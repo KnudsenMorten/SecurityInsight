@@ -93,6 +93,8 @@ $ranges = @{ SI_Pro_DataRetentionDays = @{ min = 1 }; SI_PatchCycle_CatchUpDays 
             # #491: which controls the setup report (uplink Kind=setup) carries -- the framework minimum until Invardia has imported SI's extras
             SI_Telemetry_SetupControls = @{ type = 'enum'; values = @('minimum', 'all', 'off') }
             SI_AssetProperties_RetentionDays = @{ min = 1 }; SI_AssetProperties_ChangeGuardPercent = @{ min = 1; max = 100 }
+            # #1218: the complete collections per grain that keep their findings (Get-SIDataKeepCollectionsSetting: at least 2)
+            SI_Data_KeepCollections = @{ min = 2 }
             # #1200: the most minutes one Risk Analysis report spends on its retries (Get-RARecoveryBudgetMinutes: 0 = no limit)
             SI_RA_RecoveryBudgetMinutes = @{ min = 0 }
             # #1209 the privileged-logon tier source (Get-SIPrivilegedLogonSettings takes a whole number >= 1; anything else = the default)

@@ -43,8 +43,9 @@ function Get-SIDataUnfiguredSql {
         A run figured before the per-view finding counts existed (no protection / findings_lifecycle row, owner 2026-10-20) is
         figured again -- in the same bounded set.
     #>
+    # #1218: the newest -Newest are counted among the collections the retention keeps (a removed one never takes a place)
     param([int]$Newest = 4)
-    $live = ''; if (Get-Command -Name Get-SIDataLiveFilter -ErrorAction SilentlyContinue) { $live = Get-SIDataLiveFilter }
+    $live = ''; $liveN = ''; if (Get-Command -Name Get-SIDataLiveFilter -ErrorAction SilentlyContinue) { $live = Get-SIDataLiveFilter; $liveN = Get-SIDataLiveFilter -Alias 'n' }
     $n = [Math]::Max(1, $Newest)
     "SELECT CollectionId, CollectionTime FROM sidata.Collection WHERE Kind = N'Detailed' AND Status = 'Complete' AND ContextAt IS NOT NULL" +
     " AND (KeyFiguresAt IS NULL OR KeyFiguresAt < ContextAt OR NOT EXISTS (SELECT 1 FROM sidata.KeyFigure AS kx WHERE kx.CollectionId = sidata.Collection.CollectionId AND kx.Block = N'protection' AND kx.Figure = N'findings_lifecycle')" +
@@ -52,7 +53,7 @@ function Get-SIDataUnfiguredSql {
     " OR NOT EXISTS (SELECT 1 FROM sidata.KeyFigure AS kg WHERE kg.CollectionId = sidata.Collection.CollectionId AND kg.Block = N'meta' AND kg.Figure = N'grace_by_kind')" +
     # #855 W11: a run figured before the not-onboarded devices were split by status is figured again (bounded as above)
     " OR NOT EXISTS (SELECT 1 FROM sidata.KeyFigure AS ko WHERE ko.CollectionId = sidata.Collection.CollectionId AND ko.Block = N'meta' AND ko.Figure = N'onboarding_by_status'))$live" +
-    " AND CollectionId IN (SELECT TOP ($n) n.CollectionId FROM sidata.Collection AS n WHERE n.Kind = N'Detailed' AND n.Status = 'Complete' ORDER BY n.CollectionTime DESC) ORDER BY CollectionTime DESC"
+    " AND CollectionId IN (SELECT TOP ($n) n.CollectionId FROM sidata.Collection AS n WHERE n.Kind = N'Detailed' AND n.Status = 'Complete'$liveN ORDER BY n.CollectionTime DESC) ORDER BY CollectionTime DESC"
 }
 
 function Get-SIKeyFigureDomainSql {
@@ -737,14 +738,18 @@ function Invoke-SIDataKeyFigures {
     #>
     # -Settings: the protection score's settings (a dictionary; none = the globals, as the data sync loads them) -- the update
     # passes the install's own when it figures the collections again (Invoke-SIContainerUpdate.ps1 step 9g)
-    param([Parameter(Mandatory)][scriptblock]$Invoke, [switch]$DryRun, [scriptblock]$Log, [int]$BudgetSeconds = 600, $Settings = $null)
+    # #1218 -Keep: the data sync's keep count (the collections the retention keeps, SI_Data_KeepCollections): the newest -Keep
+    # kept collections without figures get them in THIS run, each once -- the budget never leaves one of them to a later run
+    # (paced by the database's load between collections). 0 = as before (the newest 4, the budget paces the older ones).
+    param([Parameter(Mandatory)][scriptblock]$Invoke, [switch]$DryRun, [scriptblock]$Log, [int]$BudgetSeconds = 600, $Settings = $null, [int]$Keep = 0)
     if (-not $Log) { $Log = { param($l, $m) Write-Host ('[{0}] {1}' -f $l, $m) } }
     try {
         if (([int](& $Invoke (Get-SIDataKeyFiguresSchemaCheckSql) @{} 'scalar')) -ne 1) {
             & $Log 'INFO' 'key figures : the database does not have the key figures table yet (the updater adds it) -- the Executive overview and report say they are being prepared.'
             return [pscustomobject]@{ Status = 'no-schema'; Collections = 0 }
         }
-        $pending = @(@(& $Invoke (Get-SIDataUnfiguredSql) @{} 'reader') | ForEach-Object { $_ } | Where-Object { $null -ne $_ })
+        $unfigured = if ($Keep -gt 0) { Get-SIDataUnfiguredSql -Newest ([Math]::Max(2, $Keep)) } else { Get-SIDataUnfiguredSql }
+        $pending = @(@(& $Invoke $unfigured @{} 'reader') | ForEach-Object { $_ } | Where-Object { $null -ne $_ })
         if ($DryRun) {
             & $Log 'INFO' ("key figures : {0} collection(s) would get their key figures; nothing is written." -f $pending.Count)
             return [pscustomobject]@{ Status = 'dry-run'; Collections = 0; Pending = $pending.Count }
@@ -753,8 +758,12 @@ function Invoke-SIDataKeyFigures {
         $days = 30; if ($global:SI_PatchCycle_CatchUpDays -and [int]$global:SI_PatchCycle_CatchUpDays -gt 0) { $days = [int]$global:SI_PatchCycle_CatchUpDays }
         $sql = Get-SIDataKeyFiguresSql -CatchUpDays $days
         $clock = [Diagnostics.Stopwatch]::StartNew(); $done = 0; $rows = [long]0
+        $paced = ($Keep -gt 0) -and [bool](Get-Command -Name Invoke-SISqlPacing -ErrorAction SilentlyContinue); $lastMs = 0L
         foreach ($p in $pending) {
-            if ($done -gt 0 -and $clock.Elapsed.TotalSeconds -gt $BudgetSeconds) { break }
+            # #1218: with -Keep every pending collection is a kept one -- never left to a later run, only paced
+            if ($Keep -le 0 -and $done -gt 0 -and $clock.Elapsed.TotalSeconds -gt $BudgetSeconds) { break }
+            if ($paced -and $done -gt 0) { $null = Invoke-SISqlPacing -Invoke $Invoke -LastBatchMs $lastMs -Log $Log }
+            $one = [Diagnostics.Stopwatch]::StartNew()
             $cid = $(if ($p -is [System.Collections.IDictionary]) { $p['CollectionId'] } else { $p.CollectionId })
             $ps = Get-SIProtectionScoreParams -Settings $Settings; $ps['CollectionId'] = [string][int]$cid
             if ($Invoke.PSObject.Properties['SISqlSession'] -and $Invoke.SISqlSession) {
@@ -762,6 +771,7 @@ function Invoke-SIDataKeyFigures {
             } else {
                 $rows += [long](& $Invoke $sql $ps 'scalar')
             }
+            $one.Stop(); $lastMs = $one.ElapsedMilliseconds
             $done++
         }
         $left = $pending.Count - $done

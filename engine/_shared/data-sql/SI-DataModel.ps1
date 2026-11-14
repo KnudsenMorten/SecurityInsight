@@ -820,6 +820,8 @@ function Resolve-SIDataSettings {
           SI_Pro_DataSqlServer / SI_Pro_DataSqlDatabase   default: SI_ProSqlServer / SI_ProSqlDatabase (one Pro database)
           SI_Pro_DataRetentionDays                        default 90; a whole number of days, 1 or more
           SI_Pro_DataLookbackDays                         default 3; how far back unloaded collections are caught up
+          SI_Data_KeepCollections                         default 3; the complete collections per grain that keep their
+                                                          findings (at least 2; Get-SIDataKeepCollectionsSetting)
         An invalid value is a Problem (the run refuses), never silently replaced by the default.
     #>
     param([hashtable]$Globals = @{})
@@ -847,7 +849,10 @@ function Resolve-SIDataSettings {
     # #408: the level of asset metadata this install runs -- 'full' stores the full metadata (sidata.AssetMetadata), else none
     $apMode = 'security'
     if (Get-Command -Name Get-SIDataAssetMetadataMode -ErrorAction SilentlyContinue) { $apMode = Get-SIDataAssetMetadataMode -Globals $Globals }
-    [pscustomobject]@{ Server = $server; Database = $db; RetentionDays = $retention; LookbackDays = $lookback; AssetPropertiesRetentionDays = $apDays; AssetPropertiesMode = $apMode; Problems = $problems.ToArray() }
+    # #1218: how many complete collections per grain keep their findings -- never a Problem (a wrong value falls back to 3)
+    $keepN = 3
+    if (Get-Command -Name Get-SIDataKeepCollectionsSetting -ErrorAction SilentlyContinue) { $keepN = Get-SIDataKeepCollectionsSetting -Globals $Globals }
+    [pscustomobject]@{ Server = $server; Database = $db; RetentionDays = $retention; LookbackDays = $lookback; AssetPropertiesRetentionDays = $apDays; AssetPropertiesMode = $apMode; KeepCollections = $keepN; Problems = $problems.ToArray() }
 }
 
 function Get-SIDataRetentionCutoff {

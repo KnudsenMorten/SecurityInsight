@@ -1,0 +1,29 @@
+{
+  "version": "3.1.16",
+  "date": "2026-11-13",
+  "type": "fix-only",
+  "summary": "Your reports now rest only on complete data, and updates run more reliably.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "Reports use only complete data",
+      "text": "When a data collection is incomplete, it no longer replaces your good history. You never see or receive incomplete data."
+    },
+    {
+      "title": "Updates finish reliably",
+      "text": "Long updates are no longer stopped by mistake. Every part of SecurityInsight now moves to the new version together."
+    },
+    {
+      "title": "You see when sending is paused",
+      "text": "When sending data to your other systems is paused because the newest data was incomplete, SecurityInsight now tells you, and since when."
+    },
+    {
+      "title": "No repeated runs or mails",
+      "text": "A step that already ran is no longer started a second time, so you get no repeated mails or data."
+    },
+    {
+      "title": "Smaller fixes",
+      "text": "Mail waits safely when Microsoft cannot confirm the mailbox. Finished runs show as finished. Update logs are complete, and the identity collection is quicker again."
+    }
+  ]
+}

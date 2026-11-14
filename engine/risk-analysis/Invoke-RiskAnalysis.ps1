@@ -768,6 +768,7 @@ function Invoke-SISentinelLakeQuery {
 . ([System.IO.Path]::Combine($PSScriptRoot, '..', '_shared', 'SI-StepPhase.ps1'))   # #873 A: the [phases] times also go to cfg.StepPhaseTime
 . (Join-Path $PSScriptRoot '_shared/RA-SilentSource.ps1')          # #900 a source that went silent holds the reports reading it
 . (Join-Path $PSScriptRoot '_shared/RA-KpiTally.ps1')             # the key figures' tally: one copy, counted in the AI summary's pass when it reads every row
+. (Join-Path $PSScriptRoot '_shared/RA-TopListsSql.ps1')          # #1212 the Top 50 lists and the key figures worked out in the database (set-based)
 foreach ($__raSqlDep in @('../_shared/data-sql/SI-DataModel.ps1', '../_shared/data-sql/SI-DataSql.ps1', '../_shared/data-sql/SI-DataSummary.ps1', '../asset-trend/_shared/SI-TrendRollup.ps1', '_shared/RA-Findings.ps1')) {
     # core in both editions (owner 2026-10-13: "ra is part of core functionality"): engine/_shared/data-sql ships in both
     . ([System.IO.Path]::Combine($PSScriptRoot, $__raSqlDep))
@@ -4940,6 +4941,13 @@ while (-not $bucketRunSucceeded -and -not $reportCannotFit) {
   $__abBusySlices = 0
   $__abMemSplit = 0         # slices whose rows did not fit in memory at once -- asked again smaller (Add-RAStreamBucketGuarded)
   $__abMemRoots = @{}       # the buckets split because the worker had no memory for them (read or processing) -- sized from what it held
+  # #1216: a slice advanced hunting answered 504 Gateway Timeout twice is split in halves, never asked again as the same query
+  $__gwSeen = @{}           # slice key -> its 504 answers so far (the hunting call's own attempts included)
+  $__gwRoots = @{}          # the buckets split in halves for 504s
+  $__gwFinest = @{}         # bucket -> the finest slice count asked under it
+  # a finer slice exists: the hash partition can address it, and the slice is not the whole report (#401: built without the
+  # exposure-graph side slice filter, with every lookup replicated -- each half would be the whole report again)
+  $__gwCanSplit = { param([long]$Count) (Test-RASubSplitAddressable -SliceCount $Count -FanOut 2) -and -not ([bool]$script:_SkipEGBucketForCrossDomain -and [bool]$script:_RACrossDomainReplicated) }
   Reset-RAProof
   # count timing: each run of the report's slices is framed by its own two counts (a run again with more slices counts again)
   Reset-RAReadCounts
@@ -5057,6 +5065,10 @@ while (-not $bucketRunSucceeded -and -not $reportCannotFit) {
       while (-not $bucketAttemptDone) {
           $bucketAttempt++
           $__abSliceSw = [System.Diagnostics.Stopwatch]::StartNew()   # #737: the slice's time is measured like its rows
+          # #1216: this slice stops asking the same query at its second 504 (it is split in halves instead), while a finer slice exists
+          $__gwKey = ('{0}/{1}' -f $b, $bucketCountToUse)
+          $script:RAGatewayTimeoutStopAt = Get-RAGatewayTimeoutStopAt -Seen ([int]('0' + [string]$__gwSeen[$__gwKey])) -Off:(-not (& $__gwCanSplit $bucketCountToUse))
+          $script:_LastGraphHuntingGatewayTimeouts = -1
           try {
               $resp = Invoke-GraphHuntingQuery -Query $thisQuery -ReconnectMaxAgeMinutes $global:GraphReconnectMaxAgeMinutes -MaxRetries $global:GraphQueryMaxRetries
               $__abSliceSw.Stop()
@@ -5149,8 +5161,21 @@ while (-not $bucketRunSucceeded -and -not $reportCannotFit) {
               #    too large. The shared classifier is what makes that impossible now.
               else {
                   $bucketAction = Get-RABucketFailureAction -Err $_ -AllTimedOut ([bool]$script:_LastGraphHuntingAllTimedOut)
-                  if ($bucketAction -ne 'Split' -and $bucketAction -ne 'Defect' -and $bucketAction -ne 'Absent') { $__abBusySlices++ }
-                  if ($bucketAction -eq 'Split' -and (Test-RABucketOutOfMemory -Err $_)) {
+                  # #1216: answered 504 twice (the hunting call's own attempts count) -- too heavy for the gateway at this size, not an
+                  # outage: split in halves. A 429 / 503 / busy answer / one-off 504 stays 'Retry' (the same query), a defect 'Defect'.
+                  $__gwN = Add-RASliceGatewayTimeouts -Seen $__gwSeen -Slice $__gwKey -Err $_ -Reported ([int]$script:_LastGraphHuntingGatewayTimeouts)
+                  if ($bucketAction -eq 'Retry' -and (Get-RAGatewayTimeoutAction -Err $_ -Count $__gwN -SplitAt $script:RAGatewaySplitAt -CanSplit (& $__gwCanSplit $bucketCountToUse)) -eq 'Split') { $bucketAction = 'GatewaySplit' }
+                  if ($bucketAction -ne 'Split' -and $bucketAction -ne 'Defect' -and $bucketAction -ne 'Absent' -and $bucketAction -ne 'GatewaySplit') { $__abBusySlices++ }
+                  if ($bucketAction -eq 'GatewaySplit') {
+                      Write-Warn2 ("bucket {0}/{1}: advanced hunting answered 504 Gateway Timeout {2} times -- the query is too heavy for the gateway at this size, not an outage: it is not asked again as the same query but split in halves ({3}/{4} and {5}/{4}, after the other slices; rows already retrieved are kept). Error: {6}" -f `
+                        $bucketNo, $bucketCountToUse, $__gwN, $bucketNo, ($bucketCountToUse * 2), ($bucketNo + $bucketCountToUse), $errMsg)
+                      $__gwRoots[[int]$b] = $true
+                      $__abSplitCause[[int]$b] = $true
+                      [void]$failedBucketIndices.Add($b)
+                      $bucketAttemptDone = $true
+                      $resp              = $null
+                  }
+                  elseif ($bucketAction -eq 'Split' -and (Test-RABucketOutOfMemory -Err $_)) {
                       # the worker could not hold this slice's answer: the same rows are asked again in smaller slices, split
                       # until they fit, and the next run starts finer (a split for size, as a slice the service called too large)
                       Write-Warn2 ("query slice {0}/{1}: its answer is too large for this worker's memory -- nothing of it is kept; the same rows are asked again in smaller slices after the other slices" -f $bucketNo, $bucketCountToUse)
@@ -5487,6 +5512,10 @@ while (-not $bucketRunSucceeded -and -not $reportCannotFit) {
               $script:_CurrentBucketCount = $bucketCountToUse
               $script:_CurrentBucketIndex = $db
               Step-RARecoveryBudgetCall -Budget $__rb   # #1200: counted (and the progress ticked) as the call starts
+              # #1216: the slice's 504s so far count -- at its second it is split in halves, not asked again as the same query
+              $__gwKey = ('{0}/{1}' -f $db, $bucketCountToUse)
+              $script:RAGatewayTimeoutStopAt = Get-RAGatewayTimeoutStopAt -Seen ([int]('0' + [string]$__gwSeen[$__gwKey])) -Off:(-not (& $__gwCanSplit $bucketCountToUse))
+              $script:_LastGraphHuntingGatewayTimeouts = -1
               try {
                   $__abLateSw = [System.Diagnostics.Stopwatch]::StartNew()   # #880: a recovered slice is measured like every other
                   $dbResp = Invoke-GraphHuntingQuery -Query $dbQuery -ReconnectMaxAgeMinutes $global:GraphReconnectMaxAgeMinutes -MaxRetries $global:GraphQueryMaxRetries
@@ -5523,7 +5552,15 @@ while (-not $bucketRunSucceeded -and -not $reportCannotFit) {
               } catch {
                   $dbErr = $_.Exception.Message
                   $dbAction = Get-RABucketFailureAction -Err $_ -AllTimedOut ([bool]$script:_LastGraphHuntingAllTimedOut)
-                  if ($dbAction -eq 'Split') {
+                  $__gwN = Add-RASliceGatewayTimeouts -Seen $__gwSeen -Slice $__gwKey -Err $_ -Reported ([int]$script:_LastGraphHuntingGatewayTimeouts)
+                  if ($dbAction -eq 'Retry' -and (Get-RAGatewayTimeoutAction -Err $_ -Count $__gwN -SplitAt $script:RAGatewaySplitAt -CanSplit (& $__gwCanSplit $bucketCountToUse)) -eq 'Split') {
+                      # #1216: answered 504 twice -- too heavy for the gateway at this size: split in halves (the sub-bucket pass)
+                      Write-Warn2 ("late retry: bucket {0}/{1}: advanced hunting answered 504 Gateway Timeout {2} times -- not asked again as the same query; split in halves ({0}/{3} and {4}/{3}) in the sub-bucket pass. Error: {5}" -f $dbNo, $bucketCountToUse, $__gwN, ($bucketCountToUse * 2), ($dbNo + $bucketCountToUse), $dbErr)
+                      $__gwRoots[[int]$db] = $true
+                      $__abSplitCause[[int]$db] = $true
+                      [void]$failedBucketIndices.Add($db)
+                      $dbDone = $true
+                  } elseif ($dbAction -eq 'Split') {
                       Write-Warn2 ("late retry: bucket {0}/{1} is now failing as too large -- moving it to the sub-bucket pass. Error: {2}" -f $dbNo, $bucketCountToUse, $dbErr)
                       $__abSplitCause[[int]$db] = (Test-RABucketExplicitTooLarge -Err $_)
                       if (Test-RABucketOutOfMemory -Err $_) { $__abMemSplit++; $__abMemRoots[[int]$db] = $true }
@@ -5664,7 +5701,9 @@ while (-not $bucketRunSucceeded -and -not $reportCannotFit) {
           # How = 'key' (split by the bucket key, as always) | 'row' (split by the row: one key value alone is too large for the
           # worker's memory). RC / RI: the slice's own row split (1 / 0 = none). M: the slice is split because the worker had no
           # memory for it -- such a slice is split again until it fits (no depth cap; Get-RAMemorySplitNext).
-          $subQueue.Enqueue(@{ N = [int]$idx; T = [int]$bucketCountToUse; D = 1; PK = $null; R = [int]$idx; How = 'key'; RC = 1L; RI = 0L; M = [bool]$__abMemRoots[[int]$idx] })
+          # #1216 K: how many smaller slices this one is split into (2 = halves, for a slice answered 504 twice -- G)
+          $__gwR = ([bool]$__gwRoots[[int]$idx] -and -not [bool]$__abMemRoots[[int]$idx])
+          $subQueue.Enqueue(@{ N = [int]$idx; T = [int]$bucketCountToUse; D = 1; PK = $null; R = [int]$idx; How = 'key'; RC = 1L; RI = 0L; M = [bool]$__abMemRoots[[int]$idx]; K = $(if ($__gwR) { 2 } else { $subFanOut }); G = $__gwR })
           # #880 Busy: busy answers its smaller slices met (retried, never split); SizeFails: smaller slices refused for their size
           # or time; LostBusy: a smaller slice lost because Defender kept refusing it as busy (never a size need)
           $__abSplitSlices[[int]$idx] = [pscustomobject]@{ Rows = 0L; Bytes = 0L; Seconds = 0.0; TooLarge = [bool]$__abSplitCause[[int]$idx]; Lost = $false
@@ -5704,13 +5743,18 @@ while (-not $bucketRunSucceeded -and -not $reportCannotFit) {
               if ($__abSplitSlices.ContainsKey($root)) { $__abSplitSlices[$root].Lost = $true }
               continue
           }
-          $newT    = if ($pHow -eq 'row' -or $pAgain) { $pT } else { $pT * $subFanOut }
-          $kids    = if ($pAgain) { 1 } else { $subFanOut }
+          # #1216: a slice answered 504 twice (G) is split in HALVES (K = 2); every other split uses the pass's fan-out
+          $pFan    = if ($item.ContainsKey('K') -and [int]$item.K -ge 2) { [int]$item.K } else { $subFanOut }
+          $pGw     = [bool]$item.G
+          $newT    = if ($pHow -eq 'row' -or $pAgain) { $pT } else { $pT * $pFan }
+          $kids    = if ($pAgain) { 1 } else { $pFan }
           # #880: a deeper key split runs only while the split reduced the failure of this bucket (measured, see above) -- a
           # memory split and a request that shrinks with every split (F) always make the next slice smaller and are not judged here
+          # (#1216: halves are judged over two halvings -- one 4-way step -- so one halving whose halves both still time out goes on)
           if (-not $pAgain -and $pHow -in @('key', 'row') -and -not [bool]$item.M -and -not [bool]$item.F -and $depth -ge 2 -and
-              -not (Test-RASplitReducesFailure -Tried $(if ($__subTried.ContainsKey($root)) { $__subTried[$root] } else { @{} }) -Failed $(if ($__subFailed.ContainsKey($root)) { $__subFailed[$root] } else { @{} }) -Depth $depth)) {
+              -not (Test-RASplitReducesFailure -Tried $(if ($__subTried.ContainsKey($root)) { $__subTried[$root] } else { @{} }) -Failed $(if ($__subFailed.ContainsKey($root)) { $__subFailed[$root] } else { @{} }) -Depth $depth -Step $(if ($pGw) { 2 } else { 1 }))) {
               $prunedSubtreeCount++
+              if ($__abSplitSlices.ContainsKey($root)) { $__abSplitSlices[$root].Lost = $true }   # #1216: its rows stay unknown
               Write-Warn2 ("[sub-bucket] slice {0}/{1} (depth {2}) of bucket {3}: not split further -- its smaller slices were refused for their size or time as often as their parents were, so a finer split does not reduce the failure; its rows are unknown, not resolved" -f $pN, $pT, $depth, ($root + 1))
               Add-RABucketLoss ("sub-bucket index {0}/{1} (depth {2}): not split further -- splitting did not reduce the failure of bucket {3}" -f $pN, $pT, $depth, ($root + 1))
               continue
@@ -5721,6 +5765,12 @@ while (-not $bucketRunSucceeded -and -not $reportCannotFit) {
               Write-Info ("[sub-bucket] slice {0}/{1}: asked again (round {2}/{3}) after {4}s -- it was refused as busy or throttled, never split for it" -f $pN, $pT, $pRounds, $__subLateRounds, $__againSleep)
               Start-Sleep -Seconds $__againSleep
               Invoke-RABucketReauth
+          }
+          # #1216: the halvings asked under this bucket -- the run log says per report how deep they went
+          if ($pGw -and -not $pAgain) {
+              $__gwRoots[$root] = $true
+              if ([long]$newT -gt [long]('0' + [string]$__gwFinest[$root])) { $__gwFinest[$root] = [long]$newT }
+              Write-Info ("[gateway split] slice {0}/{1} of bucket {2}: split in halves -- {3}/{4} and {5}/{4} ({6}x finer than the report's {7} slices)" -f ($pN + 1), $pT, ($root + 1), ($pN + 1), $newT, ($pN + $pT + 1), [long]($newT / [Math]::Max(1, [int]$bucketCountToUse)), $bucketCountToUse)
           }
           # parent-key identifies THIS parent across its own children below
           $thisParentKey = if ($pRC -gt 1 -or $pHow -eq 'row') { ('{0}/{1}/{2}/r{3}/{4}' -f $pN, $pT, $depth, $pRI, $pRC) } else { ('{0}/{1}/{2}' -f $pN, $pT, $depth) }
@@ -5738,14 +5788,14 @@ while (-not $bucketRunSucceeded -and -not $reportCannotFit) {
                   $subFilter  = New-BucketFilterKql -BucketCount $pT -BucketIndex $pN -ReportName $ReportName
               } elseif ($pHow -eq 'row') {
                   $subN   = $pN
-                  $subRC  = [long]($pRC * $subFanOut)
+                  $subRC  = [long]($pRC * $pFan)
                   $subRI  = [long]($pRI + ($j * $pRC))
                   $subFilter  = New-BucketFilterKql -BucketCount $pT -BucketIndex $pN -ReportName $ReportName
               } else {
                   $subN   = $pN + ($j * $pT)
                   $subRC  = 1L
                   $subRI  = 0L
-                  $subFilter  = New-SubBucketFilterKql -ParentBucketCount $pT -ParentBucketIndex $pN -SubBucketCount $subFanOut -SubBucketIndex $j -ReportName $ReportName
+                  $subFilter  = New-SubBucketFilterKql -ParentBucketCount $pT -ParentBucketIndex $pN -SubBucketCount $pFan -SubBucketIndex $j -ReportName $ReportName
               }
               $subQuery   = Add-RARowSplitFilter -Query (Replace-BucketFilterBlock -Query $Query -BucketFilterKql $subFilter) -RowCount $subRC -RowIndex $subRI
               $subLabel   = if ($subRC -gt 1) { ('sub:{0}/{1}/row:{2}/{3}' -f $subN, $newT, $subRI, $subRC) } else { ('sub:{0}/{1}' -f $subN, $newT) }
@@ -5766,8 +5816,8 @@ while (-not $bucketRunSucceeded -and -not $reportCannotFit) {
               $script:_CurrentBucketCount = $newT
               $script:_CurrentBucketIndex = $subN
 
-              if ($subRC -gt 1) { Write-Info ("[sub-bucket] depth={0} parent={1}/{2}: running row part {3}/{4} (row split {5}/{6})" -f $depth, $pN, $pT, ($j + 1), $subFanOut, $subRI, $subRC) }
-              else { Write-Info ("[sub-bucket] depth={0} parent={1}/{2}: running sub {3}/{4} (effective index {5}/{6})" -f $depth, $pN, $pT, ($j + 1), $subFanOut, $subN, $newT) }
+              if ($subRC -gt 1) { Write-Info ("[sub-bucket] depth={0} parent={1}/{2}: running row part {3}/{4} (row split {5}/{6})" -f $depth, $pN, $pT, ($j + 1), $pFan, $subRI, $subRC) }
+              else { Write-Info ("[sub-bucket] depth={0} parent={1}/{2}: running sub {3}/{4} (effective index {5}/{6})" -f $depth, $pN, $pT, ($j + 1), $pFan, $subN, $newT) }
               # One child, with its own recovery: a THROTTLED/unavailable API is retried at the same size
               # (backoff + re-auth) -- never split, which would multiply calls against a throttling API;
               # a slice that is still TOO LARGE is split deeper; only a defect or an exhausted recovery
@@ -5778,7 +5828,7 @@ while (-not $bucketRunSucceeded -and -not $reportCannotFit) {
               while (-not $subDone) {
                   # #1200: no NEW call once the report's recovery budget is spent -- this smaller slice is a named loss
                   if (Test-RARecoveryBudgetSpent -Budget $__rb) {
-                      Add-RABucketLoss (Format-RARecoveryBudgetLoss -Slice ('sub-bucket depth={0} parent={1}/{2} sub={3}/{4}' -f $depth, $pN, $pT, ($j + 1), $subFanOut) -Minutes ([int]$__rb.Minutes) -LastError $(if ($subAttempt -gt 0) { [string]$subErr } else { '' }))
+                      Add-RABucketLoss (Format-RARecoveryBudgetLoss -Slice ('sub-bucket depth={0} parent={1}/{2} sub={3}/{4}' -f $depth, $pN, $pT, ($j + 1), $pFan) -Minutes ([int]$__rb.Minutes) -LastError $(if ($subAttempt -gt 0) { [string]$subErr } else { '' }))
                       $__rb.Lost = [int]$__rb.Lost + 1
                       if ($__abSplitSlices.ContainsKey($root)) { $__abSplitSlices[$root].Lost = $true }
                       $subDone = $true
@@ -5786,6 +5836,10 @@ while (-not $bucketRunSucceeded -and -not $reportCannotFit) {
                   }
                   $subAttempt++
                   Step-RARecoveryBudgetCall -Budget $__rb   # #1200: counted (and the progress ticked) as the call starts
+                  # #1216: this smaller slice stops asking the same query at its second 504 (halved again), while a finer slice exists
+                  $__gwKey = ('{0}/{1}/{2}/{3}' -f $subN, $newT, $subRI, $subRC)
+                  $script:RAGatewayTimeoutStopAt = Get-RAGatewayTimeoutStopAt -Seen ([int]('0' + [string]$__gwSeen[$__gwKey])) -Off:(-not (& $__gwCanSplit $newT))
+                  $script:_LastGraphHuntingGatewayTimeouts = -1
                   $__abSubSw = [System.Diagnostics.Stopwatch]::StartNew()   # #737
                   try {
                       $subResp = Invoke-GraphHuntingQuery -Query $subQuery -ReconnectMaxAgeMinutes $global:GraphReconnectMaxAgeMinutes -MaxRetries $global:GraphQueryMaxRetries
@@ -5800,12 +5854,12 @@ while (-not $bucketRunSucceeded -and -not $reportCannotFit) {
                           $__memKids.Add(@{ N = $subN; T = $newT; RC = $subRC; RI = $subRI; Why = $__memErr })
                       }
                       elseif (-not $subConv.Ok) {
-                          Write-Err2 ("[sub-bucket] result conversion failed for sub {0}/{1} (parent={2}/{3} depth={4}): {5}" -f ($j + 1), $subFanOut, $pN, $pT, $depth, $subConv.Error)
+                          Write-Err2 ("[sub-bucket] result conversion failed for sub {0}/{1} (parent={2}/{3} depth={4}): {5}" -f ($j + 1), $pFan, $pN, $pT, $depth, $subConv.Error)
                           # The query SUCCEEDED and the rows were still dropped -- the most deceptive loss
                           # there is, so it is counted like every other one.
-                          Add-RABucketLoss ("sub-bucket depth={0} parent={1}/{2} sub={3}/{4}: query succeeded but result conversion threw -- {5}" -f $depth, $pN, $pT, ($j + 1), $subFanOut, $subConv.Error)
+                          Add-RABucketLoss ("sub-bucket depth={0} parent={1}/{2} sub={3}/{4}: query succeeded but result conversion threw -- {5}" -f $depth, $pN, $pT, ($j + 1), $pFan, $subConv.Error)
                       } else {
-                          Write-Info ("[sub-bucket] depth={0} parent={1}/{2} sub={3}/{4}: {5} rows" -f $depth, $pN, $pT, ($j + 1), $subFanOut, @($subConv.Rows).Count)
+                          Write-Info ("[sub-bucket] depth={0} parent={1}/{2} sub={3}/{4}: {5} rows" -f $depth, $pN, $pT, ($j + 1), $pFan, @($subConv.Rows).Count)
                           if (@($subConv.Rows).Count -eq 0) { $__emptyKids++ }
                           & $__subCount $__subTried $root $depth   # #880: asked and answered at this depth
                           # #737: the split bucket's own answer -- rows, estimated bytes and time of its sub-slices together
@@ -5822,7 +5876,7 @@ while (-not $bucketRunSucceeded -and -not $reportCannotFit) {
                               $__sbc = Test-RABucketRowCount -Query $subQuery -Rows $__sbcRows
                               if ($__sbc.Short) {
                                   Write-Err2 ("[sub-bucket] {0}/{1}: the source counts {2} row(s) but returned {3} -- the missing findings are unknown, not resolved" -f $subN, $newT, $__sbc.Expected, $__sbcRows)
-                                  Add-RABucketLoss ("sub-bucket depth={0} parent={1}/{2} sub={3}/{4}: the source returned {5} of the {6} row(s) it counts" -f $depth, $pN, $pT, ($j + 1), $subFanOut, $__sbcRows, $__sbc.Expected)
+                                  Add-RABucketLoss ("sub-bucket depth={0} parent={1}/{2} sub={3}/{4}: the source returned {5} of the {6} row(s) it counts" -f $depth, $pN, $pT, ($j + 1), $pFan, $__sbcRows, $__sbc.Expected)
                               }
                           }
                           $__subIn = $true
@@ -5865,6 +5919,14 @@ while (-not $bucketRunSucceeded -and -not $reportCannotFit) {
                   } catch {
                       $subErr    = $_.Exception.Message
                       $subAction = Get-RABucketFailureAction -Err $_ -AllTimedOut ([bool]$script:_LastGraphHuntingAllTimedOut)
+                      # #1216: answered 504 twice -- too heavy for the gateway at this size: halved again (a size split: it starts no
+                      # recovery clock, and the measured stop below judges it over two halvings)
+                      $__gwN = Add-RASliceGatewayTimeouts -Seen $__gwSeen -Slice $__gwKey -Err $_ -Reported ([int]$script:_LastGraphHuntingGatewayTimeouts)
+                      $__subGw = ($subAction -eq 'Retry' -and (Get-RAGatewayTimeoutAction -Err $_ -Count $__gwN -SplitAt $script:RAGatewaySplitAt -CanSplit (& $__gwCanSplit $newT)) -eq 'Split')
+                      if ($__subGw) {
+                          Write-Warn2 ("[gateway split] slice {0}/{1} of bucket {2}: advanced hunting answered 504 Gateway Timeout {3} times -- not asked again as the same query; split in halves ({0}/{4} and {5}/{4})" -f ($subN + 1), $newT, ($root + 1), $__gwN, ($newT * 2), ($subN + $newT + 1))
+                          $subAction = 'Split'
+                      }
                       $__abSubSw.Stop()
                       # #880: a busy answer is the backend's load -- counted as busy evidence for the bucket (never its size)
                       $__subBusy = ($subAction -eq 'Retry') -and (Test-RABucketBusyAnswer -Err $_)
@@ -5877,7 +5939,7 @@ while (-not $bucketRunSucceeded -and -not $reportCannotFit) {
                           if (Test-RARecoveryBudgetSpent -Budget $__rb) { continue }
                           $subSleep = Get-RABucketRetryDelaySeconds -Attempt $subAttempt -Err $_
                           $__subWhyRetry = if ($__subBusy) { 'Defender is busy (preempted for its load, not refused for its size)' } else { 'the API is throttling or had an issue' }
-                          Write-Warn2 ("[sub-bucket] depth={0} parent={1}/{2} sub={3}/{4}: {9} -- re-auth + retry {5}/{6} after {7}s (same size). Error: {8}" -f $depth, $pN, $pT, ($j + 1), $subFanOut, $subAttempt, $subTransientRetries, $subSleep, $subErr, $__subWhyRetry)
+                          Write-Warn2 ("[sub-bucket] depth={0} parent={1}/{2} sub={3}/{4}: {9} -- re-auth + retry {5}/{6} after {7}s (same size). Error: {8}" -f $depth, $pN, $pT, ($j + 1), $pFan, $subAttempt, $subTransientRetries, $subSleep, $subErr, $__subWhyRetry)
                           Start-Sleep -Seconds $subSleep
                           Invoke-RABucketReauth
                           continue
@@ -5920,24 +5982,24 @@ while (-not $bucketRunSucceeded -and -not $reportCannotFit) {
                       # the hash partition can address (2^31), where a finer split of the key does not exist
                       $__subFiner = Test-RASubSplitAddressable -SliceCount $newT -FanOut $subFanOut
                       if ($subAction -eq 'Split' -and $__subFiner) {
-                          if ($__subCanFit) { Write-Info ("[sub-bucket] depth={0} parent={1}/{2} sub={3}/{4}: the request is still over the service's size limit, and a finer split makes it smaller -- split again (depth {5})" -f $depth, $pN, $pT, ($j + 1), $subFanOut, ($depth + 1)) }
-                          else { Write-Warn2 ("[sub-bucket] depth={0} parent={1}/{2} sub={3}/{4} still too large or too slow -- queueing for further split (depth {5})" -f $depth, $pN, $pT, ($j + 1), $subFanOut, ($depth + 1)) }
+                          if ($__subCanFit) { Write-Info ("[sub-bucket] depth={0} parent={1}/{2} sub={3}/{4}: the request is still over the service's size limit, and a finer split makes it smaller -- split again (depth {5})" -f $depth, $pN, $pT, ($j + 1), $pFan, ($depth + 1)) }
+                          else { Write-Warn2 ("[sub-bucket] depth={0} parent={1}/{2} sub={3}/{4} still too large or too slow -- queueing for further split (depth {5})" -f $depth, $pN, $pT, ($j + 1), $pFan, ($depth + 1)) }
                           # a row part stays a row part (its children split its rows further, never the whole key slice again)
-                          $subQueue.Enqueue(@{ N = $subN; T = $newT; D = ($depth + 1); PK = $thisParentKey; R = $root; How = $(if ($subRC -gt 1) { 'row' } else { 'key' }); RC = $subRC; RI = $subRI; M = $false; F = [bool]$__subCanFit })
+                          $subQueue.Enqueue(@{ N = $subN; T = $newT; D = ($depth + 1); PK = $thisParentKey; R = $root; How = $(if ($subRC -gt 1) { 'row' } else { 'key' }); RC = $subRC; RI = $subRI; M = $false; F = [bool]$__subCanFit; K = $(if ($__subGw) { 2 } else { $subFanOut }); G = [bool]$__subGw })
                           # #737: a sub-slice that had to go deeper is itself evidence the bucket was large (or slow)
                           if ($__abSplitSlices.ContainsKey($root)) { $__abSplitSlices[$root].Seconds += [double]$__abSubSw.Elapsed.TotalSeconds }
                       } elseif ($subAction -eq 'Split') {
-                          Write-Err2 ("[sub-bucket] depth={0} parent={1}/{2} sub={3}/{4} still too large at {5} slices, the finest split the key partition can address -- giving up on this slice (rows in this sub-bucket NOT included). Error: {6}" -f $depth, $pN, $pT, ($j + 1), $subFanOut, $newT, $subErr)
+                          Write-Err2 ("[sub-bucket] depth={0} parent={1}/{2} sub={3}/{4} still too large at {5} slices, the finest split the key partition can address -- giving up on this slice (rows in this sub-bucket NOT included). Error: {6}" -f $depth, $pN, $pT, ($j + 1), $pFan, $newT, $subErr)
                           if ($__abSplitSlices.ContainsKey($root)) { $__abSplitSlices[$root].Lost = $true }   # #737
                           # #62 LOSS PATH 5 -- the message already says "NOT included"; now it is COUNTED too.
-                          Add-RABucketLoss ("sub-bucket depth={0} parent={1}/{2} sub={3}/{4}: still too large or too slow at {5} slices -- the key partition cannot be split finer" -f $depth, $pN, $pT, ($j + 1), $subFanOut, $newT)
+                          Add-RABucketLoss ("sub-bucket depth={0} parent={1}/{2} sub={3}/{4}: still too large or too slow at {5} slices -- the key partition cannot be split finer" -f $depth, $pN, $pT, ($j + 1), $pFan, $newT)
                       } elseif ($subAction -eq 'Absent') {
-                          Write-Info ("[sub-bucket] depth={0} parent={1}/{2} sub={3}/{4}: not applicable -- {5}" -f $depth, $pN, $pT, ($j + 1), $subFanOut, $subErr)
+                          Write-Info ("[sub-bucket] depth={0} parent={1}/{2} sub={3}/{4}: not applicable -- {5}" -f $depth, $pN, $pT, ($j + 1), $pFan, $subErr)
                       } else {
                           $subWhy = if ($subAction -eq 'Retry' -and $__subBusy) { ("Defender kept refusing it as busy through {0} retries and {1} later round(s)" -f $subTransientRetries, $pRounds) } elseif ($subAction -eq 'Retry') { ("API throttling/unavailable survived {0} retries and {1} later round(s)" -f $subTransientRetries, $pRounds) } elseif ($subAction -eq 'Defect') { 'query defect' } else { 'failed (non-timeout)' }
-                          Write-Err2 ("[sub-bucket] depth={0} parent={1}/{2} sub={3}/{4} {5}: {6}" -f $depth, $pN, $pT, ($j + 1), $subFanOut, $subWhy, $subErr)
+                          Write-Err2 ("[sub-bucket] depth={0} parent={1}/{2} sub={3}/{4} {5}: {6}" -f $depth, $pN, $pT, ($j + 1), $pFan, $subWhy, $subErr)
                           # #62 LOSS PATH 6.
-                          Add-RABucketLoss ("sub-bucket depth={0} parent={1}/{2} sub={3}/{4}: {5} -- {6}" -f $depth, $pN, $pT, ($j + 1), $subFanOut, $subWhy, $subErr)
+                          Add-RABucketLoss ("sub-bucket depth={0} parent={1}/{2} sub={3}/{4}: {5} -- {6}" -f $depth, $pN, $pT, ($j + 1), $pFan, $subWhy, $subErr)
                       }
                   }
               }
@@ -5970,6 +6032,13 @@ while (-not $bucketRunSucceeded -and -not $reportCannotFit) {
           Write-Info ("[sub-bucket] pass complete; total rows after sub-bucketing: {0}" -f $ResultAll.Count)
       }
       }   # v2.2.363 -- close `else` branch of $allOuterFailedWithEgSuppressed
+  }
+
+  # #1216: the run log says per report how many slices were split in halves for 504s, how deep, and whether they recovered
+  if ($__gwRoots.Count -gt 0) {
+      $__gwLost = @($__gwRoots.Keys | Where-Object { -not $__abSplitSlices.ContainsKey([int]$_) -or [bool]$__abSplitSlices[[int]$_].Lost }).Count
+      $__gwFin = [long](@($__gwFinest.Values) + @([long]$bucketCountToUse * 2) | Measure-Object -Maximum).Maximum
+      Write-Info (Format-RAGatewaySplitSummary -ReportName $ReportName -Slices $__gwRoots.Count -Finest $__gwFin -BucketCount ([int]$bucketCountToUse) -Lost $__gwLost)
   }
 
   # #1200: the report's recovery budget ended its recovery -- said once, in plain words (the lost slices are named above and in
@@ -7250,6 +7319,34 @@ try {
         if ($script:_RAUpstreamOutcome.ExitReason -ne 'success') { Write-Warn2 ("This run is partial: {0}" -f $script:_RAUpstreamOutcome.Message) }
     }
 } catch { Write-Diag ("profile run-health check skipped: {0}" -f $_.Exception.Message) }
+# #1226 (owner 2026-11-12: "only send in data for the latest collection that completed"): the decision above is kept WITH
+# this run's collection (sidata.CollectionTrust), so the data sync judges THIS collection by its own run -- not by whatever
+# source run is newest when the sync happens to run. Nothing is recorded when the check did not run. Never fails the run.
+try {
+    # a scale-out WORKER attaches to the producer's collection: it never writes the collection's verdict (one writer, one
+    # moment); a collection with no verdict is judged by the source runs at sync time (said there)
+    if ($script:RAStreamOn -and $null -ne $script:RAStream -and -not $script:SIWhatIf -and [string]$script:RAScaleRole -ne 'worker' -and (Get-Command -Name Get-RACollectionTrustVerdict -ErrorAction SilentlyContinue)) {
+        $__upRead = $(if ($null -eq $__up) { 0 } else { ($__up | Measure-Object).Count })   # piped count, never @() a list
+        # #1235 (owner: "trusted = the run finished every step"): THIS run's own steps, from the pipeline's record of it
+        # (cfg.FlowStepRun). Not readable / not a pipeline run = not known: the source records decide alone, as before.
+        $__steps = $null
+        if ($global:SI_ProSettingsStore -and $global:SI_ProSettingsStore.Invoke -and (Get-Command -Name Get-SIFlowStepVerdict -ErrorAction SilentlyContinue)) {
+            try {
+                $__job = $(if ([string]$script:RAStream.Grain -eq 'Summary') { 'risk-analysis' } else { 'risk-analysis-detailed' })
+                $__sr = & $global:SI_ProSettingsStore.Invoke (Get-SIFlowStepOutcomeSql) @{ Job = $__job } 'reader'   # assigned first, then unwrapped
+                $__steps = Get-SIFlowStepVerdict -Rows @($__sr | ForEach-Object { $_ } | Where-Object { $null -ne $_ })
+            } catch { $__steps = $null; Write-Warn2 ("this run's own steps could not be read ({0}) -- whether it finished every step is judged from the source runs' records only" -f $_.Exception.Message) }
+            if ($__steps -and $__steps.Known -and -not $__steps.Trusted) { Write-Warn2 ('This run''s collection is not trusted for data out: {0}' -f $__steps.Why) }
+            elseif ($__steps -and $__steps.Known) { Write-Info 'this run''s own steps: every step this collection is built on finished' }
+            elseif ($__steps) { Write-Info ('this run''s own steps: not judged ({0}) -- the source runs'' records decide' -f $__steps.Why) }
+        }
+        $__tv = Get-RACollectionTrustVerdict -Outcome $script:_RAUpstreamOutcome -RowsRead $__upRead -Steps $__steps
+        if ($__tv.Write) {
+            $null = Invoke-RAStreamSql -Stream $script:RAStream -Sql (Get-RACollectionTrustWriteSql) -Mode 'scalar' -What 'saving what this run was built on' `
+                        -Params @{ CollectionTime = $script:RAStream.TimeText; Grain = [string]$script:RAStream.Grain; Trusted = $(if ($__tv.Trusted) { 1 } else { 0 }); Why = [string]$__tv.Why }
+        }
+    }
+} catch { Write-Warn2 ("whether this run was built on complete source data was not saved with its collection ({0}) -- the data sync checks the source runs itself" -f $_.Exception.Message) }
 
 # #533 (c): the one line that says how many disabled accounts the reports left out (SI_DisabledAssets_RiskAnalysis off).
 try {
@@ -8028,6 +8125,34 @@ if ([bool]$global:BuildSummaryByAI -or [long]$script:RAViewCount -gt 0) {
         }
 
         $isDetailedTemplate = ($global:ReportTemplate -like '*_Detailed')
+
+        # #1212 THE TOP 50 LISTS AND THE KEY FIGURES IN THE DATABASE (live 2026-11-12: the row-by-row pass below read 1.35 M rows
+        # at ~5,400 a minute, ~4 h). A Detailed run whose result is in SQL works them out set-based (RA-TopListsSql.ps1): the
+        # same lists in the same order and the same figures, from a narrow work table, GROUP BY / ORDER BY / TOP; the values
+        # only the AI prompt reads (links, cmdb id + data sensitivity, an asset count) only with the AI summary on. Anything
+        # it does not mirror -- or any failure -- "declines": nothing of it is used and the row-by-row pass runs as before.
+        $__sb = $null
+        if ($script:RAStreamOn -and $null -ne $script:RAStream -and [string]$script:RAStream.Grain -eq 'Detailed' -and (Test-RAKpiProtectionFromStore)) {
+            $__sbKpi = $null
+            try { $__sbKpi = New-RAKpiState } catch { $__sbKpi = $null; Write-Info ("the Top 50 lists and key figures are read row by row ({0})" -f $_.Exception.Message) }
+            if ($null -ne $__sbKpi) {
+                $__sbTick = New-RAProgressTicker -Stream $script:RAStream -What 'the Top 50 lists and key figures read the rows in the database' -Unit 'rows' -Total ([long]$script:RAViewCount) -Log { param($l, $t) Write-Info $t }   # #1180
+                $__sb = Invoke-RATopListsInSql -Stream $script:RAStream -ViewRows ([long]$script:RAViewCount) -Collapse $isDetailedTemplate -WithAi (-not $script:_RATopListsOnly) `
+                            -TopAssetsN $TopAssetsN -TopFindingsN $TopFindingsN -KpiState $__sbKpi -Progress $__sbTick -Log { param($l, $t) Write-Info $t }
+                Write-Info (Format-RATopListsLine -Result $__sb)
+                if ([string]$__sb.Status -ne 'ok') { $__sb = $null }
+            }
+        }
+        if ($null -ne $__sb) {
+            $__aiRows = [long]$__sb.Rows
+            $assetRanked = @($__sb.TopAssets); $findingRanked = @($__sb.TopFindings); $__assetsTotal = [long]$__sb.Assets
+            # every View row is in the key figures' state (counted in the database) -- the key figures' block takes it
+            $script:RAKpiFromAiPass = $__sb.KpiState
+            if ($isDetailedTemplate) { Write-Info ("AI rollup collapse: {0} *_Detailed rows -> {1} (asset x ConfigBucket) buckets (max-weighted; XLSX unaffected)" -f $__aiRows, [long]$__sb.Kept) }
+            if ([long]$__sb.NoAsset -gt 0) { Write-Info ("Top 50 lists: {0} row(s) name no asset and are not in the asset or finding lists (the key figures count them)" -f [long]$__sb.NoAsset) }
+            Write-RAStepPhaseRow -Stream $script:RAStream -Phase 'after the reports: the Top 50 lists and key figures in the database' -Seconds ([double]$__sb.Seconds) -Rows $__aiRows
+        } else {
+        # >>> THE ROW-BY-ROW ROLLUP (#1212: the fallback -- a run in memory, a Summary run, or a Detailed run the database pass declined)
         # The (asset x ConfigBucket) collapse, WHILE the rows stream by: the rows arrive highest weighted score first, so the
         # first row seen for a pair IS its max-weighted row (ties: the first, as before) -- the same representative the
         # two-pass collapse picked, without holding every row first (#638).
@@ -8061,6 +8186,8 @@ if ([bool]$global:BuildSummaryByAI -or [long]$script:RAViewCount -gt 0) {
 
             if (-not $findingAgg.ContainsKey($ConfId)) {
                 $findingAgg[$ConfId] = [pscustomobject]@{
+                    # #1212: where it first appears -- the last sort key, so equal findings keep one order (a hashtable's was random)
+                    FirstSeen               = $findingAgg.Count
                     ConfId                  = $ConfId
                     ConfName                = $ConfName
                     Category                = $Category
@@ -8136,6 +8263,8 @@ if ([bool]$global:BuildSummaryByAI -or [long]$script:RAViewCount -gt 0) {
 
             if (-not $assetAgg.ContainsKey($aggKey)) {
                 $assetAgg[$aggKey] = [pscustomobject]@{
+                    # #1212: where it first appears -- the last sort key, so equal assets keep one order (a hashtable's was random)
+                    FirstSeen           = $assetAgg.Count
                     Asset               = $Asset
                     # #288: the aggregation key ('id:<asset id>' or 'name:<name>'), so the web app can link the asset
                     AssetKey            = $aggKey
@@ -8310,7 +8439,8 @@ if ([bool]$global:BuildSummaryByAI -or [long]$script:RAViewCount -gt 0) {
                     }; Ascending = $true}, `
                     @{Expression="TotalRiskScore_Weighted";Descending=$true}, `
                     @{Expression="TotalRiskScore";Descending=$true}, `
-                    @{Expression="Findings";Descending=$true} |
+                    @{Expression="Findings";Descending=$true}, `
+                    @{Expression="FirstSeen";Ascending=$true} |
                 Select-Object -First $TopAssetsN
         }
 
@@ -8318,9 +8448,12 @@ if ([bool]$global:BuildSummaryByAI -or [long]$script:RAViewCount -gt 0) {
         $findingRanked = @()
         if ($findingAgg.Count -gt 0) {
             $findingRanked = $findingAgg.Values |
-                Sort-Object -Property @{Expression="TotalRiskScore_Weighted";Descending=$true}, @{Expression="TotalRiskScore";Descending=$true}, @{Expression="AffectedAssetCount";Descending=$true} |
+                Sort-Object -Property @{Expression="TotalRiskScore_Weighted";Descending=$true}, @{Expression="TotalRiskScore";Descending=$true}, @{Expression="AffectedAssetCount";Descending=$true}, @{Expression="FirstSeen";Ascending=$true} |
                 Select-Object -First $TopFindingsN
         }
+        $__assetsTotal = [long]$assetAgg.Count
+        # <<< THE ROW-BY-ROW ROLLUP
+        }   # close #1212 `else` -- the row-by-row rollup
         # #288: the executive view shows this run's own Top-50 (until a peer's is adopted below).
         $script:_RAExecTopAssets = @($assetRanked); $script:_RAExecTopFindings = @($findingRanked)
         $script:_RAExecFiguresFrom = [string]$global:ReportTemplate; $script:_RAExecFiguresAt = $null
@@ -8354,8 +8487,10 @@ if ([bool]$global:BuildSummaryByAI -or [long]$script:RAViewCount -gt 0) {
             # just hide data -- it lets the model state "the affected assets are X, Y, Z" as if the
             # list were complete. The counts make the truncation visible to the model AND to anyone
             # reading the prompt back.
-            if ($f.AssetRiskScores.Count -gt 5) {
-                $topAssetsForFinding += ('; [+{0} more of {1} total]' -f ($f.AssetRiskScores.Count - 5), $f.AssetRiskScores.Count)
+            # #1212: the database pass hands only the hottest assets and says how many there are in all (AssetRiskScoreCount)
+            $__arsN = if ($f.PSObject.Properties['AssetRiskScoreCount']) { [int]$f.AssetRiskScoreCount } else { [int]$f.AssetRiskScores.Count }
+            if ($__arsN -gt 5) {
+                $topAssetsForFinding += ('; [+{0} more of {1} total]' -f ($__arsN - 5), $__arsN)
             }
 
             $finLinks = ""
@@ -8400,7 +8535,7 @@ if ([bool]$global:BuildSummaryByAI -or [long]$script:RAViewCount -gt 0) {
 ReportTemplate: $($global:ReportTemplate)
 Final rows:     $($script:RAViewCount)
 Included in AI: $($__aiRows) (TopN findings)
-Asset rollup:   $($assetAgg.Keys.Count) unique assets (TopAssetsN=$TopAssetsN included)
+Asset rollup:   $($__assetsTotal) unique assets (TopAssetsN=$TopAssetsN included)
 RiskScore col:  $colRiskScore
 Output file:    $($global:OutputXlsx)
 Generated:      $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')

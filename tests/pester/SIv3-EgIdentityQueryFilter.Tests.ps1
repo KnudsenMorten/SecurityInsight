@@ -362,3 +362,65 @@ Describe 'WIRING: the read builds every user query from the one builder, with th
         $t | Should -Not -MatchExactly "ExposureGraphNodes \| where NodeLabel == '\`$label'"
     }
 }
+
+Describe 'THE QUERY TEXT IS VALID KQL: every count probe and page, every label, with and without the filter' {
+    # Field 2026-11-12: the user count probe answered HTTP 400 "The incomplete fragment is unexpected" every run -- the
+    # filter's privilege step closed one parenthesis too many -- and the read fell back to the unfiltered bucketed fetch.
+    # The offline reading above never parses the KQL, so the text itself is checked here: string literals stripped (the
+    # Risk Analysis lint's Get-RAKqlStripped), then balanced brackets and no dangling operator.
+    BeforeAll {
+        . (Join-Path $PSScriptRoot '_RaKqlDynamicLint.ps1')
+        function script:Get-KqlShapeProblems([string]$Kql) {
+            $out = New-Object System.Collections.Generic.List[string]
+            $s = Get-RAKqlStripped $Kql
+            # (the stripper leaves every literal as "s" / 's'; a quote left over after those is one that never closed)
+            $q = $s.Replace('"s"', '').Replace("'s'", '')
+            if ($q.Contains('"')) { $out.Add('an unclosed double quote') }
+            if ($q.Contains("'")) { $out.Add('an unclosed single quote') }
+            $stack = New-Object System.Collections.Generic.Stack[char]
+            $pair = @{ [char]')' = [char]'('; [char]']' = [char]'['; [char]'}' = [char]'{' }
+            for ($i = 0; $i -lt $s.Length; $i++) {
+                $c = $s[$i]
+                if ($c -eq '(' -or $c -eq '[' -or $c -eq '{') { $stack.Push($c) }
+                elseif ($pair.ContainsKey($c)) {
+                    if ($stack.Count -eq 0 -or $stack.Pop() -ne $pair[$c]) { $out.Add(('an unmatched "{0}" at {1}: ...{2}' -f $c, $i, $s.Substring([Math]::Max(0, $i - 60), [Math]::Min(60, $i)))); break }
+                }
+            }
+            if ($stack.Count -gt 0) { $out.Add(('{0} bracket(s) never closed' -f $stack.Count)) }
+            foreach ($bad in '\|\s*\|', '\|\s*$', '^\s*\|', '\(\s*\)','\(\s*,', ',\s*\)', ',\s*,', '\b(and|or|not)\s*[),|]', '\b(and|or)\s*$', '(==|!=|=)\s*[),|]', '\b(and|or)\s+(and|or)\b') {
+                if ($s -match $bad) { $out.Add(('a dangling operator ({0}): {1}' -f $bad, $Matches[0])) }
+            }
+            $out.ToArray()
+        }
+        $script:Filters = [ordered]@{
+            'no filter'                              = ''
+            'SI_Identity_SkipNeverSyncedDisabledAd' = (Get-SIEgNeverSyncedSkipKql -CriticalGroups $script:Tier)
+            'SI_Identity_SkipNeverSyncedAd'         = (Get-SIEgNeverSyncedSkipKql -CriticalGroups $script:Tier -AnyEnabledState)
+            'a group name that is not safe'          = (Get-SIEgNeverSyncedSkipKql -CriticalGroups @('Domain Admins', "O'Brien \ Admins"))
+            'no tier 0/1 group names'                = (Get-SIEgNeverSyncedSkipKql -CriticalGroups @())
+        }
+    }
+    It 'the checker itself finds the field defect (one closing parenthesis too many) and a dangling operator' {
+        @(Get-KqlShapeProblems 'T | extend a = iff(isnotempty(tostring(x)), 1, 2))').Count | Should -BeGreaterThan 0
+        @(Get-KqlShapeProblems 'T | where a == 1 and | count').Count | Should -BeGreaterThan 0
+        @(Get-KqlShapeProblems "T | where a == 'x").Count | Should -BeGreaterThan 0
+        @(Get-KqlShapeProblems "T | where a == 'x(' | extend b = dynamic(null) | count").Count | Should -Be 0
+    }
+    It 'every label''s count probe and pages (single and bucket) are sound with every filter' {
+        foreach ($label in 'user', 'serviceprincipal', 'managedidentity', 'group') {
+            foreach ($k in $script:Filters.Keys) {
+                $flt = $script:Filters[$k]
+                foreach ($q in @((Get-SIEgIdentityQueryText -Label $label -Kind count -Filter $flt),
+                                 (Get-SIEgIdentityQueryText -Label $label -Kind page -Filter $flt),
+                                 (Get-SIEgIdentityQueryText -Label $label -Kind page -Filter $flt -Buckets 8 -Bucket 3))) {
+                    @(Get-KqlShapeProblems $q) | Should -BeNullOrEmpty -Because ('{0} / {1}: {2}' -f $label, $k, $q)
+                }
+            }
+        }
+    }
+    It 'the corrected privilege step is pinned: the criticality level test closes exactly the iff it opens' {
+        $f = Get-SIEgNeverSyncedSkipKql -CriticalGroups $script:Tier
+        $f | Should -Match ([regex]::Escape(' or iff(gettype(_siRl.criticalitylevel) == "dictionary", isnotempty(tostring(_siRl.criticalitylevel.criticalitylevel)), isnotempty(tostring(_siRl.criticalitylevel))) | extend _siSkip = '))
+        $f | Should -Not -Match ([regex]::Escape('isnotempty(tostring(_siRl.criticalitylevel))))'))
+    }
+}

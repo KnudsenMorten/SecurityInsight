@@ -222,9 +222,19 @@ function Wait-SIAcrBuilds {
         'Started', 'Running' = still going). Returns the builds with Status set. A build that ends in anything but Succeeded
         gets its log's tail (LogTail), and -Log prints it. Never throws -- the caller decides per image. -Az: ignored (see
         Start-SIAcrBuild).
+        A WAIT IS NEVER SILENT: a build can run for longer than the liveness rule's 15 minutes without a sign of life (the
+        updater's early self-move waits here in the middle of an update). Every poll beats the updater's own sign of life
+        (-Beat { param($What) }; default Invoke-SIUpdaterLockBeat when it is loaded -- on this thread, never a runspace), and
+        -Log gets one plain line at most every -LineEveryMinutes (5): "<What>: waiting for the image build, <N> min".
+        -What: what is built (default: the images). A beat that fails never fails the wait.
     #>
     param([scriptblock]$Rest, [scriptblock]$Az, [Parameter(Mandatory)][string]$AcrName, [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Builds,
-          [int]$TimeoutMinutes = 30, [int]$PollSeconds = 15, [scriptblock]$Log, [string]$SubscriptionId, [string]$ResourceGroup)
+          [int]$TimeoutMinutes = 30, [int]$PollSeconds = 15, [scriptblock]$Log, [string]$SubscriptionId, [string]$ResourceGroup,
+          [string]$What = '', [scriptblock]$Beat, [double]$LineEveryMinutes = 5)
+    $waitWhat = if ("$What".Trim()) { "$What".Trim() } else { (@($Builds | ForEach-Object { [string]$_.Image } | Where-Object { $_ }) -join ', ') }
+    if (-not $waitWhat) { $waitWhat = 'the image build' }
+    if (-not $Beat -and (Get-Command -Name Invoke-SIUpdaterLockBeat -ErrorAction SilentlyContinue)) { $Beat = { param($w) $null = Invoke-SIUpdaterLockBeat -What $w } }
+    $waitStart = [datetime]::UtcNow; $lastLine = $waitStart
     if (-not $SubscriptionId) { $SubscriptionId = Get-SIUpdateRestSubscription }
     $reg = $null
     try { $Rest = Resolve-SIFastRollRest -Rest $Rest -SubscriptionId $SubscriptionId; $reg = Get-SIAcrRegistry -Rest $Rest -SubscriptionId $SubscriptionId -AcrName $AcrName -ResourceGroup $ResourceGroup }
@@ -251,6 +261,13 @@ function Wait-SIAcrBuilds {
         if ([datetime]::UtcNow -ge $deadline) {
             foreach ($b in @($Builds | Where-Object { $_.Status -notin $script:SIAcrDone })) { $b.Status = 'Timeout' }
             break
+        }
+        # still building: the update's sign of life on every poll, a plain line at most every -LineEveryMinutes
+        $waitedMin = [int][Math]::Floor(([datetime]::UtcNow - $waitStart).TotalMinutes)
+        if ($Beat) { try { $null = & $Beat ('{0}: waiting for the image build, {1} min' -f $waitWhat, $waitedMin) } catch { } }
+        if ($Log -and ([datetime]::UtcNow - $lastLine).TotalMinutes -ge $LineEveryMinutes) {
+            try { & $Log ('{0}: waiting for the image build, {1} min' -f $waitWhat, $waitedMin) } catch { }
+            $lastLine = [datetime]::UtcNow
         }
         if ($PollSeconds -gt 0) { Start-Sleep -Seconds $PollSeconds }
     }

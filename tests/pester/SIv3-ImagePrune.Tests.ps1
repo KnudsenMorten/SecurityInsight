@@ -230,6 +230,30 @@ Describe 'IMAGE-PRUNE NEGATIVE: never another registry, never anything else' {
         $null = & $seam.Delete 'si-management' (D 'a')
         [uri]::UnescapeDataString($script:Bodies[0]) | Should -Match 'scope=repository:si-management:pull,metadata_read,delete&'
     }
+    It 'CONTRACT point 4: the real seam beats before EVERY HTTP request (token calls, each listing page, manifest, delete); a failing beat is tried once per window' {
+        $script:Seq = New-Object System.Collections.Generic.List[string]
+        $rest = {
+            param($Method, $Uri, $Body, $Resource, $Headers)
+            $script:Seq.Add("HTTP $Method")
+            if ($Uri -like '*/oauth2/exchange') { return [pscustomobject]@{ Status = 200; Body = '{"refresh_token":"r"}'; Headers = @{} } }
+            if ($Uri -like '*/oauth2/token') { return [pscustomobject]@{ Status = 200; Body = '{"access_token":"a"}'; Headers = @{} } }
+            if ($Uri -like '*_manifests?n=1000') { return [pscustomobject]@{ Status = 200; Body = '{"manifests":[{"digest":"' + (D 'a') + '","tags":["v1"]}]}'; Headers = @{ Link = '</acr/v1/si-orchestrator/_manifests?last=x&n=1000>; rel="next"' } } }
+            if ($Uri -like '*_manifests?last=x*') { return [pscustomobject]@{ Status = 200; Body = '{"manifests":[{"digest":"' + (D 'b') + '","tags":["v2"]}]}'; Headers = @{} } }
+            [pscustomobject]@{ Status = 202; Body = ''; Headers = @{} }
+        }
+        $seam = New-SIUpdaterRegistrySeam -LoginServer $script:Login -Rest $rest -Token { param($r) 'aad-token' } -BeatSeconds 0 -Beat { param($w) $script:Seq.Add('BEAT') }
+        $ls = & $seam.List 'si-orchestrator'
+        @($ls.Manifests).Count | Should -Be 2 -Because 'both pages were read'
+        $null = & $seam.Delete 'si-orchestrator' (D 'a')
+        $http = @(for ($i = 0; $i -lt $script:Seq.Count; $i++) { if ($script:Seq[$i] -like 'HTTP *') { $i } })
+        $http.Count | Should -Be 5 -Because 'exchange + token + 2 listing pages + 1 delete'
+        foreach ($i in $http) { $script:Seq[$i - 1] | Should -Be 'BEAT' }
+        # a beat that fails: tried once in a long window, the requests all go through
+        $script:Tries = 0
+        $seam2 = New-SIUpdaterRegistrySeam -LoginServer $script:Login -Rest $rest -Token { param($r) 'aad-token' } -BeatSeconds 3600 -Beat { $script:Tries++; throw 'database unreachable' }
+        @((& $seam2.List 'si-orchestrator').Manifests).Count | Should -Be 2
+        $script:Tries | Should -Be 1
+    }
     It 'the clean-up code calls no module, no CLI and no ARM write' {
         $src = [IO.File]::ReadAllText((Join-Path $script:SIRoot 'container\updater\_shared\SI-UpdaterImagePrune.ps1'))
         $src | Should -Not -Match '(?im)^\s*Import-Module|\baz\s+acr\b|Remove-AzContainerRegistry|Connect-AzAccount'
@@ -401,8 +425,9 @@ Describe 'IMAGE-PRUNE: what the install records (the read of jobs and apps, the 
                    -Version '3.1.11' -PreviousVersion '3.1.10' -Registry $f.Seam -Get { param($n) '' } -Store @{ Invoke = {} } `
                    -ReadSecret { param($n) $null } -WriteSecret { param($n, $v) $script:Written[$n] = $v }
         $res.Done | Should -BeTrue
-        @($script:Log | Where-Object { $_ -like 'si-orchestrator:*' }).Count | Should -Be 1
-        @($script:Log | Where-Object { $_ -like 'si-management:*' }).Count | Should -Be 1
+        @($script:Log | Where-Object { $_ -like 'si-orchestrator:*deleted*' }).Count | Should -Be 1
+        @($script:Log | Where-Object { $_ -eq 'si-orchestrator: 4 images, 2 kept, 2 to delete' }).Count | Should -Be 1 -Because 'the plan is said before the deletes'
+        @($script:Log | Where-Object { $_ -like 'si-management:*deleted*' }).Count | Should -Be 1
         $rec = ConvertFrom-SIUpdaterReleaseImageRecord -Json $script:Written['SI-Release-Images']
         $rec.CurrentVersion | Should -Be '3.1.11'; $rec.PreviousVersion | Should -Be '3.1.10'
         @($rec.Current | ForEach-Object { Format-SIUpdaterImageRef -Ref $_ }) | Should -Be @('si-management:src-2', 'si-orchestrator:v4-aaa')
@@ -434,6 +459,161 @@ Describe 'IMAGE-PRUNE: what the install records (the read of jobs and apps, the 
         Mock Get-SIUpdaterRegistry { throw 'the container registry was not found' }
         { Invoke-SIUpdaterImagePruneStep -ResourceGroup 'rg-si' -AcrName 'acrsi' -SubscriptionId 'sub' -Healthy $true -Before (& $script:Prev) -Get { param($n) '' } } | Should -Not -Throw
         ($script:Log -join "`n") | Should -Match 'WARNING: old images: not cleaned up this time .* every image is kept'
+    }
+}
+
+Describe 'IMAGE-PRUNE: a long clean-up stays alive and says what it did as it goes (live 2026-11-12: stopped as dead after 15 minutes)' {
+    It 'beats at every registry call -- every list, manifest read and delete' {
+        $f = New-StandardRegistry
+        $script:Beats = New-Object System.Collections.Generic.List[string]
+        $script:Seq = New-Object System.Collections.Generic.List[string]
+        $seq = $script:Seq
+        foreach ($k in 'List', 'Manifest', 'Delete') {
+            $orig = $f.Seam[$k]
+            $f.Seam[$k] = { $seq.Add('CALL'); & $orig @args }.GetNewClosure()
+        }
+        $null = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current (& $script:Cur) -Previous (& $script:Prev) -BeatSeconds 0 -Beat { param($w) $script:Seq.Add("BEAT $w") }
+        # one beat right before EVERY registry call
+        $calls = @(for ($i = 0; $i -lt $script:Seq.Count; $i++) { if ($script:Seq[$i] -eq 'CALL') { $i } })
+        $calls.Count | Should -Be $f.Calls.Count
+        foreach ($i in $calls) { $script:Seq[$i - 1] | Should -BeLike 'BEAT *' -Because 'a beat comes right before every registry call' }
+        @($script:Seq | Where-Object { $_ -like 'BEAT deleting si-orchestrator (* of 2)' }).Count | Should -Be 2
+    }
+    It 'a beat is TRIED at most once per -BeatSeconds, also when it fails (a slow or unreachable database never slows the clean-up to hours)' {
+        $f = New-StandardRegistry
+        $script:Tries = 0
+        $r = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current (& $script:Cur) -Previous (& $script:Prev) -BeatSeconds 3600 -Beat { $script:Tries++; throw 'database unreachable' }
+        $script:Tries | Should -Be 1
+        $r.Done | Should -BeTrue; $f.Deleted.Count | Should -Be 4
+    }
+    It 'the step''s beat asks the lock for a beat every 30 seconds at most (with the 15-second try limit: at least once a minute)' {
+        $f = New-StandardRegistry
+        Mock Write-UpdLog { }
+        Mock Get-SIUpdaterRegistry { [pscustomobject]@{ id = 'x'; name = 'acrsi'; resourceGroup = 'rg-si'; loginServer = 'acrsi.azurecr.io' } }
+        Mock Invoke-SIUpdaterLockBeat { $true }
+        $null = Invoke-SIUpdaterImagePruneStep -ResourceGroup 'rg-si' -AcrName 'acrsi' -SubscriptionId 'sub' -Healthy $true -Before (& $script:Prev) -After (& $script:Cur) `
+                    -Version '3.1.13' -PreviousVersion '3.1.12' -Registry $f.Seam -Get { param($n) '' } -WriteSecret { param($n, $v) }
+        Should -Invoke Invoke-SIUpdaterLockBeat -ParameterFilter { $MinSeconds -eq 30 }
+    }
+    It 'counts the child manifests of a kept multi-platform image apart, and "n of N" leaves locked images out' {
+        $f = New-FakeRegistry @{
+            'si-orchestrator' = @(
+                (M 'orch-v4' @('v4-aaa') @() @('orch-v4-amd64', 'orch-v4-arm64')),
+                (M 'orch-v4-amd64' @() @('L0', 'L4')), (M 'orch-v4-arm64' @() @('L0', 'L4a')),
+                (M 'orch-v3' @('v3-bbb') @('L0', 'L3')),
+                (M 'orch-v2' @('v2-ccc') @('L0', 'L2')),
+                (M 'orch-v1' @('v1-ddd') @('L0', 'L1') -DeleteEnabled $false))
+        }
+        $script:Seq = New-Object System.Collections.Generic.List[string]
+        $r = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current (Snap @('si-orchestrator:v4-aaa')) -Previous (Snap @('si-orchestrator:v3-bbb')) `
+                 -BeatSeconds 0 -Beat { param($w) $script:Seq.Add($w) } -Log { param($l) $script:Seq.Add($l) }
+        $script:Seq | Should -Contain 'si-orchestrator: 6 images, 4 kept (2 of them child manifests of multi-platform images), 2 to delete'
+        @($script:Seq | Where-Object { $_ -like 'deleting si-orchestrator (*' }) | Should -Be @('deleting si-orchestrator (1 of 1)')
+        $o = @($r.Repos | Where-Object { $_.Repo -eq 'si-orchestrator' })[0]
+        $o.Kept | Should -Be 4; $o.Children | Should -Be 2; $o.Deleted | Should -Be 1
+        ($o.Line) | Should -Match '1 locked against deletion'
+    }
+    It 'each repository''s plan is written before its deletes and its result right after, before the next repository' {
+        $f = New-StandardRegistry
+        $script:Seq = New-Object System.Collections.Generic.List[string]
+        $f.Seam.Delete = { param($Repo, $Digest) $script:Seq.Add("DELETE $Repo"); [pscustomobject]@{ Ok = $true; Status = 202; Why = '' } }
+        $null = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current (& $script:Cur) -Previous (& $script:Prev) -Log { param($l) $script:Seq.Add("LOG $l") } -Sleep { param($s) }
+        $o = @($script:Seq | Where-Object { $_ -like '*si-orchestrator*' })
+        $o[0] | Should -Be 'LOG si-orchestrator: 4 images, 2 kept, 2 to delete'
+        $o[1] | Should -Be 'DELETE si-orchestrator'; $o[2] | Should -Be 'DELETE si-orchestrator'
+        $o[3] | Should -BeLike 'LOG si-orchestrator: 2 old images deleted*'
+        # plan, result, plan, result ... -- a repository's result is written before the next repository starts
+        $logs = @($script:Seq | Where-Object { $_ -like 'LOG *' })
+        $logs.Count | Should -Be 6
+        for ($i = 0; $i -lt $logs.Count; $i += 2) {
+            $logs[$i] | Should -BeLike '* to delete'
+            $logs[$i + 1] | Should -BeLike '* deleted*'
+            ($logs[$i] -split ':')[0] | Should -Be ($logs[$i + 1] -split ':')[0]
+        }
+    }
+    It 'a beat or a log line that fails never stops the clean-up' {
+        $f = New-StandardRegistry
+        $r = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current (& $script:Cur) -Previous (& $script:Prev) -Beat { throw 'lock table gone' } -Log { throw 'log gone' }
+        $r.Done | Should -BeTrue
+        $f.Deleted.Count | Should -Be 4
+        @($r.Lines) | Should -Contain 'si-orchestrator: 2 old images deleted, 2 left (this release and the one before)'
+    }
+    It 'the step beats the update''s own sign of life through Invoke-SIUpdaterLockBeat and writes each line once' {
+        $f = New-StandardRegistry
+        $script:Log = New-Object System.Collections.Generic.List[string]
+        Mock Write-UpdLog { $script:Log.Add($m) }
+        Mock Get-SIUpdaterRegistry { [pscustomobject]@{ id = 'x'; name = 'acrsi'; resourceGroup = 'rg-si'; loginServer = 'acrsi.azurecr.io' } }
+        Mock Invoke-SIUpdaterLockBeat { $true }
+        $null = Invoke-SIUpdaterImagePruneStep -ResourceGroup 'rg-si' -AcrName 'acrsi' -SubscriptionId 'sub' -Healthy $true -Before (& $script:Prev) -After (& $script:Cur) `
+                    -Version '3.1.13' -PreviousVersion '3.1.12' -Registry $f.Seam -Get { param($n) '' } -WriteSecret { param($n, $v) }
+        Should -Invoke Invoke-SIUpdaterLockBeat -ParameterFilter { $What -like 'old images: *' }
+        @($script:Log | Where-Object { $_ -like 'si-base: *deleted*' }).Count | Should -Be 1
+        @($script:Log | Where-Object { $_ -eq 'old images: 4 deleted in 3 repositories' }).Count | Should -Be 1
+    }
+}
+
+Describe 'IMAGE-PRUNE CONTRACT point 5: the release record is written BEFORE the first delete' {
+    BeforeEach {
+        Mock Get-SIUpdaterRegistry { [pscustomobject]@{ id = 'x'; name = 'acrsi'; resourceGroup = 'rg-si'; loginServer = 'acrsi.azurecr.io' } }
+        $script:Log = New-Object System.Collections.Generic.List[string]
+        Mock Write-UpdLog { $script:Log.Add($m) }
+    }
+    It 'the record (this release + the one before, no result yet) is written before any delete; then again with what was done' {
+        $f = New-StandardRegistry
+        $script:Seq = New-Object System.Collections.Generic.List[string]
+        $seq = $script:Seq; $origDelete = $f.Seam.Delete
+        $f.Seam.Delete = { param($Repo, $Digest) $seq.Add('DELETE'); & $origDelete $Repo $Digest }.GetNewClosure()
+        $script:Written = New-Object System.Collections.Generic.List[string]
+        $null = Invoke-SIUpdaterImagePruneStep -ResourceGroup 'rg-si' -AcrName 'acrsi' -SubscriptionId 'sub' -Healthy $true -Before (& $script:Prev) -After (& $script:Cur) `
+                    -Version '3.1.13' -PreviousVersion '3.1.12' -Registry $f.Seam -Get { param($n) '' } -WriteSecret { param($n, $v) $script:Seq.Add('RECORD'); $script:Written.Add($v) }
+        $script:Seq.IndexOf('RECORD') | Should -Be 0 -Because 'the record comes before the first delete'
+        $script:Seq.IndexOf('DELETE') | Should -BeGreaterThan 0
+        @($script:Seq | Where-Object { $_ -eq 'RECORD' }).Count | Should -Be 2
+        $first = $script:Written[0] | ConvertFrom-Json
+        $first.current.version | Should -Be '3.1.13'; $first.previous.version | Should -Be '3.1.12'
+        $first.PSObject.Properties['prune'] | Should -BeNullOrEmpty -Because 'nothing was done yet when it was written'
+        ($script:Written[1] | ConvertFrom-Json).prune.done | Should -BeTrue
+    }
+    It 'NEGATIVE: the record cannot be written -> NOTHING is deleted, said once' {
+        $f = New-StandardRegistry
+        $r = Invoke-SIUpdaterImagePruneStep -ResourceGroup 'rg-si' -AcrName 'acrsi' -SubscriptionId 'sub' -Healthy $true -Before (& $script:Prev) -After (& $script:Cur) `
+                 -Version '3.1.13' -PreviousVersion '3.1.12' -Registry $f.Seam -Get { param($n) '' } -WriteSecret { param($n, $v) throw 'vault refused' }
+        $r.Done | Should -BeFalse
+        $f.Deleted.Count | Should -Be 0
+        @($f.Calls | Where-Object { $_ -like 'DELETE*' }).Count | Should -Be 0
+        @($script:Log | Where-Object { $_ -like 'old images: not cleaned up -- the release record could not be written before the deletes*' }).Count | Should -Be 1
+    }
+    It 'the second record write (with what was done) fails: the deletes stand, the first record stands, said once, the step does not throw' {
+        $f = New-StandardRegistry
+        $script:Writes = New-Object System.Collections.Generic.List[string]
+        $r = Invoke-SIUpdaterImagePruneStep -ResourceGroup 'rg-si' -AcrName 'acrsi' -SubscriptionId 'sub' -Healthy $true -Before (& $script:Prev) -After (& $script:Cur) `
+                 -Version '3.1.13' -PreviousVersion '3.1.12' -Registry $f.Seam -Get { param($n) '' } `
+                 -WriteSecret { param($n, $v) if ($script:Writes.Count -ge 1) { throw 'vault refused the second write' }; $script:Writes.Add($v) }
+        $r.Done | Should -BeTrue
+        $f.Deleted.Count | Should -Be 4
+        $script:Writes.Count | Should -Be 1
+        ($script:Writes[0] | ConvertFrom-Json).current.version | Should -Be '3.1.13'
+        @($script:Log | Where-Object { $_ -like 'NOTE: old images: what the clean-up did could not be added to the release record*' }).Count | Should -Be 1
+    }
+    It 'NEGATIVE: no place to write the record -> nothing is deleted' {
+        $f = New-StandardRegistry
+        $r = Invoke-SIUpdaterImagePruneStep -ResourceGroup 'rg-si' -AcrName 'acrsi' -SubscriptionId 'sub' -Healthy $true -Before (& $script:Prev) -After (& $script:Cur) `
+                 -Version '3.1.13' -Registry $f.Seam -Get { param($n) '' }
+        $r.Done | Should -BeFalse
+        $f.Deleted.Count | Should -Be 0
+        @($script:Log | Where-Object { $_ -like '*no place to write the release record*' }).Count | Should -Be 1
+    }
+    It 'an early "not cleaned up" (the previous release not recorded) goes through the step and is logged exactly once' {
+        $f = New-StandardRegistry
+        $null = Invoke-SIUpdaterImagePruneStep -ResourceGroup 'rg-si' -AcrName 'acrsi' -SubscriptionId 'sub' -Healthy $true -Before (Snap @() -Ok $false -Reason 'x') -After (& $script:Cur) `
+                    -Version '3.1.13' -Registry $f.Seam -Get { param($n) '' } -ReadSecret { param($n) $null } -WriteSecret { param($n, $v) }
+        @($script:Log | Where-Object { $_ -like 'old images: not cleaned up -- the images of the previous release are not recorded*' }).Count | Should -Be 1
+        $f.Deleted.Count | Should -Be 0
+    }
+    It 'the plan line is said live but is not one of the result lines' {
+        $f = New-StandardRegistry
+        $r = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current (& $script:Cur) -Previous (& $script:Prev) -Log { param($l) }
+        @($r.Lines | Where-Object { $_ -like '* to delete' }).Count | Should -Be 0
     }
 }
 
@@ -553,5 +733,133 @@ Describe 'IMAGE-PRUNE WIRING: after the read-back, never before' {
     It 'the step runs with this update''s version and the version that ran before it' {
         $step = $script:Inv.IndexOf('Invoke-SIUpdaterImagePruneStep -ResourceGroup')
         $script:Inv.Substring($step, 600) | Should -Match '-Version "\$\(\$code\.Version\)" -PreviousVersion "\$Deployed"'
+    }
+}
+
+Describe 'IMAGE-PRUNE: the read-back count is the count the registry ends at (its deletes complete after it answers them)' {
+    # Live 2026-11-13: the result line said "3 left" right after the deletes while the registry ended at 2 -- a deleted image
+    # was still listed for a moment. The listing is read again (short pauses, a sign of life before each) while an image the
+    # registry took as deleted is still listed; still listed after the last re-read = "deletes still completing".
+    BeforeAll {
+        # one engine repository, current v4 + previous v3 kept, v2 + v1 deleted
+        function script:New-OneRepo { New-FakeRegistry @{ 'si-orchestrator' = @((M 'orch-v4' @('v4-aaa') @('L0', 'L4')), (M 'orch-v3' @('v3-bbb') @('L0', 'L3')), (M 'orch-v2' @('v2-ccc') @('L0', 'L2')), (M 'orch-v1' @('v1-ddd') @('L0', 'L1'))) } }
+        # the first deleted manifest stays listed for -Times listings after it was deleted (-1 = it never goes)
+        function script:Add-Ghost($Fake, [int]$Times) {
+            $state = @{ Ghost = $null; Left = $Times }
+            $origList = $Fake.Seam.List; $origDel = $Fake.Seam.Delete
+            $Fake.Seam.Delete = { param($Repo, $Digest) if (-not $state.Ghost) { $state.Ghost = [pscustomobject]@{ Digest = $Digest; Tags = @(); MediaType = ''; DeleteEnabled = $true } }; & $origDel $Repo $Digest }.GetNewClosure()
+            $Fake.Seam.List = {
+                param($Repo)
+                $r = & $origList $Repo
+                if ($state.Ghost -and $state.Left -ne 0) { $state.Left--; $r = [pscustomobject]@{ Found = $true; Manifests = @(@($r.Manifests) + @($state.Ghost)) } }
+                $r
+            }.GetNewClosure()
+            $state
+        }
+        $script:One = @{ Current = (Snap @('si-orchestrator:v4-aaa')); Previous = (Snap @('si-orchestrator:v3-bbb')) }
+    }
+    BeforeEach {
+        $script:Slept = New-Object System.Collections.Generic.List[int]
+        $script:Beats = New-Object System.Collections.Generic.List[string]
+    }
+    It 'a deleted image still listed on the first re-read: read again after a short pause, and the line says the count it ends at' {
+        $f = New-OneRepo; $null = Add-Ghost $f 1
+        $r = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current $script:One.Current -Previous $script:One.Previous `
+                 -BeatSeconds 0 -Beat { param($w) $script:Beats.Add($w) } -Sleep { param($s) $script:Slept.Add($s) }
+        $o = @($r.Repos)[0]
+        $o.Deleted | Should -Be 2; $o.Left | Should -Be 2; $o.Pending | Should -Be 0
+        $o.Line | Should -Be 'si-orchestrator: 2 old images deleted, 2 left (this release and the one before)'
+        @($script:Slept) | Should -Be @(5) -Because 'one short pause before the one re-read that was needed'
+        @($f.Calls | Where-Object { $_ -eq 'LIST si-orchestrator' }).Count | Should -Be 3 -Because 'the plan, the read-back, one re-read'
+        $wi = $script:Beats.IndexOf('waiting for the deletes of si-orchestrator to complete')
+        $wi | Should -BeGreaterOrEqual 0 -Because 'a sign of life before the pause'
+        $script:Beats[$wi + 1] | Should -Be 'reading si-orchestrator' -Because 'and before the re-read'
+        ($o.Line) | Should -Not -Match 'WARNING'
+    }
+    It 'the registry settled at once: no pause, no extra read (as before)' {
+        $f = New-OneRepo
+        $r = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current $script:One.Current -Previous $script:One.Previous -Sleep { param($s) $script:Slept.Add($s) }
+        $script:Slept.Count | Should -Be 0
+        @($f.Calls | Where-Object { $_ -eq 'LIST si-orchestrator' }).Count | Should -Be 2
+        @($r.Repos)[0].Left | Should -Be 2
+    }
+    It 'still listed after the last re-read: bounded (three pauses, 30 seconds in all), and said as deletes still completing with the count seen' {
+        $f = New-OneRepo; $null = Add-Ghost $f -1
+        $r = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current $script:One.Current -Previous $script:One.Previous -Sleep { param($s) $script:Slept.Add($s) }
+        @($script:Slept) | Should -Be @(5, 10, 15)
+        @($f.Calls | Where-Object { $_ -eq 'LIST si-orchestrator' }).Count | Should -Be 5 -Because 'the plan, the read-back and three re-reads -- never more'
+        $o = @($r.Repos)[0]
+        $o.Left | Should -Be 3; $o.Pending | Should -Be 1
+        $o.Line | Should -Be 'si-orchestrator: 2 old images deleted, 3 listed right after -- deletes still completing (1 of the deleted images still listed; the registry removes them shortly)'
+        $o.Line | Should -Not -Match 'WARNING' -Because 'a delete still completing is not a lost image'
+        $r.Done | Should -BeTrue
+    }
+    It 'a kept image missing stays the loud case, also while deletes are still completing' {
+        $f = New-OneRepo; $null = Add-Ghost $f -1
+        $origDel = $f.Seam.Delete; $w = $f
+        $f.Seam.Delete = { param($Repo, $Digest) $res = & $origDel $Repo $Digest; $k = @($w.Repos[$Repo] | Where-Object { $_.Name -eq 'orch-v3' }) | Select-Object -First 1; if ($k) { $w.Repos[$Repo].Remove($k) }; $res }.GetNewClosure()
+        $r = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current $script:One.Current -Previous $script:One.Previous -Sleep { param($s) }
+        @($r.Repos)[0].Line | Should -Match 'deletes still completing'
+        @($r.Repos)[0].Line | Should -Match 'WARNING: 1 image\(s\) that should be kept are not there any more'
+    }
+    It 'a re-read that fails keeps what the read before it saw; a read-back that cannot be read at all is said as before' {
+        $f = New-OneRepo; $null = Add-Ghost $f -1
+        # (counted for the engine repository only: its base repository is listed too, between the plan and the read-back)
+        $inner = $f.Seam.List; $n = @{ c = 0 }
+        $f.Seam.List = { param($Repo) if ($Repo -eq 'si-orchestrator') { $n.c++; if ($n.c -ge 3) { throw 'HTTP 500' } }; & $inner $Repo }.GetNewClosure()
+        $r = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current $script:One.Current -Previous $script:One.Previous -Sleep { param($s) }
+        $o = @($r.Repos)[0]; $o.Left | Should -Be 3; $o.Line | Should -Match '3 listed right after -- deletes still completing'
+        $f2 = New-OneRepo; $inner2 = $f2.Seam.List; $n2 = @{ c = 0 }
+        $f2.Seam.List = { param($Repo) if ($Repo -eq 'si-orchestrator') { $n2.c++; if ($n2.c -ge 2) { throw 'HTTP 500' } }; & $inner2 $Repo }.GetNewClosure()
+        $r2 = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f2.Seam -Current $script:One.Current -Previous $script:One.Previous -Sleep { param($s) }
+        @($r2.Repos)[0].Left | Should -Be -1
+        @($r2.Repos)[0].Line | Should -Be 'si-orchestrator: 2 old images deleted; what is left could not be read back'
+    }
+}
+Describe 'THE END OF AN UPDATE REACHES THE LOG: flush + a short, bounded pause on every way out of the updater' {
+    # Found 2026-11-13 at the clean-up's proof: the last minutes of a finished update never arrived in Log Analytics -- the
+    # container ended before its last lines were shipped. Start-SIUpdater.ps1 ends every execution with Complete-SIUpdaterOutput.
+    BeforeAll {
+        $script:UpdPath = Join-Path $script:SIRoot 'container\updater\Start-SIUpdater.ps1'
+        $script:UpdAst = [System.Management.Automation.Language.Parser]::ParseFile($script:UpdPath, [ref]$null, [ref]$null)
+    }
+    It 'flushes and pauses a fixed, bounded time: 15 s by default, never more than 30, none below 0; never throws' {
+        $script:Paused = New-Object System.Collections.Generic.List[int]
+        Complete-SIUpdaterOutput -Sleep { param($s) $script:Paused.Add($s) }
+        Complete-SIUpdaterOutput -Seconds 600 -Sleep { param($s) $script:Paused.Add($s) }
+        Complete-SIUpdaterOutput -Seconds -5 -Sleep { param($s) $script:Paused.Add($s) }
+        @($script:Paused) | Should -Be @(15, 30)
+        { Complete-SIUpdaterOutput -Sleep { throw 'interrupted' } } | Should -Not -Throw
+        $src = $script:UpdAst.Find({ param($a) $a -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $a.Name -eq 'Complete-SIUpdaterOutput' }, $true).Extent.Text
+        $src | Should -Match ([regex]::Escape('[Console]::Out.Flush()'))
+        $src | Should -Match ([regex]::Escape('[Console]::Error.Flush()'))
+    }
+    It 'WIRING: the one exit of the updater comes right after a try whose finally is the flush -- success, failure and a throw all pass it' {
+        $exits = @($script:UpdAst.FindAll({ param($a) $a -is [System.Management.Automation.Language.ExitStatementAst] }, $true))
+        $exits.Count | Should -Be 1 -Because 'one way out of the execution'
+        $exits[0].Extent.Text | Should -Be 'exit $rc'
+        $stmts = @($exits[0].Parent.Statements)
+        $i = [array]::IndexOf($stmts, $exits[0])
+        $i | Should -BeGreaterThan 0
+        $i | Should -Be ($stmts.Count - 1) -Because 'the exit is the last statement'
+        $try = $stmts[$i - 1]
+        $try | Should -BeOfType ([System.Management.Automation.Language.TryStatementAst])
+        $try.Finally | Should -Not -BeNullOrEmpty
+        $try.Finally.Extent.Text | Should -Match '^\{\s*Complete-SIUpdaterOutput\s*\}$'
+        # the whole execution is inside that try: the run (its own catch = the failure path) and every step after it
+        foreach ($s in '$rc = Invoke-SIUpdater', 'Write-UpdLog ("FAILED: {0}"', 'Stop-SIUpdateTrack -ExitCode $rc', 'Invoke-SIUpdaterFailureReport -ExitCode $rc', 'Unregister-SIUpdaterExecutionBeat') {
+            $try.Body.Extent.Text.Contains($s) | Should -BeTrue -Because "$s runs inside the try the flush closes"
+        }
+        @($script:UpdAst.FindAll({ param($a) $a -is [System.Management.Automation.Language.CommandAst] -and $a.GetCommandName() -eq 'Complete-SIUpdaterOutput' }, $true)).Count | Should -Be 1 -Because 'once, at the end only'
+    }
+    It 'WIRING: nothing else ends the process before it (no exit and no Environment.Exit in the updater''s files)' {
+        $files = @(Get-ChildItem -Path (Join-Path $script:SIRoot 'container\updater') -Filter '*.ps1' -Recurse)
+        $files.Count | Should -BeGreaterThan 3
+        foreach ($fl in $files) {
+            $a = [System.Management.Automation.Language.Parser]::ParseFile($fl.FullName, [ref]$null, [ref]$null)
+            $n = @($a.FindAll({ param($x) $x -is [System.Management.Automation.Language.ExitStatementAst] }, $true)).Count
+            if ($fl.Name -eq 'Start-SIUpdater.ps1') { $n | Should -Be 1 } else { $n | Should -Be 0 -Because $fl.FullName }
+            [IO.File]::ReadAllText($fl.FullName) | Should -Not -Match 'Environment\]::Exit\(' -Because $fl.FullName
+        }
     }
 }

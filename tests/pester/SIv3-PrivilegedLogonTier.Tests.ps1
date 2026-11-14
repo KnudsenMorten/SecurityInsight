@@ -114,7 +114,7 @@ BeforeAll {
     }
     function script:Run([object[]]$Events, [string[]]$Devices = @($script:Dev1), $Store = $null, [datetime]$At = $script:Now, [string]$RunId = '', $Ids = $script:IdOk, $S = $null, [hashtable]$Primary = @{}) {
         if ($null -eq $S) { $S = Settings }
-        $script:Events = $Events; $script:Calls.Clear(); $script:Info.Clear(); $script:Issues.Clear()
+        $script:Events = $Events; $script:Calls.Clear(); $script:Info.Clear(); $script:Issues.Clear(); $global:SI_EnrichScopedNotes = $null
         Get-SIBulkPrivilegedLogons -MdeDeviceIds $Devices -Now $At -RunId $RunId -Query $script:FakeHunt -PrivilegedIdentities $Ids -Store $Store -Settings $S -PrimaryUsers $Primary
     }
     # a state with rows: @(@(device, account, distinct days), ...)
@@ -144,6 +144,8 @@ AfterAll {
     Remove-Item -Recurse -Force $script:Tree -ErrorAction SilentlyContinue
     if ($null -ne $script:Saved) { $global:SI_EnrichmentDataRoot = $script:Saved }
     foreach ($n in $script:SavedSettings.Keys) { Set-Variable -Name $n -Scope Global -Value $script:SavedSettings[$n] }
+    # the source's process-wide notes never leak into a later suite (a run report test would see them as Reports[])
+    foreach ($n in 'SI_RunNoteCodes', 'SI_EnrichScopedNotes', 'SI_PrivilegedLogonPart') { Remove-Variable -Name $n -Scope Global -ErrorAction SilentlyContinue }
 }
 
 Describe 'no setting set (a fresh or an updated install): the defaults run' {
@@ -485,7 +487,8 @@ Describe 'limits: split by time, then by account; unread is UNKNOWN, never "no p
         $script:FailIf = { param($k, $s, $u, $sids) $true }
         $r = Run @((Ev $script:Dev1 $script:HrSid 'Interactive' 2)) @($script:Dev1, $script:Dev2) $store $script:Now 'a'
         foreach ($d in $script:Dev1, $script:Dev2) { $r.ByDevice[$d].PrivilegedLogonStatus | Should -Match '^unknown -- ' }
-        ($script:Issues -join "`n") | Should -Match 'UNKNOWN this run, not "no privileged logon"'
+        ($global:SI_EnrichScopedNotes -join "`n") | Should -Match 'UNKNOWN this run, not "no privileged logon".*\[si-col-0505\]'
+        $script:Issues.Count | Should -Be 0 -Because '#1227: a gap of this source never makes the run INCOMPLETE'
         @(($store.Json | ConvertFrom-Json).Accounts).Count | Should -Be 0
         $script:FailIf = $null
         $r2 = Run @((Ev $script:Dev1 $script:HrSid 'Interactive' 2)) @($script:Dev1) $store $script:Now.AddHours(1) 'b'
@@ -498,7 +501,8 @@ Describe 'limits: split by time, then by account; unread is UNKNOWN, never "no p
         $r = Run @() @($script:Dev1, $script:Dev2)
         $script:Calls.Count | Should -Be 1 -Because 'a missing table is not split or asked again'
         $r.ByDevice[$script:Dev1].PrivilegedLogonStatus | Should -Be 'unknown -- this tenant has no Defender device logons'
-        @($script:Issues | Where-Object { $_ -match 'no Defender device logons' }).Count | Should -Be 1
+        @($global:SI_EnrichScopedNotes | Where-Object { $_ -match 'no Defender device logons.*\[si-col-0503\]' }).Count | Should -Be 1
+        $script:Issues.Count | Should -Be 0
     }
     It 'the identity tiers cannot be read, or are not there yet -> every device unknown, said; no query' {
         $r = Run @((Ev $script:Dev1 $script:AdminSid 'RemoteInteractive' 1)) -Ids { @{ Complete = $false; Missing = $false; Rows = @() } }
@@ -553,6 +557,94 @@ Describe 'end to end: a Tier 2 device is patched before a Tier 3 device' {
         [double]$t2.RiskScoreTotal | Should -BeGreaterThan ([double]$t3.RiskScoreTotal)
         [double]$t2.RiskConsequenceScore | Should -BeGreaterThan ([double]$t3.RiskConsequenceScore)
         [int]$t2.RiskScoreDomainKPI | Should -BeGreaterThan ([int]$t3.RiskScoreDomainKPI)
+    }
+}
+
+Describe '#1227 -- a gap of this source never breaks the run (live 2026-11-12: one failed read made every 3.1.10+ run partial)' {
+    BeforeAll {
+        $script:Enrich = [IO.File]::ReadAllText((Join-Path $script:SIRoot 'engine\asset-profiling\stages\Invoke-Enrich.ps1'))
+        $script:PlSrc = [IO.File]::ReadAllText((Join-Path $script:SIRoot 'engine\asset-profiling\shared\SI-PrivilegedLogon.ps1'))
+    }
+    It 'the source raises no run issue at all -- every gap is a scoped note with a stable code' {
+        $fn = [regex]::Match($script:PlSrc, '(?s)function Get-SIBulkPrivilegedLogons \{.*?\n\}').Value
+        $fn | Should -Not -BeNullOrEmpty
+        $fn | Should -Not -Match 'Add-SIEnrichIssue'
+        foreach ($c in 'si-col-0504', 'si-col-0503', 'si-col-0505') { $fn | Should -Match ([regex]::Escape("'$c'")) }
+    }
+    It 'Enrich: a throw in the read is a scoped note that names the part -- never Add-SIEnrichIssue (which makes the step INCOMPLETE)' {
+        $blk = [regex]::Match($script:Enrich, '(?s)if \(\$privLogonAsked\) \{ try \{.*?\} catch \{.*?\} \}').Value
+        $blk | Should -Not -BeNullOrEmpty
+        $catch = $blk.Substring($blk.LastIndexOf('} catch {'))
+        $catch | Should -Not -Match 'Add-SIEnrichIssue'
+        $catch | Should -Match "Write-SIPrivilegedLogonNote -Code 'si-col-0502'"
+        $catch | Should -Match 'SI_PrivilegedLogonPart'
+        $catch | Should -Match '\$privLogonByDevice = @\{\}' -Because 'every device is then stamped UNKNOWN by the row loop'
+    }
+    It 'a note is one warning line with its code, kept in the scoped notes, never in the run issues' {
+        $global:SI_EnrichScopedNotes = $null; $script:Issues.Clear()
+        Write-SIPrivilegedLogonNote -Code 'si-col-0502' -Text 'The privileged logons were not read.' 3>$null
+        @($global:SI_EnrichScopedNotes) | Should -Be @('The privileged logons were not read. [si-col-0502]')
+        $script:Issues.Count | Should -Be 0
+    }
+    It 'Invardia (2): after a throw the map is EMPTY and every device the run asked for is stamped UNKNOWN on its row -- never "no privileged logon"' {
+        # the row loop: a device without an entry, when the logons were asked, gets the UNKNOWN status and no tier
+        $script:Enrich | Should -Match "if \(\`$privLogonAsked\) \{\s+\`$pe = \`$privLogonByDevice\[\`$devKey\]\s+if \(\`$null -eq \`$pe\) \{ \`$pe = @\{ PrivilegedLogonComputedTier = \`$null; PrivilegedLogonTier = \`$null; PrivilegedLogons = @\(\); PrivilegedLogonStatus = 'unknown -- the device logons could not be read this run'"
+        # and the catch empties the map (so EVERY device takes that branch)
+        $blk = [regex]::Match($script:Enrich, '(?s)if \(\$privLogonAsked\) \{ try \{.*?\} catch \{.*?\} finally \{.*?\} \}').Value
+        $blk | Should -Match '\$privLogonByDevice = @\{\}'
+    }
+    It 'Invardia (3): the part is reset before the block and cleared after it (finally)' {
+        $blk = [regex]::Match($script:Enrich, '(?s)if \(\$privLogonAsked\) \{ try \{.*?\} catch \{.*?\} finally \{.*?\} \}').Value
+        $blk | Should -Not -BeNullOrEmpty
+        $blk | Should -Match '(?s)try \{.*?\$global:SI_PrivilegedLogonPart = \$null\s+\$global:SI_PrivilegedLogonPart = ''listing'
+        $blk | Should -Match '\} finally \{ \$global:SI_PrivilegedLogonPart = \$null \} \}$'
+    }
+    It 'Invardia (1): a note''s catalogue code reaches the run report (Reports[]) -- the catalogue knows every code' {
+        . (Join-Path $script:SIRoot 'engine\_shared\SI-UplinkCauses.ps1')
+        foreach ($c in 'si-col-0502', 'si-col-0503', 'si-col-0504', 'si-col-0505') {
+            $it = @(ConvertTo-SIUplinkFailureItem -Code $c -Job 'endpoint' -Step 'privileged-logons' -Text 'x' -Identified)
+            $it.Count | Should -Be 1 -Because "$c must be in data-model\errors.locked.json, else the item is dropped"
+            $it[0].Code | Should -Be $c; $it[0].Report | Should -Be 'endpoint-privileged-logons'
+        }
+        $cat = Get-Content -Raw (Join-Path $script:SIRoot 'data-model\errors.locked.json') | ConvertFrom-Json
+        @($cat | Where-Object { $_.code -eq 'si-col-0502' })[0].opensTicket | Should -BeTrue -Because 'the read failure is an SI defect: one fix request'
+        # the note records its code once per process
+        $global:SI_RunNoteCodes = $null
+        Write-SIPrivilegedLogonNote -Code 'si-col-0502' -Text 'a' 3>$null; Write-SIPrivilegedLogonNote -Code 'si-col-0502' -Text 'b' 3>$null
+        $global:SI_RunNoteCodes.Count | Should -Be 1 -Because 'once per code (never @( ) around a List[object]: it throws on pwsh 7.6)'
+        $global:SI_RunNoteCodes[0].Step | Should -Be 'privileged-logons'
+        # the run report adds them
+        $send = [IO.File]::ReadAllText((Join-Path $script:SIRoot 'engine\_shared\SI-TelemetrySend.ps1'))
+        $send | Should -Match 'foreach \(\$n in @\(\$global:SI_RunNoteCodes'
+        $send | Should -Match 'ConvertTo-SIUplinkFailureItem -Code \(\[string\]\$n\.Code\)'
+        $global:SI_RunNoteCodes = $null
+    }
+    It '#1223 THE LIVE FAILURE: the identity rows arrive as a List[object] (as Get-SIPrivilegedIdentities built them) -- the read works' {
+        # pwsh 7.6 / .NET 10: @( ) around a List[object] throws "Argument types do not match"; live 2026-11-12 at every 3.1.10+
+        # install the caller did @(@($pi.Rows) | ...). The rows are now piped (and the producer returns an array).
+        $rows = New-Object System.Collections.Generic.List[object]
+        foreach ($x in $script:Identities) { $rows.Add($x) }
+        $ids = { @{ Complete = $true; Missing = $false; Rows = $rows } }.GetNewClosure()
+        $script:FailIf = $null; $global:SI_RunNoteCodes = $null
+        $r = Run @((Ev $script:Dev1 $script:AdminSid 'RemoteInteractive' 2)) -Ids $ids
+        $r.ByDevice[$script:Dev1].PrivilegedLogonTier | Should -Be 0
+        $r.ByDevice[$script:Dev1].PrivilegedLogonStatus | Should -Be 'read'
+        ($null -eq $global:SI_RunNoteCodes -or $global:SI_RunNoteCodes.Count -eq 0) | Should -BeTrue -Because 'no note: the read worked'
+    }
+    It '#1223: the producer returns the identity rows as a plain array, never a List[object]' {
+        $script:PlSrc | Should -Match '\$out\.Rows = \$out\.Rows\.ToArray\(\)\s+return \$out'
+        $script:PlSrc | Should -Not -Match '@\(@\(\$pi\.Rows\)'
+    }
+    It 'a throw inside the read names the part it happened in (the part is set before each step)' {
+        $global:SI_PrivilegedLogonPart = $null
+        $boom = { param($kql) throw 'Argument types do not match' }
+        # the hunting answer throws -> the read of that list is not Ok -> a scoped PARTIAL note, the part was the Defender read
+        $r = Get-SIBulkPrivilegedLogons -MdeDeviceIds @($script:Dev1) -Now $script:Now -Query $boom -PrivilegedIdentities $script:IdOk -Settings (Settings) 3>$null
+        $r.ByDevice[$script:Dev1].PrivilegedLogonStatus | Should -Match '^unknown -- '
+        "$global:SI_PrivilegedLogonPart" | Should -Not -BeNullOrEmpty
+        foreach ($p in 'reading the Tier 0-2 accounts', 'reading the stored sign-ins', 'reading the sign-ins from Defender', 'combining the sign-ins Defender returned', 'saving the sign-ins', "working out each device''s tier") {
+            $script:PlSrc | Should -Match ([regex]::Escape("SI_PrivilegedLogonPart = '$p'"))
+        }
     }
 }
 

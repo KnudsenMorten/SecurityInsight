@@ -101,7 +101,7 @@ Describe 'and it RESOLVES to the version this tree actually ships' {
         # would ship v3 to ~30 customers on their next nightly sync. The marker belongs in the
         # stamped value only.
         $script:Expected | Should -Not -Match '\+v3'
-        $script:Expected | Should -Match '^\d+\.\d+\.\d+$'
+        $script:Expected | Should -Match '^\d+\.\d+\.\d+(\.\d+)?$'   # an image patch adds a fourth part (3.1.16 -> 3.1.16.1)
     }
 
     It '<Engine>: it is never the (dev) sentinel in this tree' -ForEach $script:SwitchBuilders {

@@ -259,6 +259,115 @@ Describe 'the updater rolls ITSELF (Invoke-SIUpdaterSelfRoll), against a fake AR
     }
 }
 
+Describe 'the updater moves itself RIGHT AFTER the engine roll reads back healthy (live 2026-11-12)' {
+    # Before: the move was the run's LAST step -- an update stopped in the steps after the roll left the updater on its old
+    # image. Now the run plans it (New-SIUpdaterSelfMovePlan) and the release's update script carries it out at its step 4b,
+    # only once every engine job read back on the new image; the post-roll then only reports it.
+    BeforeEach {
+        $global:SI_UpdaterSelfMove = $null
+        $script:Moves = New-Object System.Collections.Generic.List[string]
+        $script:Env42 = [pscustomobject]@{ LoginServer = 'reg.example.io'; UpdaterId = '/subscriptions/sub/resourceGroups/rg/providers/Microsoft.App/jobs/caj-si-updater'; UpdaterImage = 'reg.example.io/si-updater:v3.0.0' }
+        Mock Invoke-SIUpdaterSelfRoll { $script:Moves.Add("self $Tag from $CurrentImage"); [pscustomobject]@{ Action = 'rolled'; Image = "reg.example.io/si-updater:$Tag"; Previous = $CurrentImage; Reason = 'moved' } }
+    }
+    AfterEach { $global:SI_UpdaterSelfMove = $null }
+    It 'planned: the move happens ONCE, when the release''s script calls it, with the release''s tag and the job''s current image' {
+        $global:SI_UpdaterSelfMove = New-SIUpdaterSelfMovePlan -SIRoot $TestDrive -Version '3.0.0-rc.42' -Commit $script:C42 -Environment $script:Env42 -ResourceGroup 'rg' -AcrName 'acr' -SubscriptionId 'sub'
+        $r = Invoke-SIUpdaterSelfMoveAfterEngine 6>$null
+        $r.Action | Should -Be 'rolled'
+        @($script:Moves) | Should -Be @("self $($script:Tag42) from reg.example.io/si-updater:v3.0.0")
+        $global:SI_UpdaterSelfMove.Done | Should -BeTrue
+        Invoke-SIUpdaterSelfMoveAfterEngine 6>$null | Should -BeNullOrEmpty -Because 'once per run'
+        $script:Moves.Count | Should -Be 1
+    }
+    It 'not planned (an update run by hand, an older updater image): nothing is moved' {
+        Invoke-SIUpdaterSelfMoveAfterEngine 6>$null | Should -BeNullOrEmpty
+        $script:Moves.Count | Should -Be 0
+    }
+    It 'a move that fails never throws: the result says failed, the plan is NOT done (the post-roll tries it again, last); tried once' {
+        Mock Invoke-SIUpdaterSelfRoll { throw 'HTTP 403' }
+        $global:SI_UpdaterSelfMove = New-SIUpdaterSelfMovePlan -SIRoot $TestDrive -Version '3.0.0-rc.42' -Environment $script:Env42 -ResourceGroup 'rg' -AcrName 'acr' -SubscriptionId 'sub'
+        { $script:Fm = Invoke-SIUpdaterSelfMoveAfterEngine 6>$null } | Should -Not -Throw
+        $script:Fm.Action | Should -Be 'failed'; $script:Fm.Reason | Should -Match 'SecurityInsight IS updated'
+        $global:SI_UpdaterSelfMove.Done | Should -BeFalse
+        Invoke-SIUpdaterSelfMoveAfterEngine 6>$null | Should -BeNullOrEmpty -Because 'the early move is tried once per run'
+        Should -Invoke Invoke-SIUpdaterSelfRoll -Times 1 -Exactly -Scope It
+    }
+    It 'an early move that THROWS is tried again by the post-roll, LAST (as before 3.1.16) -- never reused as a result' {
+        Mock Invoke-SIUpdaterAppRoll { $script:Moves.Add('web app'); [pscustomobject]@{ Code = 0; Text = 'healthy' } }
+        Mock Save-SIUpdaterInstalledRecord { $script:Moves.Add('record'); $true }
+        $script:SelfTry = 0
+        Mock Invoke-SIUpdaterSelfRoll { $script:SelfTry++; if ($script:SelfTry -eq 1) { throw 'the registry did not answer' }; $script:Moves.Add("self $Tag"); [pscustomobject]@{ Action = 'rolled'; Image = "reg.example.io/si-updater:$Tag"; Previous = $CurrentImage; Reason = 'moved' } }
+        $global:SI_UpdaterSelfMove = New-SIUpdaterSelfMovePlan -SIRoot $TestDrive -Version '3.0.1' -Environment $script:Env42 -ResourceGroup 'rg' -AcrName 'acr' -SubscriptionId 'sub'
+        (Invoke-SIUpdaterSelfMoveAfterEngine 6>$null).Action | Should -Be 'failed'
+        $p = Invoke-SIUpdaterInvardiaPostRoll -SIRoot $TestDrive -Version '3.0.1' -Environment $script:Env42 -ResourceGroup 'rg' -AcrName 'acr' -SubscriptionId 'sub' 6>$null
+        Should -Invoke Invoke-SIUpdaterSelfRoll -Times 2 -Exactly -Scope It
+        $p.SelfAction | Should -Be 'rolled'
+        @($script:Moves) | Should -Be @('web app', 'record', 'self v3.0.1-build') -Because 'the post-roll moved it last'
+    }
+    It 'an early move whose result says failed is tried again by the post-roll too (its own failure path marks it pending)' {
+        Mock Invoke-SIUpdaterAppRoll { [pscustomobject]@{ Code = 0; Text = 'healthy' } }
+        Mock Save-SIUpdaterInstalledRecord { $true }
+        Mock Invoke-SIUpdaterSelfRoll { [pscustomobject]@{ Action = 'failed'; Image = ''; Previous = $CurrentImage; Reason = 'the image could not be built -- SecurityInsight IS updated' } }
+        $global:SI_UpdaterSelfMove = New-SIUpdaterSelfMovePlan -SIRoot $TestDrive -Version '3.0.1' -Environment $script:Env42 -ResourceGroup 'rg' -AcrName 'acr' -SubscriptionId 'sub'
+        $null = Invoke-SIUpdaterSelfMoveAfterEngine 6>$null
+        $global:SI_UpdaterSelfMove.Done | Should -BeFalse
+        $p = Invoke-SIUpdaterInvardiaPostRoll -SIRoot $TestDrive -Version '3.0.1' -Environment $script:Env42 -ResourceGroup 'rg' -AcrName 'acr' -SubscriptionId 'sub' 6>$null
+        Should -Invoke Invoke-SIUpdaterSelfRoll -Times 2 -Exactly -Scope It
+        $p.SelfAction | Should -Be 'failed'
+    }
+    It 'the failed-update line says what is true: after the early move the engine and the updater run the new release; otherwise every changed job was restored' {
+        $plan = New-SIUpdaterSelfMovePlan -SIRoot $TestDrive -Version '3.0.1' -Environment $script:Env42 -ResourceGroup 'rg' -AcrName 'acr' -SubscriptionId 'sub'
+        Test-SIUpdaterSelfMovedEarly -Plan $plan | Should -BeFalse
+        Test-SIUpdaterSelfMovedEarly -Plan $null | Should -BeFalse
+        $plan.Done = $true; $plan.Result = [pscustomobject]@{ Action = 'rolled' }
+        Test-SIUpdaterSelfMovedEarly -Plan $plan | Should -BeTrue
+        $plan.Result = [pscustomobject]@{ Action = 'failed' }
+        Test-SIUpdaterSelfMovedEarly -Plan $plan | Should -BeFalse
+        Get-SIUpdaterUpdateFailedLine -Code 1 | Should -Be 'the update FAILED (exit 1) -- every changed job was restored to its previous image'
+        $moved = Get-SIUpdaterUpdateFailedLine -Code 1 -SelfMoved
+        $moved | Should -Be 'the update FAILED (exit 1) in a step after the move -- the engine jobs and the updater run the new release; the failed step is tried again by the next run'
+        $moved | Should -Not -Match 'restored'
+        $su = Get-Content -Raw -LiteralPath (Join-Path $script:SIRoot 'container\updater\Start-SIUpdater.ps1')
+        $su | Should -Match ([regex]::Escape('else { Get-SIUpdaterUpdateFailedLine -Code $code -SelfMoved:(Test-SIUpdaterSelfMovedEarly) })'))
+    }
+    It 'the post-roll does not move it a second time: it reports the early move (and the second update follows from it)' {
+        Mock Invoke-SIUpdaterAppRoll { $script:Moves.Add('web app'); [pscustomobject]@{ Code = 0; Text = 'healthy' } }
+        Mock Save-SIUpdaterInstalledRecord { $script:Moves.Add('record'); $true }
+        $global:SI_UpdaterSelfMove = New-SIUpdaterSelfMovePlan -SIRoot $TestDrive -Version '3.0.1' -Environment $script:Env42 -ResourceGroup 'rg' -AcrName 'acr' -SubscriptionId 'sub'
+        $null = Invoke-SIUpdaterSelfMoveAfterEngine 6>$null
+        $p = Invoke-SIUpdaterInvardiaPostRoll -SIRoot $TestDrive -Version '3.0.1' -Environment $script:Env42 -ResourceGroup 'rg' -AcrName 'acr' -SubscriptionId 'sub' 6>$null
+        $p.Code | Should -Be 0; $p.SelfAction | Should -Be 'rolled'
+        @($script:Moves) | Should -Be @('self v3.0.1-build from reg.example.io/si-updater:v3.0.0', 'web app', 'record')
+        Should -Invoke Invoke-SIUpdaterSelfRoll -Times 1 -Exactly -Scope It
+    }
+    It 'a release whose script does not move it (an older one -- a rollback to the release before): the post-roll moves it LAST, as before' {
+        Mock Invoke-SIUpdaterAppRoll { $script:Moves.Add('web app'); [pscustomobject]@{ Code = 0; Text = 'healthy' } }
+        Mock Save-SIUpdaterInstalledRecord { $script:Moves.Add('record'); $true }
+        $global:SI_UpdaterSelfMove = New-SIUpdaterSelfMovePlan -SIRoot $TestDrive -Version '3.0.0' -Environment $script:Env42 -ResourceGroup 'rg' -AcrName 'acr' -SubscriptionId 'sub'
+        $p = Invoke-SIUpdaterInvardiaPostRoll -SIRoot $TestDrive -Version '3.0.0' -Environment $script:Env42 -ResourceGroup 'rg' -AcrName 'acr' -SubscriptionId 'sub' 6>$null
+        $p.SelfAction | Should -Be 'rolled'
+        @($script:Moves) | Should -Be @('web app', 'record', 'self v3.0.0-build from reg.example.io/si-updater:v3.0.0')
+    }
+    It 'the release''s update script moves it right after VERIFY (and after "nothing to roll"), never after a roll that failed, and before the steps that follow' {
+        $u = Get-Content -Raw -LiteralPath (Join-Path $script:SIRoot 'setup\Invoke-SIContainerUpdate.ps1')
+        $fn = [regex]::Match($u, '(?s)function Invoke-SIUpdateSelfMove \{.*?\n\}').Value
+        $fn | Should -Match ([regex]::Escape('if (-not $Apply -or $DetectOnly -or -not $global:SI_UpdaterSelfMove) { return }'))
+        $fn | Should -Match 'Invoke-SIUpdaterSelfMoveAfterEngine'
+        $fn | Should -Match "Step '4b\. THE UPDATER ITSELF"
+        $iVerify = $u.IndexOf("Step '4. VERIFY'"); $iFail = $u.IndexOf('if ($failed.Count) {'); $iExit1 = $u.IndexOf('exit 1', $iFail)
+        $iMove = $u.IndexOf("`nInvoke-SIUpdateSelfMove`n"); if ($iMove -lt 0) { $iMove = $u.IndexOf("`nInvoke-SIUpdateSelfMove`r`n") }
+        $iComplete = $u.LastIndexOf('exit (Complete-SIUpdate)')
+        $iVerify | Should -BeGreaterThan 0
+        $iMove | Should -BeGreaterThan $iExit1 -Because 'a failed roll exits 1 before it -- never moved after an unhealthy read-back'
+        $iMove | Should -BeLessThan $iComplete -Because 'before the steps that follow the roll'
+        $u | Should -Match ([regex]::Escape("Info 'Every job already runs this tree -- nothing to roll.'; Invoke-SIUpdateSelfMove; exit (Complete-SIUpdate)"))
+        # the run plans it before the release's script runs, and forgets it at its end
+        $inv = Get-Content -Raw -LiteralPath (Join-Path $script:SIRoot 'container\updater\_shared\SI-UpdaterInvardia.ps1')
+        $inv.IndexOf('$global:SI_UpdaterSelfMove = New-SIUpdaterSelfMovePlan') | Should -BeLessThan $inv.IndexOf('$roll = Invoke-SIUpdaterRoll -SIRoot $si')
+        $inv | Should -Match '(?s)\} finally \{\s+# the updater''s own move belongs to this run only\s+\$global:SI_UpdaterSelfMove = \$null'
+    }
+}
+
 Describe 'the updater image carries the self-update in BOTH editions' {
     It 'Start-SIUpdater loads SI-UpdaterSelf.ps1 unconditionally, and the Dockerfile copies the whole _shared folder' {
         $s = Get-Content -Raw -LiteralPath (Join-Path $script:SIRoot 'container\updater\Start-SIUpdater.ps1')

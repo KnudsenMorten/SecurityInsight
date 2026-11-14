@@ -707,7 +707,7 @@ Describe 'the clean-up finishes before the next run: the width and the deadline 
     It 'the statements of several ranges: the bounds and each range carry the one mark, the range refuses the published run under its lock and is cut to the cap' {
         $b = Get-SIDataRetireBoundsSql -Table Finding
         $s = Get-SIDataRetireSpanSql -Table Finding
-        $mark = "EXISTS (SELECT 1 FROM sidata.Collection AS m WHERE m.CollectionId = @c AND m.Kind = N'Detailed' AND m.RetiredAt IS NOT NULL AND (@mb IS NULL OR (m.RetiredAt < @mb AND m.RetiredWhy IN (N'superseded', N'abandoned', N'stopped run'))))"
+        $mark = "EXISTS (SELECT 1 FROM sidata.Collection AS m WHERE m.CollectionId = @c AND m.Kind = N'Detailed' AND m.RetiredAt IS NOT NULL AND (@mb IS NULL OR (m.RetiredAt < @mb AND m.RetiredWhy IN (N'superseded', N'abandoned', N'stopped run', N'untrusted'))))"
         $b | Should -Match ([regex]::Escape($mark)); $s | Should -Match ([regex]::Escape($mark))
         (Get-SIDataRetireRangeSql -Table Finding) | Should -Match ([regex]::Escape($mark)) -Because 'the range driver carries the same mark'
         $s | Should -Match ([regex]::Escape("sp_getapplock @Resource = N'sidata.PublishedRun', @LockMode = N'Shared'"))

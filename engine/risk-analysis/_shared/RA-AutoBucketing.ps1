@@ -577,6 +577,63 @@ function Get-RALateLeftAction {
   return 'Lost'
 }
 
+# #1216 A QUERY SLICE ADVANCED HUNTING ANSWERS 504 TWICE IS SPLIT IN HALVES, NEVER ASKED AGAIN AS THE SAME QUERY (live 2026-11-12,
+# a large install: an attack-path report over SI_CI_CL + the exposure graph, 42 slices; 15 of them answered 504 Gateway Timeout
+# after ~200 s on EVERY attempt -- 4 attempts a round, then the late-retry rounds asked the SAME query again -- until the report's
+# recovery budget ended with 15 slices "not read"). A 504 here is the query being too heavy for the gateway, not a passing
+# outage, so the same query fails the same way. A slice answered 504 twice (-SplitAt; the hunting call's own attempts count) is
+# split in two by its hash range (1/42 -> 1/84 + 43/84, the sub-bucket pass with 2 halves a step), each half asked; a half
+# answered 504 twice is halved again. The halving stops at a measured floor, never a fixed depth: the key partition cannot be
+# split finer (Test-RASubSplitAddressable), or two halvings in a row did not reduce the share of halves refused
+# (Test-RASplitReducesFailure -Step 2 -- the same measured stop as the 4-way split, one 4-way step = two halvings); only then is
+# the slice a named loss. Unchanged: a 429 / 503 / busy answer / one-off 504 retries the same query (working rule 4: only the
+# platform is re-run), a query defect fails on attempt 1 (Get-RABucketFailureAction 'Defect' never reaches this).
+$script:RAGatewaySplitAt = 2
+
+function Get-RAGatewayTimeoutStopAt {
+  <# #1216 PURE. How many 504 answers the next hunting call of a slice may take before it stops asking the same query (the
+     value for $script:RAGatewayTimeoutStopAt, read once by Invoke-GraphHuntingQuery): the split threshold (-SplitAt) less the
+     504s the slice already had (-Seen); at least 1. -Off (no finer slice exists): 0 = no stop, every attempt as before. #>
+  param([int]$Seen = 0, [int]$SplitAt = 2, [switch]$Off)
+  if ($Off) { return 0 }
+  if ($SplitAt -lt 1) { $SplitAt = 2 }
+  return [int][Math]::Max(1, $SplitAt - [Math]::Max(0, $Seen))
+}
+
+function Add-RASliceGatewayTimeouts {
+  <# #1216. Counts one slice's 504 answers in -Seen (slice key -> count) and returns its total. -Reported: the hunting call's
+     own count of its attempts answered 504 ($script:_LastGraphHuntingGatewayTimeouts; -1 = the call reported none, e.g. a
+     fake or a path outside the hunting loop) -- else 1 when -Err is a 504 (Test-RABucketGatewayTimeout), 0 otherwise. #>
+  param([Parameter(Mandatory)][hashtable]$Seen, [Parameter(Mandatory)][string]$Slice, [AllowNull()][object]$Err, [int]$Reported = -1)
+  $n = if ($Reported -ge 0) { $Reported } elseif (Test-RABucketGatewayTimeout -Err $Err) { 1 } else { 0 }
+  $Seen[$Slice] = [int]('0' + [string]$Seen[$Slice]) + [int]$n
+  return [int]$Seen[$Slice]
+}
+
+function Get-RAGatewayTimeoutAction {
+  <# #1216 PURE. For a failure Get-RABucketFailureAction routed 'Retry': 'Split' when it is the gateway's time limit (504, never
+     a busy answer), the slice has been answered 504 at least -SplitAt times, and a finer slice exists (-CanSplit); else 'Retry'
+     -- the caller's own route (a 429 / 503 / a one-off 504 asks the same query again). #>
+  param([AllowNull()][object]$Err, [int]$Count = 0, [int]$SplitAt = 2, [bool]$CanSplit = $true)
+  if (-not $CanSplit) { return 'Retry' }
+  if ($SplitAt -lt 1) { $SplitAt = 2 }
+  if (-not (Test-RABucketGatewayTimeout -Err $Err)) { return 'Retry' }
+  if ($Count -ge $SplitAt) { return 'Split' }
+  return 'Retry'
+}
+
+function Format-RAGatewaySplitSummary {
+  <# #1216 PURE. The run log's line per report: how many of its -BucketCount slices were split for 504s and to what depth
+     (-Finest: the finest slice count asked under them; the depth in halvings is log2(Finest / BucketCount)), and -Lost: how
+     many of the split slices still left rows unknown. #>
+  param([Parameter(Mandatory)][string]$ReportName, [int]$Slices, [long]$Finest, [int]$BucketCount, [int]$Lost = 0)
+  if ($BucketCount -lt 1) { $BucketCount = 1 }
+  if ($Finest -lt $BucketCount) { $Finest = $BucketCount }
+  $depth = [int][Math]::Round([Math]::Log([double]$Finest / [double]$BucketCount, 2))
+  $end = if ($Lost -gt 0) { ('{0} of them still have rows unknown (named above)' -f $Lost) } else { 'every one recovered' }
+  ("[gateway split] '{0}': {1} of {2} query slice(s) answered 504 Gateway Timeout twice and were split in halves instead of being asked again -- {3} halving(s) deep at most (finest slice 1/{4}); {5}" -f $ReportName, $Slices, $BucketCount, $depth, $Finest, $end)
+}
+
 function Get-RAIncompleteStreak {
   <#
     #1155 PURE. How many runs in a row a report has NOT been complete, THIS run included: 1 + the leading 'incomplete' rows of
@@ -713,8 +770,11 @@ function Test-RASplitReducesFailure {
     of its devices, and its smaller slices were still refused about as often as at the top). The old rule stopped only when ALL
     four children of one parent failed.
   #>
-  param([hashtable]$Tried = @{}, [hashtable]$Failed = @{}, [int]$Depth = 1)
-  if ($Depth -lt 2) { return $true }
+  # #1216 -Step: how many split levels make one comparison -- 1 for the 4-way split; 2 for the halving of a slice refused for 504s
+  # (two halvings = one 4-way step), so a single halving whose halves are both still refused is not yet the end of it.
+  param([hashtable]$Tried = @{}, [hashtable]$Failed = @{}, [int]$Depth = 1, [int]$Step = 1)
+  if ($Step -lt 1) { $Step = 1 }
+  if ($Depth -le $Step) { return $true }
   $share = {
     param([int]$d)
     if ($d -le 0) { return 1.0 }
@@ -724,7 +784,7 @@ function Test-RASplitReducesFailure {
   }
   $now = & $share ($Depth - 1)
   if ($null -eq $now) { return $true }
-  $before = & $share ($Depth - 2)
+  $before = & $share ($Depth - 1 - $Step)
   if ($null -eq $before) { $before = 1.0 }
   return ([double]$now -lt [double]$before)
 }

@@ -185,6 +185,99 @@ function Get-SIUpstreamOutcome {
 }
 
 # =====================================================================================================================
+#  #1235 (owner 2026-11-12, #1226: "trusted = the run finished every step"): THIS RUN'S OWN STEPS. The source runs' newest
+#  records cannot say it: a source STEP that failed this run (its container never started -- live at internal 2026-11-13
+#  00:47Z) leaves its older success as the newest record. The pipeline's own record of this run (cfg.FlowStepRun) can.
+# =====================================================================================================================
+$script:SIFlowStepFailures = @('Failed', 'TimedOut', 'Interrupted')   # the pipeline's own failure states (SI-JobFlow.ps1 Failures)
+
+function Get-SIFlowStepOutcomeSql {
+    <#
+        One guarded read of the settings database: the pipeline run that is running -@Job now (its step Starting / Running,
+        the run Running), -@Job's own step (Mine = 1) and every step of the GROUPS BEFORE its own -- what it reads. Not the
+        steps of its own group: they run beside it and it does not read them (Risk Analysis Summary runs beside Detailed;
+        a failed Summary must never hold Detailed's collection -- review 2026-11-13). The runner starts a step only after
+        every step of the groups above it has ended, so each of those is in its end state. A lock wait ends after 15 s (the
+        settings store has no command time limit): the caller then says so and falls back. A database without the
+        pipeline's tables, or a job that runs outside a pipeline run, answers no rows.
+    #>
+    @'
+SET NOCOUNT ON; SET LOCK_TIMEOUT 15000;
+IF OBJECT_ID(N'cfg.FlowRun') IS NULL OR OBJECT_ID(N'cfg.FlowStepRun') IS NULL
+BEGIN SELECT CAST(NULL AS nvarchar(64)) AS FlowRunId, CAST(NULL AS int) AS StepOrder, CAST(NULL AS int) AS GroupNo, CAST(NULL AS nvarchar(64)) AS Job, CAST(NULL AS nvarchar(16)) AS State, CAST(NULL AS nvarchar(64)) AS ErrorClass, CAST(NULL AS nvarchar(1000)) AS Error, CAST(0 AS int) AS Mine, CAST(NULL AS nvarchar(16)) AS PrevState, CAST(NULL AS nvarchar(64)) AS PrevRunId WHERE 1 = 0; RETURN; END
+DECLARE @fr nvarchar(64), @o int, @g int, @fid nvarchar(32), @st datetime2(0);
+SELECT TOP (1) @fr = s.FlowRunId, @o = s.StepOrder, @g = s.GroupNo, @fid = r.FlowId, @st = r.StartedUtc FROM cfg.FlowStepRun AS s JOIN cfg.FlowRun AS r ON r.FlowRunId = s.FlowRunId
+WHERE (s.Job = @Job OR s.Job = N'caj-si-' + @Job) AND s.State IN (N'Starting', N'Running') AND r.State = N'Running'
+ORDER BY r.StartedUtc DESC, r.FlowRunId DESC;
+IF @fr IS NULL
+BEGIN SELECT CAST(NULL AS nvarchar(64)) AS FlowRunId, CAST(NULL AS int) AS StepOrder, CAST(NULL AS int) AS GroupNo, CAST(NULL AS nvarchar(64)) AS Job, CAST(NULL AS nvarchar(16)) AS State, CAST(NULL AS nvarchar(64)) AS ErrorClass, CAST(NULL AS nvarchar(1000)) AS Error, CAST(0 AS int) AS Mine, CAST(NULL AS nvarchar(16)) AS PrevState, CAST(NULL AS nvarchar(64)) AS PrevRunId WHERE 1 = 0; RETURN; END
+-- a step this run did not run because it is a RE-RUN from a later step ('before-rerun'): its outcome in the newest earlier
+-- run of the same pipeline in which that step actually RAN (it started: never a row of a run in which it was skipped,
+-- cancelled, switched off or still waiting -- review 2026-11-13) -- the run its stored data comes from (NULL = none found)
+SELECT s.FlowRunId, s.StepOrder, s.GroupNo, s.Job, s.State, s.ErrorClass, s.Error, CASE WHEN s.StepOrder = @o THEN 1 ELSE 0 END AS Mine,
+       p.PrevState, p.PrevRunId
+FROM cfg.FlowStepRun AS s
+OUTER APPLY (SELECT TOP (1) ps.State AS PrevState, ps.FlowRunId AS PrevRunId
+             FROM cfg.FlowStepRun AS ps JOIN cfg.FlowRun AS pr ON pr.FlowRunId = ps.FlowRunId
+             WHERE s.ErrorClass = N'before-rerun' AND ps.Job = s.Job AND pr.FlowId = @fid AND pr.StartedUtc < @st
+               AND ISNULL(ps.ErrorClass, N'') <> N'before-rerun' AND ps.StartedUtc IS NOT NULL
+             ORDER BY pr.StartedUtc DESC, pr.FlowRunId DESC) AS p
+WHERE s.FlowRunId = @fr AND (s.GroupNo < @g OR s.StepOrder = @o) ORDER BY s.StepOrder;
+'@
+}
+
+function Get-SIFlowStepVerdict {
+    <#
+        PURE. Did THIS run finish every step it reads (the groups before -Rows' own step, Mine = 1)? From
+        Get-SIFlowStepOutcomeSql's rows:
+          a step that ended Failed / TimedOut / Interrupted   -> NOT trusted; Why names each such step plainly
+          Disabled / Skipped (switched off, or not covered by this run -- framework TRUST-1 point 7: absent by design;
+          a step skipped because one it needs failed is covered by that failed step)
+                                                              -> not counted
+        A RE-RUN from a step (Invardia 2026-11-13: the strict reading): a step this run did not run ('before-rerun') is
+        judged by its outcome in the run the re-run continues (PrevState: the newest earlier run of the pipeline in which it
+        ran) -- a failure there, or a step that never finished there, is NOT trusted; when that run cannot be found: not known.
+        @{ Known; Trusted; Why; FlowRunId }. Known $false -- the caller then decides from the source runs' records alone,
+        as before -- when: no rows / no own step (a run outside the pipeline, an older database); no earlier step at all
+        (a run of one step or one stage: "hold only on real failure" for what cannot be read); a re-run whose earlier run
+        cannot be found.
+    #>
+    param([AllowNull()][object[]]$Rows)
+    $val = { param($r, $n) if ($r -is [System.Collections.IDictionary]) { if ($r.Contains($n)) { $r[$n] } else { $null } } elseif ($r -and $r.PSObject.Properties[$n]) { $r.$n } else { $null } }
+    $unknown = { param($why) [pscustomobject]@{ Known = $false; Trusted = $true; Why = $why; FlowRunId = '' } }
+    $rs = @(@($Rows) | Where-Object { $null -ne $_ })
+    $mine = @($rs | Where-Object { [int](& $val $_ 'Mine') -eq 1 })
+    if ($rs.Count -eq 0 -or $mine.Count -eq 0) { return (& $unknown 'this run''s steps could not be read (not a pipeline run, or no record of it)') }
+    $earlier = @($rs | Where-Object { [int](& $val $_ 'Mine') -ne 1 })
+    if ($earlier.Count -eq 0) { return (& $unknown 'a run of one step or one stage: the steps it reads are not part of this run') }
+    $fine = @('Success', 'Disabled', 'Skipped')
+    $failures = @('Failed', 'TimedOut', 'Interrupted')   # the pipeline's own failure states (SI-JobFlow.ps1 Failures)
+    # the step in plain words (the reason is shown to the customer): never the job's internal key
+    $names = @{ 'ptc' = 'privilege tier catalog'; 'identity' = 'identity collection'; 'endpoint' = 'device collection'; 'azure' = 'Azure collection'
+                'publicip' = 'public IP collection'; 'asset-correlation' = 'correlation' }
+    $judged = New-Object System.Collections.Generic.List[object]
+    $notFound = New-Object System.Collections.Generic.List[string]
+    foreach ($r in $earlier) {
+        $k = ([string](& $val $r 'Job')) -replace '^caj-si-', ''
+        $j = if ($names.ContainsKey($k)) { $names[$k] } else { $k -replace '-', ' ' }
+        if ([string](& $val $r 'ErrorClass') -eq 'before-rerun') {
+            $ps = [string](& $val $r 'PrevState')
+            # a run that cannot be found for ONE step never hides a failure found for another (review 2026-11-13)
+            if (-not $ps.Trim()) { $notFound.Add($j); continue }
+            if ($fine -notcontains $ps) { $judged.Add(('the {0} step {1} in the run this re-run continues' -f $j, $(switch ($ps) { 'TimedOut' { 'timed out' } 'Interrupted' { 'was interrupted' } 'Failed' { 'failed' } default { 'did not finish' } }))) }
+        } elseif ($failures -contains [string](& $val $r 'State')) {
+            $judged.Add(('the {0} step of this run {1}' -f $j, $(switch ([string](& $val $r 'State')) { 'TimedOut' { 'timed out' } 'Interrupted' { 'was interrupted' } default { 'failed' } })))
+        }
+    }
+    $fr = [string](& $val $mine[0] 'FlowRunId')
+    if ($judged.Count -eq 0 -and $notFound.Count) { return (& $unknown ('a re-run from a later step: the run it continues could not be found for the {0} step(s)' -f ($notFound.ToArray() -join ', '))) }
+    if ($judged.Count -eq 0) { return [pscustomobject]@{ Known = $true; Trusted = $true; Why = ''; FlowRunId = $fr } }
+    $parts = $judged.ToArray()
+    [pscustomobject]@{ Known = $true; Trusted = $false; FlowRunId = $fr
+                       Why = ('built on a run that did not finish every step: {0}' -f ($parts -join '; ')) }
+}
+
+# =====================================================================================================================
 #  #899 A ROLE READ THAT WAS NOT COMPLETE. The identity collection kept every identity's stored roles (IdentityRoleFetcher
 #  Resolve-SIEntraRoleReadIncomplete) and says so as ONE note of its own kind: the run ends 'success-partial', and its
 #  END record's message is made of this note only -- which Risk Analysis reads as "the role facts are partial" (RolesOnly).

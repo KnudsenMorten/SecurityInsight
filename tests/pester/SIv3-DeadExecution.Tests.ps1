@@ -162,7 +162,8 @@ Describe '(a) the updater''s own step-aside' {
         $c.IndexOf('Register-SIUpdaterExecutionBeat -Store (New-SIUpdaterProStore') | Should -BeGreaterThan $c.IndexOf('Get-SIUpdaterStepAsideText -Earlier $earlier')
         $c.IndexOf('Register-SIUpdaterExecutionBeat -Store') | Should -BeLessThan $c.IndexOf('Invoke-SIUpdaterSecretHandover -Rest')
         $c | Should -Match '-SubscriptionId \$sub -FreshToken'
-        $c | Should -Match 'Unregister-SIUpdaterExecutionBeat \}\s+exit \$rc'
+        # the beat ends last; only the end line and the end-of-output flush (the outer finally) sit before the exit
+        $c | Should -Match 'Unregister-SIUpdaterExecutionBeat \}\s+Write-Host [^\n]*the update run has ended[^\n]*\s+\} finally \{\s+Complete-SIUpdaterOutput\s+\}\s+exit \$rc'
     }
 }
 

@@ -18,6 +18,9 @@
                                                       override them when the data lives in another database)
         SI_Pro_DataRetentionDays                      90 -- collections older than this are removed
         SI_Pro_DataLookbackDays                       3  -- how far back collections not yet loaded are caught up
+        SI_Data_KeepCollections                       3  -- the newest complete collections per kind that keep their
+                                                      findings (at least 2; fewer, one per run, while the database is
+                                                      70 % full or more)
         SI_AssetProperties                            security (default) = the security profile only, nothing extra
                                                       stored; full = the full asset metadata (SI_AssetProperties_CL) is
                                                       stored generically in sidata.AssetMetadata for the asset page (#408)
@@ -98,7 +101,8 @@ if ([string]::IsNullOrWhiteSpace([string]$global:SI_WorkspaceResourceId)) {
 
 $g = @{}
 # #408: the asset-metadata level and its retention travel too (the retention was never passed here, so it was always 3)
-foreach ($n in 'SI_ProSqlServer', 'SI_ProSqlDatabase', 'SI_Pro_DataSqlServer', 'SI_Pro_DataSqlDatabase', 'SI_Pro_DataRetentionDays', 'SI_Pro_DataLookbackDays', 'SI_AssetProperties', 'SI_AssetProperties_RetentionDays') {
+# #1218: the complete collections per grain that keep their findings travel too
+foreach ($n in 'SI_ProSqlServer', 'SI_ProSqlDatabase', 'SI_Pro_DataSqlServer', 'SI_Pro_DataSqlDatabase', 'SI_Pro_DataRetentionDays', 'SI_Pro_DataLookbackDays', 'SI_AssetProperties', 'SI_AssetProperties_RetentionDays', 'SI_Data_KeepCollections') {
     $g[$n] = Get-Variable -Name $n -Scope Global -ValueOnly -ErrorAction SilentlyContinue
 }
 if ($LookbackDays -gt 0) { $g['SI_Pro_DataLookbackDays'] = $LookbackDays }
@@ -184,12 +188,39 @@ try {
 # the job could not be started) gets data out from this sync, as before (the fallback below).
 $dataOutHand = @{ Off = $true; DryRun = [bool]$DryRun; Invoke = $invoke; SettingsInvoke = $(if ($guardCommon.Invoke) { $guardCommon.Invoke } else { $invoke }); Log = $log
                   Holder = $(if ($env:CONTAINER_APP_JOB_EXECUTION_NAME) { [string]$env:CONTAINER_APP_JOB_EXECUTION_NAME } else { 'datasync-' + $runContext.RunId })
-                  Target = $null; Store = $null; Mark = $null; Hand = $null }
+                  Target = $null; Store = $null; Mark = $null; Hand = $null; Trust = $null }
 try {
     . (Join-Path $siRoot 'engine\data-out\SI-DataOutJob.ps1')
     $dataOutHand.Target = Get-SIDataOutJobTarget
     $dataOutHand.Off = [bool]$DryRun
 } catch { Write-DataWarn ("data out  : the data-out job cannot be used this run ({0}) -- the data sync sends data out itself" -f $_.Exception.Message) }
+# #1226 (owner 2026-11-12) THE HOLD: a collection built on partial profile data is NOT trusted -- nothing is sent out from it
+# (the job hand-off below and this sync's own fallback). A read that fails holds nothing (said).
+# THE FALLBACK, read once: the source runs' newest records (3.1.13's check) -- used only for a collection that carries no verdict
+# of its own. Never "the newest complete collection's" verdict: Risk Analysis leaves ITS collection Loading until this sync
+# completes it, so the newest COMPLETE one is the run before (agent review 2026-11-12).
+$upstreamTrust = if (Get-Command -Name Get-SIDataUpstreamTrust -ErrorAction SilentlyContinue) { Get-SIDataUpstreamTrust -Query $query }
+                 else { [pscustomobject]@{ Trusted = $true; Known = $false; Why = 'the check of the source runs is not loaded' } }
+# Invardia 2026-11-12: "tie the trust check to the collection's own run" / "read the verdict by the collection being sent" -- a
+# data-out mark is made from ONE collection (the set the findings per CI were made from, the DataModel's CollectionTime): that
+# collection is judged by ITS OWN verdict (sidata.CollectionTrust, written by Risk Analysis with it, read by its exact time --
+# Loading or Complete alike); the source runs' records only when it carries none. Each judgement said in one line. Never throws.
+$judgeSent = {
+    param($dm, [string]$Where)
+    $ct = $null
+    try { if ($null -ne $dm -and (Get-Command -Name Get-SIDataOutField -ErrorAction SilentlyContinue)) { $ct = Get-SIDataOutField $dm 'CollectionTime' } } catch { $ct = $null }
+    $verdict = $upstreamTrust; $how = "the source runs' newest records decide"
+    if ($null -ne $ct -and "$ct".Trim() -and (Get-Command -Name Get-SIDataCollectionTrust -ErrorAction SilentlyContinue)) {
+        $own = Get-SIDataCollectionTrust -Invoke $invoke -CollectionTime $ct
+        if ($own.Found) { $verdict = $own; $how = 'its own verdict' } else { $how = ('{0} -- the source runs'' newest records decide' -f $own.Why) }
+    }
+    $state = if (-not $verdict.Known) { ('not known ({0}) -- not held for that' -f $verdict.Why) } elseif ($verdict.Trusted) { 'built on complete source data' } else { 'built on incomplete source data -- HELD: nothing is sent from it, what the targets have stays, the next trusted run sends what changed' }
+    try {
+        $line = ('data out  : the collection {0} sends from ({1}) -- {2}: {3}' -f $Where, $(if ($ct) { $ct } else { 'not named' }), $how, $state)
+        if ($verdict.Known -and $verdict.Trusted) { Write-DataInfo $line } else { Write-DataWarn $line }   # a hold / an unknown is never only info
+    } catch { }
+    $verdict
+}
 $onFindingsStored = {
     param([string]$Stage, $DataModel)
     if ($dataOutHand.Off) { return }
@@ -200,8 +231,10 @@ $onFindingsStored = {
     }
     try {
         $os = Get-SIDataRunOnStored -Invoke $dataOutHand.SettingsInvoke
-        $hold = [bool]$os.OnStored -or -not [bool]$os.Known
-        $holdWhy = if ($os.OnStored) { 'the pipeline started this data sync after a failed step ({0})' -f $os.Why } elseif (-not $os.Known) { 'whether the pipeline''s run is complete could not be read ({0})' -f $os.Why } else { '' }
+        $sentTrust = & $judgeSent $DataModel 'the data-out job'
+        $dataOutHand.Trust = $sentTrust
+        $hold = [bool]$os.OnStored -or -not [bool]$os.Known -or ($sentTrust.Known -and -not $sentTrust.Trusted)
+        $holdWhy = if ($os.OnStored) { 'the pipeline started this data sync after a failed step ({0})' -f $os.Why } elseif (-not $os.Known) { 'whether the pipeline''s run is complete could not be read ({0})' -f $os.Why } elseif ($sentTrust.Known -and -not $sentTrust.Trusted) { [string]$sentTrust.Why } else { '' }
         $tables = $(if ($dataOutHand.Store) { [bool]$dataOutHand.Store.Tables } else { Test-SIDataOutJobTables -Invoke $dataOutHand.Invoke })
         $plan = Get-SIDataOutMarkPlan -DataModel $DataModel -Hold $hold -HoldWhy $holdWhy -Tables $tables
         $dataOutHand.Mark = Invoke-SIDataOutReadyMark -Invoke $dataOutHand.Invoke -Plan $plan -DataModel $DataModel -MarkedBy $dataOutHand.Holder -Log $dataOutHand.Log
@@ -378,6 +411,22 @@ $holdOutputs = [bool]$onStored.OnStored -or -not [bool]$onStored.Known
 # previous collection's set. No output is written from it this run (never a "resolved" or a removal from a set that is not
 # the newest): the outputs send only what changed, so the next run that stores the newest set sends it.
 $dmPart = $null; if ($res -and ($res -is [System.Collections.IDictionary] -or $res.PSObject.Properties['DataModel'])) { $dmPart = $res.DataModel }
+# #1226: the fallback (no data-out job here) holds a collection that is not trusted too -- judged, like the mark, by the
+# collection it would send from (its own verdict first)
+$fallbackTrust = & $judgeSent $dmPart 'this data sync'
+if ($fallbackTrust.Known -and -not $fallbackTrust.Trusted) { $holdOutputs = $true }
+# #1237 (Invardia 2026-11-13: "a held install must never go quiet"): this run's decision on the collection's trust is RECORDED
+# (cfg.InstallState 'DataOutTrust': held or not, since when the runs are held, the newest trusted collection) -- the hourly
+# heartbeat says a held output from it (heldReason 'untrusted', heldSinceUtc, newestTrustedUtc), and a holding run's report
+# carries the catalogue code si-out-1501. The verdict the data-out job's mark was made on, else this fallback's (the same
+# collection). Never in a dry run; a record that cannot be written changes nothing that is sent (said verbose only).
+if (-not $DryRun -and (Get-Command -Name Save-SIDataOutTrustRecord -ErrorAction SilentlyContinue)) {
+    $trustUsed = $(if ($dataOutHand.Trust) { $dataOutHand.Trust } else { $fallbackTrust })
+    $trustCt = $null
+    try { if ($null -ne $dmPart -and (Get-Command -Name Get-SIDataOutField -ErrorAction SilentlyContinue)) { $trustCt = Get-SIDataOutField $dmPart 'CollectionTime' } } catch { $trustCt = $null }
+    $trustRec = Save-SIDataOutTrustRecord -SettingsInvoke $(if ($guardCommon.Invoke) { $guardCommon.Invoke } else { $invoke }) -DataInvoke $invoke -Verdict $trustUsed -CollectionTime $trustCt -NowUtc ([datetime]::UtcNow) -By ([string]$dataOutHand.Holder)
+    Add-SIDataOutTrustNote -Verdict $trustUsed -Record $trustRec
+}
 if (Test-SIDataOutHoldForStaleFindings -DataModel $dmPart) {
     Write-DataWarn 'data out  : held this run -- the findings per CI of the newest collection were not stored (a part failed); nothing is sent from the previous set, and the next run sends what changed.'
     $holdOutputs = $true
@@ -512,7 +561,7 @@ if ($apPrune) {
 $colRet = $null; if ($res -and ($res -is [System.Collections.IDictionary] -or $res.PSObject.Properties['CollectionRetention'])) { $colRet = $res.CollectionRetention }
 if ($colRet -and @($colRet.Removed).Count -gt 0) {
     [void](Write-SIAuditEvent -Invoke $auditInvoke -Action 'datasync.collection.retention' -Actor $auditActor -ActorSource 'job' -Target 'sidata.Finding + sidata.Recommendation + sidata.IssueContext + sidata.Summary* (older and abandoned collections)' `
-        -Reason 'per kind the newest complete collection and the one before it are kept; older collections, and collections a stopped run left loading, have their rows removed' -WhatIfRun:$DryRun -Log $auditLog `
+        -Reason 'per kind the newest complete collections are kept (SI_Data_KeepCollections, fewer while the database is 70 % full or more); older collections, and collections a stopped run left loading, have their rows removed' -WhatIfRun:$DryRun -Log $auditLog `
         -After ([ordered]@{ rows = $colRet.Rows
                             collections = @(@($colRet.Removed) | ForEach-Object { [ordered]@{ kind = $_.Grain; collectionId = $_.CollectionId; collectionTimeUtc = ([datetime]$_.CollectionTime).ToString('o', [Globalization.CultureInfo]::InvariantCulture); why = $(if ($_.Why) { $_.Why } else { 'finished' }) } })
                             refused = @(@($colRet.Refused) | ForEach-Object { [ordered]@{ kind = $_.Grain; collectionId = $_.CollectionId } }) }))

@@ -81,6 +81,19 @@ function Get-RAKpiDomainFromReportName {
     return ''
 }
 
+function Test-RAKpiProtectionFromStore {
+    <#
+        The Protection Score of THIS run is the STORED one (a Detailed run that writes its result to the Pro database: the data
+        sync's key figures of this collection) -- New-RAKpiState then counts no protection findings at all. The one rule,
+        used by New-RAKpiState and by the set-based Top 50 / key figures (#1212, RA-TopListsSql.ps1), which works only then.
+    #>
+    try {
+        (Get-RAReportGrainLabel -ReportTemplate ([string]$global:ReportTemplate)) -ne 'Summary' -and
+            -not [string]::IsNullOrWhiteSpace([string]$global:SI_ProSettingsVersion) -and [bool]$script:RAStreamOn -and $null -ne $script:RAStream -and
+            $null -ne $script:RAStream.Invoke -and [int]$script:RAStream.CollectionId -gt 0 -and -not [bool]$script:SIWhatIf -and $script:RAScaleRole -ne 'worker'
+    } catch { $false }
+}
+
 function New-RAKpiState {
     <#
         The key figures' setup, before the first row: the accumulators, the patch-cycle tally and the Protection Score's
@@ -130,12 +143,7 @@ function New-RAKpiState {
     # to the Pro database is the STORED one -- the data sync's key figures of this collection, the number the web app shows.
     # This run does not count it at all (no walk over every CI); its mail waits for the stored figures in sidata.RaMailOutbox
     # and the data sync sends it with them (engine\_shared\data-sql\SI-RaMailOutbox.ps1). Community counts it here.
-    $script:RAProtectionFromStore = $false
-    try {
-        $script:RAProtectionFromStore = (Get-RAReportGrainLabel -ReportTemplate ([string]$global:ReportTemplate)) -ne 'Summary' -and
-            -not [string]::IsNullOrWhiteSpace([string]$global:SI_ProSettingsVersion) -and [bool]$script:RAStreamOn -and $null -ne $script:RAStream -and
-            $null -ne $script:RAStream.Invoke -and [int]$script:RAStream.CollectionId -gt 0 -and -not [bool]$script:SIWhatIf -and $script:RAScaleRole -ne 'worker'
-    } catch { $script:RAProtectionFromStore = $false }
+    $script:RAProtectionFromStore = [bool](Test-RAKpiProtectionFromStore)
     try {
         if ($script:RAProtectionFromStore) {
             Write-Info '[SCORE] Protection Score: taken from this run''s stored figures once the data sync has computed them -- the mail waits for them (the numbers the web app shows)'
@@ -176,6 +184,18 @@ function Add-RAKpiRow {
     $State.Rows++
     Add-SIPatchCycleRow -Tally $State.Patch -Row $r
     if ($null -ne $State.Prot) { Add-SIProtectionRow -Tally $State.Prot -Row $r }
+    Add-RAKpiRowFigures -State $State -Row $r -Count 1
+}
+
+function Add-RAKpiRowFigures {
+    <#
+        The severity counts and the per-domain weighted secure score of ONE row -- or of -Count rows that carry exactly the same
+        six values (SecuritySeverity, SecurityDomain, Report, RiskScoreKPI, CriticalityTier, ImpactedAssetCount): the set-based
+        key figures (#1212, RA-TopListsSql.ps1) hand each distinct combination once with its count. -Count 1 is the per-row
+        tally exactly as it was (x * 1 is x). Rows / the patch cycle / the protection findings are NOT counted here.
+    #>
+    param([Parameter(Mandatory)][hashtable]$State, $Row, [long]$Count = 1)
+    $r = $Row
     $dom = ''
     if ($r.PSObject.Properties['SecurityDomain']) { $dom = [string]$r.SecurityDomain }
     if ($dom -eq 'PublicIp') { $dom = 'PublicIP' }
@@ -200,10 +220,19 @@ function Add-RAKpiRow {
         '^(?i)low$'                  { 'Low';      break }
         default                      { 'Other' }
     }
-    $State.SevCount[$sevBucket]++
-    if ($State.SevByDomain.ContainsKey($dom)) {
-        $State.SevByDomain[$dom][$sevBucket]++
-        $State.SevByDomain[$dom]['Total']++
+    # (the counts stay [int] as the per-row tally made them: ++ for one row, + [int] for a group)
+    if ($Count -eq 1) {
+        $State.SevCount[$sevBucket]++
+        if ($State.SevByDomain.ContainsKey($dom)) {
+            $State.SevByDomain[$dom][$sevBucket]++
+            $State.SevByDomain[$dom]['Total']++
+        }
+    } else {
+        $State.SevCount[$sevBucket] += [int]$Count
+        if ($State.SevByDomain.ContainsKey($dom)) {
+            $State.SevByDomain[$dom][$sevBucket] += [int]$Count
+            $State.SevByDomain[$dom]['Total'] += [int]$Count
+        }
     }
 
     if (-not ($State.DomainSet -contains $dom)) { return }
@@ -245,9 +274,15 @@ function Add-RAKpiRow {
         }
     }
 
-    $State.DomainAcc[$dom].Numer += $rowKpi * $tw * $rowWeight
-    $State.DomainAcc[$dom].Denom += $tw * $rowWeight
-    $State.DomainAcc[$dom].Rows++
+    if ($Count -eq 1) {
+        $State.DomainAcc[$dom].Numer += $rowKpi * $tw * $rowWeight
+        $State.DomainAcc[$dom].Denom += $tw * $rowWeight
+        $State.DomainAcc[$dom].Rows++
+    } else {
+        $State.DomainAcc[$dom].Numer += ($rowKpi * $tw * $rowWeight) * $Count
+        $State.DomainAcc[$dom].Denom += ($tw * $rowWeight) * $Count
+        $State.DomainAcc[$dom].Rows += [int]$Count
+    }
 }
 
 function Test-RAKpiStateComplete {

@@ -530,11 +530,19 @@ function Get-SIMailRestriction {
         $roles = @()
         try { $p = $tok.Split('.')[1].Replace('-', '+').Replace('_', '/'); while ($p.Length % 4) { $p += '=' }; $roles = @(([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($p)) | ConvertFrom-Json).roles) } catch { }
         $probeBody = [ordered]@{ message = [ordered]@{ subject = 'SecurityInsight permission check (never delivered: no recipient)'; body = [ordered]@{ contentType = 'Text'; content = '-' }; toRecipients = @() }; saveToSentItems = $false }
-        $ask = { param($box) $r = & $Http ('https://graph.microsoft.com/v1.0/users/{0}/sendMail' -f [uri]::EscapeDataString($box)) $tok $probeBody; Get-SIMailProbeVerdict -StatusCode ([int]$r.StatusCode) -Body ([string]$r.Body) }
+        # what Microsoft Graph answered each probe (status + error code), so a check that says nothing is logged as WHAT it
+        # got (live 2026-11-13: an incident's answers could not be told apart -- 5xx, 403 or a timeout)
+        $answers = New-Object System.Collections.Generic.List[string]
+        $ask = { param($box)
+            $r = & $Http ('https://graph.microsoft.com/v1.0/users/{0}/sendMail' -f [uri]::EscapeDataString($box)) $tok $probeBody
+            $ge = Get-SIMailGraphError -Body ([string]$r.Body)
+            $answers.Add(('HTTP {0}{1}' -f [int]$r.StatusCode, $(if ("$($ge.Code)".Trim()) { ' ' + [string]$ge.Code } else { '' })))
+            Get-SIMailProbeVerdict -StatusCode ([int]$r.StatusCode) -Body ([string]$r.Body) }
         $self = & $ask $mb
         $other = ''
         if ($self -eq 'allowed' -and "$($Settings.ProbeMailbox)".Trim() -and "$($Settings.ProbeMailbox)".Trim() -ne $mb) { $other = & $ask ([string]$Settings.ProbeMailbox) }
         $v = Get-SIMailRestrictionVerdict -TokenHasMailSend ($roles -contains 'Mail.Send') -Self $self -Other $other -Mailbox $mb -ProbeMailbox ([string]$Settings.ProbeMailbox) -Attestation ([string]$Settings.Attestation)
+        if ([string]$v.State -eq 'error' -and $answers.Count) { $v.Detail = ('{0} (Microsoft Graph answered {1})' -f $v.Detail, ($answers.ToArray() -join ', ')) }
     } catch {
         $v = [pscustomobject]@{ State = 'error'; Detail = ('the send right could not be checked: {0}' -f $_.Exception.Message); AllowsSend = $false }
     }
@@ -743,7 +751,9 @@ function Send-SIMail {
           # and a support ticket number -- both optional; Get-SIMailSubject builds the whole subject
           [AllowNull()][AllowEmptyString()][string]$Severity, [AllowNull()][AllowEmptyString()][string]$Ticket)
     Initialize-SIMailTransportState
-    $res = [ordered]@{ Sent = $false; Mode = [string]$Settings.Mode; Off = [bool]$Settings.Off; Error = $null; Dropped = @(); Restriction = $null; Text = ''; Pdf = $null; PdfError = $null }
+    # Held = 'check-unreadable' when the mail is held ONLY because the send right could not be checked (Microsoft did not
+    # give an answer that says anything) -- not a proven refusal; the caller may treat it as a warning, never as sent
+    $res = [ordered]@{ Sent = $false; Mode = [string]$Settings.Mode; Off = [bool]$Settings.Off; Error = $null; Dropped = @(); Restriction = $null; Text = ''; Pdf = $null; PdfError = $null; Held = '' }
     $fail = { param($m) $res.Error = $m; Write-Host ('   mail NOT sent: ' + $m); [pscustomobject]$res }
     $mode = if ($Settings.Mode) { [string]$Settings.Mode } else { 'smtp' }
     if ($Settings.Off) { Write-Host '   mail is off (SI_Mail_Mode = none) -- not sent'; $res.Error = 'mail is off (SI_Mail_Mode = none)'; return [pscustomobject]$res }
@@ -826,6 +836,12 @@ function Send-SIMail {
     if ($mode -eq 'sharedMailbox') {
         $r = Get-SIMailRestriction -Settings $Settings -Http $Http -TokenProvider $TokenProvider
         $res.Restriction = $r
+        if (-not $r.AllowsSend -and [string]$r.State -eq 'error') {
+            # live 2026-11-13: Microsoft's sendMail answered nothing usable during an incident -- "could not be checked" is
+            # NOT "not restricted": held, said as what it is; the next run checks again
+            $res.Held = 'check-unreadable'
+            return (& $fail ('the send right on the shared mailbox could not be checked, so SecurityInsight does not send this time; the next run checks again. ' + $r.Detail))
+        }
         if (-not $r.AllowsSend) { return (& $fail ('Mail.Send is not restricted to the shared mailbox yet -- SecurityInsight does not send until it is. ' + $r.Detail)) }
         if ($r.State -eq 'legacy-policy') { Write-Host ('   note: ' + $r.Detail) }
         $plan = Get-SIMailAttachmentPlan -Paths $Attachments -MaxMb ([double]$Settings.MaxAttachmentMb)

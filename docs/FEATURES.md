@@ -437,6 +437,11 @@ These run only with a Pro licence ([invardia.com/pricing](https://invardia.com/p
   costs no extra copy), and "Back up now" takes one before a big change. To restore, pick a backup, see exactly what
   differs from today -- record by record, value by value -- and tick only what you want back. Backups can be downloaded
   as a signed file and imported in another environment. Secrets, the audit trail and run logs are never in a backup.
+- **A week of runs to look back on.** ✅ 2026-11-12 (built, not yet live) — the Pro database keeps all the findings of
+  the newest 7 complete collections of each kind (a setting, never fewer than 2), so What changed, the collection lists
+  and the history pages go back a week. When the database reaches 70 % of its maximum size, SecurityInsight keeps one
+  fewer each run and says so in one warning line -- with what you can do: a larger database tier, or a lower setting --
+  instead of filling up; below 70 % it goes back to the setting.
 - **Release a safety check, narrowly.** ✅ 2026-10-09 — a held set of closes or a held
   collection is released by a SuperAdmin, with a reason, for the next run or a few hours at most, and only for exactly
   what was held: if it changes, it needs a new release. The Guards page shows every safety check, whether it is holding

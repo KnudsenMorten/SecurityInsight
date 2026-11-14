@@ -728,6 +728,50 @@ function Test-RAReportFingerprintCarried {
     $false
 }
 
+function Get-RACollectionTrustWriteSql {
+    <#
+        #1226 (owner 2026-11-12: "only send in data for the latest collection that completed"): THE COLLECTION'S OWN TRUST
+        VERDICT, written with the collection -- what this run decided about the source data it was built on (Trusted = 1 /
+        0, Why). One row per collection time and grain (replaced on a re-run of the same collection). A database the updater
+        has not given the table yet keeps nothing (the data sync then checks the source runs itself). Returns 1 when written.
+    #>
+    @'
+SET NOCOUNT ON; SET XACT_ABORT ON;
+IF OBJECT_ID('sidata.CollectionTrust') IS NULL BEGIN SELECT 0; RETURN; END
+DECLARE @t datetime2(3) = CONVERT(datetime2(3), @CollectionTime, 126);
+BEGIN TRAN;
+DELETE FROM sidata.CollectionTrust WHERE CollectionTime = @t AND Grain = @Grain;
+INSERT sidata.CollectionTrust (CollectionTime, Grain, Trusted, Why) VALUES (@t, @Grain, CONVERT(bit, @Trusted), NULLIF(LEFT(@Why, 2000), ''));
+COMMIT;
+SELECT 1;
+'@
+}
+
+function Get-RACollectionTrustVerdict {
+    <#
+        PURE. #1226: the trust verdict of THIS run's collection from its upstream outcome (Get-SIUpstreamOutcome after the
+        #899 role-read exception): @{ Write; Trusted; Why }. No outcome (the check did not run or could not read) = Write
+        $false -- nothing is recorded, the data sync then checks the source runs itself (never a guessed verdict).
+        'success-partial' = not trusted (built on a source run that ended partial); anything else = trusted.
+        -RowsRead = how many source-run records the check read; 0 = the check saw nothing, so nothing is recorded either
+        (an empty read is not proof the sources were complete).
+        #1235 (owner's #1226 rule: "trusted = the run finished every step"): -Steps = THIS run's own steps
+        (Get-SIFlowStepVerdict). A step of this run that FAILED is decisive on its own: written as not trusted, whatever the
+        source records say (a failed source step leaves its older success as the newest record) -- also when the source read
+        saw nothing. The source-record check stays the second reason, joined to the Why. Steps not known (a run outside the
+        pipeline): the source-record rule alone, as before.
+    #>
+    param($Outcome, [int]$RowsRead = -1, $Steps = $null)
+    $partial = ($null -ne $Outcome -and [string]$Outcome.ExitReason -eq 'success-partial')
+    if ($Steps -and $Steps.Known -and -not $Steps.Trusted) {
+        $why = [string]$Steps.Why
+        if ($partial -and $RowsRead -ne 0) { $why = '{0}; also {1}' -f $why, [string]$Outcome.Message }
+        return [pscustomobject]@{ Write = $true; Trusted = $false; Why = $why }
+    }
+    if ($null -eq $Outcome -or $RowsRead -eq 0) { return [pscustomobject]@{ Write = $false; Trusted = $true; Why = '' } }
+    [pscustomobject]@{ Write = $true; Trusted = (-not $partial); Why = $(if ($partial) { [string]$Outcome.Message } else { '' }) }
+}
+
 function Get-RAStreamStatusSql {
     # #690 (34): the report's query fingerprint (@QueryHash) is written only where the database has the column (dynamic SQL:
     # a database the updater has not updated yet stores the verdict exactly as before)

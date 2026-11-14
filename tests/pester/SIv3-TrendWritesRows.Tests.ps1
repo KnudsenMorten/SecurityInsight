@@ -160,7 +160,8 @@ Describe 'SIv3-TrendWritesRows -- the trend run from Risk Analysis sees Risk Ana
             $fakeEngine = Join-Path $dir 'fake-trend.ps1'
             Set-Content -LiteralPath $fakeEngine -Encoding ASCII -Value @'
 param([string]$Grain, [AllowEmptyCollection()][object[]]$PublishedRows)
-$global:SI394Probe = @{ Job = $(try { Resolve-SITelemetryJob -Engine 'asset-trend' } catch { 'threw: ' + $_.Exception.Message }); Rows = @($PublishedRows).Count }
+$global:SI394Probe = @{ Job = $(try { Resolve-SITelemetryJob -Engine 'asset-trend' } catch { 'threw: ' + $_.Exception.Message })
+                       Plain = $(try { Get-SI394Setting } catch { 'threw: ' + $_.Exception.Message }); Rows = @($PublishedRows).Count }
 '@
             # a stand-in for Risk Analysis: a SCRIPT that loads the telemetry sender at its own script scope, then runs the trend
             $outer = Join-Path $dir 'fake-ra.ps1'
@@ -170,15 +171,23 @@ $global:SI394Probe = @{ Job = $(try { Resolve-SITelemetryJob -Engine 'asset-tren
 param([string]`$Engine, [string]`$Mode)
 . '$tel'
 . '$atEnd'
+# a shared function that keeps its setting in PLAIN script state, read directly (the shape the sender had before
+# 2026-10-29): it only resolves when the trend runs in THIS script's scope
+`$script:SI394Map = @{ Value = 'ra-setting' }
+function Get-SI394Setting { `$script:SI394Map.get_Item('Value') }
 if (`$Mode -eq 'ampersand') { `$null = & `$Engine -Grain Summary -PublishedRows @(1, 2) }
 else { `$null = Invoke-SIRaTrendAtEnd -Rows @(1, 2) -Detailed `$true -Published `$true -WhatIfRun `$false -Engine `$Engine -Log { param(`$l, `$m) } }
 "@
-            # control: the old way (`& $Engine`) cannot see the sender's settings -- this is the failure the report showed
+            # CONTROL -- the old way (`& $Engine`): a shared function on plain script state cannot see its setting (the failure
+            # the report showed, null-valued). The real sender no longer has that shape: since 2026-10-29 (1fc1454fd) it reads
+            # its state through Get-SITelemetrySendState, made in the scope that reads it -- so it resolves on BOTH paths
             & $outer -Engine $fakeEngine -Mode 'ampersand'
-            [string]$global:SI394Probe.Job | Should -Match 'threw: .*null-valued'
+            [string]$global:SI394Probe.Plain | Should -Match '^threw: .*null-valued' -Because 'the control must bite: & runs the engine in its own script scope'
+            $global:SI394Probe.Job | Should -Be 'si-trend' -Because 'the sender is scope-independent since 2026-10-29'
             Remove-Variable -Name SI394Probe -Scope Global -ErrorAction SilentlyContinue
-            # the fix
+            # the fix: the trend at the end of Risk Analysis runs the engine in Risk Analysis's own script scope
             & $outer -Engine $fakeEngine -Mode 'atend'
+            $global:SI394Probe.Plain | Should -Be 'ra-setting'
             $global:SI394Probe.Job | Should -Be 'si-trend'
             $global:SI394Probe.Rows | Should -Be 2
         } finally {

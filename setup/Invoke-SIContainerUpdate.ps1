@@ -20,6 +20,13 @@
                      on it may have changed (trigger, secrets, env, resources, identity, tags ...).
       5. ROLLBACK -- on any failure after a job changed, every changed job returns to its previous image,
                      and the script exits 1 so the sync reports the solution as failed.
+     4b. THE UPDATER ITSELF -- run by the updater (caj-si-updater): once every engine job read back on this tree's image (or
+                     already ran it), the updater moves its OWN job to this release's updater image at once -- before the
+                     steps below, never after a roll that failed. Never fails the update; a move that fails is retried by the
+                     updater's next run. (Before 2026-11-12 this was the updater's very last step.)
+     DATABASE STATEMENTS -- every statement of the steps below runs under a background beat (setup/_shared/SI-UpdateSqlBeat.ps1):
+                     while it runs, the updater's own lock row is beaten every 5 minutes on a connection of its own, with one
+                     log line "<step>: SQL statement running <N> min". The summary views' statements (9f) stop after 2 hours.
       6. TEMPLATES -- SecurityInsight Pro (the Pro database is configured): once the jobs run this tree, the default
                      templates are installed or kept current as template pack 1.0 (#250, setup\Publish-SITemplates.ps1
                      -InstallDefault: the schema, names and CMDB ownership as configuration, the pack staged and
@@ -209,6 +216,12 @@ $solRoot = Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot '_shared/SI-AcrBuild.ps1')
 # #416: the fast roll -- two-layer builds, queued builds, the parallel job swap
 . (Join-Path $PSScriptRoot '_shared/SI-FastRoll.ps1')
+# live 2026-11-12: every database statement below runs under the background beat (Invoke-SIUpdateSqlBeat): while it runs, the
+# updater's own lock row is beaten every 5 minutes on a connection of its own, with one log line each -- a long statement is
+# never taken for a dead update (the pipeline runner's rule: no beat for 15 minutes = dead)
+. (Join-Path $PSScriptRoot '_shared/SI-UpdateSqlBeat.ps1')
+# the summary views' statements (9f) are the one place with a time limit: 2 hours -- a beaten statement is never alive for ever
+$script:SIUpdateSummaryTimeoutSeconds = 7200
 # #911 (e): a step with no log line for 20 minutes says "still working: <step>" -- started here unless the updater runs one
 $updWatchLib = Join-Path $PSScriptRoot '_shared/SI-UpdateWatch.ps1'
 $script:SIUpdateWatchOwn = $false
@@ -424,8 +437,10 @@ function Get-SIUpdateSetting {
                 $ps = @(); $i = 0
                 foreach ($n in $script:SIUpdateProSettingNames) { $p = '@n{0}' -f $i; $null = $cmd.Parameters.AddWithValue($p, $n); $ps += $p; $i++ }
                 $cmd.CommandText = "IF OBJECT_ID('cfg.Setting') IS NOT NULL SELECT Name, ValueJson FROM cfg.Setting WHERE Scope = N'solution' AND Name IN ({0});" -f ($ps -join ', ')
-                $rd = $cmd.ExecuteReader()
-                try { while ($rd.Read()) { $script:SIUpdateProSettings[[string]$rd.GetValue(0)] = ConvertFrom-SIUpdateSettingJson $rd.GetValue(1) } } finally { $rd.Dispose() }
+                Invoke-SIUpdateSqlBeat -What 'the settings' -Action {
+                    $rd = $cmd.ExecuteReader()
+                    try { while ($rd.Read()) { $script:SIUpdateProSettings[[string]$rd.GetValue(0)] = ConvertFrom-SIUpdateSettingJson $rd.GetValue(1) } } finally { $rd.Dispose() }
+                }
             } catch { Info ("settings: the Pro database's settings could not be read ({0}) -- the config and the job's variables count" -f $_.Exception.Message) }
             finally { if ($cn) { $cn.Dispose() } }
         }
@@ -494,8 +509,10 @@ function Invoke-SIUpdateJobSizing {
                 $cn.AccessToken = $tok.Trim()
                 try {
                     $cn.Open(); $cmd = $cn.CreateCommand(); $cmd.CommandText = $Sql; $cmd.CommandTimeout = 0
-                    $rd = $cmd.ExecuteReader()
-                    try { while ($rd.Read()) { $o = [ordered]@{}; for ($i = 0; $i -lt $rd.FieldCount; $i++) { $o[$rd.GetName($i)] = $rd.GetValue($i) }; [pscustomobject]$o } } finally { $rd.Dispose() }
+                    Invoke-SIUpdateSqlBeat -What '8. JOB SIZE' -Action {
+                        $rd = $cmd.ExecuteReader()
+                        try { while ($rd.Read()) { $o = [ordered]@{}; for ($i = 0; $i -lt $rd.FieldCount; $i++) { $o[$rd.GetName($i)] = $rd.GetValue($i) }; [pscustomobject]$o } } finally { $rd.Dispose() }
+                    }
                 } finally { $cn.Dispose() }
             }   # dynamic scope: $proSrv, $proDb come from this function
         }
@@ -714,9 +731,11 @@ function Invoke-SIUpdateOrchestration {
                         try {
                             $cn.Open(); $cmd = $cn.CreateCommand(); $cmd.CommandText = $Query; $cmd.CommandTimeout = 0
                             if ($Params) { foreach ($k in @($Params.Keys)) { $pv = $Params[$k]; $null = $cmd.Parameters.AddWithValue('@' + $k, $(if ($null -eq $pv) { [DBNull]::Value } else { $pv })) } }
-                            if ($Mode -eq 'nonquery') { return $cmd.ExecuteNonQuery() }
-                            $rd = $cmd.ExecuteReader()
-                            try { while ($rd.Read()) { $o = [ordered]@{}; for ($i = 0; $i -lt $rd.FieldCount; $i++) { $o[$rd.GetName($i)] = $rd.GetValue($i) }; [pscustomobject]$o } } finally { $rd.Dispose() }
+                            Invoke-SIUpdateSqlBeat -What '9b. PIPELINE SCHEDULE' -Action {
+                                if ($Mode -eq 'nonquery') { return $cmd.ExecuteNonQuery() }
+                                $rd = $cmd.ExecuteReader()
+                                try { while ($rd.Read()) { $o = [ordered]@{}; for ($i = 0; $i -lt $rd.FieldCount; $i++) { $o[$rd.GetName($i)] = $rd.GetValue($i) }; [pscustomobject]$o } } finally { $rd.Dispose() }
+                            }
                         } finally { $cn.Dispose() }
                     }   # dynamic scope: $proSrv, $proDb come from this function
                 }
@@ -763,8 +782,12 @@ function Read-SIUpdateStoredJobFlow {
         }
         try {
             $cmd = $cn.CreateCommand(); $cmd.CommandText = (Get-SIJobFlowSqlText -Name ReadDefinition); $cmd.CommandTimeout = 0
-            $rd = $cmd.ExecuteReader()
-            try { if ($rd.Read()) { if (-not $rd.IsDBNull(0)) { $def = ConvertFrom-SIJobFlowJson -Json ([string]$rd.GetValue(0)) }; if (-not $rd.IsDBNull(1)) { $storedMode = ([string]$rd.GetValue(1)).ToLowerInvariant() } } } finally { $rd.Dispose() }
+            # (the values are handed out of the beaten statement in one object: an assignment inside it would land in its own scope)
+            $read = Invoke-SIUpdateSqlBeat -What 'the stored pipeline' -Action {
+                $rd = $cmd.ExecuteReader()
+                try { if ($rd.Read()) { [pscustomobject]@{ Def = $(if (-not $rd.IsDBNull(0)) { ConvertFrom-SIJobFlowJson -Json ([string]$rd.GetValue(0)) } else { $null }); Mode = $(if (-not $rd.IsDBNull(1)) { ([string]$rd.GetValue(1)).ToLowerInvariant() } else { '' }) } } } finally { $rd.Dispose() }
+            }
+            if ($read) { $def = $read.Def; $storedMode = [string]$read.Mode }
         } finally { $cn.Dispose() }
     } catch { return [pscustomobject]@{ Ok = $false; Pro = $true; Definition = $null; Mode = ''; Error = $_.Exception.Message } }
     [pscustomobject]@{ Ok = $true; Pro = $true; Definition = $def; Mode = $storedMode; Error = '' }
@@ -884,8 +907,11 @@ function Invoke-SIUpdateMissingJobs {
                 try {
                     $cn.Open(); $cmd = $cn.CreateCommand(); $cmd.CommandTimeout = 0
                     $cmd.CommandText = (Get-SIMissingJobConnectorSql)
-                    $rd = $cmd.ExecuteReader()
-                    try { while ($rd.Read()) { $connectors += [pscustomobject]@{ Kind = [string]$rd.GetValue(0); Direction = [string]$rd.GetValue(1) } } } finally { $rd.Dispose() }
+                    # (the rows are the beaten statement's output: an assignment inside it would land in its own scope)
+                    $connectors = @(Invoke-SIUpdateSqlBeat -What '9a. MISSING JOBS' -Action {
+                        $rd = $cmd.ExecuteReader()
+                        try { while ($rd.Read()) { [pscustomobject]@{ Kind = [string]$rd.GetValue(0); Direction = [string]$rd.GetValue(1) } } } finally { $rd.Dispose() }
+                    })
                 } finally { $cn.Dispose() }
             } catch { Info ("missing jobs: the connectors could not be read from the Pro database ({0}) -- a ServiceNow job is made only where a setting says ServiceNow is used; the next update reads them again." -f $_.Exception.Message) }
         }
@@ -952,9 +978,11 @@ function Invoke-SIUpdateNightlySchedule {
             try {
                 $cn.Open(); $cmd = $cn.CreateCommand(); $cmd.CommandText = $Query; $cmd.CommandTimeout = 0
                 if ($Params) { foreach ($k in @($Params.Keys)) { $pv = $Params[$k]; $null = $cmd.Parameters.AddWithValue('@' + $k, $(if ($null -eq $pv) { [DBNull]::Value } else { $pv })) } }
-                if ($Mode -eq 'nonquery') { return $cmd.ExecuteNonQuery() }
-                $rd = $cmd.ExecuteReader()
-                try { while ($rd.Read()) { $o = [ordered]@{}; for ($i = 0; $i -lt $rd.FieldCount; $i++) { $o[$rd.GetName($i)] = $rd.GetValue($i) }; [pscustomobject]$o } } finally { $rd.Dispose() }
+                Invoke-SIUpdateSqlBeat -What '9c. NIGHTLY SCHEDULE' -Action {
+                    if ($Mode -eq 'nonquery') { return $cmd.ExecuteNonQuery() }
+                    $rd = $cmd.ExecuteReader()
+                    try { while ($rd.Read()) { $o = [ordered]@{}; for ($i = 0; $i -lt $rd.FieldCount; $i++) { $o[$rd.GetName($i)] = $rd.GetValue($i) }; [pscustomobject]$o } } finally { $rd.Dispose() }
+                }
             } finally { $cn.Dispose() }
         }   # dynamic scope: $proSrv, $proDb come from this function
         $p = Invoke-SINightlyPipelineStart -Sql $sql -Zone $rz.Zone -Region $rz.Region -WhatIf:$wi
@@ -999,9 +1027,11 @@ function Invoke-SIUpdateReportCopy {
             try {
                 $cn.Open(); $cmd = $cn.CreateCommand(); $cmd.CommandText = $Query; $cmd.CommandTimeout = 0
                 if ($Params) { foreach ($k in @($Params.Keys)) { $pv = $Params[$k]; $null = $cmd.Parameters.AddWithValue('@' + $k, $(if ($null -eq $pv) { [DBNull]::Value } else { $pv })) } }
-                if ($Mode -eq 'nonquery') { return $cmd.ExecuteNonQuery() }
-                $rd = $cmd.ExecuteReader()
-                try { while ($rd.Read()) { $o = [ordered]@{}; for ($i = 0; $i -lt $rd.FieldCount; $i++) { $o[$rd.GetName($i)] = $rd.GetValue($i) }; [pscustomobject]$o } } finally { $rd.Dispose() }
+                Invoke-SIUpdateSqlBeat -What '9e. REPORT ROW COPY' -Action {
+                    if ($Mode -eq 'nonquery') { return $cmd.ExecuteNonQuery() }
+                    $rd = $cmd.ExecuteReader()
+                    try { while ($rd.Read()) { $o = [ordered]@{}; for ($i = 0; $i -lt $rd.FieldCount; $i++) { $o[$rd.GetName($i)] = $rd.GetValue($i) }; [pscustomobject]$o } } finally { $rd.Dispose() }
+                }
             } finally { $cn.Dispose() }
         }   # dynamic scope: $proSrv, $proDb come from this function
         $r = Invoke-SIReportCopyDefault -Sql $sql -WhatIf:(-not $Apply -or $DetectOnly)
@@ -1034,7 +1064,9 @@ function Invoke-SIUpdateSummaryRebuild {
         $jobs = @($script:SISqlTierJobs)
         if ($rest) { try { $v = @(Get-SIArmJobList -Rest $rest -SubscriptionId $sub -ResourceGroup $target.ResourceGroupName); if ($v.Count) { $jobs = $v } } catch { } }
         $hasDataSync = [bool]@($jobs | Where-Object { [string]$_.name -eq 'caj-si-asset-datasync' }).Count
-        # parameterised statements, signed in with this update's own token (a new connection per call)
+        # parameterised statements, signed in with this update's own token (a new connection per call). Live 2026-11-12: with no
+        # time limit a statement here could keep a beaten update alive for ever -- it has a real one now (2 hours,
+        # $script:SIUpdateSummaryTimeoutSeconds); a statement that reaches it is stopped, said as a warning, and the update goes on
         $open = {
             param([string]$Server, [string]$Database, [string]$Query, $Params)
             $tok = ([string](Get-SIAzureToken -Resource 'https://database.windows.net/')).Trim()
@@ -1043,10 +1075,20 @@ function Invoke-SIUpdateSummaryRebuild {
             $cn.ConnectionString = "Server=tcp:$Server,1433;Database=$Database;Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;"
             $cn.AccessToken = $tok
             try {
-                $cn.Open(); $cmd = $cn.CreateCommand(); $cmd.CommandText = $Query; $cmd.CommandTimeout = 0
+                $cn.Open(); $cmd = $cn.CreateCommand(); $cmd.CommandText = $Query; $cmd.CommandTimeout = $script:SIUpdateSummaryTimeoutSeconds
                 if ($Params) { foreach ($k in @($Params.Keys)) { $pv = $Params[$k]; $null = $cmd.Parameters.AddWithValue('@' + $k, $(if ($null -eq $pv) { [DBNull]::Value } else { $pv })) } }
-                $rd = $cmd.ExecuteReader()
-                try { while ($rd.Read()) { $o = [ordered]@{}; for ($i = 0; $i -lt $rd.FieldCount; $i++) { $o[$rd.GetName($i)] = $rd.GetValue($i) }; [pscustomobject]$o } } finally { $rd.Dispose() }
+                try {
+                    Invoke-SIUpdateSqlBeat -What '9f. SUMMARY VIEWS' -Action {
+                        $rd = $cmd.ExecuteReader()
+                        try { while ($rd.Read()) { $o = [ordered]@{}; for ($i = 0; $i -lt $rd.FieldCount; $i++) { $o[$rd.GetName($i)] = $rd.GetValue($i) }; [pscustomobject]$o } } finally { $rd.Dispose() }
+                    }
+                } catch {
+                    # SqlClient's own timeout (error number -2), wherever PowerShell wrapped it
+                    $e = $_.Exception; $timedOut = $false
+                    while ($e) { if ($e -is [System.Data.SqlClient.SqlException] -and $e.Number -eq -2) { $timedOut = $true }; $e = $e.InnerException }
+                    if ($timedOut) { throw ("a database statement of the summary views ran past its limit of {0} minutes and was stopped" -f [int]($script:SIUpdateSummaryTimeoutSeconds / 60)) }
+                    throw
+                }
             } finally { $cn.Dispose() }
         }
         $sql = { param([string]$Query, $Params, [string]$Mode) & $open $proSrv $proDb $Query $Params }        # dynamic scope: this function's values
@@ -1090,9 +1132,11 @@ function Invoke-SIUpdatePublishedCopy {
             try {
                 $cn.Open(); $cmd = $cn.CreateCommand(); $cmd.CommandText = $Query; $cmd.CommandTimeout = 0
                 if ($Params) { foreach ($k in @($Params.Keys)) { $pv = $Params[$k]; $null = $cmd.Parameters.AddWithValue('@' + $k, $(if ($null -eq $pv) { [DBNull]::Value } else { $pv })) } }
-                if ($Mode -eq 'scalar') { return $cmd.ExecuteScalar() }
-                $rd = $cmd.ExecuteReader()
-                try { while ($rd.Read()) { $o = [ordered]@{}; for ($i = 0; $i -lt $rd.FieldCount; $i++) { $o[$rd.GetName($i)] = $rd.GetValue($i) }; [pscustomobject]$o } } finally { $rd.Dispose() }
+                Invoke-SIUpdateSqlBeat -What '9j. PUBLISHED COPIES' -Action {
+                    if ($Mode -eq 'scalar') { return $cmd.ExecuteScalar() }
+                    $rd = $cmd.ExecuteReader()
+                    try { while ($rd.Read()) { $o = [ordered]@{}; for ($i = 0; $i -lt $rd.FieldCount; $i++) { $o[$rd.GetName($i)] = $rd.GetValue($i) }; [pscustomobject]$o } } finally { $rd.Dispose() }
+                }
             } finally { $cn.Dispose() }
         }   # dynamic scope: $dataSrv, $dataDb come from this function
         # live 2026-11-09/10: without connections to hand out, the copies were refreshed by the database's procedure in ONE call
@@ -1102,7 +1146,14 @@ function Invoke-SIUpdatePublishedCopy {
         $dataInfo = { $tok = ([string](Get-SIAzureToken -Resource 'https://database.windows.net/')).Trim(); @{ ConnectionString = "Server=tcp:$dataSrv,1433;Database=$dataDb;Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;"; AccessToken = $tok; CommandTimeout = 0 } }   # dynamic scope, as $dataSql (a closure could not see Get-SIAzureToken)
         $dataSql | Add-Member -NotePropertyName SIConnectionInfo -NotePropertyValue $dataInfo
         $copyBeat = { if (Get-Command -Name Invoke-SIUpdaterLockBeat -ErrorAction SilentlyContinue) { $null = Invoke-SIUpdaterLockBeat -What 'the copies the pages show' } }
-        $r = Invoke-SIPublishedCopyCatchUp -Invoke $dataSql -WhatIf:(-not $Apply -or $DetectOnly) -Beat $copyBeat
+        # live 2026-11-12: ONE long wave of ranges (its statements run on connections of their own, the update waits for all) beat
+        # only after it ended -- the wave runs under the background beat as well (a release whose engine driver takes no -Wave:
+        # the call as before)
+        $copyWave = @{}
+        if ((Get-Command -Name Invoke-SIPublishedCopyCatchUp).Parameters.ContainsKey('Wave')) {
+            $copyWave['Wave'] = { param($info, $ranges) Invoke-SIUpdateSqlBeat -What '9j. PUBLISHED COPIES' -Action { Invoke-SIPublishedCopyRangeWave -Info $info -Ranges $ranges } }
+        }
+        $r = Invoke-SIPublishedCopyCatchUp -Invoke $dataSql -WhatIf:(-not $Apply -or $DetectOnly) -Beat $copyBeat @copyWave
         if (@($r.Lines).Count) { Step '9j. PUBLISHED COPIES' }
         foreach ($l in @($r.Lines)) { if ($r.Action -in @('failed', 'held')) { Warn $l } else { Info $l } }
         $global:SI_UpdatePublishedCopy = $r
@@ -1142,11 +1193,15 @@ function Invoke-SIUpdateKeyFigures {
             try {
                 $cn.Open(); $cmd = $cn.CreateCommand(); $cmd.CommandText = $Query; $cmd.CommandTimeout = 0
                 if ($Params) { foreach ($k in @($Params.Keys)) { $pv = $Params[$k]; $null = $cmd.Parameters.AddWithValue('@' + $k, $(if ($null -eq $pv) { [DBNull]::Value } else { $pv })) } }
-                if ($Mode -eq 'scalar') { $v = $cmd.ExecuteScalar(); if ($v -is [DBNull]) { return $null }; return $v }
-                $rd = $cmd.ExecuteReader()
-                try { while ($rd.Read()) { $o = [ordered]@{}; for ($i = 0; $i -lt $rd.FieldCount; $i++) { $o[$rd.GetName($i)] = $(if ($rd.IsDBNull($i)) { $null } else { $rd.GetValue($i) }) }; [pscustomobject]$o } } finally { $rd.Dispose() }
+                Invoke-SIUpdateSqlBeat -What '9i. KEY FIGURES' -Action {
+                    if ($Mode -eq 'scalar') { $v = $cmd.ExecuteScalar(); if ($v -is [DBNull]) { return $null }; return $v }
+                    $rd = $cmd.ExecuteReader()
+                    try { while ($rd.Read()) { $o = [ordered]@{}; for ($i = 0; $i -lt $rd.FieldCount; $i++) { $o[$rd.GetName($i)] = $(if ($rd.IsDBNull($i)) { $null } else { $rd.GetValue($i) }) }; [pscustomobject]$o } } finally { $rd.Dispose() }
+                }
             } finally { $cn.Dispose() }
         }
+        # the beat for the closure below (a closure runs in a scope of its own and does not see this script's functions)
+        $sqlBeat = ${function:Invoke-SIUpdateSqlBeat}
         $dataSql = {
             param([string]$Query, $Params, [string]$Mode, [scriptblock]$OnRow)
             if ($Mode -ne 'session') { return (& $open $dataSrv $dataDb $Query $Params $Mode) }
@@ -1160,16 +1215,19 @@ function Invoke-SIUpdateKeyFigures {
             $scn.AccessToken = $tok
             try {
                 $scn.Open()
+                $sqlBeat = $sqlBeat   # a local copy: .GetNewClosure() keeps only this scope's variables
                 $run = {
                     param([string]$StepSql, [string]$StepMode)
                     $sc = $scn.CreateCommand(); $sc.CommandText = $StepSql; $sc.CommandTimeout = 0
-                    if ($StepMode -eq 'scalar') { $v = $sc.ExecuteScalar(); if ($v -is [DBNull]) { return $null }; return $v }
-                    if ($StepMode -eq 'reader') {
-                        $rd = $sc.ExecuteReader()
-                        try { while ($rd.Read()) { $o = [ordered]@{}; for ($i = 0; $i -lt $rd.FieldCount; $i++) { $o[$rd.GetName($i)] = $(if ($rd.IsDBNull($i)) { $null } else { $rd.GetValue($i) }) }; [pscustomobject]$o } } finally { $rd.Dispose() }
-                        return
+                    & $sqlBeat -What '9i. KEY FIGURES' -Action {
+                        if ($StepMode -eq 'scalar') { $v = $sc.ExecuteScalar(); if ($v -is [DBNull]) { return $null }; return $v }
+                        if ($StepMode -eq 'reader') {
+                            $rd = $sc.ExecuteReader()
+                            try { while ($rd.Read()) { $o = [ordered]@{}; for ($i = 0; $i -lt $rd.FieldCount; $i++) { $o[$rd.GetName($i)] = $(if ($rd.IsDBNull($i)) { $null } else { $rd.GetValue($i) }) }; [pscustomobject]$o } } finally { $rd.Dispose() }
+                            return
+                        }
+                        [void]$sc.ExecuteNonQuery()
                     }
-                    [void]$sc.ExecuteNonQuery()
                 }.GetNewClosure()
                 & $OnRow $run
             } finally { $scn.Dispose() }
@@ -1223,9 +1281,12 @@ $script:SIUpdateProSql = {
     try {
         $cn.Open(); $cmd = $cn.CreateCommand(); $cmd.CommandText = $Query; $cmd.CommandTimeout = 0
         if ($Params) { foreach ($k in @($Params.Keys)) { $pv = $Params[$k]; $null = $cmd.Parameters.AddWithValue('@' + $k, $(if ($null -eq $pv) { [DBNull]::Value } else { $pv })) } }
-        if ($Mode -eq 'nonquery') { return $cmd.ExecuteNonQuery() }
-        $rd = $cmd.ExecuteReader()
-        try { while ($rd.Read()) { $o = [ordered]@{}; for ($i = 0; $i -lt $rd.FieldCount; $i++) { $o[$rd.GetName($i)] = $(if ($rd.IsDBNull($i)) { $null } else { $rd.GetValue($i) }) }; [pscustomobject]$o } } finally { $rd.Dispose() }
+        # $sqlStep: the calling step's name (dynamic scope), for the beat's log line
+        Invoke-SIUpdateSqlBeat -What "$sqlStep" -Action {
+            if ($Mode -eq 'nonquery') { return $cmd.ExecuteNonQuery() }
+            $rd = $cmd.ExecuteReader()
+            try { while ($rd.Read()) { $o = [ordered]@{}; for ($i = 0; $i -lt $rd.FieldCount; $i++) { $o[$rd.GetName($i)] = $(if ($rd.IsDBNull($i)) { $null } else { $rd.GetValue($i) }) }; [pscustomobject]$o } } finally { $rd.Dispose() }
+        }
     } finally { $cn.Dispose() }
 }
 
@@ -1244,7 +1305,7 @@ function Invoke-SIUpdateOwnSqlConnector {
         if (-not $proSrv -or -not $proDb) { return }
         if ($proSrv -notmatch '\.') { $proSrv = $proSrv + '.database.windows.net' }
         # parameterised statements on the Pro database, signed in with this update's own token (a new connection per call)
-        $sql = $script:SIUpdateProSql   # dynamic scope: $proSrv, $proDb come from this function
+        $sqlStep = '9k. OWN SQL TARGET'; $sql = $script:SIUpdateProSql   # dynamic scope: $proSrv, $proDb, $sqlStep come from this function
         $r = Invoke-SIOwnSqlConnectorOn -Sql $sql -WhatIf:(-not $Apply -or $DetectOnly)
         if (@($r.Lines).Count) { Step '9k. OWN SQL TARGET' }
         foreach ($l in @($r.Lines)) { if ($r.Action -eq 'failed') { Warn $l } else { Info $l } }
@@ -1274,7 +1335,7 @@ function Invoke-SIUpdateSupportGrant {
         $lines = New-Object System.Collections.Generic.List[object]
         $q = Invoke-SISupportGrantQueueEnsure -Rest $rest -SubscriptionId $sub -ResourceGroup $target.ResourceGroupName -Account (& $gv 'SI_StorageAccount') -WhatIf:$wi
         if ($q.Line) { $lines.Add(@($q.Action, $q.Line)) }
-        $sql = $script:SIUpdateProSql   # dynamic scope: $proSrv, $proDb come from this function
+        $sqlStep = '9p. SUPPORT ACCESS'; $sql = $script:SIUpdateProSql   # dynamic scope: $proSrv, $proDb, $sqlStep come from this function
         $dc = Invoke-SISupportGrantDerivedConsent -Rest $rest -Sql $sql -SubscriptionId $sub -ResourceGroup $target.ResourceGroupName -VaultName (& $gv 'SI_KeyVaultName') -WhatIf:$wi
         if ($dc.Line) { $lines.Add(@($dc.Action, $dc.Line)) }
         # #1154 (framework §5.5): the support grant job started by its queue (read back), THEN the Support app's rights on the
@@ -1308,7 +1369,7 @@ function Invoke-SIUpdateSnowDataOut {
         $proDb = & $envOr 'SI_UPDATER_PRO_SQL_DATABASE'; if (-not $proDb) { $proDb = & $gv 'SI_ProSqlDatabase' }
         if (-not $proSrv -or -not $proDb) { return }
         if ($proSrv -notmatch '\.') { $proSrv = $proSrv + '.database.windows.net' }
-        $sql = $script:SIUpdateProSql   # dynamic scope: $proSrv, $proDb come from this function
+        $sqlStep = '9m. SERVICENOW DATA OUT'; $sql = $script:SIUpdateProSql   # dynamic scope: $proSrv, $proDb, $sqlStep come from this function
         $r = Invoke-SISnowDataOutConnectorOn -Sql $sql -WhatIf:(-not $Apply -or $DetectOnly)
         if (@($r.Lines).Count -or @($r.Warnings).Count) { Step '9m. SERVICENOW DATA OUT' }
         foreach ($l in @($r.Lines)) { if ($r.Action -eq 'failed') { Warn $l } else { Info $l } }
@@ -1329,7 +1390,7 @@ function Invoke-SIUpdateSnowStagingStatus {
         $proDb = & $envOr 'SI_UPDATER_PRO_SQL_DATABASE'; if (-not $proDb) { $proDb = & $gv 'SI_ProSqlDatabase' }
         if (-not $proSrv -or -not $proDb) { return }
         if ($proSrv -notmatch '\.') { $proSrv = $proSrv + '.database.windows.net' }
-        $sql = $script:SIUpdateProSql   # dynamic scope: $proSrv, $proDb come from this function
+        $sqlStep = '9n. SERVICENOW STAGING STATUS'; $sql = $script:SIUpdateProSql   # dynamic scope: $proSrv, $proDb, $sqlStep come from this function
         $r = Invoke-SISnowStagingStatusUpdate -Sql $sql -WhatIf:(-not $Apply -or $DetectOnly)
         if (@($r.Lines).Count -or @($r.Warnings).Count) { Step '9n. SERVICENOW STAGING STATUS' }
         foreach ($l in @($r.Lines)) { if ($r.Action -eq 'failed') { Warn $l } else { Info $l } }
@@ -1349,7 +1410,7 @@ function Invoke-SIUpdateSnowOneRoute {
         $proDb = & $envOr 'SI_UPDATER_PRO_SQL_DATABASE'; if (-not $proDb) { $proDb = & $gv 'SI_ProSqlDatabase' }
         if (-not $proSrv -or -not $proDb) { return }
         if ($proSrv -notmatch '\.') { $proSrv = $proSrv + '.database.windows.net' }
-        $sql = $script:SIUpdateProSql   # dynamic scope: $proSrv, $proDb come from this function
+        $sqlStep = '9o. SERVICENOW ONE ROUTE'; $sql = $script:SIUpdateProSql   # dynamic scope: $proSrv, $proDb, $sqlStep come from this function
         $r = Invoke-SISnowOneRouteUpdate -Sql $sql -WhatIf:(-not $Apply -or $DetectOnly)
         if (@($r.Lines).Count -or @($r.Warnings).Count) { Step '9o. SERVICENOW ONE ROUTE' }
         foreach ($l in @($r.Lines)) { Info $l }
@@ -1390,9 +1451,11 @@ function Invoke-SIUpdatePipelineLayout {
             try {
                 $cn.Open(); $cmd = $cn.CreateCommand(); $cmd.CommandText = $Query; $cmd.CommandTimeout = 0
                 if ($Params) { foreach ($k in @($Params.Keys)) { $pv = $Params[$k]; $null = $cmd.Parameters.AddWithValue('@' + $k, $(if ($null -eq $pv) { [DBNull]::Value } else { $pv })) } }
-                if ($Mode -eq 'nonquery') { return $cmd.ExecuteNonQuery() }
-                $rd = $cmd.ExecuteReader()
-                try { while ($rd.Read()) { $o = [ordered]@{}; for ($i = 0; $i -lt $rd.FieldCount; $i++) { $o[$rd.GetName($i)] = $rd.GetValue($i) }; [pscustomobject]$o } } finally { $rd.Dispose() }
+                Invoke-SIUpdateSqlBeat -What '9d. PIPELINE LAYOUT' -Action {
+                    if ($Mode -eq 'nonquery') { return $cmd.ExecuteNonQuery() }
+                    $rd = $cmd.ExecuteReader()
+                    try { while ($rd.Read()) { $o = [ordered]@{}; for ($i = 0; $i -lt $rd.FieldCount; $i++) { $o[$rd.GetName($i)] = $rd.GetValue($i) }; [pscustomobject]$o } } finally { $rd.Dispose() }
+                }
             } finally { $cn.Dispose() }
         }   # dynamic scope: $proSrv, $proDb come from this function
         $r = Invoke-SIPipelineLayout -Sql $sql -Installed $installed -WhatIf:(-not $Apply -or $DetectOnly)
@@ -1465,8 +1528,10 @@ function Invoke-SIUpdateDisplayNames {
             try {
                 $cn.Open(); $cmd = $cn.CreateCommand(); $cmd.CommandText = $Query; $cmd.CommandTimeout = 0
                 if ($Params) { foreach ($k in @($Params.Keys)) { $null = $cmd.Parameters.AddWithValue('@' + $k, [string]$Params[$k]) } }
-                if ($Mode -eq 'nonquery') { return $cmd.ExecuteNonQuery() }
-                $cmd.ExecuteScalar()
+                Invoke-SIUpdateSqlBeat -What '12. DISPLAY NAMES' -Action {
+                    if ($Mode -eq 'nonquery') { return $cmd.ExecuteNonQuery() }
+                    $cmd.ExecuteScalar()
+                }
             } finally { $cn.Dispose() }
         }   # dynamic scope: $proSrv, $proDb come from this function
         # the switch: the Pro database's value (the web app's Settings page) first, then the config, then the job's variable --
@@ -1548,9 +1613,11 @@ function Invoke-SIUpdateSigninStore {
             try {
                 $cn.Open(); $cmd = $cn.CreateCommand(); $cmd.CommandText = $Query; $cmd.CommandTimeout = 0
                 if ($Params) { foreach ($k in @($Params.Keys)) { $pv = $Params[$k]; $null = $cmd.Parameters.AddWithValue('@' + $k, $(if ($null -eq $pv) { [DBNull]::Value } else { [string]$pv })) } }
-                if ($Mode -eq 'nonquery') { return $cmd.ExecuteNonQuery() }
-                $rd = $cmd.ExecuteReader()
-                try { while ($rd.Read()) { $o = [ordered]@{}; for ($i = 0; $i -lt $rd.FieldCount; $i++) { $o[$rd.GetName($i)] = $rd.GetValue($i) }; [pscustomobject]$o } } finally { $rd.Dispose() }
+                Invoke-SIUpdateSqlBeat -What '9g. SIGN-IN FRONT STORE' -Action {
+                    if ($Mode -eq 'nonquery') { return $cmd.ExecuteNonQuery() }
+                    $rd = $cmd.ExecuteReader()
+                    try { while ($rd.Read()) { $o = [ordered]@{}; for ($i = 0; $i -lt $rd.FieldCount; $i++) { $o[$rd.GetName($i)] = $rd.GetValue($i) }; [pscustomobject]$o } } finally { $rd.Dispose() }
+                }
             } finally { $cn.Dispose() }
         }   # dynamic scope: $proSrv, $proDb come from this function
         $wi = (-not $Apply -or $DetectOnly)
@@ -1709,7 +1776,20 @@ if ($plan.Count -eq 0) {
 }
 $toUpdate = @($plan | Where-Object { $_.Action -eq 'update' })
 foreach ($p in $plan) { Info ("{0,-40} {1}  ({2})" -f $p.Name, $p.Action, $p.PreviousImage) }
-if ($toUpdate.Count -eq 0) { Info 'Every job already runs this tree -- nothing to roll.'; exit (Complete-SIUpdate) }
+# 4b. THE UPDATER ITSELF -- RIGHT AFTER THE ENGINE JOBS READ BACK HEALTHY (live 2026-11-12: the updater moved its own job as
+# the LAST step of a run, so an update stopped in the steps after the roll left the updater on its old image). Only when the
+# updater runs this script and planned the move (Invoke-SIUpdaterSelfMoveAfterEngine, container\updater\_shared\
+# SI-UpdaterRollSteps.ps1); only after every engine job read back on this tree's image -- a roll that failed returns above
+# (exit 1) and never gets here. The running execution finishes on its image; the next one starts on the new. Never fails
+# the update (a failed move is retried by the next run, as before).
+function Invoke-SIUpdateSelfMove {
+    if (-not $Apply -or $DetectOnly -or -not $global:SI_UpdaterSelfMove) { return }
+    if (-not (Get-Command -Name Invoke-SIUpdaterSelfMoveAfterEngine -ErrorAction SilentlyContinue)) { return }
+    Step '4b. THE UPDATER ITSELF (right after the engine jobs read back healthy)'
+    try { $null = Invoke-SIUpdaterSelfMoveAfterEngine }
+    catch { Warn ("the updater itself: not moved now ({0}) -- the update goes on; its next run tries again." -f $_.Exception.Message) }
+}
+if ($toUpdate.Count -eq 0) { Info 'Every job already runs this tree -- nothing to roll.'; Invoke-SIUpdateSelfMove; exit (Complete-SIUpdate) }
 if (-not $Apply -or $DetectOnly) { Info ("{0} job(s) would move to the new image. Re-run with -Apply to update." -f $toUpdate.Count); exit (Complete-SIUpdate) }
 
 # ---- 2. BUILD ---------------------------------------------------------------------------------
@@ -1830,6 +1910,8 @@ if ($failed.Count) {
     exit 1
 }
 Info ("{0} job(s) now run {1}." -f $toUpdate.Count, $tag)
+# every engine job read back healthy: the updater moves itself NOW, before the steps that follow (4b above)
+Invoke-SIUpdateSelfMove
 # The update NEVER stops a running pipeline (owner 2026-10-16, reversing 2026-10-15: "i dont want it to stop it ... otherwise it
 # will newer complete on large env where it takes more than 24 hr to complete"). A run in progress finishes: a job already
 # running ends on the version it started with, every job started after the roll runs the new version.

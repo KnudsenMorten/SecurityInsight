@@ -1330,6 +1330,15 @@ function Send-SITelemetryRunEnd {
                                                    -Text $ErrorMessage -Identified:(-not $anon) -Version (Get-SITelemetryReleaseVersion) -Region (Get-SIUplinkRegion))
             }
         } catch { }
+        # #1227 (owner 2026-11-12): a SCOPED NOTE of a rule / tier source (the run stayed whole, so it is not a failure of the
+        # run) still reaches the run report with its catalogue code -- the monitor shows the code, a fix request opens where
+        # the catalogue says so. A code the catalogue does not know is dropped by ConvertTo-SIUplinkFailureItem. Never fatal.
+        try {
+            foreach ($n in @($global:SI_RunNoteCodes | Where-Object { $_ -and "$($_.Code)".Trim() } | Select-Object -First 10)) {
+                $causeItems = @($causeItems) + @(ConvertTo-SIUplinkFailureItem -Code ([string]$n.Code) -Job ([string]$RunContext.Engine) -Step ([string]$n.Step) `
+                                                   -Text ([string]$n.Text) -Identified:(-not $anon) -Version (Get-SITelemetryReleaseVersion) -Region (Get-SIUplinkRegion))
+            }
+        } catch { }
         # a COMPLETE report with more rows than the source counted is a note, not a failure: never in Reports, kept on the
         # run's own record (RunContext.ReportNotes) and said once in the run log
         try {

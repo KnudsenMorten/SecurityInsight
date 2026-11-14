@@ -2,7 +2,7 @@
 <#
     THE PIPELINE NOTICES THAT ITS STEP'S EXECUTION HAS ENDED (REQUIREMENTS #945, owner 2026-10-29; live, a customer install: the
     correlation step's execution ended Failed on 28 Oct 03:09Z and the run still showed the step running on 29 Oct).
-      1. the wake-up check (Get-SIJobFlowEndedExecutionCloses): an execution that ENDED at least 20 minutes ago while its step
+      1. the wake-up check (Get-SIJobFlowEndedExecutionCloses): an execution that ENDED at least 35 minutes ago while its step
          still says Running closes the step with that result; running / unknown / too recent / unreadable = nothing;
       2. the poll falls back to the job's execution LIST when the read of the one execution fails;
       3. the stores close one step only while it is Running with that execution, in a run that has not ended;
@@ -55,15 +55,15 @@ Describe '#945 the wake-up check: an ENDED execution closes its open step' {
         foreach ($case in @(
                 @{ 'asset-correlation' = @((New-Exec 'caj-si-asset-correlation-ihcbirb' 'Running' $null)) },
                 @{ 'asset-correlation' = @((New-Exec 'caj-si-asset-correlation-ihcbirb' 'Processing' $null)) },
-                @{ 'asset-correlation' = @((New-Exec 'caj-si-asset-correlation-ihcbirb' 'Failed' $script:Now.AddMinutes(-19))) },
+                @{ 'asset-correlation' = @((New-Exec 'caj-si-asset-correlation-ihcbirb' 'Failed' $script:Now.AddMinutes(-34))) },
                 @{ 'asset-correlation' = @((New-Exec 'caj-si-asset-correlation-other' 'Failed' $script:Now.AddHours(-3))) },
                 @{ 'asset-correlation' = @((New-Exec 'caj-si-asset-correlation-ihcbirb' 'Failed' $null)) },
                 @{ 'asset-correlation' = $null },
                 @{})) {
             @(Get-SIJobFlowEndedExecutionCloses -State $run -NowUtc $script:Now -ExecutionsByJob $case).Count | Should -Be 0
         }
-        # exactly at the grace it closes (20 minutes)
-        @(Get-SIJobFlowEndedExecutionCloses -State $run -NowUtc $script:Now -ExecutionsByJob @{ 'asset-correlation' = @((New-Exec 'caj-si-asset-correlation-ihcbirb' 'Failed' $script:Now.AddMinutes(-20))) }).Count | Should -Be 1
+        # exactly at the grace it closes (35 minutes: longer than the runner may wait for Azure's late events, 30)
+        @(Get-SIJobFlowEndedExecutionCloses -State $run -NowUtc $script:Now -ExecutionsByJob @{ 'asset-correlation' = @((New-Exec 'caj-si-asset-correlation-ihcbirb' 'Failed' $script:Now.AddMinutes(-35))) }).Count | Should -Be 1
     }
     It 'a run that has ended, a VM process (pid@...) and a step that is not Running are left alone' {
         $old = $script:Now.AddHours(-3)

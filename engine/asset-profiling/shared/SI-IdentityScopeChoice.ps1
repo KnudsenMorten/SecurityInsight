@@ -346,7 +346,9 @@ function Get-SIEgNeverSyncedSkipKql {
             (' or {0}' -f $groupTest) +
             ' or not(tostring(_siRl.assignedroles) in ("", "[]"))' +
             (' or {0} or {1} or {2}' -f (& $flagNotFalse 'hasserviceprincipalname'), (& $flagNotFalse 'isserviceaccount'), (& $flagNotFalse 'issensitive')) +
-            ' or iff(gettype(_siRl.criticalitylevel) == "dictionary", isnotempty(tostring(_siRl.criticalitylevel.criticalitylevel)), isnotempty(tostring(_siRl.criticalitylevel))))')
+            ' or iff(gettype(_siRl.criticalitylevel) == "dictionary", isnotempty(tostring(_siRl.criticalitylevel.criticalitylevel)), isnotempty(tostring(_siRl.criticalitylevel)))')
+        # (one closing parenthesis too many here made the whole user count probe a syntax error: HTTP 400 "The incomplete
+        # fragment is unexpected", every run -- the read fell back to the unfiltered bucketed fetch)
     )
     if ($AnyEnabledState) { $parts += '| extend _siSkip = isnotnull(_siRl) and not(_siHasOid) and _siIsAd and not(_siPriv)' }
     else { $parts += '| extend _siSkip = isnotnull(_siRl) and not(_siHasOid) and _siIsAd and _siDisabled and not(_siPriv)' }

@@ -1276,6 +1276,11 @@ $global:SI_StorageAccount = '<storage-account-name>'
 # Days of run data the Pro database keeps (findings, assets, daily aggregates); older collections are purged. Default 90,
 # at least 1. The vulnerability current state and the identity ledger are never purged.
 # $global:SI_Pro_DataRetentionDays = 90
+# How many complete collections of each kind (Risk Analysis Detailed and Summary) keep all their findings in the Pro
+# database: the newest ones, so What changed, the collection lists and the history pages go back that many runs. Older
+# collections keep only their totals for the trends. While the database is 70 % full or more, one fewer is kept each run
+# (never fewer than 2) and the run says so in a warning; below 70 % this number applies again. Default 3, at least 2.
+# $global:SI_Data_KeepCollections = 3
 # The shipped named views hidden from the view picker of Security recommendations > Summary and Detailed, for everyone:
 # critical-high, tier0, cve, exploited, mitre, compliance, cvss (summary:<view> / detailed:<view> = one page). Default none.
 # $global:SI_Pro_HiddenViews = @()
@@ -6890,6 +6895,25 @@ $global:SI_StorageAccount = '<storage-account-name>'
 #                     retires assets (and closes their findings) sooner. Lengthening is safe but uses more storage.
 #   Recommended:      Keep the default. Change it when: Lengthen it when you report on fixes over a longer period.
 #   More info:        https://invardia.com/docs/si/settings/SI_Pro_FindingStateRetentionDays/
+#
+# Collections kept with all their findings  [SI_Data_KeepCollections]  (advanced, collections)
+#   What it is for:   How many complete collections of each kind (Risk Analysis Detailed and Summary) keep all their
+#                     findings in the Pro database -- the newest ones. What changed, the collection lists and the
+#                     history pages go back that many runs; older collections keep only their totals for the trends.
+#   Default:          3 collections (the newest and the 2 before it; never fewer than 2)
+#   If you change it: More keeps more runs to open and compare, and grows the database by about one run's findings per
+#                     extra collection; fewer keeps a smaller database. While the database is 70 % full or more,
+#                     SecurityInsight keeps one fewer each run (never fewer than 2) and the run says so in a warning;
+#                     below 70 % this number applies again. Collections already removed do not come back -- the kept
+#                     number grows again by one per run.
+#   When to change:   Lower it when the database keeps filling up and a larger database tier is not an option; raise
+#                     it when you need to look further back than the last 3 runs.
+#   Risk:             A lower value PERMANENTLY removes the findings of the older collections at the next data sync
+#                     (their totals for the trends stay); What changed, the collection lists and the history then go
+#                     back fewer runs. Cannot be undone. A higher value grows the database by about one run's findings
+#                     per extra collection.
+#   Recommended:      Keep 3 (the newest and the 2 before it).
+#   More info:        https://invardia.com/docs/si/settings/SI_Data_KeepCollections/
 #
 # Copy records to Log Analytics  [SI_LaExport]  (advanced)
 #   What it is for:   Optionally copies the provider records (every object a collection reads, mapped to SI fields) to

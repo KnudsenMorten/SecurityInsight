@@ -543,6 +543,15 @@ function Invoke-SIUpdaterFromInvardia {
                         $imgBefore = Get-SIUpdaterImageSnapshot -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId -LoginServer $imgLogin -UpdaterJob (& $nameOf 'updater')
                     } catch { $imgBefore = [pscustomobject]@{ Ok = $false; Refs = @(); Reason = $_.Exception.Message } }
                 }
+                # live 2026-11-12: the updater's own move is planned NOW and carried out by the release's update script right
+                # after its engine roll reads back healthy (its step 4b) -- no longer the run's last step; a roll that does not
+                # read back healthy never moves it. Seam (tests): SelfMove { param($Plan, $Tag) } -> the self-roll result.
+                $global:SI_UpdaterSelfMove = $null
+                if ((Get-Command -Name New-SIUpdaterSelfMovePlan -ErrorAction SilentlyContinue) -and ($pre.Environment -or $s['SelfMove'])) {
+                    $global:SI_UpdaterSelfMove = New-SIUpdaterSelfMovePlan -SIRoot $si -Version "$($code.Version)" -Commit $relCommit -Environment $pre.Environment `
+                        -ResourceGroup $ResourceGroup -AcrName $AcrName -SubscriptionId $SubscriptionId -UpdaterJob (& $nameOf 'updater') `
+                        -SelfOff:((& $get 'SI_UPDATER_SELF_UPDATE') -match '^(?i)(0|false|off|no)$') -SelfRoll $s['SelfMove']
+                }
                 # #405: ring 1 (internal) gets the release's templates installed directly, exactly as on the ring channel
                 $roll = Invoke-SIUpdaterRoll -SIRoot $si -ResourceGroup $ResourceGroup -AcrName $AcrName -SubscriptionId $SubscriptionId -Store $Store `
                             -AcceptFingerprint $AcceptFingerprint -TemplatesFollowChannel:$channel -InstallTemplatesDirect:($ringPick.Ring -eq 1) `
@@ -687,6 +696,8 @@ function Invoke-SIUpdaterFromInvardia {
     & $save
     $rc
     } finally {
+        # the updater's own move belongs to this run only
+        $global:SI_UpdaterSelfMove = $null
         # the install's lock, when this run took it: released -- the pipeline's next wake-up takes the queue on the new build
         if (Get-Command -Name Unregister-SIUpdaterLockBeat -ErrorAction SilentlyContinue) { Unregister-SIUpdaterLockBeat }
         if ($gate.Result -and $gate.Result.LockTaken) {

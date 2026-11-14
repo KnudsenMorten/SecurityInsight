@@ -136,7 +136,8 @@ Describe 'by default the CVE report''s own query carries the context and no Defe
     It 'the Detailed query counts the exposed devices per CVE over the whole tenant and carries them as si_exposed_devices' {
         $q = $script:Detailed
         $q | Should -Match '(?s)let _cveExposedDevices = DeviceTvmSoftwareVulnerabilities\s*\|\s*summarize by _expCve = toupper\(tostring\(CveId\)\), _expDevice = tolower\(tostring\(DeviceId\)\)'
-        $q | Should -Match '(?s)_cveExposedDevices.*?join kind=leftanti \(DeviceInfo.*?isnotempty\(ExclusionReason\).*?\) on _expDevice\s*\|\s*summarize _expDevices = count\(\) by _expCve\s*\|\s*where isnotempty\(_expCve\);' -Because 'an excluded device is not counted, as in the report''s own rows'
+        # DeviceInfo through a fuzzy union (a tenant without DeviceInfo still runs the report)
+        $q | Should -Match '(?s)_cveExposedDevices.*?join kind=leftanti \((union isfuzzy=true \(datatable\(DeviceId:string, Timestamp:datetime\)\[\]\), \()?DeviceInfo.*?isnotempty\(ExclusionReason\).*?\) on _expDevice\s*\|\s*summarize _expDevices = count\(\) by _expCve\s*\|\s*where isnotempty\(_expCve\);' -Because 'an excluded device is not counted, as in the report''s own rows'
         # tenant scope: the count is defined before the bucket filter and never under it
         $letAt = $q.IndexOf('let _cveExposedDevices'); $unionAt = $q.IndexOf('union _AssetFindingEdges, _TvmOnly')
         $letAt | Should -BeGreaterThan 0; $letAt | Should -BeLessThan $unionAt

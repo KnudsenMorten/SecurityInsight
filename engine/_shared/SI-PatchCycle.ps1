@@ -130,7 +130,8 @@ function Complete-SIPatchCycleTally {
     $fixes = @($Tally.CatchUpFixes.Values | ForEach-Object {
         $behind = $null; if ($null -ne $_.Month) { $behind = (($col.Year - $_.Month.Year) * 12) + $col.Month - $_.Month.Month }
         [pscustomobject]@{ Id = $_.Id; Name = $_.Name; Findings = $_.Findings; Devices = [long]$_.Devices.Count; MonthsBehind = $behind }
-    } | Sort-Object @{ Expression = { if ($null -eq $_.MonthsBehind) { -1 } else { $_.MonthsBehind } }; Descending = $true }, @{ Expression = 'Findings'; Descending = $true })
+    } | Sort-Object @{ Expression = { if ($null -eq $_.MonthsBehind) { -1 } else { $_.MonthsBehind } }; Descending = $true }, @{ Expression = 'Findings'; Descending = $true }, @{ Expression = { [string]$_.Id }; Descending = $false })
+    # (#1212: the fix id orders fixes equal in both -- a hashtable's order, random per process, did before)
     [pscustomobject]@{ Findings = [long]$Tally.Findings; Devices = [long]$Tally.Devices.Count; CatchUpDays = $Tally.CatchUpDays; Groups = @($groups); CatchUpFixes = $fixes }
 }
 

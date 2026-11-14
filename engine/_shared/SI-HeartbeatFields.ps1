@@ -60,6 +60,10 @@
                 this run is kept open, not held, and is counted in cfg.DataOutBatch.KeptOpenRows. Its own key (rowsKeptOpen) is
                 sent as the LAST key of each entry, a whole number (null when not known), behind DataOutSendKeptOpen = $true
                 (Invardia accepts it since its deploy b03e7e72, 2026-11-11).
+                #1237 (Invardia's wire contract 2026-11-13, "a held install must never go quiet"): an output whose newest
+                attempt was held because the collection is not trusted (the data sync's record cfg.InstallState
+                'DataOutTrust') reads phase / lastResult 'held', heldReason 'untrusted', + the SOFT keys heldSinceUtc /
+                newestTrustedUtc after the others, each only when known -- behind DataOutSendTrustHold = $true.
       BuildPool { tier, count, building, checkedUtc } (framework rule 11g, 2026-11-05): a PRIVATE install's image build pool --
                 tier as Azure names it (S2), its agents now (0 between builds), building = a run of the registry is Queued /
                 Started / Running. Only an install with an agent pool sends it. NOT YET CONFIRMED by Invardia (its wire contract
@@ -151,8 +155,17 @@ $script:SIHeartbeatFields = @{
     DataOutPhases      = @('read', 'build', 'send', 'close', 'readback', 'idle', 'held', 'failed')
     DataOutRunPhases   = @('readback', 'read', 'build', 'send', 'close')
     DataOutResults     = @('complete', 'partial', 'held', 'failed')
-    DataOutHeldReasons = @('column-too-long', 'mapping', 'connection', 'auth', 'other')
+    # #1237 (Invardia's wire contract, 2026-11-13): 'untrusted' = the newest attempt was held because the collection is not trusted
+    DataOutHeldReasons = @('column-too-long', 'mapping', 'connection', 'auth', 'other', 'untrusted')
     MaxDataOut = 10; DataOutStallMinutes = 10
+    # #1237 (Invardia 2026-11-13: "a held install must never go quiet"): an output whose newest data-out attempt was HELD because
+    # the collection is not trusted (the data sync's record, cfg.InstallState 'DataOutTrust') reads phase / lastResult 'held',
+    # heldReason 'untrusted', + two SOFT keys after the others, each only when known (never null): heldSinceUtc = the first run
+    # of the current row of held runs, newestTrustedUtc = the CollectionTime of the newest trusted collection. Invardia raises a
+    # LASTING hold itself from the two. >>> THE SWITCH: DataOutSendTrustHold ($false = the entries as before 3.1.16).
+    DataOutTrustHeldReason = 'untrusted'
+    DataOutTrustFields     = @('heldSinceUtc', 'newestTrustedUtc')
+    DataOutSendTrustHold   = $true
     # the catalogue code of a ServiceNow output held by its check (data-model/errors.locked.json); every other result: null
     DataOutSnowHeldCode = 'si-snow-1301'
     # #1188 (owner 2026-11-11; Invardia 2026-11-11 asked for it): rowsHeld counts ONLY the real holds since 3.1.2 -- the rows
@@ -569,7 +582,12 @@ function Test-SIHeartbeatField {
             $w = & $array $Value $c.MaxDataOut 'DataOut'; if ($w) { return $w }
             $seen = @{}
             foreach ($x in @($Value)) {
-                $w = & $exact $x (Get-SIHeartbeatDataOutFieldNames) 'a DataOut entry'; if ($w) { return $w }
+                # #1237: heldSinceUtc / newestTrustedUtc after the others -- each only when it is there (soft, never null)
+                # assigned first: the function answers ONE string[] (', [string[]]'), which @( ) would wrap as one element
+                $doNames = Get-SIHeartbeatDataOutFieldNames; $doNames = [string[]]$doNames
+                if ($x -and -not ($x -is [string]) -and -not ($x -is [System.Collections.IDictionary])) { foreach ($on in @($c.DataOutTrustFields)) { if ($x.PSObject.Properties[$on]) { $doNames += $on } } }
+                $w = & $exact $x $doNames 'a DataOut entry'; if ($w) { return $w }
+                foreach ($on in @($c.DataOutTrustFields)) { if ($x.PSObject.Properties[$on] -and ($null -eq $x.$on -or -not (& $isTime $x.$on))) { return ("DataOut.{0} is not ISO-8601 UTC (left out when not known)" -f $on) } }
                 if ($c.DataOutSendKeptOpen -and -not (& $isInt $x.($c.DataOutKeptOpenField))) { return ("DataOut.{0} is not a whole number >= 0" -f $c.DataOutKeptOpenField) }
                 if (-not ($x.output -is [string] -and $x.output -cmatch '^[a-z0-9-]{1,64}$')) { return ("DataOut.output '{0}' is not an output id" -f $x.output) }
                 if ($seen.ContainsKey($x.output)) { return ("output {0} appears more than once" -f $x.output) }; $seen[$x.output] = 1
@@ -852,24 +870,6 @@ function Get-SIHeartbeatPublished {
         copiedUtc = (ConvertTo-SIHeartbeatUtc (& $g 'CopiedAt')); newestCompleteUtc = (ConvertTo-SIHeartbeatUtc (& $g 'NewestComplete')) }
 }
 
-function Test-SIHeartbeatPublishCopyGoing {
-    <#
-        PURE. Is the NEWEST run's publish copy being written right now? -CopyRow: the row of Get-SIHeartbeatPublishedCopySql;
-        -RunStartedUtc: the newest run's start. True only when ALL hold: a refresher writes the copies now (Refreshing = 1),
-        they are older than the publish shown (Stale = 1), and that publish is this run's (PublishedAt at or after its start).
-        A refused or failed run's shown publish is an older run's -- never this run's copy. Anything unknown = $false.
-    #>
-    param($CopyRow, $RunStartedUtc)
-    if ($null -eq $CopyRow -or $null -eq $RunStartedUtc) { return $false }
-    $b = { param($x) ($x -eq $true) -or ([string]$x -in @('1', 'True', 'true')) }
-    if (-not (& $b (Get-SIHeartbeatRowValue $CopyRow 'Refreshing'))) { return $false }
-    if (-not (& $b (Get-SIHeartbeatRowValue $CopyRow 'Stale'))) { return $false }
-    $pub = ConvertTo-SIHeartbeatTime (Get-SIHeartbeatRowValue $CopyRow 'PublishedAt')
-    $st = ConvertTo-SIHeartbeatTime $RunStartedUtc
-    if ($null -eq $pub -or $null -eq $st) { return $false }
-    $pub -ge $st
-}
-
 function Test-SIHeartbeatCopyStaleTooLong {
     <#
         PURE. si-data-1401 only for a copy that REALLY stays stale (owner 2026-10-29). Every publish leaves the copies of the
@@ -1007,13 +1007,13 @@ function Get-SIHeartbeatPipeline {
         #1175); null in schedules mode or when it cannot be made. $null when nothing is recorded at all.
         -Eta: the progress and estimated end follow the agreed seven (Get-SIPipelineEta over the newest run's steps, each
         job's duration in the newest succeeded run among those read, and the waiting pipeline requests).
-        -PublishCopy (2026-10-24: two installs wrote the published copies for 15-50 minutes after the run row had closed --
-        load tickets): the row of Get-SIHeartbeatPublishedCopySql. While the NEWEST run has ended and ITS publish copy is
-        being written right now (Test-SIHeartbeatPublishCopyGoing), state is 'running' -- runId and startedUtc the run's,
-        lastEndedUtc the run's TRUE end, step empty, nextStartUtc by the runner's own rule (#1175). Nothing is written: the run's record and result stay as
-        they are, and the moment the copy is over the state is the run's own again.
+        THE STATE FOLLOWS THE RUN RECORD, AND ONLY IT (live 2026-11-13: a run closed Succeeded at 05:44Z read "running" for
+        the next hour, because an update that took the install right after was refreshing the published copies -- the
+        refresher's lock, tested here since 2026-10-24, said "running" for a run that had ended, whoever held it). A run
+        whose record is Succeeded / Failed / Stopped / Cancelled is never 'running': what holds the install after it (an
+        update, the copies of the pages) is said by its own job (Jobs: the updater's newest execution, lastResult 'running').
     #>
-    param([object[]]$Rows, [Parameter(Mandatory)][datetime]$NowUtc, [switch]$Eta, $PublishCopy = $null, [switch]$Stopped)
+    param([object[]]$Rows, [Parameter(Mandatory)][datetime]$NowUtc, [switch]$Eta, [switch]$Stopped)
     $runs = @(Get-SIHeartbeatRowsOf $Rows 'run' | Sort-Object { ConvertTo-SIHeartbeatTime (Get-SIHeartbeatRowValue $_ 'T1') } -Descending)
     $def = @(Get-SIHeartbeatRowsOf $Rows 'def')[0]
     if (-not $runs.Count -and -not $def) { return $null }
@@ -1044,11 +1044,6 @@ function Get-SIHeartbeatPipeline {
     }
     $ended = @($runs | Where-Object { $null -ne (ConvertTo-SIHeartbeatTime (Get-SIHeartbeatRowValue $_ 'T2')) } | Sort-Object { ConvertTo-SIHeartbeatTime (Get-SIHeartbeatRowValue $_ 'T2') } -Descending)
     if ($ended.Count) { $v.lastEndedUtc = ConvertTo-SIHeartbeatUtc (Get-SIHeartbeatRowValue $ended[0] 'T2') }
-    # the newest run has ended, and its publish copy is written right now: the install is still busy with that run
-    if ($top -and $v.state -ne 'running' -and $null -ne $PublishCopy) {
-        $cr = @(@($PublishCopy) | Where-Object { $null -ne $_ })[0]
-        if (Test-SIHeartbeatPublishCopyGoing -CopyRow $cr -RunStartedUtc (Get-SIHeartbeatRowValue $top 'T1')) { $v.state = 'running' }
-    }
     # #1175: the next SCHEDULED start, so Invardia judges a source against its schedule. While a run is going (its record
     # says Running) it is the first slot after now -- the schedule's own time, the same function the runner uses
     # (Get-SIJobFlowNextSlot); a run that has ended (its publish copy may still be written) takes the runner's own rule.
@@ -2034,8 +2029,9 @@ function Get-SIHeartbeatSecurity {
 function Get-SIHeartbeatDataOutSql {
     <#
         Rows: K = batch (the newest live / resync batch of each output: its state, times, counts and the progress columns --
-        NULL on a schema without them) | run (the newest run of each data-out connector: its outcome, times and why). A
-        database without a table gives no rows of it.
+        NULL on a schema without them) | run (the newest run of each data-out connector: its outcome, times and why) |
+        trust (#1237: the data sync's record cfg.InstallState 'DataOutTrust' -- Reason = its value, EndedAt = when written).
+        A database without a table gives no rows of it.
     #>
     @'
 SET NOCOUNT ON; SET LOCK_TIMEOUT 5000;
@@ -2064,6 +2060,9 @@ IF OBJECT_ID(N'cfg.ConnectorRun') IS NOT NULL
     FROM (SELECT DISTINCT ConnectorName FROM cfg.ConnectorRun WHERE ConnectorName LIKE N'data-out-%') n
     CROSS APPLY (SELECT TOP (1) r.RunId, r.Outcome, r.StartedAt, r.EndedAt, r.HaltReason FROM cfg.ConnectorRun r
                  WHERE r.ConnectorName = n.ConnectorName ORDER BY r.StartedAt DESC, r.ConnectorRunId DESC) x;
+-- #1237 the data sync's record of its newest decision on the collection's trust (one row, its primary key)
+IF OBJECT_ID(N'cfg.InstallState') IS NOT NULL
+    INSERT @r (K, EndedAt, Reason) SELECT N'trust', UpdatedAt, LEFT(Value, 1000) FROM cfg.InstallState WHERE Name = N'DataOutTrust';
 SELECT K, OutputId, BatchId, RunId, State, StartedAt, EndedAt, Phase, RowsPlanned, RowsSent, RowsHeld, KeptOpenRows, LastProgressUtc, Reason FROM @r;
 '@
 }
@@ -2089,6 +2088,23 @@ function Get-SIHeartbeatDataOutHeldReason {
     'other'
 }
 
+function Get-SIHeartbeatDataOutTrust {
+    <#
+        PURE. #1237 The data sync's trust record (a K 'trust' row of Get-SIHeartbeatDataOutSql: Reason = 'held=1;since=..;
+        collection=..;trusted=..;at=..', EndedAt = when written) -> @{ Held; HeldSinceUtc; NewestTrustedUtc; AtUtc } (times as
+        ISO-8601 UTC texts or $null; AtUtc falls back to when the row was written), or $null (no row / not a record).
+    #>
+    param([AllowNull()]$Row)
+    if ($null -eq $Row) { return $null }
+    $txt = Get-SIHeartbeatRowValue $Row 'Reason'; if ($txt -is [DBNull]) { $txt = $null }
+    $kv = @{}
+    foreach ($p in ("$txt" -split ';')) { $i = $p.IndexOf('='); if ($i -gt 0) { $kv[$p.Substring(0, $i).Trim().ToLowerInvariant()] = $p.Substring($i + 1).Trim() } }
+    if (-not $kv.ContainsKey('held')) { return $null }
+    $at = ConvertTo-SIHeartbeatUtc $kv['at']
+    if (-not $at) { $w = Get-SIHeartbeatRowValue $Row 'EndedAt'; if ($w -isnot [DBNull]) { $at = ConvertTo-SIHeartbeatUtc $w } }
+    [pscustomobject]@{ Held = ($kv['held'] -eq '1'); HeldSinceUtc = (ConvertTo-SIHeartbeatUtc $kv['since']); NewestTrustedUtc = (ConvertTo-SIHeartbeatUtc $kv['trusted']); AtUtc = $at }
+}
+
 function Get-SIHeartbeatDataOut {
     <#
         PURE. The DataOut entries from -Rows (Get-SIHeartbeatDataOutSql) at -NowUtc: one per output, running first, then the
@@ -2096,12 +2112,18 @@ function Get-SIHeartbeatDataOut {
         phase, rows, rate; stalled = no progress for 10 minutes); otherwise the output's newest run: idle (complete / partial),
         held (+ heldReason, + si-snow-1301 for a ServiceNow output held by its check) or failed. A switched-off or what-if
         output is left out. Returns ONE array (possibly empty).
+        #1237: when the data sync's newest decision HELD data out because the collection is not trusted (K 'trust', while
+        DataOutSendTrustHold is on), that hold IS the newest attempt of every output whose last run started before it: phase /
+        lastResult 'held', heldReason 'untrusted', started / ended = when it was held, no batch and no row counts (nothing was
+        sent), + heldSinceUtc / newestTrustedUtc after the other keys, each only when known. A running send is never changed.
     #>
     param([AllowNull()][object[]]$Rows, [Parameter(Mandatory)][datetime]$NowUtc)
     $c = $script:SIHeartbeatFields
     $v = { param($r, $n) $x = Get-SIHeartbeatRowValue $r $n; if ($x -is [DBNull]) { $null } else { $x } }
     $byOut = [ordered]@{}
+    $trust = $null
     foreach ($r in @($Rows | Where-Object { $null -ne $_ })) {
+        if ([string](& $v $r 'K') -eq 'trust') { if ($null -eq $trust) { $trust = Get-SIHeartbeatDataOutTrust -Row $r }; continue }
         $o = ([string](& $v $r 'OutputId')).Trim().ToLowerInvariant()
         if (-not ($o -cmatch '^[a-z0-9-]{1,64}$')) { continue }
         if (-not $byOut.Contains($o)) { $byOut[$o] = @{ Batch = $null; Run = $null } }
@@ -2161,7 +2183,20 @@ function Get-SIHeartbeatDataOut {
         # #1188 prepared: the kept-open rows (not seen this run) -- only sent while DataOutSendKeptOpen is on
         $e[[string]$c.DataOutKeptOpenField] = $(if ($same) { & $int (& $v $b 'KeptOpenRows') } else { $null })
         $at = ConvertTo-SIHeartbeatTime $en; if ($null -eq $at) { $at = ConvertTo-SIHeartbeatTime $st }; if ($null -eq $at) { $at = [datetime]::MinValue }
-        $entries.Add([pscustomobject]@{ Running = $false; At = $at; Entry = (New-SIHeartbeatOrdered -Names (Get-SIHeartbeatDataOutFieldNames) -Values $e) })
+        $names = Get-SIHeartbeatDataOutFieldNames
+        # #1237: the data sync held data out AFTER this output's newest run started -- that hold is the output's newest attempt
+        $holdAt = $(if ($c.DataOutSendTrustHold -and $trust -and $trust.Held -and $trust.AtUtc) { ConvertTo-SIHeartbeatTime $trust.AtUtc } else { $null })
+        $lastStart = ConvertTo-SIHeartbeatTime $st; if ($null -eq $lastStart) { $lastStart = $at }
+        if ($null -ne $holdAt -and $holdAt -ge $lastStart) {
+            foreach ($k in 'batchId', 'rowsPlanned', 'rowsSent', 'rowsHeld', 'rowsPerSec', 'lastProgressUtc', 'lastErrorCode') { $e[$k] = $null }
+            $e.phase = 'held'; $e.lastResult = 'held'; $e.heldReason = [string]$c.DataOutTrustHeldReason; $e.stalled = $false
+            $e.startedUtc = [string]$trust.AtUtc; $e.lastEndedUtc = [string]$trust.AtUtc
+            $e[[string]$c.DataOutKeptOpenField] = $null
+            # the two SOFT keys, after the others, each only when known (never null)
+            foreach ($k in @($c.DataOutTrustFields)) { if ($trust.$k) { $e[$k] = [string]$trust.$k; $names = @($names) + @([string]$k) } }
+            $at = $holdAt
+        }
+        $entries.Add([pscustomobject]@{ Running = $false; At = $at; Entry = (New-SIHeartbeatOrdered -Names $names -Values $e) })
     }
     , [object[]]@($entries | Sort-Object -Property @{ Expression = { $_.Running }; Descending = $true }, @{ Expression = { $_.At }; Descending = $true } | Select-Object -First ([int]$c.MaxDataOut) | ForEach-Object { $_.Entry })
 }
@@ -2338,8 +2373,8 @@ function New-SIHeartbeatFields {
         }
         # #871: the Security rows, read at most once per tick and shared by Warnings and Security (a child scope cannot set a local)
         $tick = @{ SecurityRows = $SecurityRows; CopyRows = $CopyRows; CopyRead = ($null -ne $CopyRows) }
-        # the shown run's publish and its copies (the data database, one key read), read at most once per tick and shared by
-        # Pipeline (is the newest run's copy being written?) and Warnings (si-data-1401); a read that fails says nothing
+        # the shown run's publish and its copies (the data database, one key read), read at most once per tick, for Warnings
+        # (si-data-1401) only -- never Pipeline, whose state follows the run record alone; a read that fails says nothing
         $readCopy = {
             if (-not $tick.CopyRead) {
                 $tick.CopyRead = $true
@@ -2366,7 +2401,6 @@ function New-SIHeartbeatFields {
         $build = [ordered]@{
             Pipeline = {
                 if ($null -eq $CfgRows) { return $null }
-                $copy = & $readCopy
                 # the progress and estimated end ride along only where their own switch says so (default: every ring);
                 # built in their own try -- a problem there never costs the agreed seven
                 $etaOn = $(if ($Switch.ContainsKey('PipelineEta')) { [bool]$Switch['PipelineEta'] } else { (Resolve-SIUplinkPipelineEtaSwitch -Ring $Ring).On })
@@ -2376,13 +2410,13 @@ function New-SIHeartbeatFields {
                 $pv = $null
                 if ($etaOn) {
                     try {
-                        $pe = Get-SIHeartbeatPipeline -Rows $CfgRows -NowUtc $NowUtc -Eta -PublishCopy $copy -Stopped:$stoppedOn
+                        $pe = Get-SIHeartbeatPipeline -Rows $CfgRows -NowUtc $NowUtc -Eta -Stopped:$stoppedOn
                         $why = Test-SIHeartbeatField -Name 'Pipeline' -Value $pe
                         if (-not $why) { $pv = $pe }
                         else { $problems.Add(('the pipeline estimate was left out: {0}' -f $why)) }
                     } catch { $problems.Add(('the pipeline estimate could not be made ({0})' -f $_.Exception.Message)) }
                 }
-                if ($null -eq $pv) { $pv = Get-SIHeartbeatPipeline -Rows $CfgRows -NowUtc $NowUtc -PublishCopy $copy -Stopped:$stoppedOn }
+                if ($null -eq $pv) { $pv = Get-SIHeartbeatPipeline -Rows $CfgRows -NowUtc $NowUtc -Stopped:$stoppedOn }
                 # the running steps far past their last run's time with no progress (si-flow-1204), named -- in their own try:
                 # a problem there never costs the rest of Pipeline; none = the key is left out
                 if ($null -ne $pv) {

@@ -66,7 +66,7 @@
     { "action": "datasync.reportname.backfill", "source": "job", "what": "the data sync filled the report of stored findings that had none, from each finding's own data" },
     { "action": "datasync.responsibility.resolve", "source": "job", "what": "the data sync resolved findings to departments with the current responsibility policy" },
     { "action": "datasync.assetproperties.prune", "source": "job", "what": "the data sync removed full asset metadata older than its retention (SI_AssetProperties_RetentionDays) from the Pro database" },
-    { "action": "datasync.collection.retention", "source": "job", "what": "the data sync removed the finding rows of collections older than the newest complete one and the one before it, and of collections a stopped run left loading (each collection and the rows per table)" },
+    { "action": "datasync.collection.retention", "source": "job", "what": "the data sync removed the finding rows of collections older than the newest complete ones it keeps (SI_Data_KeepCollections, default 3; fewer while the database is 70 % full or more), and of collections a stopped run left loading (each collection and the rows per table)" },
     { "action": "datasync.collection.finish", "source": "job", "what": "the data sync completed a collection whose Risk Analysis run stopped after its verdicts were final, before the run marked it (the collection, its reports and rows, whether it was partial)" },
     { "action": "department.advisor.add", "source": "web", "what": "an external advisor added to a department" },
     { "action": "department.advisor.revoke", "source": "web", "what": "an external advisor revoked" },

@@ -455,6 +455,8 @@ $stages = if ($Engine -eq 'schema-discovery') {
     elseif ($Phase -eq 'parts') { $__st = @($__st | Where-Object { $_ -notin 'Schedule', 'Discover' }) }
     $__st
 }
+# #1227: the scoped notes of a rule / tier source belong to THIS run -- never carried over from an earlier run in the same process
+$global:SI_RunNoteCodes = $null; $global:SI_EnrichScopedNotes = $null
 # what the container needs after this run (#475): the run id and, for the producer, the part count discovery decided
 $global:SI_CollectRunInfo = [pscustomobject]@{ RunId = $runId; Phase = $Phase; Parts = 0; CollectionTime = $runContext.CollectionTime }
 

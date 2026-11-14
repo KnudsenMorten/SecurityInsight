@@ -383,6 +383,12 @@ _t
         try { Invoke-SIAzOperationalInsightsQuery -WorkspaceId $guid -Query 'SI_Identity_Profile_CL | take 0' -ErrorAction Stop | Out-Null } catch { $missing = $true }
         if ($missing) { $out.Missing = $true; $out.Complete = $true }
     }
+    # #1223 ROOT CAUSE (found 2026-11-12, pwsh 7.6.9 / .NET 10.0.14 on the Linux test runner): the array subexpression @( )
+    # around a System.Collections.Generic.List[object] throws "Argument types do not match" -- @($list), @($list).Count,
+    # @($list)[0] all throw; List[string] / List[int] / List[psobject], $list.Count and piping the list do not. The caller
+    # wrapped these rows in @( ), so the privileged-logon read failed at EVERY 3.1.10+ install on its first live run.
+    # The rows go out as a plain array.
+    $out.Rows = $out.Rows.ToArray()
     return $out
 }
 
@@ -528,6 +534,7 @@ function Update-SIPrivilegedLogonState {
                 if ($rr.TableMissing) { $res.TableMissing = $true }
                 continue
             }
+            $global:SI_PrivilegedLogonPart = 'combining the sign-ins Defender returned'
             $keyIdx = @{}
             foreach ($a in $list) { foreach ($k in @($a.Sids) + @($a.Upns) + @($a.Oids)) { $keyIdx[([string]$k).ToLowerInvariant()] = $a.Id } }
             foreach ($row in $rr.Rows) {
@@ -629,6 +636,29 @@ function Get-SIPrivilegedLogonDecision {
     return $out
 }
 
+function Write-SIPrivilegedLogonNote {
+    <#
+        #1227 (owner 2026-11-12: "it should be possible to include new rules and it must never break the pipeline"): a gap
+        of the privileged-logon source is a SCOPED NOTE, never a run issue. One plain warning line with a stable code; the
+        devices' own value says UNKNOWN and why; the run stays whole (Add-SIEnrichIssue -- which makes the Enrich step
+        INCOMPLETE and so the whole run partial -- is NOT called). Kept in $global:SI_EnrichScopedNotes, AND its catalogue
+        code in $global:SI_RunNoteCodes (@{ Code; Text; Step }) -- the run report to Invardia carries it as a Reports[] item
+        (SI-TelemetrySend.ps1, ConvertTo-SIUplinkFailureItem), so the run monitor shows the code and a fix request opens
+        where the catalogue says so -- a scoped note is never hidden. One entry per code per process. Never throws.
+    #>
+    param([Parameter(Mandatory)][string]$Code, [Parameter(Mandatory)][string]$Text)
+    try {
+        if (-not ($global:SI_EnrichScopedNotes -is [System.Collections.Generic.List[string]])) { $global:SI_EnrichScopedNotes = New-Object System.Collections.Generic.List[string] }
+        $line = '{0} [{1}]' -f $Text.Trim(), $Code
+        $global:SI_EnrichScopedNotes.Add($line)
+        if (-not ($global:SI_RunNoteCodes -is [System.Collections.Generic.List[object]])) { $global:SI_RunNoteCodes = New-Object System.Collections.Generic.List[object] }
+        if (-not @($global:SI_RunNoteCodes | Where-Object { $_ -and [string]$_.Code -eq $Code }).Count) {
+            $global:SI_RunNoteCodes.Add([pscustomobject]@{ Code = $Code; Text = $Text.Trim(); Step = 'privileged-logons' })
+        }
+        Write-Warning $line
+    } catch { }
+}
+
 function Get-SIBulkPrivilegedLogons {
     <#
     .SYNOPSIS  The privileged logons of the given Defender devices (this part of the run). Returns
@@ -648,7 +678,9 @@ function Get-SIBulkPrivilegedLogons {
     param([AllowNull()][AllowEmptyCollection()][string[]]$MdeDeviceIds, [string]$RunId = '', [datetime]$Now = [datetime]::UtcNow,
           [hashtable]$PrimaryUsers = @{}, [scriptblock]$Query, [scriptblock]$PrivilegedIdentities, $Store, $Settings)
     if ($null -eq $Settings) { $Settings = Get-SIPrivilegedLogonSettings }
-    $say = { param($t) if (Get-Command -Name Add-SIEnrichIssue -ErrorAction SilentlyContinue) { Add-SIEnrichIssue $t } else { Write-Warning $t } }
+    # #1227 (owner 2026-11-12: "it must never break the pipeline"): a gap of THIS source is a scoped note -- each device's
+    # privileged-logon value is UNKNOWN with why, the run itself stays whole (never INCOMPLETE because of this source)
+    $say = { param($code, $t) Write-SIPrivilegedLogonNote -Code $code -Text $t }
     $info = { param($t) if (Get-Command -Name Write-SIInfo -ErrorAction SilentlyContinue) { Write-SIInfo $t } else { Write-Verbose $t } }
     $out = [pscustomobject]@{ ByDevice = @{}; Settings = $Settings; Summary = $null; Accounts = 0; Queries = 0; Rows = 0; Splits = 0; StateRows = 0
                               Unknown = 0; Read = 0; Saved = $false; Reused = $false }
@@ -661,20 +693,24 @@ function Get-SIBulkPrivilegedLogons {
     }
 
     # 1. this run's Tier 0-2 accounts
+    $global:SI_PrivilegedLogonPart = 'reading the Tier 0-2 accounts'
     $pi = $null
     try { if ($PrivilegedIdentities) { $pi = & $PrivilegedIdentities } else { $pi = Get-SIPrivilegedIdentities } } catch { $pi = @{ Complete = $false; Missing = $false; Rows = @(); Error = $_.Exception.Message } }
     if ($null -eq $pi -or -not $pi.Complete -or $pi.Missing) {
         $why = if ($pi -and $pi.Missing) { 'the identity profile is not there yet (the identity engine runs first)' } else { 'the identity tiers could not be read this run' }
         $detail = ''; if ($pi -and $pi.Error) { $detail = ' (' + [string]$pi.Error + ')' }
-        & $say ('The privileged logons of the devices could not be counted: {0}{1}. The privileged-logon tier is UNKNOWN this run, not "no privileged logon"; the devices keep their other tier sources.' -f $why, $detail)
+        & $say 'si-col-0504' ('The privileged logons of the devices could not be counted: {0}{1}. The privileged-logon tier is UNKNOWN this run, not "no privileged logon"; the devices keep their other tier sources.' -f $why, $detail)
         & $setUnknown $why
         return $out
     }
-    $accounts = @(@($pi.Rows) | ForEach-Object { ConvertTo-SIPrivilegedAccount $_ } | Where-Object { $null -ne $_ })
+    $global:SI_PrivilegedLogonPart = 'reading the accounts'' sign-in keys'
+    # #1223: the rows are PIPED, never wrapped in @( ) -- @( ) around a List[object] throws on pwsh 7.6 (see Get-SIPrivilegedIdentities)
+    $accounts = @($pi.Rows | ForEach-Object { ConvertTo-SIPrivilegedAccount $_ } | Where-Object { $null -ne $_ })
     $acctById = @{}; foreach ($a in $accounts) { $acctById[$a.Id] = $a }
     $out.Accounts = $acctById.Count
 
     # 2. the stored state (another part of THIS run may already have read it)
+    $global:SI_PrivilegedLogonPart = 'reading the stored sign-ins'
     $read = $null; $stateOk = $true
     if ($Store) {
         try { $read = $Store.Read() } catch { $stateOk = $false; & $info ('[perms] privileged logons: the stored logons could not be read ({0}) -- the whole window is read this run and the store is left as it is' -f $_.Exception.Message) }
@@ -690,17 +726,19 @@ function Get-SIBulkPrivilegedLogons {
     } else {
         $ua = @{ Accounts = $accounts; State = $state; Now = $Now; Days = $Days; LogonTypes = $Settings.LogonTypes }
         if ($Query) { $ua['Query'] = $Query }
+        $global:SI_PrivilegedLogonPart = 'reading the sign-ins from Defender'
         $upd = Update-SIPrivilegedLogonState @ua
         $out.Queries = $upd.Queries; $out.Rows = $upd.Rows; $out.Splits = $upd.Splits
         $state.RunId = $RunId
         if ($upd.TableMissing) {
-            & $say 'The privileged logons of the devices were not read: this tenant has no Defender device logons (DeviceLogonEvents -- no Defender for Endpoint data). The privileged-logon tier is UNKNOWN, not "no privileged logon"; the devices keep their other tier sources.'
+            & $say 'si-col-0503' 'The privileged logons of the devices were not read: this tenant has no Defender device logons (DeviceLogonEvents -- no Defender for Endpoint data). The privileged-logon tier is UNKNOWN, not "no privileged logon"; the devices keep their other tier sources.'
         } elseif ($upd.Unknown.Count -gt 0) {
-            & $say ('The logons of {0} of {1} Tier 0-2 account(s) were not read ({2}). Their privileged logons are UNKNOWN this run, not "no privileged logon"; they are read again on the next run and the devices keep their other tier sources.' -f $upd.Unknown.Count, $accounts.Count, ($upd.Errors | Select-Object -First 1))
+            & $say 'si-col-0505' ('The logons of {0} of {1} Tier 0-2 account(s) were not read ({2}). Their privileged logons are UNKNOWN this run, not "no privileged logon"; they are read again on the next run and the devices keep their other tier sources.' -f $upd.Unknown.Count, $accounts.Count, ($upd.Errors | Select-Object -First 1))
         }
     }
 
     # 3. the tenant's pattern of this run (recorded; it decides only when the support filter is on)
+    $global:SI_PrivilegedLogonPart = 'working out the tenant''s sign-in pattern'
     $pat = Get-SIPrivilegedLogonPatterns -State $state
     $sum = [ordered]@{
         RunId = $RunId; Mode = $Settings.Mode; MostFrequentMode = $Settings.MostFrequentMode; SupportFilter = $Settings.SupportFilter
@@ -710,6 +748,7 @@ function Get-SIBulkPrivilegedLogons {
         Queries = $out.Queries; RowsReturned = $out.Rows; StateRows = $state.Rows.Count
     }
     $out.Summary = $sum
+    $global:SI_PrivilegedLogonPart = 'saving the sign-ins'
     if ($Store -and $stateOk -and $null -ne $upd) {
         $state.Summary = [pscustomobject]$sum
         try { $Store.Write((ConvertTo-SIPrivilegedLogonStateJson -State $state -Now $Now), $etag); $out.Saved = $true }
@@ -727,6 +766,7 @@ function Get-SIBulkPrivilegedLogons {
     $out.StateRows = $state.Rows.Count
 
     # 4. per device, account by account in tier order -- FIRST HIT: a counted Tier 0 logon ends the device
+    $global:SI_PrivilegedLogonPart = 'working out each device''s tier'
     $partial = ($null -ne $upd -and $upd.Unknown.Count -gt 0)
     $missing = ($null -ne $upd -and $upd.TableMissing)
     $perDev = @{}

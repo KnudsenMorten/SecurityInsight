@@ -5,7 +5,9 @@
       Resolve-SIUpdaterRunningRelease    the release the jobs run (the recorded applied version when it is a build of it)
       Get-SIUpdaterNeedsQuiet            a release that must be installed while no SI job runs (UPDATE-NEEDS-QUIET.txt)
       Invoke-SIUpdaterInvardiaPreRoll    the manual-deploy mark + the quiet wait, before a roll (name kept: Pro tests call it)
-      Invoke-SIUpdaterInvardiaPostRoll   the web app, the installed record, then the updater itself LAST
+      New-SIUpdaterSelfMovePlan          the updater's own move, planned before the release's update script runs
+      Invoke-SIUpdaterSelfMoveAfterEngine  the updater itself, right after the engine roll read back healthy (that script's 4b)
+      Invoke-SIUpdaterInvardiaPostRoll   the web app, the installed record (the updater itself only when not moved already)
       Invoke-SIUpdaterInvardiaSelfRetry  an earlier self-roll that is owed
       Save-SIUpdaterInvardiaStateRow     the compact update state into cfg.InstallState 'UpdateState' (the Settings page)
     Nothing here reads the Invardia update client (the Pro-only engine client). PS 5.1 and 7.
@@ -73,13 +75,81 @@ function Invoke-SIUpdaterInvardiaPreRoll {
     } catch { [pscustomobject]@{ Go = $true; Reason = ("the environment could not be read ({0}) -- rolling without the deploy-lock check" -f $_.Exception.Message); Environment = $null } }
 }
 
+function New-SIUpdaterSelfMovePlan {
+    <#
+        PURE. The updater's own move, planned by the run BEFORE the release's setup\Invoke-SIContainerUpdate.ps1 runs (live
+        2026-11-12: the move was the run's LAST step, so an update stopped in the steps after the engine roll left the updater on
+        its old image). The release's script carries it out right after its engine roll READ BACK HEALTHY, through
+        Invoke-SIUpdaterSelfMoveAfterEngine; the post-roll then only reports it. Kept in $global:SI_UpdaterSelfMove for the run.
+        -SelfRoll: test seam { param($Plan, $Tag) } -> the self-roll result.
+    #>
+    param([Parameter(Mandatory)][string]$SIRoot, [Parameter(Mandatory)][string]$Version, [string]$Commit = '', $Environment,
+          [Parameter(Mandatory)][string]$ResourceGroup, [Parameter(Mandatory)][string]$AcrName, [Parameter(Mandatory)][string]$SubscriptionId,
+          [string]$UpdaterJob = 'caj-si-updater', [switch]$SelfOff, [scriptblock]$SelfRoll)
+    [pscustomobject]@{ SIRoot = $SIRoot; Version = $Version; Commit = $Commit; Environment = $Environment; ResourceGroup = $ResourceGroup
+                       AcrName = $AcrName; SubscriptionId = $SubscriptionId; UpdaterJob = $UpdaterJob; SelfOff = [bool]$SelfOff; SelfRoll = $SelfRoll
+                       Done = $false; Tried = $false; Result = $null }
+}
+
+function Invoke-SIUpdaterSelfMoveAfterEngine {
+    <#
+        Called by the release's setup\Invoke-SIContainerUpdate.ps1 (step 4b) ONLY after every engine job read back on the
+        release's image: the updater's own job onto the release's updater image NOW (Invoke-SIUpdaterSelfRoll: built when the
+        registry lacks it, one PATCH, read back, recorded) -- before the steps that follow the roll, so an update stopped in
+        them still leaves the updater on the new image. Tried once per run. Only a move that did NOT fail marks the plan done;
+        one that FAILED (it threw, or its result says failed) leaves it NOT done, so the post-roll tries the move again LAST,
+        as before 3.1.16 -- and that try's own failure path marks it pending on the job for the next run. No plan / no
+        environment = nothing done, $null (the post-roll then moves it last, as before). Never throws; returns the result.
+    #>
+    $p = $global:SI_UpdaterSelfMove
+    if (-not $p -or $p.Done) { return $null }
+    if ($p.PSObject.Properties['Tried'] -and $p.Tried) { return $null }
+    if (-not $p.SelfRoll -and (-not $p.Environment -or -not (Get-Command -Name Invoke-SIUpdaterSelfRoll -ErrorAction SilentlyContinue))) { return $null }
+    if ($p.PSObject.Properties['Tried']) { $p.Tried = $true } else { $p | Add-Member -NotePropertyName Tried -NotePropertyValue $true -Force }
+    $res = $null
+    try {
+        $tag = New-SIUpdaterBuildTag -Version $p.Version -Commit $p.Commit
+        Write-UpdLog 'updater: the engine jobs read back healthy -- the updater moves itself now, before the steps that follow'
+        $res = if ($p.SelfRoll) { & $p.SelfRoll $p $tag }
+               else { Invoke-SIUpdaterSelfRoll -SIRoot $p.SIRoot -ResourceGroup $p.ResourceGroup -AcrName $p.AcrName -SubscriptionId $p.SubscriptionId -LoginServer $p.Environment.LoginServer `
+                          -Tag $tag -JobName $p.UpdaterJob -JobId $p.Environment.UpdaterId -CurrentImage $p.Environment.UpdaterImage -Disabled:([bool]$p.SelfOff) }
+        if ($res) { Write-UpdLog ("updater: {0} -- {1}" -f $res.Action, $res.Reason) }
+    } catch {
+        $res = [pscustomobject]@{ Action = 'failed'; Reason = ("the updater could not be moved now ({0}) -- SecurityInsight IS updated; the update tries it again at its end" -f $_.Exception.Message) }
+        Write-UpdLog ("NOTE: updater: {0}" -f $res.Reason)
+    }
+    $p.Result = $res
+    # a failed early move is NOT done: the post-roll moves the updater again, last (its failure marks it pending)
+    $p.Done = [bool]($res -and [string]$res.Action -ne 'failed')
+    $res
+}
+
+function Test-SIUpdaterSelfMovedEarly {
+    <# PURE (reads the run's plan). Did the updater already move itself onto the release this run (the early move, right
+       after the engine jobs read back healthy)? -Plan: default $global:SI_UpdaterSelfMove. #>
+    param($Plan = $global:SI_UpdaterSelfMove)
+    [bool]($Plan -and $Plan.Done -and $Plan.Result -and @('rolled', 'current') -contains [string]$Plan.Result.Action)
+}
+
+function Get-SIUpdaterUpdateFailedLine {
+    <# PURE. The log line of an update whose release script ended with exit -Code <> 0 and whose failed job restores all
+       succeeded. When the updater had ALREADY moved itself (-SelfMoved), the engine jobs and the updater run the new release
+       and only a later step failed -- "every changed job was restored" would not be true then. #>
+    param([int]$Code, [switch]$SelfMoved)
+    if ($SelfMoved) { return ("the update FAILED (exit {0}) in a step after the move -- the engine jobs and the updater run the new release; the failed step is tried again by the next run" -f $Code) }
+    "the update FAILED (exit $Code) -- every changed job was restored to its previous image"
+}
+
 function Invoke-SIUpdaterInvardiaPostRoll {
     <#
         After the engine jobs rolled to a release from Invardia -- what the ring channel does after its roll (#350), so an
         environment that takes its updates from Invardia (Pro customers, and ring 1 once it moves there) gets the SAME update:
           1. Pro: the web app + MCP server onto the release (Invoke-SIUpdaterAppRoll: build, roll, health-check, restore);
           2. what now runs, as tags on the updater job (si-installed / si-installed-commit);
-          3. LAST, the updater's own job onto the release's updater image (Invoke-SIUpdaterSelfRoll; SI_UPDATER_SELF_UPDATE=0 = off).
+          3. the updater's own job onto the release's updater image (Invoke-SIUpdaterSelfRoll; SI_UPDATER_SELF_UPDATE=0 = off) --
+             since 2026-11-12 done already by the release's own script right after the engine roll read back healthy
+             (Invoke-SIUpdaterSelfMoveAfterEngine): then only reported here. A release whose script does not do it (an older
+             one -- a rollback to the release before, say): moved here, LAST, as before.
         Returns @{ Code (0 ok / 1 the web app failed); Text }. A failure of 3. never fails the run (retried next run).
     #>
     param([Parameter(Mandatory)][string]$SIRoot, [Parameter(Mandatory)][string]$Version, [string]$Commit = '', $Environment,
@@ -94,7 +164,12 @@ function Invoke-SIUpdaterInvardiaPostRoll {
     if ($apps.Code -ne 0) { return [pscustomobject]@{ Code = 1; Text = ("the engine jobs run {0}, but the web app was NOT updated: {1}" -f $Version, $apps.Text) } }
     if (Get-Command -Name Save-SIUpdaterInstalledRecord -ErrorAction SilentlyContinue) { $null = Save-SIUpdaterInstalledRecord -ResourceId $Environment.UpdaterId -Version $Version -Commit $Commit -SubscriptionId $SubscriptionId }
     $self = $null
-    if (Get-Command -Name Invoke-SIUpdaterSelfRoll -ErrorAction SilentlyContinue) {
+    $early = $global:SI_UpdaterSelfMove
+    if ($early -and $early.Done -and "$($early.Version)" -eq $Version) {
+        $self = $early.Result
+        if ($self) { Write-UpdLog ("updater: moved right after the engine jobs read back healthy -- {0}" -f $self.Action) }
+    }
+    elseif (Get-Command -Name Invoke-SIUpdaterSelfRoll -ErrorAction SilentlyContinue) {
         $self = Invoke-SIUpdaterSelfRoll -SIRoot $SIRoot -ResourceGroup $ResourceGroup -AcrName $AcrName -SubscriptionId $SubscriptionId -LoginServer $Environment.LoginServer `
                     -Tag $tag -JobName $UpdaterJob -JobId $Environment.UpdaterId -CurrentImage $Environment.UpdaterImage -Disabled:$SelfOff
         Write-UpdLog ("updater: {0} -- {1}" -f $self.Action, $self.Reason)

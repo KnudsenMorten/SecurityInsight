@@ -36,9 +36,11 @@
          arrays), once per snapshot -- older snapshots are KEPT, so the asset page shows the history.
       6. Retention: collections older than SI_Pro_DataRetentionDays are purged in batches (sidata only); the full asset
          metadata after SI_AssetProperties_RetentionDays (6b).
-      6a. The collections' own retention (#717, SI-DataSql.ps1 Invoke-SIDataCollectionRetention): per grain the newest
-         complete collection and the one before it are kept; the finding rows of older ones, and of collections a stopped
-         run left 'Loading' once a newer one is complete, are removed (the collection row and its aggregates stay, marked).
+      6a. The collections' own retention (#717 / #1218, SI-DataSql.ps1 Invoke-SIDataCollectionRetention): per grain the
+         newest SI_Data_KeepCollections (3) complete collections are kept -- one fewer per run while the database is 70 % full
+         or more, never fewer than 2 (Resolve-SIDataKeepCollections, decided once per run); the finding rows of older ones,
+         and of collections a stopped run left 'Loading' once a newer one is complete, are removed (the collection row and
+         its aggregates stay, marked).
       6c. How full the database is: above 70 % of its maximum size the run says so (SI-DataSql.ps1 Get-SIDataFill).
 
     A source table that does not exist yet (a fresh install) is skipped with one line; any other failure stops the run.
@@ -332,9 +334,20 @@ function Invoke-SIDataSyncCore {
     # ---- 4 (z). #834 the collections the retention removes are MARKED now, right after the loads -- before any step below
     # derives, prepares or groups them (measured at internal 2026-10-20: the run prepared the context, the CVE rows, the
     # pivots ... of a collection its own retention removed at the end: one collection in three). The same plan and the
-    # same guards as the removal (Invoke-SIDataCollectionRetention: the newest complete collection and the one before it,
+    # same guards as the removal (Invoke-SIDataCollectionRetention: the newest kept complete collections (#1218),
     # the published run's and a result waiting for the data sync are never marked); only the rows wait. Never fails the run.
-    if (-not $DryRun -and $retiredReady) { $result['CollectionMarks'] = Invoke-SIDataCollectionRetention -Invoke $Invoke -MarkOnly -RowsRemovedBy 'by the pipeline runner''s next wake-ups, in key ranges' -Log $Log }
+    # #1218 (owner 2026-11-12: "Last 7 runs" / "If a database passes 70% full, SI keeps fewer and warns instead of hitting the
+    # limit"): how many complete collections per grain keep their findings THIS run -- decided ONCE here (SI_Data_KeepCollections,
+    # one fewer per run while the database is 70 % full or more, never below 2; one warning line then) and used by both marks,
+    # the Summary groupings' shown set and the key figures below. Never fails the run.
+    $keepSet = if ($script:SIDataKeepCollectionsDefault -ge 2) { [int]$script:SIDataKeepCollectionsDefault } else { 3 }   # owner 2026-11-12: 3 (was 7)
+    if ($Settings -and $Settings.PSObject.Properties['KeepCollections'] -and [int]$Settings.KeepCollections -ge 2) { $keepSet = [int]$Settings.KeepCollections }
+    $keepNow = $keepSet
+    if ($retiredReady -and (Get-Command -Name Resolve-SIDataKeepCollections -ErrorAction SilentlyContinue)) {
+        $result['KeepCollections'] = Resolve-SIDataKeepCollections -Invoke $Invoke -Setting $keepSet -DryRun:$DryRun -Log $Log
+        if ($result['KeepCollections'] -and [int]$result['KeepCollections'].Keep -ge 2) { $keepNow = [int]$result['KeepCollections'].Keep }
+    }
+    if (-not $DryRun -and $retiredReady) { $result['CollectionMarks'] = Invoke-SIDataCollectionRetention -Invoke $Invoke -MarkOnly -RowsRemovedBy 'by the pipeline runner''s next wake-ups, in key ranges' -Log $Log -KeepCollections $keepNow }
 
     & $phase 'retention marks'
     # ---- 4e. what earlier loads stored wrong (#296, #297/#298): report names, duplicate and phantom assets ---------
@@ -553,7 +566,8 @@ function Invoke-SIDataSyncCore {
     # Summary step's rows. After the prepared context (the category and subcategory columns come from there). Never fails
     # the data sync.
     if ($viewsReady -eq 1 -and (Get-Command -Name Invoke-SIDataSummaryGroups -ErrorAction SilentlyContinue)) {
-        $result['SummaryGroups'] = Invoke-SIDataSummaryGroups -Invoke $Invoke -DryRun:$DryRun -Log $Log
+        # #1218: the shown set = the published collection + the newest kept ones at or before it + the newer ones
+        $result['SummaryGroups'] = Invoke-SIDataSummaryGroups -Invoke $Invoke -DryRun:$DryRun -Log $Log -Keep $keepNow
     }
 
     & $phase 'summary groups'
@@ -565,7 +579,8 @@ function Invoke-SIDataSyncCore {
     }
     & $phase 'remediations'
     if ($viewsReady -eq 1 -and (Get-Command -Name Invoke-SIDataKeyFigures -ErrorAction SilentlyContinue)) {
-        $result['KeyFigures'] = Invoke-SIDataKeyFigures -Invoke $Invoke -DryRun:$DryRun -Log $Log
+        # #1218: every kept collection gets its key figures (once each), paced, never one of them left to a later run
+        $result['KeyFigures'] = Invoke-SIDataKeyFigures -Invoke $Invoke -DryRun:$DryRun -Log $Log -Keep $keepNow
     }
 
     & $phase 'key figures'
@@ -657,8 +672,9 @@ function Invoke-SIDataSyncCore {
             $Settings.RetentionDays, $ret.Collections, $ret.Findings, $ret.Recommendations, $ret.Runs, $ret.Assets, $ret.Cutoff)
 
         & $phase 'retention'
-        # ---- 6a. #717 the collections' own retention: per grain the newest complete collection + the one before it are
-        # kept; the rows of older ones, and of collections a stopped run left 'Loading', are removed. Never fails the run.
+        # ---- 6a. #717 / #1218 the collections' own retention: per grain the newest $keepNow complete collections are kept
+        # (SI_Data_KeepCollections, decided once above); the rows of older ones, and of collections a stopped run left
+        # 'Loading', are removed. Never fails the run.
         # #834 (measured at internal 2026-10-20, a small database: 26.3 min, most of it the pacing waiting on the database
         # this very sync had saturated): started by the pipeline, the sync only marks; the pipeline runner's wake-ups remove
         # the rows once the run has ended, while no run is running (Invoke-SIDataStoppedRunCleanup).
@@ -672,13 +688,16 @@ function Invoke-SIDataSyncCore {
             $byPipeline = Test-SIDataRunByPipeline -Invoke $SettingsInvoke
             $rowsBy = if ($byPipeline) { 'by the pipeline runner''s wake-ups, in key ranges -- once no run, data sync or data out is going' }
                       else { 'by the pipeline runner''s next wake-ups, in key ranges -- after this data sync has sent its data out' }
-            $result['CollectionRetention'] = Invoke-SIDataCollectionRetention -Invoke $Invoke -MarkOnly -RowsRemovedBy $rowsBy -Log $Log
+            $result['CollectionRetention'] = Invoke-SIDataCollectionRetention -Invoke $Invoke -MarkOnly -RowsRemovedBy $rowsBy -Log $Log -KeepCollections $keepNow
         }
     }
     & $phase 'collection retention'
-    if ($DryRun -and $retiredReady) { $result['CollectionRetention'] = Invoke-SIDataCollectionRetention -Invoke $Invoke -DryRun -Log $Log }
+    if ($DryRun -and $retiredReady) { $result['CollectionRetention'] = Invoke-SIDataCollectionRetention -Invoke $Invoke -DryRun -Log $Log -KeepCollections $keepNow }
     # ---- 6c. #717 how full the database is (its used share of its maximum size); above 70 % the run says so. Never fails.
-    $result['DatabaseFill'] = Get-SIDataFill -Invoke $Invoke -Log $Log
+    # #1218: when the keep count already said how full it is (one warning line), the reading is taken without a second line
+    $fillLog = $Log
+    if ($result['KeepCollections'] -and $result['KeepCollections'].Full) { $fillLog = { param($l, $m) } }
+    $result['DatabaseFill'] = Get-SIDataFill -Invoke $Invoke -Log $fillLog
     if (-not $DryRun) {
 
         & $phase 'database fill'
@@ -737,6 +756,239 @@ ELSE SELECT ISNULL((SELECT TOP (1) s.RetryReason FROM cfg.FlowStepRun AS s JOIN 
                      WHERE s.Job = @Job AND s.State IN (N'Starting', N'Running') AND r.State = N'Running' AND s.RetryReason LIKE @Mark
                      ORDER BY r.StartedUtc DESC), N'');
 '@
+}
+
+function Get-SIDataCollectionTrustSql {
+    <# #1226: a Detailed collection and ITS OWN trust verdict (sidata.CollectionTrust, written by Risk Analysis with the collection).
+       -ByTime: the collection @CollectionTime names (the one a data-out mark is made from -- Invardia 2026-11-12: "read the verdict
+       by the collection being sent"); else the newest complete one. Found = 0: no verdict recorded for it. A database without the
+       table answers none. Retired collections are left out the way every data-sync read leaves them out (Get-SIDataLiveFilter). #>
+    param([switch]$ByTime)
+    $live = if (Get-Command -Name Get-SIDataLiveFilter -ErrorAction SilentlyContinue) { Get-SIDataLiveFilter } else { '' }
+    $pick = if ($ByTime) { 'DECLARE @t datetime2(3) = TRY_CONVERT(datetime2(3), @CollectionTime, 126);' }
+            else { "DECLARE @t datetime2(3) = (SELECT TOP (1) CollectionTime FROM sidata.Collection WHERE Kind = N'Detailed' AND Status = N'Complete'{LIVE} ORDER BY CollectionTime DESC);" }
+    (@'
+SET NOCOUNT ON;
+IF OBJECT_ID('sidata.CollectionTrust') IS NULL OR OBJECT_ID('sidata.Collection') IS NULL
+BEGIN SELECT CAST(NULL AS datetime2(3)) AS CollectionTime, CAST(NULL AS bit) AS Trusted, CAST(NULL AS nvarchar(2000)) AS Why, CAST(0 AS int) AS Found WHERE 1 = 0; RETURN; END
+{PICK}
+IF @t IS NULL BEGIN SELECT CAST(NULL AS datetime2(3)) AS CollectionTime, CAST(NULL AS bit) AS Trusted, CAST(NULL AS nvarchar(2000)) AS Why, CAST(0 AS int) AS Found WHERE 1 = 0; RETURN; END
+SELECT @t AS CollectionTime, ct.Trusted, ct.Why, CASE WHEN ct.CollectionTime IS NULL THEN 0 ELSE 1 END AS Found
+FROM (SELECT 1 AS One) AS o LEFT JOIN sidata.CollectionTrust AS ct ON ct.CollectionTime = @t AND ct.Grain = N'Detailed';
+'@).Replace('{PICK}', $pick).Replace('{LIVE}', $live)
+}
+
+function Get-SIDataCollectionTrust {
+    <#
+        #1226 (Invardia 2026-11-12: "tie the trust check to the collection's own run"): THE COLLECTION'S OWN VERDICT, read by
+        its time and grain -- exactly what Risk Analysis decided for the source data THIS collection was built on (incl. the
+        role-read exception). @{ Found; Trusted; Known; Why; CollectionTime }. Found $false (no verdict for it: an older Risk
+        Analysis, or no collection / table) -> the caller falls back to Get-SIDataUpstreamTrust and says so. Never throws.
+    #>
+    param([scriptblock]$Invoke, $CollectionTime = $null)
+    $none = { param($why) [pscustomobject]@{ Found = $false; Trusted = $true; Known = $false; Why = $why; CollectionTime = $null } }
+    if (-not $Invoke) { return (& $none 'no database to read the collection''s verdict from') }
+    try {
+        # -CollectionTime: THE collection a data-out mark is made from (as SQL's ISO text, the way Risk Analysis wrote it)
+        $byTime = ($null -ne $CollectionTime -and "$CollectionTime".Trim())
+        $ctText = if ($CollectionTime -is [datetime]) { Format-SIDataSqlTime -Time $CollectionTime } else { "$CollectionTime".Trim() }
+        # a text time (with or without a zone, e.g. '...Z') becomes the same zone-less ISO text Risk Analysis wrote
+        if ($CollectionTime -isnot [datetime]) {
+            $pt = [datetime]::MinValue
+            if ([datetime]::TryParse($ctText, [Globalization.CultureInfo]::InvariantCulture, ([Globalization.DateTimeStyles]::AdjustToUniversal -bor [Globalization.DateTimeStyles]::AssumeUniversal), [ref]$pt)) {
+                $ctText = $pt.ToString('yyyy-MM-ddTHH:mm:ss.fff', [Globalization.CultureInfo]::InvariantCulture)
+            }
+        }
+        # the reader answers ONE array object (', $rows.ToArray()'): assigned first, then unwrapped -- as every data-sync read does
+        $raw = if ($byTime) { & $Invoke (Get-SIDataCollectionTrustSql -ByTime) @{ CollectionTime = $ctText } 'reader' } else { & $Invoke (Get-SIDataCollectionTrustSql) @{} 'reader' }
+        $rows = @(@($raw) | Where-Object { $_ })
+        if ($rows.Count -eq 0) { return (& $none $(if ($byTime) { ('the collection time {0} could not be read as a time' -f $ctText) } else { 'no complete collection to judge' })) }
+        $r = $rows[0]
+        $val = { param($n) try { $r[$n] } catch { $null } }
+        $t = & $val 'CollectionTime'
+        if ([int](& $val 'Found') -ne 1) { $o = & $none 'no verdict was recorded with this collection'; $o.CollectionTime = $t; return $o }
+        $tr = [bool](& $val 'Trusted')
+        $why = [string](& $val 'Why')
+        [pscustomobject]@{ Found = $true; Trusted = $tr; Known = $true; CollectionTime = $t
+                           Why = $(if ($tr) { '' } else { ('this collection is not trusted: it was {0}' -f $(if ($why.Trim()) { $why.Trim() } else { 'built on incomplete source data' })) }) }
+    } catch { return (& $none ('the collection''s verdict could not be read: ' + $_.Exception.Message)) }
+}
+
+function Get-SIDataUpstreamTrust {
+    <#
+        #1226 (owner 2026-11-12: "only send in data for the latest collection that completed ... we dont trust the data"),
+        THE HOLD HALF: is the collection this sync stores TRUSTED -- built on whole profile data? The SAME rule Risk Analysis
+        applies to itself (engine\_shared\SI-RunOutcome.ps1: Get-SIUpstreamRunHealthKql + Get-SIUpstreamOutcome): a profile
+        run (endpoint / identity / azure / publicip) whose newest run ended 'success-partial' makes the collection NOT
+        trusted -- nothing is sent out from it. EXCEPT when the only reason is the identity run's role read (#899 RolesOnly):
+        Risk Analysis already holds just the reports that read roles (each keeps its last complete result), the rest is
+        whole and trusted. A report that lost parts is NOT this rule: it keeps its last complete result per report.
+        @{ Trusted; Known; Why }. Never throws: a read that fails = Known $false -- NOT held on suspicion (owner: "hold only
+        on real failure"), said by the caller. -Query: the sync's Log Analytics seam { param($kql) rows }.
+    #>
+    param([scriptblock]$Query)
+    $ok = { param($why) [pscustomobject]@{ Trusted = $true; Known = $true; Why = $why } }
+    if (-not $Query -or -not (Get-Command -Name Get-SIUpstreamRunHealthKql -ErrorAction SilentlyContinue) -or -not (Get-Command -Name Get-SIUpstreamOutcome -ErrorAction SilentlyContinue)) {
+        return [pscustomobject]@{ Trusted = $true; Known = $false; Why = 'the source runs could not be checked (their check is not loaded)' }
+    }
+    try {
+        $rows = @(& $Query (Get-SIUpstreamRunHealthKql))
+        $o = Get-SIUpstreamOutcome -Rows $rows
+        if ([string]$o.ExitReason -ne 'success-partial') { return (& $ok '') }
+        if ($o.RolesOnly) { return (& $ok 'only the Entra role read of the identity run was partial -- the reports that read roles keep their last complete result; the rest is whole') }
+        return [pscustomobject]@{ Trusted = $false; Known = $true; Why = ('this collection is not trusted: it was {0}' -f [string]$o.Message) }
+    } catch {
+        return [pscustomobject]@{ Trusted = $true; Known = $false; Why = [string]$_.Exception.Message }
+    }
+}
+
+# =====================================================================================================================
+#  #1237 (Invardia 2026-11-13: "a held install must never go quiet") -- EVERY data-out decision of a data sync on the trust
+#  of the collection it sends is RECORDED in the settings database: cfg.InstallState 'DataOutTrust', one row, replaced by
+#  each run (never in a dry run). The hourly heartbeat reads it with the data-out progress (Get-SIHeartbeatDataOutSql) and
+#  says a held output as phase / lastResult 'held', heldReason 'untrusted', + heldSinceUtc (the first run of the current
+#  row of held runs) and newestTrustedUtc (the CollectionTime of the newest trusted collection). Value (<= 400, plain
+#  key=value pairs, no JSON -- a JSON reader turns ISO texts into local times): held=1|0; since=; collection=; trusted=;
+#  at= -- each time ISO-8601 UTC (yyyy-MM-ddTHH:mm:ssZ), a pair left out when not known.
+# =====================================================================================================================
+$script:SIDataOutTrustStateName = 'DataOutTrust'
+
+function ConvertTo-SIDataOutTrustIso {
+    <# PURE. A time (a [datetime] or a text; no zone = UTC) as yyyy-MM-ddTHH:mm:ssZ, or $null. #>
+    param([AllowNull()]$Value)
+    if ($null -eq $Value -or $Value -is [System.DBNull] -or "$Value".Trim() -eq '') { return $null }
+    try {
+        $d = $null
+        if ($Value -is [datetime]) { $d = $(if ($Value.Kind -eq [DateTimeKind]::Local) { $Value.ToUniversalTime() } else { [datetime]::SpecifyKind($Value, [DateTimeKind]::Utc) }) }
+        else { $d = [datetime]::Parse("$Value".Trim(), [Globalization.CultureInfo]::InvariantCulture, ([Globalization.DateTimeStyles]::AdjustToUniversal -bor [Globalization.DateTimeStyles]::AssumeUniversal)) }
+        $d.ToString('yyyy-MM-ddTHH:mm:ssZ', [Globalization.CultureInfo]::InvariantCulture)
+    } catch { $null }
+}
+
+function ConvertFrom-SIDataOutTrustText {
+    <# PURE. The stored value -> @{ Held; HeldSinceUtc; CollectionUtc; NewestTrustedUtc; AtUtc } (times as ISO texts or
+       $null), or $null for nothing / a text that is not a record. #>
+    param([AllowNull()][AllowEmptyString()][string]$Text)
+    if (-not "$Text".Trim()) { return $null }
+    $kv = @{}
+    foreach ($p in ("$Text" -split ';')) { $i = $p.IndexOf('='); if ($i -gt 0) { $kv[$p.Substring(0, $i).Trim().ToLowerInvariant()] = $p.Substring($i + 1).Trim() } }
+    if (-not $kv.ContainsKey('held')) { return $null }
+    [pscustomobject]@{ Held = ($kv['held'] -eq '1'); HeldSinceUtc = (ConvertTo-SIDataOutTrustIso $kv['since']); CollectionUtc = (ConvertTo-SIDataOutTrustIso $kv['collection'])
+                       NewestTrustedUtc = (ConvertTo-SIDataOutTrustIso $kv['trusted']); AtUtc = (ConvertTo-SIDataOutTrustIso $kv['at']) }
+}
+
+function ConvertTo-SIDataOutTrustText {
+    <# PURE. A record (Get-SIDataOutTrustNext) as the stored value (<= 400). #>
+    param([Parameter(Mandatory)]$Record)
+    $pairs = @(('held={0}' -f $(if ($Record.Held) { '1' } else { '0' })))
+    foreach ($k in @(@('since', 'HeldSinceUtc'), @('collection', 'CollectionUtc'), @('trusted', 'NewestTrustedUtc'), @('at', 'AtUtc'))) {
+        $v = ConvertTo-SIDataOutTrustIso $Record.($k[1]); if ($v) { $pairs += ('{0}={1}' -f $k[0], $v) }
+    }
+    ($pairs -join ';')
+}
+
+function Get-SIDataOutTrustNext {
+    <#
+        PURE. The record after THIS run's decision. -Previous: the stored record ($null = none yet); -Verdict: the judgement
+        of the collection data out sends from (@{ Known; Trusted }); -CollectionTime: that collection; -NewestTrusted: the
+        newest trusted collection the data database knows (Get-SIDataNewestTrustedSql; $null = not read).
+          held      = the verdict is KNOWN and NOT trusted -- nothing went out from the collection
+          since     = held: the previous record's since when it was held too (the row of held runs goes on), else -NowUtc;
+                      not held: none (a trusted run -- or one not held for its trust -- ends the row)
+          trusted   = the newest of the previous one, -NewestTrusted and (a trusted verdict) this collection's own time
+          at        = -NowUtc (when this run decided)
+    #>
+    param([AllowNull()]$Previous, [AllowNull()]$Verdict, [AllowNull()]$CollectionTime, [Parameter(Mandatory)][datetime]$NowUtc, [AllowNull()]$NewestTrusted)
+    $held = [bool]($null -ne $Verdict -and [bool]$Verdict.Known -and -not [bool]$Verdict.Trusted)
+    $now = ConvertTo-SIDataOutTrustIso $NowUtc
+    $ct = ConvertTo-SIDataOutTrustIso $CollectionTime
+    $max = { param([object[]]$t) @($t | Where-Object { $_ } | Sort-Object -Descending) | Select-Object -First 1 }
+    $cands = @($(if ($Previous) { $Previous.NewestTrustedUtc }), (ConvertTo-SIDataOutTrustIso $NewestTrusted))
+    if ($null -ne $Verdict -and [bool]$Verdict.Known -and [bool]$Verdict.Trusted) { $cands += $ct }
+    $since = $null
+    if ($held) { $since = $(if ($Previous -and $Previous.Held -and $Previous.HeldSinceUtc) { [string]$Previous.HeldSinceUtc } else { $now }) }
+    [pscustomobject]@{ Held = $held; HeldSinceUtc = $since; CollectionUtc = $ct; NewestTrustedUtc = (& $max $cands); AtUtc = $now }
+}
+
+function Get-SIDataOutTrustReadSql {
+    <# PURE. The settings database's record (Value, UpdatedAt); none on a database without the table. #>
+    "SET NOCOUNT ON; IF OBJECT_ID(N'cfg.InstallState') IS NOT NULL SELECT Value, UpdatedAt FROM cfg.InstallState WHERE Name = N'$($script:SIDataOutTrustStateName)';"
+}
+
+function Get-SIDataOutTrustWriteSql {
+    <# PURE. Replace the record (@Value <= 400, @By) -- one row, the way cfg.InstallState 'StatisticsRefresh' is written. A
+       database without the table yet: nothing. #>
+    $n = $script:SIDataOutTrustStateName
+@"
+IF OBJECT_ID(N'cfg.InstallState') IS NOT NULL
+BEGIN
+    IF EXISTS (SELECT 1 FROM cfg.InstallState WITH (UPDLOCK, HOLDLOCK) WHERE Name = N'$n')
+        UPDATE cfg.InstallState SET Value = LEFT(@Value, 400), UpdatedAt = SYSUTCDATETIME(), UpdatedBy = LEFT(@By, 256) WHERE Name = N'$n';
+    ELSE
+        INSERT cfg.InstallState (Name, Value, [Version], UpdatedBy) VALUES (N'$n', LEFT(@Value, 400), NULL, LEFT(@By, 256));
+END
+"@
+}
+
+function Get-SIDataNewestTrustedSql {
+    <# PURE. The data database: the CollectionTime of the newest Detailed collection recorded TRUSTED (sidata.CollectionTrust),
+       at or before @CollectionTime ('' = any). NULL on a database without the table or with no trusted collection. #>
+@'
+SET NOCOUNT ON;
+IF OBJECT_ID(N'sidata.CollectionTrust') IS NULL BEGIN SELECT CAST(NULL AS datetime2(3)); RETURN; END
+DECLARE @t datetime2(3) = TRY_CONVERT(datetime2(3), NULLIF(@CollectionTime, N''), 126);
+SELECT MAX(CollectionTime) FROM sidata.CollectionTrust WHERE Grain = N'Detailed' AND Trusted = 1 AND (@t IS NULL OR CollectionTime <= @t);
+'@
+}
+
+function Save-SIDataOutTrustRecord {
+    <#
+        Record this run's decision (Get-SIDataOutTrustNext) in the settings database (-SettingsInvoke), the newest trusted
+        collection read from the data database (-DataInvoke). NEVER throws and never changes what was sent: the record that
+        was written, or $null (no seam, or a read / write that failed -- said verbose only; the heartbeat then says what it
+        said before).
+    #>
+    param([scriptblock]$SettingsInvoke, [scriptblock]$DataInvoke, [AllowNull()]$Verdict, [AllowNull()]$CollectionTime, [Parameter(Mandatory)][datetime]$NowUtc, [string]$By = 'datasync')
+    if (-not $SettingsInvoke) { return $null }
+    try {
+        $prev = $null
+        $raw = & $SettingsInvoke (Get-SIDataOutTrustReadSql) @{} 'reader'
+        foreach ($r in @(@($raw) | ForEach-Object { $_ } | Where-Object { $null -ne $_ })) {
+            $v = $(if ($r -is [System.Collections.IDictionary]) { $r['Value'] } else { $r.Value }); $prev = ConvertFrom-SIDataOutTrustText ([string]$v); break
+        }
+        $newest = $null
+        if ($DataInvoke) {
+            # the collection's own time to the millisecond (zone-less ISO, as datetime2 reads it); '' = not known (any)
+            $ctText = ''
+            if ($null -ne $CollectionTime -and "$CollectionTime".Trim()) {
+                try {
+                    $cd = $(if ($CollectionTime -is [datetime]) { $(if ($CollectionTime.Kind -eq [DateTimeKind]::Local) { $CollectionTime.ToUniversalTime() } else { $CollectionTime }) }
+                            else { [datetime]::Parse("$CollectionTime".Trim(), [Globalization.CultureInfo]::InvariantCulture, ([Globalization.DateTimeStyles]::AdjustToUniversal -bor [Globalization.DateTimeStyles]::AssumeUniversal)) })
+                    $ctText = $cd.ToString('yyyy-MM-ddTHH:mm:ss.fff', [Globalization.CultureInfo]::InvariantCulture)
+                } catch { $ctText = '' }
+            }
+            try { $newest = & $DataInvoke (Get-SIDataNewestTrustedSql) @{ CollectionTime = $ctText } 'scalar' } catch { $newest = $null; Write-Verbose ("data out trust record: the newest trusted collection was not read -- {0}" -f $_.Exception.Message) }
+        }
+        $rec = Get-SIDataOutTrustNext -Previous $prev -Verdict $Verdict -CollectionTime $CollectionTime -NowUtc $NowUtc -NewestTrusted $newest
+        $null = & $SettingsInvoke (Get-SIDataOutTrustWriteSql) ([ordered]@{ Value = (ConvertTo-SIDataOutTrustText -Record $rec); By = $(if ($By) { $By } else { 'datasync' }) }) 'nonquery'
+        $rec
+    } catch { Write-Verbose ("data out trust record: not written -- {0}" -f $_.Exception.Message); $null }
+}
+
+function Add-SIDataOutTrustNote {
+    <# The run's catalogue note si-out-1501 (data out held: the collection is not trusted) -- once per run, in the run's notes
+       (SI_RunNoteCodes): the data sync's run report carries it as a Reports[] item on every run that holds. -Record: the
+       record this run wrote (its since / trusted go in the detail). Never throws. #>
+    param([AllowNull()]$Verdict, [AllowNull()]$Record, [string]$Step = 'data-out')
+    try {
+        if (-not ($null -ne $Verdict -and [bool]$Verdict.Known -and -not [bool]$Verdict.Trusted)) { return }
+        if (-not ($global:SI_RunNoteCodes -is [System.Collections.Generic.List[object]])) { $global:SI_RunNoteCodes = New-Object System.Collections.Generic.List[object] }
+        if (@($global:SI_RunNoteCodes | Where-Object { $_ -and [string]$_.Code -eq 'si-out-1501' }).Count) { return }
+        $t = ('data out is held: {0}; nothing was sent to the outputs from it this run' -f $(if ("$($Verdict.Why)".Trim()) { "$($Verdict.Why)".Trim() } else { 'the collection is not trusted' }))
+        if ($Record -and $Record.HeldSinceUtc) { $t += ('; held since {0}' -f $Record.HeldSinceUtc) }
+        if ($Record -and $Record.NewestTrustedUtc) { $t += ('; the newest trusted collection is of {0}' -f $Record.NewestTrustedUtc) }
+        $global:SI_RunNoteCodes.Add([pscustomobject]@{ Code = 'si-out-1501'; Text = $t; Step = $Step })
+    } catch { }
 }
 
 function Get-SIDataRunOnStored {

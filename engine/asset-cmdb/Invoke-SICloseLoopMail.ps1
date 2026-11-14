@@ -220,8 +220,21 @@ $govMailError = $null
 if ($govMailDue) { try { & $govMail -OutboxOnly:$govOutboxOnly -DryRun:$DryRun } catch { $govMailError = $_ } }
 $taskDigestError = $null
 if ($taskDigestDue) { try { & $taskDigest -DryRun:$DryRun } catch { $taskDigestError = $_ } }
+# Framework TRUST-1 point 3 (live 2026-11-13): a mail HELD only because its send right could not be checked (Microsoft
+# answered nothing usable) is not a proven refusal -- said as a warning with its catalogue code, and the step is not failed
+# for it: every mail stays held (none is recorded as sent) and the next run checks again. Any other failure fails as before.
+$heldMail = { param($kind, $e) if (Test-SIMailHeldUnreadable -Failure $e) { Write-MailWarn ('{0}: held this run -- the mail send right could not be checked ({1}); nothing was sent and nothing is lost, the next run checks again' -f $kind, $(if ($e -is [System.Management.Automation.ErrorRecord]) { $e.Exception.Message } else { [string]$e })); Add-SIMailHeldNote; $true } else { $false } }
+if ($closeLoopError -and (& $heldMail 'close-loop mail' $closeLoopError)) { $closeLoopError = $null }
+if ($deptReportError -and (& $heldMail 'business owners'' report' $deptReportError)) { $deptReportError = $null }
+if ($govMailError -and (& $heldMail 'governance mail' $govMailError)) { $govMailError = $null }
+if ($taskDigestError -and (& $heldMail 'task digest' $taskDigestError)) { $taskDigestError = $null }
 if ($closeLoopError) { throw $closeLoopError }
-if ($exRes.Failed -gt 0) { throw ('{0} exemption mail(s) were not sent: {1}' -f $exRes.Failed, ($exRes.Errors -join ' | ')) }
+if ($exRes.Failed -gt 0) {
+    $exErr = @($exRes.Errors | Where-Object { "$_".Trim() })
+    if ($exErr.Count -and @($exErr | Where-Object { -not (Test-SIMailHeldUnreadable -Failure ([string]$_)) }).Count -eq 0) {
+        $null = & $heldMail ('{0} exemption mail(s)' -f $exRes.Failed) ([string]$exErr[0])
+    } else { throw ('{0} exemption mail(s) were not sent: {1}' -f $exRes.Failed, ($exRes.Errors -join ' | ')) }
+}
 if ($deptReportError) { throw $deptReportError }
 if ($govMailError) { throw $govMailError }
 if ($taskDigestError) { throw $taskDigestError }

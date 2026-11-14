@@ -15,7 +15,7 @@
          image carries ICU. 1.4.6: the runtime is aspnet:8.0-noble-chiseled-EXTRA (2.0.0: 10.0), the chiseled variant that
          carries ICU and tzdata; the plain chiseled image is invariant-only and would bring the 500 back. -->
     <InvariantGlobalization>false</InvariantGlobalization>
-    <Version>2.1.1</Version>
+    <Version>2.1.2</Version>
     <!-- A package with a known vulnerability (direct or transitive) FAILS the build: sign-in code never ships on one. -->
     <NuGetAudit>true</NuGetAudit>
     <NuGetAuditMode>all</NuGetAuditMode>
@@ -34,6 +34,12 @@
     <PackageReference Include="Azure.Identity" Version="1.21.0" />
     <PackageReference Include="Azure.Extensions.AspNetCore.DataProtection.Keys" Version="1.6.5" />
     <!-- 2.0.0: no System.Security.Cryptography.Pkcs / .Xml lift any more (1.4.x pinned the patched 8.0.x). See README 2.0.0. -->
+    <!-- 2.1.2: the ASP.NET Core packages (and the 10.0.x System.* packages) Microsoft.Identity.Web / Azure.Core bring in
+         transitively are lifted to 10.0.15 here; Microsoft.Identity.Web 4.18.0 alone resolves them at 10.0.13. -->
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.15" />
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.OpenIdConnect" Version="10.0.15" />
+    <PackageReference Include="System.Security.Cryptography.Pkcs" Version="10.0.15" />
+    <PackageReference Include="System.Memory.Data" Version="10.0.15" />
   </ItemGroup>
 
 </Project>

@@ -293,6 +293,29 @@ Describe 'builds are queued together and waited for together (the registry''s ow
         ($log -join "`n") | Should -Match '\| ERROR: failed to solve'
         @($script:BuildCalls | Where-Object { $_ -like '*listLogSasUrl*' }).Count | Should -Be 1 -Because 'only the failed run''s log is read'
     }
+    It 'a wait is never silent: a build that stays Running across polls beats the update''s sign of life on every poll, and the line appears' {
+        $script:Runs = @{ r3 = @('Running', 'Running', 'Running', 'Running', 'Succeeded') }
+        $b = @([pscustomobject]@{ Image = 'si-engine:v9'; RunId = 'r3'; Status = 'Queued'; Started = [datetime]::UtcNow })
+        $log = New-Object System.Collections.Generic.List[string]; $beats = New-Object System.Collections.Generic.List[string]
+        $r = @(Wait-SIAcrBuilds -Rest $script:BuildRest -SubscriptionId 's' -AcrName 'acr' -Builds $b -PollSeconds 0 -LineEveryMinutes 0 -What 'the updater''s own image' `
+                   -Log { param($m) $log.Add($m) }.GetNewClosure() -Beat { param($w) $beats.Add($w); $true }.GetNewClosure())
+        $r[0].Status | Should -Be 'Succeeded'
+        $beats.Count | Should -Be 4 -Because 'four polls answered Running: each one beats'
+        $beats[0] | Should -Be 'the updater''s own image: waiting for the image build, 0 min'
+        @($log | Where-Object { $_ -match '^the updater''s own image: waiting for the image build, \d+ min$' }).Count | Should -Be 4
+    }
+    It 'the line comes at most every 5 minutes by default (a short wait writes none), the beat still on every poll; a failing beat never fails the wait' {
+        $script:Runs = @{ r4 = @('Running', 'Running', 'Succeeded') }
+        $b = @([pscustomobject]@{ Image = 'si-engine:v9'; RunId = 'r4'; Status = 'Queued'; Started = [datetime]::UtcNow })
+        $log = New-Object System.Collections.Generic.List[string]; $n = New-Object System.Collections.Generic.List[int]
+        $r = @(Wait-SIAcrBuilds -Rest $script:BuildRest -SubscriptionId 's' -AcrName 'acr' -Builds $b -PollSeconds 0 -Log { param($m) $log.Add($m) }.GetNewClosure() -Beat { param($w) $n.Add(1); throw 'the database did not answer' }.GetNewClosure())
+        $r[0].Status | Should -Be 'Succeeded'
+        $n.Count | Should -Be 2
+        @($log | Where-Object { $_ -match 'waiting for the image build' }).Count | Should -Be 0
+        ((Get-Command Wait-SIAcrBuilds).ScriptBlock.Ast.Body.ParamBlock.Parameters | Where-Object { $_.Name.VariablePath.UserPath -eq 'LineEveryMinutes' }).DefaultValue.Value | Should -Be 5
+        # the default beat is the updater's own (main thread), when it is loaded
+        (Get-Command Wait-SIAcrBuilds).Definition | Should -Match ([regex]::Escape("if (-not `$Beat -and (Get-Command -Name Invoke-SIUpdaterLockBeat -ErrorAction SilentlyContinue)) { `$Beat = { param(`$w) `$null = Invoke-SIUpdaterLockBeat -What `$w } }"))
+    }
     It 'a queued build takes its run id from the registry''s answer (root or .properties), else from the newest run naming the image' {
         $ctx = Join-Path ([IO.Path]::GetTempPath()) ('si-fr-ctx-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
         New-Item -ItemType Directory -Force -Path (Join-Path $ctx 'container') | Out-Null

@@ -333,9 +333,10 @@ function Invoke-SIPublishedCopyRefresh {
         after a range or a wave has ended -- so the pipeline runner can keep ITS lock alive while the run's copy is written
         (a 15-50 minute copy outlived the lock's 15 minutes and the next wake-up could start a run beside it). Only progress
         beats: a refresh that hangs or dies stops beating, and the lock lapses as before. A beat that fails never stops it.
+        -RangeWave: how one wave runs (Invoke-SIPublishedCopyRangesParallel's seam; default its own) -- the update's runs under its beat.
     #>
     param([Parameter(Mandatory)][scriptblock]$Invoke, [scriptblock]$Log = { param($l, $m) }, [int]$Workers = 0, [long]$FirstSize = 10000,
-          [long]$TargetMs = 2000, [double]$ProgressSeconds = 60, [scriptblock]$Beat, [double]$BeatSeconds = 60)
+          [long]$TargetMs = 2000, [double]$ProgressSeconds = 60, [scriptblock]$Beat, [double]$BeatSeconds = 60, [scriptblock]$RangeWave)
     $res = [pscustomobject]@{ Ok = $false; Held = $false; Tables = 0; Rows = 0L; Ranges = 0L; Seconds = 0.0; Missing = @() }
     $ci = $null; if ($Invoke.PSObject.Properties['SIConnectionInfo'] -and $Invoke.SIConnectionInfo) { $ci = $Invoke.SIConnectionInfo }
     $maxWorkers = 1
@@ -398,7 +399,8 @@ function Invoke-SIPublishedCopyRefresh {
                     foreach ($k in $bounds) { $wave.Add(@{ Table = $t; HasFrom = $pf; From = $pv; Size = $sz; HasTo = 1; To = $k }); $pf = 1; $pv = $k }
                     # (the open range is asked for every row that is left: its own TOP takes them all, so nothing past it is left out)
                     if ($bounds.Count -lt $workersNow) { $wave.Add(@{ Table = $t; HasFrom = $pf; From = $pv; Size = [int]::MaxValue; HasTo = 0; To = $null }); $done = $true }
-                    foreach ($r in (Invoke-SIPublishedCopyRangesParallel -ConnectionInfo $ci -Ranges $wave.ToArray() -Log $Log)) {
+                    $rpWave = @{}; if ($RangeWave) { $rpWave['Wave'] = $RangeWave }
+                    foreach ($r in (Invoke-SIPublishedCopyRangesParallel -ConnectionInfo $ci -Ranges $wave.ToArray() -Log $Log @rpWave)) {
                         if ($null -eq $r.Rows) { $gone = $true } else { $rows += [long]$r.Rows }
                         if ([long]$r.Ms -gt $ms) { $ms = [long]$r.Ms }
                     }
@@ -538,8 +540,10 @@ function Invoke-SIPublishedCopyCatchUp {
         Returns @{ Action ('not-yet' | 'current' | 'refreshed' | 'would-refresh' | 'held' | 'failed'); Stale; PublishedAt;
         CopiedAt; Reason; Lines; Refresh }. Said: one line when they were stale or could not be checked (a data-health
         warning; warn only, never a block), nothing when they are current.
+        -Wave (2026-11-12): how one wave of ranges runs (handed to the range driver; default Invoke-SIPublishedCopyRangeWave) --
+        the update runs it under its background beat, so one long wave never looks like a dead update.
     #>
-    param([scriptblock]$Invoke, [switch]$WhatIf, [switch]$AfterPublish, [scriptblock]$Log = { param($l, $m) }, [scriptblock]$Beat)
+    param([scriptblock]$Invoke, [switch]$WhatIf, [switch]$AfterPublish, [scriptblock]$Log = { param($l, $m) }, [scriptblock]$Beat, [scriptblock]$Wave)
     $res = [pscustomobject]@{ Action = 'not-yet'; Stale = $false; PublishedAt = $null; CopiedAt = $null; Reason = ''; Lines = @(); Refresh = $null }
     $bit = { param($x) ($x -eq $true) -or ([string]$x -in @('1', 'True', 'true')) }
     $ask = {
@@ -565,7 +569,8 @@ function Invoke-SIPublishedCopyCatchUp {
             # review S3: the engine's range driver ONLY on a seam that can hand out connections -- it then takes the refresher
             # lock si-published-copy-refresh for the whole refresh. A seam without one (the update's) never refreshes unlocked:
             # it goes to the database's procedure below, which takes the same lock itself (another refresher = nothing done).
-            $res.Refresh = Invoke-SIPublishedCopyRefresh -Invoke $Invoke -Log $Log -Beat $Beat
+            $rfWave = @{}; if ($Wave) { $rfWave['RangeWave'] = $Wave }
+            $res.Refresh = Invoke-SIPublishedCopyRefresh -Invoke $Invoke -Log $Log -Beat $Beat @rfWave
             if ($res.Refresh.Held) { $res.Stale = $true; $res.Action = 'held'; $res.Reason = 'another refresh of the copies was running' }
             elseif (-not $res.Refresh.Ok) { $res.Stale = $true; $res.Action = 'held'; $res.Reason = ('a copy is not there: {0}' -f (@($res.Refresh.Missing) -join ', ')) }
             else {

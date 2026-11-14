@@ -84,7 +84,7 @@ BeforeAll {
     }
     # every ARM call names the install's subscription in its URL (never a default context)
     function script:Get-ArmCallsOutsideSubscription { @($global:AzCalls | Where-Object { $_ -match ' https://management\.azure\.com/' -and $_ -notmatch '/subscriptions/00000000-0000-0000-0000-000000000001/' }) }
-    $script:HookLibs = 'SI-ContainerUpdate.ps1', 'SI-BuildStage.ps1', 'SI-FastRoll.ps1', 'SI-ScriptRun.ps1', 'SI-UpdateRest.ps1', 'SI-AcrBuild.ps1'
+    $script:HookLibs = 'SI-ContainerUpdate.ps1', 'SI-BuildStage.ps1', 'SI-FastRoll.ps1', 'SI-ScriptRun.ps1', 'SI-UpdateRest.ps1', 'SI-AcrBuild.ps1', 'SI-UpdateSqlBeat.ps1'
     $script:Tag = Get-SIContainerImageTag -Version ((Get-Content -Raw (Join-Path $script:SIRoot 'VERSION')).Trim()) -ContentHash (Get-SIContainerContentHash -SolutionRoot $script:SIRoot)
     $script:NewImage = "reg.example.io/si-orchestrator:$($script:Tag)"
     $script:Common = @{ ResourceGroupName = 'rg-x'; AcrName = 'acrx'; SubscriptionId = '00000000-0000-0000-0000-000000000001' }

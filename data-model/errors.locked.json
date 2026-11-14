@@ -210,6 +210,108 @@
     "since": null
   },
   {
+    "code": "si-col-0502",
+    "title": "The privileged sign-ins of the devices could not be read",
+    "causeClass": "query-defect",
+    "appliesTo": {
+      "capabilities": [],
+      "licences": []
+    },
+    "customerText": "This run could not work out which devices had a sign-in by a privileged account. That one value is shown as unknown on each device; every other value of the run is complete and nothing was lost. This is a fault in SecurityInsight; the fix comes with an update.",
+    "internalNote": "#1223: live 2026-11-12 at every 3.1.10+ install on its first run with the privileged-logon tier (#1209): 'Argument types do not match' inside the Enrich block around Get-SIBulkPrivilegedLogons. Since 3.1.13 (#1227) a scoped note, never INCOMPLETE; the note names the part it failed in (SI_PrivilegedLogonPart). Stopgap at an install: SI_Endpoint_PrivilegedLogon_Mode = off.",
+    "whoActs": "support",
+    "priority": "P3",
+    "opensTicket": true,
+    "action": "fixed-in",
+    "fixedIn": null,
+    "waitForFix": true,
+    "steps": [
+      {
+        "who": "nobody",
+        "text": "Nothing to do. The device tiers come from their other sources until the fix is installed."
+      }
+    ],
+    "lesson": "A new tier source must never make a whole run partial: its own value is unknown, the run stays whole (#1227).",
+    "since": "3.1.13"
+  },
+  {
+    "code": "si-col-0503",
+    "title": "This tenant has no Defender device sign-ins",
+    "causeClass": "no-data-source",
+    "appliesTo": {
+      "capabilities": [],
+      "licences": [
+        "Microsoft Defender for Endpoint"
+      ]
+    },
+    "customerText": "Your tenant has no Defender for Endpoint sign-in data, so SecurityInsight cannot see which devices privileged accounts signed in to. That one value is unknown on each device; nothing else is affected.",
+    "internalNote": "DeviceLogonEvents does not resolve in advanced hunting (no MDE data). Scoped note of the privileged-logon source (#1227).",
+    "whoActs": "nobody",
+    "priority": "P4",
+    "opensTicket": false,
+    "action": "none",
+    "fixedIn": null,
+    "waitForFix": false,
+    "steps": [
+      {
+        "who": "nobody",
+        "text": "Nothing to do. If you add Defender for Endpoint later, the privileged sign-ins are read with the next run."
+      }
+    ],
+    "lesson": null,
+    "since": "3.1.13"
+  },
+  {
+    "code": "si-col-0504",
+    "title": "The privileged accounts could not be read for the device sign-ins",
+    "causeClass": "no-data-source",
+    "appliesTo": {
+      "capabilities": [],
+      "licences": []
+    },
+    "customerText": "This run could not read which accounts are privileged (the identity collection had not finished yet, or its results could not be read), so the privileged sign-ins of the devices are unknown this run. They are read again with the next run; nothing else is affected.",
+    "internalNote": "Get-SIPrivilegedIdentities: SI_Identity_Profile_CL missing (first run) or its read failed. Scoped note of the privileged-logon source (#1227).",
+    "whoActs": "nobody",
+    "priority": "P4",
+    "opensTicket": false,
+    "action": "none",
+    "fixedIn": null,
+    "waitForFix": false,
+    "steps": [
+      {
+        "who": "nobody",
+        "text": "Nothing to do. The next run reads them again."
+      }
+    ],
+    "lesson": null,
+    "since": "3.1.13"
+  },
+  {
+    "code": "si-col-0505",
+    "title": "The sign-ins of some privileged accounts could not be read",
+    "causeClass": "platform-timeout",
+    "appliesTo": {
+      "capabilities": [],
+      "licences": []
+    },
+    "customerText": "Defender did not answer for the sign-ins of some privileged accounts this run. Their sign-ins are unknown this run and are read again with the next run; nothing else is affected.",
+    "internalNote": "Read-SIPrivilegedLogonRange gave up on a list after its time and account splits; the accounts' read point stays, the next run reads them again. Scoped note of the privileged-logon source (#1227).",
+    "whoActs": "nobody",
+    "priority": "P4",
+    "opensTicket": false,
+    "action": "none",
+    "fixedIn": null,
+    "waitForFix": false,
+    "steps": [
+      {
+        "who": "nobody",
+        "text": "Nothing to do. The next run reads them again."
+      }
+    ],
+    "lesson": null,
+    "since": "3.1.13"
+  },
+  {
     "code": "si-upl-0601",
     "title": "The run record could not be built",
     "causeClass": "too-large",
@@ -1001,6 +1103,31 @@
     "since": null
   },
   {
+    "code": "si-mail-1104",
+    "title": "The mail send right could not be checked this run",
+    "causeClass": "platform-timeout",
+    "appliesTo": {
+      "capabilities": [],
+      "licences": []
+    },
+    "customerText": "SecurityInsight could not check its mail send right this run, because Microsoft gave no usable answer (usually a short Microsoft service problem). SecurityInsight sends no mail it cannot prove is limited to the shared mailbox, so this run's mail was held; nothing is lost, the run's data is complete, and the next run checks again.",
+    "internalNote": "Get-SIMailRestriction state 'error' (the sendMail probe answered none of allowed / denied / not-found; the answer is in the Detail: 'Microsoft Graph answered HTTP <status> <code>'). Send-SIMail Held = 'check-unreadable'; the close-loop mail job says it as a warning and does not fail the step (framework TRUST-1 point 3). Live 2026-11-13 during Microsoft's Exchange / Graph trouble.",
+    "whoActs": "nobody",
+    "priority": "P4",
+    "opensTicket": false,
+    "action": "none",
+    "fixedIn": null,
+    "waitForFix": false,
+    "steps": [
+      {
+        "who": "nobody",
+        "text": "Nothing to do: the next run checks the send right again and sends the held mail. If it keeps happening for a day, check Microsoft's service health for Exchange Online."
+      }
+    ],
+    "lesson": null,
+    "since": "3.1.16"
+  },
+  {
     "code": "si-flow-1201",
     "title": "The pipeline runner is not scheduled",
     "causeClass": "settings-unreachable",
@@ -1277,6 +1404,31 @@
       }
     ],
     "lesson": "A backlog that grows a little every day is only seen when its pace is measured against the time it has.",
+    "since": null
+  },
+  {
+    "code": "si-out-1501",
+    "title": "Data out is held: the collection is not trusted",
+    "causeClass": "count-less",
+    "appliesTo": {
+      "capabilities": [],
+      "licences": []
+    },
+    "customerText": "The newest collection was built on source data that was not complete, so SecurityInsight sent nothing from it to ServiceNow or the other outputs. What they already have stays as it was. The next complete collection sends what changed by itself. Support is told when this goes on.",
+    "internalNote": "The data sync judged the collection data out would send from as NOT trusted (sidata.CollectionTrust, written by Risk Analysis with the collection: a source step of its run failed, or a profile run ended success-partial; the source runs' records when the collection carries no verdict) and held both data-out paths (the data-out job's mark 'held', and its own fallback). Each run records its decision in the settings database, cfg.InstallState 'DataOutTrust' (held, since = the first run of the current row of held runs, trusted = the CollectionTime of the newest trusted collection, at). Sent on the data sync's run report (Reports[] item asset-datasync-data-out) on EVERY run that holds; the heartbeat's DataOut says the held outputs (heldReason untrusted, heldSinceUtc, newestTrustedUtc), and Invardia raises a LASTING hold from those two. Read the data sync's log: the 'data out' line names the collection and why.",
+    "whoActs": "product",
+    "priority": "P2",
+    "opensTicket": true,
+    "action": "support",
+    "fixedIn": null,
+    "waitForFix": false,
+    "steps": [
+      {
+        "who": "support",
+        "text": "Read the data sync's log: the 'data out' line names the collection that was held and why. The next trusted collection sends what changed by itself. When every run is held, find out why the source runs do not finish whole (the pipeline run's page names the step) and fix that."
+      }
+    ],
+    "lesson": "A hold that repeats on every run stops the outputs as surely as a failure does -- it must reach support, never only a warning line in the log.",
     "since": null
   }
 ]

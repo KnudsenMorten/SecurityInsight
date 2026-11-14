@@ -85,6 +85,10 @@ function Get-SIExemptionMailSignInSentSql {
 }
 
 function Get-SIExemptionMailSignInFailedSql {
+    # -Held: the mail was held only because the send right could not be checked -- the reason is kept, the attempt is NOT
+    # counted (a Microsoft incident must never use up a mail's tries and drop it -- review 2026-11-13)
+    param([switch]$Held)
+    if ($Held) { return "UPDATE cfg.SignInMail SET LastError = LEFT(@Error, 1000) WHERE MailId = @MailId AND SentAt IS NULL;" }
     "UPDATE cfg.SignInMail SET Attempts = Attempts + 1, LastError = LEFT(@Error, 1000) WHERE MailId = @MailId AND SentAt IS NULL;"
 }
 
@@ -132,10 +136,18 @@ function Get-SIReportMailSentSql {
 }
 
 function Get-SIReportMailFailedSql {
+    # -Held: the mail was held only because the send right could not be checked -- the reason is kept, the attempt is NOT
+    # counted (a Microsoft incident must never use up a mail's tries and drop it -- review 2026-11-13)
+    param([switch]$Held)
+    if ($Held) { return "UPDATE cfg.ReportMail SET LastError = LEFT(@Error, 1000) WHERE MailId = @MailId AND SentAt IS NULL;" }
     "UPDATE cfg.ReportMail SET Attempts = Attempts + 1, LastError = LEFT(@Error, 1000) WHERE MailId = @MailId AND SentAt IS NULL;"
 }
 
 function Get-SIExemptionMailFailedSql {
+    # -Held: the mail was held only because the send right could not be checked -- the reason is kept, the attempt is NOT
+    # counted (a Microsoft incident must never use up a mail's tries and drop it -- review 2026-11-13)
+    param([switch]$Held)
+    if ($Held) { return "UPDATE cfg.ExemptionMail SET LastError = LEFT(@Error, 1000) WHERE MailId = @MailId AND SentAt IS NULL;" }
     "UPDATE cfg.ExemptionMail SET Attempts = Attempts + 1, LastError = LEFT(@Error, 1000) WHERE MailId = @MailId AND SentAt IS NULL;"
 }
 
@@ -516,7 +528,7 @@ function Invoke-SIExemptionMailCore {
             $res.Sent++
         } catch {
             $err = $_.Exception.Message
-            & $invoke (Get-SIExemptionMailFailedSql) @{ MailId = $id; Error = $err } 'nonquery' | Out-Null
+            & $invoke (Get-SIExemptionMailFailedSql -Held:([bool](Get-Command -Name Test-SIMailHeldUnreadable -ErrorAction SilentlyContinue) -and (Test-SIMailHeldUnreadable -Failure $_))) @{ MailId = $id; Error = $err } 'nonquery' | Out-Null
             $res.Failed++; $res.Errors += ('mail {0}: {1}' -f $id, $err)
             & $Log 'WARN' ("exemption mail {0} was not sent: {1}" -f $id, $err)
         }
@@ -534,7 +546,7 @@ function Invoke-SIExemptionMailCore {
             $res.Sent++
         } catch {
             $err = $_.Exception.Message
-            & $invoke (Get-SIExemptionMailSignInFailedSql) @{ MailId = $id; Error = $err } 'nonquery' | Out-Null
+            & $invoke (Get-SIExemptionMailSignInFailedSql -Held:([bool](Get-Command -Name Test-SIMailHeldUnreadable -ErrorAction SilentlyContinue) -and (Test-SIMailHeldUnreadable -Failure $_))) @{ MailId = $id; Error = $err } 'nonquery' | Out-Null
             $res.Failed++; $res.Errors += ('sign-in mail {0}: {1}' -f $id, $err)
             & $Log 'WARN' ("sign-in mail {0} was not sent: {1}" -f $id, $err)
         }
@@ -567,7 +579,7 @@ function Invoke-SIExemptionMailCore {
             $res.Sent++
         } catch {
             $err = $_.Exception.Message
-            & $invoke (Get-SIReportMailFailedSql) @{ MailId = $id; Error = $err } 'nonquery' | Out-Null
+            & $invoke (Get-SIReportMailFailedSql -Held:([bool](Get-Command -Name Test-SIMailHeldUnreadable -ErrorAction SilentlyContinue) -and (Test-SIMailHeldUnreadable -Failure $_))) @{ MailId = $id; Error = $err } 'nonquery' | Out-Null
             $res.Failed++; $res.Errors += ('management summary {0}: {1}' -f $id, $err)
             & $Log 'WARN' ("management summary mail {0} was not sent: {1}" -f $id, $err)
         }

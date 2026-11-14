@@ -1765,6 +1765,22 @@ is loaded as soon as it is in; every report that IS complete is current. Per rep
 - *What still holds a whole collection*: a run that failed, a source that dropped out, rows without their key columns, a run
   that was partial for a reason that is not one report -- the hold and its release as before. Summary rows Risk Analysis
   writes itself are not carried (they are complete as written).
+- *Only a trusted collection goes out*: a collection is trusted when its run finished every step. Risk Analysis records, with
+  its own collection (`sidata.CollectionTrust`), whether it was: a source step of this run that failed, timed out or was
+  interrupted -- read from the pipeline's own record of this run (`cfg.FlowStepRun`) -- makes it not trusted and names the
+  step; a source whose newest run ended partial does too (apart from the role read, which holds only the reports that read
+  roles). A step that is switched off does not count. A re-run from a later step judges each step it did not run by that
+  step's outcome in the run it continues (the newest earlier run in which the step ran); a run of a single step or stage, or
+  one outside the pipeline, is judged by the source runs' records. The data sync judges the collection it sends by
+  that record (the source runs' newest records only when there is none), and a collection that is not trusted is held:
+  nothing is sent from it, what the targets have stays, and the next trusted run sends what changed.
+- *A hold never goes quiet*: every data sync records its decision on the collection's trust in the settings database (one
+  install-state row, replaced each run, never in a dry run): held or not, since when the runs are held (the first run of the
+  current row of held runs -- a trusted run ends the row), and the collection time of the newest trusted collection. The
+  hourly heartbeat reads it with the data-out progress: an output whose newest attempt was that hold reads `held`, reason
+  `untrusted`, with `heldSinceUtc` and `newestTrustedUtc` (each only when known); a send that is running is never changed. Each
+  run that holds also carries the catalogue code `si-out-1501` on its run report, so a hold that repeats is raised by the
+  platform from the two times. The customer sees only the warning line in the data sync's log, as before.
 ### The SI baseline dataset (v3, #455)
 
 **The field catalog is the baseline.** `data-model/field-catalog.locked.json` defines every SI field once (name, classes,
@@ -3888,7 +3904,8 @@ before. The bucketing gate is unchanged: a report is bucketed when its configure
   under 25 % of every limit, and none of them raised or resized it. It never goes down to the count that last overflowed
   (`Get-SIRaBucketDownCount`).
 - **Self-healing.** Each case is handled as follows:
-  - Platform failure (429, 503, 504, auth): retried with back-off, then retried late after the other buckets (existed).
+  - Platform failure (429, 503, a single 504, auth): retried with back-off, then retried late after the other buckets
+    (existed). A slice answered 504 twice is split in halves instead (#1216, below).
   - Timeout or 502 ("too large / too slow"): that bucket is split by the sub-bucket pass (existed).
   - Overflow ("too many rows", 413): that bucket is now split and re-run alone. Before, the whole report was re-run at
     a higher count. **Added.**
@@ -3914,6 +3931,25 @@ before. The bucketing gate is unchanged: a report is bucketed when its configure
     incomplete keeps its slice count (it is not raised from partial answers). While the recovery runs, it reports its
     progress (query slices asked again) at most every 3 minutes through the step's progress ticker. In a report split over
     several workers, each part has its own budget.
+  - **A slice advanced hunting answers 504 twice is split in halves** (#1216). A 504 Gateway Timeout that repeats on the
+    same slice is the query being too heavy for the gateway, not an outage: asking the same query again fails the same
+    way (live 2026-11-12: 15 of 42 slices of an attack-path report answered 504 after ~200 s on every attempt until the
+    recovery budget ended them unread). The bucket loop now passes a stop to the hunting call
+    (`$script:RAGatewayTimeoutStopAt`, `Get-RAGatewayTimeoutStopAt`): the call counts its attempts answered 504 and at the
+    slice's second 504 (its own attempts and earlier calls together, `Add-RASliceGatewayTimeouts`) it is not asked again.
+    The slice goes to the sub-bucket pass and is cut in two by its hash range (1/42 -> 1/84 + 43/84; the CL rows inlined
+    with it are cut by the same hash, so the halves together are exactly the slice), each half asked; a half answered 504
+    twice is halved again. This holds in the main pass, the late retry and the smaller slices alike. The halving stops at
+    a measured floor, never a fixed depth: the hash partition cannot address a finer slice, or two halvings in a row did
+    not reduce the share of halves refused (`Test-RASplitReducesFailure -Step 2`, the same measured stop as the 4-way
+    split). Only then is the slice a named loss. A halving is a size split, so it starts no recovery clock. The run log
+    says per report how many slices were split, how deep and whether they recovered (`[gateway split] '<report>': N of M
+    query slice(s) ... K halving(s) deep at most (finest slice 1/T); ...`). Unchanged: a 429, 503, busy answer or a single
+    504 asks the same query again; a query defect fails on attempt 1. The `_ciPeer` lookup (the Azure target's CI, ~1,800
+    rows, ~435 KB, whole in every slice of that report) is NOT cut with the slice: its key is the path's target, not the
+    slice key, so a hash cut would lose the target's CI (proved on a fixture in `SIv3-RaBucketSplit`). The safe trim is the
+    existing needed-key cut (`LookupNeededKeys`, used above the planning budget), but it asks each slice's key query first,
+    which runs the same graph walk, so it would double the heavy call for a slice that already times out. It is left as is.
 - **The log says what the state keeps** (#833). Live 2026-10-20, the log said "16 bucket(s) kept for the next run" while
   the state and the history held 8. The early save (#713) writes a count as soon as a slice has succeeded at it, so a run
   stopped part-way does not lose it, and its line said "for the next run". The end of the same report then halved the count
@@ -5198,7 +5234,17 @@ execution counts as running only while a lock row that names it (its Holder is t
 `caj-si-updater:<execution>`) was beaten recently:
 - **the update** beats its own row (`cfg.PipelineLock` LockId `updater`) from its first moment after the sign-in (every
   log line, at most once a minute, with a fresh database token per beat) and the install lock (`install`) from its run
-  gate on;
+  gate on. **A database statement writes no log line** (found live: a long statement after the producers' step outlived
+  the 15 minutes, and a working update was stopped as a dead one), so every statement of `setup/Invoke-SIContainerUpdate.ps1`
+  runs under a background beat (`setup/_shared/SI-UpdateSqlBeat.ps1`, `Invoke-SIUpdateSqlBeat`): started right before the
+  statement and stopped in a `finally` when it ends or throws, a runspace of its own beats both rows every 5 minutes on a
+  connection of its own (the shared open, `Open-SISqlConnectionRetry`, with the token taken when the statement started) --
+  never on the busy one, and never by calling back into the update's runspace (its code is compiled inside the beat's own
+  runspace, so a busy update thread can never block it, and nothing it does can throw into the statement) -- and writes one
+  log line per beat, `<step>: SQL statement running <N> min`. Only while a statement runs: a hang anywhere else still goes
+  dead 15 minutes after its last beat. Never for ever: the beat stops at the rule's own 6-hour outer fallback (said in one
+  line), and the summary views' statements (9f) stop after 2 hours (a warning; the update goes on). One wave of the
+  published copies' ranges (9j, each range on a connection of its own) runs under the same beat;
 - **the pipeline runner** of a run beats the install lock (`install`), as it always has;
 - **the clean-up pass** (a wake-up during a run) takes a lock of its OWN (LockId `housekeeping`; an install without a
   database: the document `sistate/flow/housekeeping.lock` beside `pipeline.lock`) as the container entry's first act,
@@ -6616,7 +6662,7 @@ Apart from the status reports (which can be turned off), the Community edition n
 | Individual SecurityInsight tables | the workspace's retention -- SecurityInsight never sets table retention | you |
 | Trend table | recommended 365 days; the trend engine prints the exact command and does not apply it | you |
 | Pro database: copied collections (findings, daily aggregates, facets, services) and assets no longer seen | 90 days (`SI_Pro_DataRetentionDays`), pruned by the daily data sync | setting |
-| Pro database: the finding rows of a collection (findings, recommendations, prepared issue rows; Summary rows) | per kind the newest complete collection and the one before it; older ones, and collections a stopped run left loading once a newer one is complete, lose their rows at the next data sync -- the collection's aggregates stay until the 90 days above | -- |
+| Pro database: the finding rows of a collection (findings, recommendations, prepared issue rows; Summary rows) | per kind the newest 3 complete collections (`SI_Data_KeepCollections`; one fewer per run while the database is 70 % full or more, never below 2); older ones, and collections a stopped run left loading once a newer one is complete, lose their rows at the next data sync -- the collection's aggregates stay until the 90 days above | setting |
 | Pro database: vulnerability state and events, the identity ledger, settings and their history, exemptions (ended, never deleted), template revisions, connector runs and items | kept until you delete them | -- |
 | Pro database: the audit trail (`cfg.AuditEvent`) | kept forever by default; with `SI_Pro_AuditRetentionMonths` (at least 13), older rows are removed by the data sync's audited retention step, which records itself -- through `cfg.AuditRetentionApply` only, because the database refuses any other UPDATE or DELETE (section A5) | setting |
 | Run logs (local and in blob storage) | 30 days (`SI_LogRetentionDays`) | setting |
@@ -7356,10 +7402,29 @@ filter and trend them quickly.
   again and derives everything else as before.
 - **Retention.** Collections older than the retention setting (default 90 days) are removed in batches. The
   vulnerability state, the identity ledger and the settings are never purged.
-- **The newest complete collection and the one before it.** Each Risk Analysis run stores around a million finding
-  rows, so the finding rows of older collections are not kept for 90 days. Per kind (Risk Analysis and Risk Analysis
-  Summary) the data sync keeps the newest COMPLETE collection -- what every view shows -- and the complete one before it,
-  which the comparison between runs reads; also kept are a collection whose rows a kept collection's not-complete report
+- **The newest 3 complete collections** (owner 2026-11-12: "min last 2 plus latest, total 3" -- before that 7, and "the newest
+  complete collection and the one before it"). Each Risk Analysis run stores around a million finding rows at a large
+  install, so the finding rows of older collections are not kept for 90 days. Per kind (Risk Analysis and Risk Analysis
+  Summary) the data sync keeps the newest **`SI_Data_KeepCollections`** (default 7, never below 2) COMPLETE collections --
+  the newest is what every view shows; the ones before it are what What changed, the collection lists and the history pages
+  read, so they go back a week of daily runs. Only collections beyond that number are 'superseded'. **Only TRUSTED
+  collections count:** a complete collection whose own verdict says it was built on incomplete source data (a collection
+  step of its run failed) never pushes a trusted one out of that number. It is removed ('untrusted') once a newer trusted
+  collection exists. At most ONE untrusted collection is kept: the newest, while it is newer than the newest trusted one
+  (for diagnosis and for what the next run carries from -- never shown, never sent). The published run and a collection
+  a kept report carries rows from are always kept. A collection with no verdict counts as
+  trusted; a kind with no trusted complete collection at all keeps the newest N complete ones, so the database never
+  grows without end. The database itself refuses a mark the rule would not make. **The database's
+  fill adapts it, with no hard cap:** when the database is at or above 70 % of its maximum size, the data sync keeps one
+  collection fewer per run (one step per new complete collection, decided once per run and stored in
+  `sidata.ViewState 'keep-collections'` so a second mark in the same run and the pipeline runner's wake-ups use the same
+  number), never below 2, and says it in ONE plain warning line: how full, how many are kept, and what the customer can do
+  (a larger database tier, or a lower setting). Below 70 % the setting applies again; removed collections do not come
+  back, the kept number grows by one per run. The Summary groupings mark the same number as shown (the published
+  collection + the newest kept ones at or before it + the newer ones) and the key figures are built for every kept
+  collection, once each -- the first run after the update can take longer for that; it is paced, never skipped. Size: the
+  database holds about (kept collections) x (finding rows per run) finding rows -- 7 x ~1 M at a large install instead of
+  2 x ~1 M. Also kept are a collection whose rows a kept collection's not-complete report
   shows (its last complete result), and every collection still loading that is newer than the newest complete one (a run
   in progress; one run at a time per install). The finding rows, recommendations and prepared issue rows of every older
   collection are removed, and so are those of a collection a stopped or failed run left loading, once a newer one of the
@@ -8146,7 +8211,7 @@ rule now.
 - **The data sync's heavy parts on a small database (#834).** Measured on a small Pro database (one sync 99.6 min, 21.1
   the day before):
   - *Old collections are marked right after the loads* (`Invoke-SIDataCollectionRetention -MarkOnly`): the same plan and
-    guards as the removal -- per grain the newest complete collection and the one before it are kept, the published run's
+    guards as the removal -- per grain the newest kept complete collections (`SI_Data_KeepCollections`, #1218) are kept, the published run's
     collection and a result waiting for the data sync are never marked -- so no later step derives, prepares or groups a
     collection the same sync removes (one collection in three on that day: the third one was the collection the cleanup
     removed at the end). No row is removed by a mark; a marked collection is never shown again.
@@ -9588,7 +9653,11 @@ the same rule in every product of the platform).
   own interface is used, with the updater's existing sign-in and the delete right of its registry role; nothing else in
   Azure is changed.
 - **What it says.** After the deletes the registry is read again, and the run log has one line per repository, for example
-  *"si-orchestrator: 3 old images deleted, 2 left (this release and the one before)"*. The same counts are recorded for
+  *"si-orchestrator: 3 old images deleted, 2 left (this release and the one before)"*. The registry completes a delete a
+  moment after it answers it, so while an image it took as deleted is still listed, the listing is read again -- at most
+  three more times, with short pauses (5, 10 and 15 seconds) and a sign of life before each; if one is still listed after
+  that, the line says the deletes are still completing and gives the count it saw. A kept image that is missing is always
+  said as a warning. The same counts are recorded for
   the web app and the health report (`cfg.InstallState 'ImagePrune'`) and in the release record. A delete the registry
   refuses is said and kept; the next update tries again. It never fails the update.
 - **A rollback.** A rollback to the release before finds its images kept. A rollback further back is an ordinary update to
@@ -10153,14 +10222,24 @@ seven jobs back on the image from BEFORE both). Three guards now: (1) a manual d
 **compare-and-restore** (`Get-SIContainerRollbackPlan -NewImage -Current`): a job is restored only while it still runs the
 image THIS update set -- a job someone else moved meanwhile keeps theirs.
 
-**The updater updates itself, LAST (#350 (c); PIM's `ca-pim-update`: "itself, last").** After the engine jobs, the web app
-and the MCP server are rolled and healthy and what now runs is recorded, the very last step of the run
-(`container/updater/_shared/SI-UpdaterSelf.ps1`, both editions) builds the updater image of the SAME verified release --
-`si-updater:v<build>-<commit 12>` from `container/updater/Dockerfile`, the SecurityInsight folder as the context, exactly
-as `Install-SIUpdaterJob.ps1` builds it; an image already in the registry is not rebuilt -- and points its OWN job
-(`caj-si-updater`) at it, then reads the job back. Last because a Container Apps job's template is read when an execution
-STARTS: changing the image does not touch the execution that is running (it finishes on the image it started with), the
-next run starts on the new one, and nothing that follows in this run depends on it. An operation still in flight on the
+**The updater updates itself RIGHT AFTER THE ENGINE ROLL READS BACK HEALTHY (since 2026-11-12; it was the run's very last
+step).** The run plans the move before the release's `setup/Invoke-SIContainerUpdate.ps1` runs (`New-SIUpdaterSelfMovePlan`);
+that script carries it out at its step **4b** (`Invoke-SIUpdaterSelfMoveAfterEngine`) as soon as every engine job read back
+on the release's image (or already ran it) -- before its later steps, the templates, the web app and the record. The order of
+an update from Invardia is now: the database step -> the template gate -> the engine build -> **3. roll / 4. verify** ->
+**4b. the updater itself** -> the steps that follow the roll (7 ... 12, the templates) -> the web app and the MCP server ->
+the installed record -> the old images. An engine roll that does NOT read back healthy puts the jobs back and ends (exit 1)
+before 4b: the updater is never moved then. Why: the move used to come last, so an update stopped in the steps after the roll
+(found live: two installs, stopped in a silent stretch after the producers' step) left the updater job on its old image.
+The move (`container/updater/_shared/SI-UpdaterSelf.ps1`, both editions) builds the updater image of the SAME verified
+release -- `si-updater:v<build>-<commit 12>` from `container/updater/Dockerfile`, the SecurityInsight folder as the context,
+exactly as `Install-SIUpdaterJob.ps1` builds it; an image already in the registry (the run queues its build beside the engine
+build) is not rebuilt -- and points its OWN job (`caj-si-updater`) at it, then reads the job back. It is safe inside the run
+because a Container Apps job's template is read when an execution STARTS: changing the image does not touch the execution
+that is running (it finishes on the image it started with, and every later step of this run runs on that image); the next
+run starts on the new one. The post-roll then only reports the move. A release whose update script does not make the move
+(a release from before it -- for example a rollback to the release before) is moved by the post-roll, last, as before, so a
+rollback from the moved updater moves it back too. An operation still in flight on the
 job (409) is waited out (0, 10, 20, 40, 60 s), as PIM's self-stamp. Recorded on the job as tags (a merge, no new
 revision): `si-updater-image`, `si-updater-previous` (the image to point it back at by hand if the new one cannot start)
 and `si-updater-pending`. **A failed self-roll never fails the update:** the product IS updated and healthy, the job keeps
@@ -11131,6 +11210,33 @@ by the parity test.
   what turns it on (an Azure OpenAI deployment; `OpenAI_endpoint`, `OpenAI_deployment`, the key in Key Vault,
   `BuildSummaryByAI`; Get Started's AI step) -- never "Top 0 risky assets" (`Pages/Management/_AiSummaryOff.cshtml`,
   `RiskExec/AiSummaryNote.cs`). The Risk Analysis page points to the database list when the run kept none.
+- **The Top 50 lists and the key figures are worked out in the database, not row by row (#1212).** The rollup above and
+  the key figures used to read EVERY stored View row back into PowerShell (~4 KB of DetailJson decoded per row, then ~15
+  look-ups): ~5,400 rows a minute, ~4 h for 1.35 M rows at a large install. A Detailed run whose result is in SQL (and whose
+  Protection Score is the stored one) now works them out set-based (`engine/risk-analysis/_shared/RA-TopListsSql.ps1`,
+  `Invoke-RATopListsInSql`), on ONE connection (the seam's mode 'session'): the View rows a FindingId range at a time (the
+  clustered key; the range sized from the measured seconds; each range paced by SI-SqlPacing; the #1180 progress tick) into
+  a narrow work table (`#ra`: only the values the lists and figures read, out of DetailJson by OPENJSON -- never the JSON
+  itself), then GROUP BY / ORDER BY / TOP; only the results come back. One copy of every rule: where PowerShell decides a
+  value's meaning (a score's text -> `ConvertTo-RADouble`, a tier text -> its sort key, the six key-figure values ->
+  `Add-RAKpiRowFigures` once per distinct combination with its count, the patch cycle -> `Get-SIPatchCycle`) the DISTINCT
+  values go to that same function and its answer comes back as a small table. **What reads what** (searched 2026-11-12):
+  the lists go to the executive view (`sidata.RiskExecView` -> the web app's Executive Risk Analysis, Top 50 assets / Top
+  risks pages, the deck) -- name, key, tier, the two sums, findings, domains, the first 12 items, cmdb name + criticality;
+  per finding id / name / category / subcategory / severity / domain / affected assets / the two sums / its 5 hottest
+  assets -- and, with the AI summary on, to the shared AI snapshot and the AI prompt; the key figures go to the mail and the
+  executive view. Read ONLY by the AI prompt: the reference links, the cmdb id and data sensitivity, a finding's asset count
+  in all -- with the AI summary off they are not worked out at all. **The same result** (`SIv3-RaTop50SetBased`, real SQL,
+  the engine's own row loop and the database form on the same stored rows): the same lists in the same order, every value,
+  every key figure. Ties equal on every sort key are ordered by where each first appears (score, then write order) -- the
+  row loop now does the same (`FirstSeen`, its last sort key; before, a hashtable's order decided, random per process), and
+  the patch cycle's catch-up fixes equal in months and findings by their id. Sums are exact for whole numbers and binary
+  fractions (every shipped score); other decimals may differ in the last binary digit (the order of adding). **Declined**
+  (one plain line, nothing used, the row loop runs as before): a row with an asset LIST (ImpactedAssetsList & co,
+  ImpactedAssetIds) or a list / object where one value is read, a report whose column is a read column in another case,
+  a Protection Score counted in the run, a row count other than the run's, any error. A Summary run (few rows) and a run
+  in memory keep the row loop. The pass says one line with its time ("Top 50 lists and key figures: worked out in the
+  database in N s (...)") and its phase row.
 - **A remediation's link opens exactly its findings (#864).** `/Collection/Rows?c=..&fix=<key>` swaps in
   `CollectionViewSql.RowsOfFix` (`f.RemediationKey = @Fix`). It inherited `Rows`' #812 keyset (the opening view paged off
   the collection's risk index, whose "applies" test only looks for an AssetKey the fix plan removes): the page read the
@@ -12721,6 +12827,7 @@ client (`container/updater/_shared/SI-UpdaterInvardia.ps1`, `engine/_shared/SI-I
 | **When** | At the install's NIGHTLY run, the version its ring has. Faster only when Invardia starts "Update now" for the install; the frequent status-report job never rolls by itself. |
 | **State** | One update state for every install (`SI-Update-State`, the channel it was read from). A Community install made before this change carries its earlier record (`cfg.InstallState` `CommunityUpdateState`) over once. |
 | **What the edition decides** | Only which address an unlicensed install asks: the resource group's `edition` tag (else the job's `SI_UPDATER_SOURCE`) -- never which files the image carries. |
+| **The end of a run** | Every update execution, however it ends (done, failed, or stopped by an error after the run), writes a last line ("the update run has ended"), flushes its console output and waits a short, fixed time (15 seconds, never more than 30) before the container exits, so the log agent ships the last lines to the install's log. Nothing the update did changes. |
 
 **Connect this install to Invardia (opt-in).** A Community install sends nothing that identifies its tenant or its
 install -- no status report, no licence request, no install key claim, no "Update now" poll, no failure report -- unless

@@ -521,8 +521,48 @@ function Send-SICloseLoopMail {
     if ($Smtp.Off) { Write-Host '[INFO] mail is off (SI_Mail_Mode = none) -- the mail was not sent'; return $false }
     if (@($Smtp.Problems).Count) { throw ('the close-loop mail cannot be sent: ' + (@($Smtp.Problems) -join '; ')) }
     $r = Send-SIMail -Settings $Smtp -To $To -Subject $Subject -BodyHtml $BodyHtml -Priority 'Normal' -NoPdf:$NoPdf -Severity $Severity -Attachments @($Attachments | Where-Object { "$_".Trim() })
-    if (-not $r.Sent) { throw ('the close-loop mail was not sent: ' + $(if ($r.Error) { [string]$r.Error } else { 'the mail was not accepted' })) }
+    if (-not $r.Sent) {
+        # still THROWS (every caller records a mail only after it went out -- a hold must never read as sent); a mail held
+        # only because the send right could not be checked carries the mark, so the job can say it as a warning
+        $ex = [System.InvalidOperationException]::new('the close-loop mail was not sent: ' + $(if ($r.Error) { [string]$r.Error } else { 'the mail was not accepted' }))
+        if ($r.PSObject.Properties['Held'] -and "$($r.Held)".Trim()) { $ex.Data['SIMailHeld'] = [string]$r.Held }
+        throw $ex
+    }
     return $true
+}
+
+function Test-SIMailHeldUnreadable {
+    <# PURE. Is -Failure (an ErrorRecord, an exception, or an error text) a mail held ONLY because the send right could not
+       be checked (Send-SIMail's Held = 'check-unreadable')? Such a hold is said as a warning and never fails the step: it is
+       not a proven refusal (framework TRUST-1 point 3, live 2026-11-13). Anything else = $false. #>
+    param([AllowNull()]$Failure)
+    if ($null -eq $Failure) { return $false }
+    $ex = if ($Failure -is [System.Management.Automation.ErrorRecord]) { $Failure.Exception } elseif ($Failure -is [System.Exception]) { $Failure } else { $null }
+    $phrase = 'the send right on the shared mailbox could not be checked, so SecurityInsight does not send this time'
+    # a text that joins several failures (' | ') is a hold only when EVERY part is one -- a real failure is never hidden
+    $allHeld = { param([string]$t) $parts = @($t -split '\s\|\s' | ForEach-Object { $_.Trim() } | Where-Object { $_ }); $parts.Count -gt 0 -and @($parts | Where-Object { $_ -notmatch [regex]::Escape($phrase) }).Count -eq 0 }
+    while ($ex) {
+        if ($ex.Data -and $ex.Data.Contains('SIMailHeld') -and [string]$ex.Data['SIMailHeld'] -eq 'check-unreadable') { return $true }
+        # a sender that caught the hold and threw its own error with the text (the governance / digest mails do)
+        if (& $allHeld ([string]$ex.Message)) { return $true }
+        $ex = $ex.InnerException
+    }
+    if ($Failure -is [string]) { return (& $allHeld $Failure) }
+    $false
+}
+
+function Add-SIMailHeldNote {
+    <# The run's catalogue note si-mail-1104 (the send right could not be checked; mail held, the run whole) -- once per run,
+       in the run's notes (SI_RunNoteCodes) for an engine that sends a run report. The close-loop mail job sends none, and
+       the heartbeat's Warnings carry customer actions only -- so for the mail job the hold is seen in its log (WARN, with the
+       reason and Microsoft's answer) and in the stored check (cfg.InstallState MailRestriction state 'error'). Never throws. #>
+    param([string]$Step = 'close-loop-mail', [string]$Text = 'the mail send right could not be checked, so mail was held this run; the next run checks again')
+    try {
+        if (-not ($global:SI_RunNoteCodes -is [System.Collections.Generic.List[object]])) { $global:SI_RunNoteCodes = New-Object System.Collections.Generic.List[object] }
+        if (-not @($global:SI_RunNoteCodes | Where-Object { $_ -and [string]$_.Code -eq 'si-mail-1104' }).Count) {
+            $global:SI_RunNoteCodes.Add([pscustomobject]@{ Code = 'si-mail-1104'; Text = $Text; Step = $Step })
+        }
+    } catch { }
 }
 
 function Get-SICloseLoopTenantTag {

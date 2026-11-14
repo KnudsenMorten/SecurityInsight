@@ -1663,11 +1663,17 @@ function Invoke-SIEnrich {
                 # Any privileged logon counts (owner 2026-11-12): the Tier 0-2 accounts of this run's identity profile that
                 # logged on to a device in the window (DeviceLogonEvents FILTERED BY THOSE ACCOUNTS, never by device;
                 # incremental from the stored state in SI's storage, shared by the parts of the run). Feeds the
-                # AssetProfileByPrivilegedLogon rule (kind privilegedLogonTier). Never throws; a failed read is a run issue
-                # and those devices' privileged-logon source is UNKNOWN (said on the row), never "none".
+                # AssetProfileByPrivilegedLogon rule (kind privilegedLogonTier). Never throws; a failed read is a SCOPED NOTE
+                # with its catalogue code (#1227 -- it reaches the run report, never makes the run partial) and those devices'
+                # privileged-logon source is UNKNOWN (said on the row), never "none".
                 # SI_Endpoint_PrivilegedLogon_Mode: on (default) / shadow (computed + recorded, never the tier) / off
                 if ($plSettings.Mode -ne 'off') { $privLogonAsked = $true }
                 if ($privLogonAsked) { try {
+                    # #1223: the part that is running, in plain words -- a failure names it (live 2026-11-12 "Argument types do
+                    # not match" at every 3.1.10+ install, the line was not known). Reset first, so a failure never names a stale
+                    # part of an earlier part of the same process; cleared after the block.
+                    $global:SI_PrivilegedLogonPart = $null
+                    $global:SI_PrivilegedLogonPart = 'listing the devices'' main users'
                     # the device's frequent user(s) (the Exposure Graph correlation above): the primary user of the filters
                     $plPrimary = @{}
                     foreach ($r in $records) {
@@ -1675,10 +1681,13 @@ function Invoke-SIEnrich {
                         $ad = Get-SIRecordAadDeviceId -Metadata $r.Metadata; if ($ad) { $ad = $ad.ToLowerInvariant() }
                         if ($ad -and $userTierByDevice.ContainsKey($ad)) { $plPrimary[$md.ToLowerInvariant()] = @(@($userTierByDevice[$ad].MostFrequentUsers) | ForEach-Object { [string]$_.Upn } | Where-Object { $_ }) }
                     }
+                    $global:SI_PrivilegedLogonPart = 'opening the store of the sign-ins'
                     $plStore = New-SIPrivilegedLogonBlobStore -StorageContext $RunContext.StorageContext
+                    $global:SI_PrivilegedLogonPart = 'starting the read of the sign-ins'
                     $pl = Get-SIBulkPrivilegedLogons -MdeDeviceIds $deviceIds.ToArray() -RunId ([string]$RunContext.RunId) -Store $plStore -PrimaryUsers $plPrimary -Settings $plSettings
                     $privLogonByDevice = $pl.ByDevice
                     $plSum = $pl.Summary
+                    $global:SI_PrivilegedLogonPart = 'writing the summary line'
                     if ($plSum) {
                         # THE COMPARISON (owner 2026-11-12: "build all scenarios so we finetune this"): what each rule does in
                         # this part, the tenant's support cut-off and how many raises come from one-off / support-pattern logons
@@ -1688,9 +1697,14 @@ function Invoke-SIEnrich {
                             $plSum.FanOutMedian, $plSum.FanOutMad, $plSum.SupportCutOff, $plSum.SupportAccounts, $plSum.UserAccounts)
                     }
                 } catch {
-                    Add-SIEnrichIssue ('The privileged logons of the devices were not read ({0}) -- the privileged-logon tier is unknown for this run, not absent.' -f $_.Exception.Message)
+                    # #1227 (owner 2026-11-12: a new rule "must never break the pipeline"): a SCOPED note -- every device's
+                    # privileged-logon value is UNKNOWN (said on the row below), the run stays whole, never INCOMPLETE
+                    $plWhere = "$global:SI_PrivilegedLogonPart".Trim(); if (-not $plWhere) { $plWhere = 'an unnamed part' }
+                    $plText = 'The privileged logons of the devices were not read while {0} ({1}) -- the privileged-logon tier is unknown on every device this run; the run goes on without it.' -f $plWhere, $_.Exception.Message
+                    if (Get-Command -Name Write-SIPrivilegedLogonNote -ErrorAction SilentlyContinue) { Write-SIPrivilegedLogonNote -Code 'si-col-0502' -Text $plText }
+                    else { Write-Warning ($plText + ' [si-col-0502]') }
                     $privLogonByDevice = @{}
-                } }
+                } finally { $global:SI_PrivilegedLogonPart = $null } }
             }
         }
         elseif ($RunContext.Engine -eq 'identity') {

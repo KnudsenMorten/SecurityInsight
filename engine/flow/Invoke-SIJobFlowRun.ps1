@@ -330,7 +330,10 @@ $upkeepCleanup = {
             $d = Get-SIJobFlowDue -Definition $cleanDef -Previous $cleanFlow.Load() -NowUtc ([datetime]::UtcNow)
             if ($d.Action -eq 'Wait' -and $d.NextUtc) { ([datetime]$d.NextUtc).ToUniversalTime() } else { $null }
         }
-        $null = Invoke-SIDataStoppedRunCleanup -Invoke $cleanSql -SettingsInvoke $proStore.Invoke -IdleStaleHours $idleHours -Log $cleanLog -RaRunning $cleanRa -JobRunning $cleanJob -Jobs $cleanJobs -WakeCron $cleanCron -NextRunUtc $cleanNext -Beat $Beat
+        # #1218: the wake-up keeps what the last data sync decided to keep (SI_Data_KeepCollections, fewer while the database
+        # is 70 % full or more) -- never fewer: it only removes what the data sync would
+        $cleanKeep = Get-SIDataKeepCollectionsForWakeUp -Invoke $cleanSql -Setting (Get-SIDataKeepCollectionsSetting -Globals @{ SI_Data_KeepCollections = $global:SI_Data_KeepCollections })
+        $null = Invoke-SIDataStoppedRunCleanup -Invoke $cleanSql -SettingsInvoke $proStore.Invoke -IdleStaleHours $idleHours -Log $cleanLog -RaRunning $cleanRa -JobRunning $cleanJob -Jobs $cleanJobs -WakeCron $cleanCron -NextRunUtc $cleanNext -Beat $Beat -KeepCollections $cleanKeep
     } catch { & $say 'WARN' ('stopped runs were not removed by this wake-up ({0}) -- the next one tries again' -f $_.Exception.Message) }
 }
 # #1063 (3.0.30): a wake-up during a run (the entry's FlowBusy) does its one job -- the clean-up; it starts nothing
@@ -836,7 +839,7 @@ if ($runStore -and $runStore.PSObject.Methods['CloseEndedRunSteps']) {
 
 # ---- #945 (owner 2026-10-29; live, a customer install: the correlation step's execution ended Failed on 28 Oct 03:09Z and the run still
 # showed it running on 29 Oct, holding the install) -- EVERY wake-up, also one that finds the install busy, reads the
-# executions of the running run's open steps. An execution that has ENDED (Failed / Stopped / Succeeded) at least 20 minutes
+# executions of the running run's open steps. An execution that has ENDED (Failed / Stopped / Succeeded) at least 35 minutes
 # ago while its step still says Running closes the step with that result (Get-SIJobFlowEndedExecutionCloses), only while the
 # row still says Running with that execution. The run then goes on by the normal rules: the runner that holds it takes the
 # close over at its next poll, or the next runner resumes it (a failed step's dependants are skipped, the run ends).

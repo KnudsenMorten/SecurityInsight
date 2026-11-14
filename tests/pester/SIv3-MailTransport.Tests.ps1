@@ -218,6 +218,21 @@ Describe 'refusal until the restriction is verified' {
         $r.Sent | Should -BeFalse
         $r.Restriction.State | Should -Be 'unrestricted'
     }
+    It 'NEGATIVE (live 2026-11-13): Microsoft answers the probe with nothing usable -> HELD as "could not be checked" (never "not restricted"), Graph''s answer named' {
+        $http = { param($u, $t, $b) [pscustomobject]@{ StatusCode = 503; Body = '{"error":{"code":"ServiceUnavailable","message":"try later"}}' } }
+        $r = Send-SIMail -Settings (Get-SIMailSettings -Globals $script:Shared) -To 'a@contoso.example' -Subject 'S' -BodyHtml 'x' -Http $http -TokenProvider { New-FakeJwt } -NoPdf 6>$null
+        $r.Sent | Should -BeFalse
+        $r.Held | Should -Be 'check-unreadable'
+        $r.Restriction.State | Should -Be 'error'
+        $r.Error | Should -Match 'the send right on the shared mailbox could not be checked, so SecurityInsight does not send this time; the next run checks again'
+        $r.Error | Should -Not -Match 'not restricted to the shared mailbox' -Because 'nothing was proven -- it is not a refusal'
+        $r.Restriction.Detail | Should -Match ([regex]::Escape('(Microsoft Graph answered HTTP 503 ServiceUnavailable)'))
+    }
+    It 'a PROVEN refusal is never marked as held (unrestricted / not-granted keep their own, louder path)' {
+        $g = New-Graph -Allowed @('securityinsight@contoso.example', 'someone@contoso.example')
+        $r = Send-SIMail -Settings (Get-SIMailSettings -Globals $script:Shared) -To 'a@contoso.example' -Subject 'S' -BodyHtml 'x' -Http $g.Http -TokenProvider { New-FakeJwt } 6>$null
+        $r.Sent | Should -BeFalse; $r.Held | Should -Be ''
+    }
     It 'probe answers: 400 InvalidRecipients = allowed, 403 = denied, 404 = not-found' {
         Get-SIMailProbeVerdict -StatusCode 400 -Body '{"error":{"code":"ErrorInvalidRecipients","message":"x"}}' | Should -Be 'allowed'
         Get-SIMailProbeVerdict -StatusCode 403 -Body '{"error":{"code":"ErrorAccessDenied","message":"Access is denied."}}' | Should -Be 'denied'

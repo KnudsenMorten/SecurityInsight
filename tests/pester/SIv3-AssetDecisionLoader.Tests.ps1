@@ -279,20 +279,21 @@ Describe 'where the file is looked for' {
         # silence instead of "configured and missing", which is the same failure one step later.
         $src = @(Get-SIAssetDecisionSource -OverlayRoot 'Q:\nope' -SolutionRoot 'Q:\si')
         $src.Count     | Should -Be 2
-        $src[0].Path   | Should -Be 'Q:\nope\asset-decisions.custom.yaml'
-        $src[1].Path   | Should -Be 'Q:\si\config\asset-decisions.custom.yaml'
+        # compared with one separator: the product joins paths with the platform's own (Linux containers: '/')
+        ($src[0].Path -replace '[\\/]', '\') | Should -Be 'Q:\nope\asset-decisions.custom.yaml'
+        ($src[1].Path -replace '[\\/]', '\') | Should -Be 'Q:\si\config\asset-decisions.custom.yaml'
         $src[0].Exists | Should -BeFalse
     }
 
     It 'the overlay file sits at the overlay ROOT, not under shared\' {
         # shared\ is scanned recursively by Get-SIRuleSet; the root is not.
         $src = Get-SIAssetDecisionSource -OverlayRoot 'D:\si-data' -SolutionRoot 'C:\si'
-        @($src)[0].Path | Should -Be 'D:\si-data\asset-decisions.custom.yaml'
+        (@($src)[0].Path -replace '[\\/]', '\') | Should -Be 'D:\si-data\asset-decisions.custom.yaml'
     }
 
     It 'the in-tree file lives in config\, NOT in the detection-rule tree' {
         $src = Get-SIAssetDecisionSource -SolutionRoot 'C:\si'
-        @($src)[0].Path | Should -Be 'C:\si\config\asset-decisions.custom.yaml'
+        (@($src)[0].Path -replace '[\\/]', '\') | Should -Be 'C:\si\config\asset-decisions.custom.yaml'
     }
 
     It 'NO search path is inside asset-profiling-enrichment -- the rule loader would eat the file' {

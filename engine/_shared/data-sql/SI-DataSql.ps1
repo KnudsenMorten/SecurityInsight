@@ -2302,9 +2302,16 @@ function Invoke-SIDataAssetPropertiesPrune {
 #  "which can be removed"). Measured at a large install: sidata.Finding 10.9M rows / 30.8 GB, ~1M rows per Risk Analysis
 #  run, six collections all still 'Loading' (a stopped run never reaches the step that marks it complete).
 #
+#  OWNER 2026-11-12 (#1218, replaces the 2026-10-16 "newest complete + ONE before it"): "Last 7 runs" -- "If a database
+#  passes 70% full, SI keeps fewer and warns instead of hitting the limit." So What changed, the collection lists and the
+#  history pages go back a week. THE KEEP COUNT (Resolve-SIDataKeepCollections): SI_Data_KeepCollections (default 7, never
+#  below 2); while the database is at or above 70 % of its maximum one fewer per run (never below 2), said in one plain
+#  warning line; below 70 % the setting again. The functions below take it as -KeepCollections (2 when not given -- the
+#  old rule, the floor: every product caller passes the install's count).
+#
 #  THE RULE, per grain (Risk Analysis Detailed = sidata.Collection; Risk Analysis Summary = sidata.SummaryLoad):
-#    KEEP     the newest COMPLETE collection (what every view shows) and the complete one before it (the comparison
-#             between runs reads it); a complete collection whose rows a kept collection's not-complete report shows
+#    KEEP     the newest -KeepCollections COMPLETE collections (the newest is what every view shows; the ones before it are
+#             what the comparison between runs, the collection lists and the history read); a complete collection whose rows a kept collection's not-complete report shows
 #             (sidata.CollectionReportCarry: the last complete result of that report); every collection still 'Loading'
 #             that is NEWER than the newest complete one (a run in progress -- one run at a time per install, the pipeline
 #             lock -- or one not superseded yet); everything, while no complete collection of the grain exists.
@@ -2372,21 +2379,28 @@ SET NOCOUNT ON;
 IF COL_LENGTH('sidata.Collection', 'RetiredAt') IS NULL
 BEGIN
     SELECT CAST(NULL AS nvarchar(16)) AS Grain, CAST(NULL AS int) AS CollectionId, CAST(NULL AS datetime2(3)) AS CollectionTime, CAST(NULL AS nvarchar(16)) AS Status,
-           CAST(NULL AS datetime2(0)) AS RetiredAt, CAST(0 AS int) AS HasRows, CAST(0 AS int) AS Pending, CAST(0 AS int) AS Published, CAST(NULL AS nvarchar(32)) AS RetiredWhy WHERE 1 = 0;
+           CAST(NULL AS datetime2(0)) AS RetiredAt, CAST(0 AS int) AS HasRows, CAST(0 AS int) AS Pending, CAST(0 AS int) AS Published, CAST(NULL AS nvarchar(32)) AS RetiredWhy, CAST(0 AS int) AS Untrusted, CAST(NULL AS nvarchar(2000)) AS UntrustedWhy WHERE 1 = 0;
     RETURN;
 END
 DECLARE @pend nvarchar(200) = CASE WHEN COL_LENGTH('sidata.Collection', 'RaCompletedAt') IS NOT NULL THEN N'CASE WHEN c.RaCompletedAt IS NOT NULL THEN 1 ELSE 0 END' ELSE N'0' END;
+-- #1226: Untrusted = 1 when the collection's OWN verdict (sidata.CollectionTrust, written by Risk Analysis) says it was built
+-- on incomplete source data; no verdict = 0 (a collection from before the verdict existed counts as before)
+DECLARE @utD nvarchar(300) = CASE WHEN OBJECT_ID('sidata.CollectionTrust') IS NOT NULL THEN N'CASE WHEN EXISTS (SELECT 1 FROM sidata.CollectionTrust AS t WHERE t.CollectionTime = c.CollectionTime AND t.Grain = N''Detailed'' AND t.Trusted = 0) THEN 1 ELSE 0 END' ELSE N'0' END;
+DECLARE @utS nvarchar(300) = CASE WHEN OBJECT_ID('sidata.CollectionTrust') IS NOT NULL THEN N'CASE WHEN EXISTS (SELECT 1 FROM sidata.CollectionTrust AS t WHERE t.CollectionTime = l.CollectionTime AND t.Grain = N''Summary'' AND t.Trusted = 0) THEN 1 ELSE 0 END' ELSE N'0' END;
+-- the verdict's own words (why it is not trusted), for the per-collection line
+DECLARE @uwD nvarchar(300) = CASE WHEN OBJECT_ID('sidata.CollectionTrust') IS NOT NULL THEN N'(SELECT TOP (1) t.Why FROM sidata.CollectionTrust AS t WHERE t.CollectionTime = c.CollectionTime AND t.Grain = N''Detailed'' AND t.Trusted = 0)' ELSE N'CAST(NULL AS nvarchar(2000))' END;
+DECLARE @uwS nvarchar(300) = CASE WHEN OBJECT_ID('sidata.CollectionTrust') IS NOT NULL THEN N'(SELECT TOP (1) t.Why FROM sidata.CollectionTrust AS t WHERE t.CollectionTime = l.CollectionTime AND t.Grain = N''Summary'' AND t.Trusted = 0)' ELSE N'CAST(NULL AS nvarchar(2000))' END;
 -- ONE TRUSTED RUN: Published = 1 on the collection of each grain the web app shows (sidata.PublishedRun 'current')
 DECLARE @pubD nvarchar(300) = CASE WHEN OBJECT_ID('sidata.PublishedRun') IS NOT NULL THEN N'CASE WHEN EXISTS (SELECT 1 FROM sidata.PublishedRun AS p WHERE p.Name = N''current'' AND p.DetailedCollectionId = c.CollectionId) THEN 1 ELSE 0 END' ELSE N'0' END;
 DECLARE @pubS nvarchar(300) = CASE WHEN OBJECT_ID('sidata.PublishedRun') IS NOT NULL THEN N'CASE WHEN EXISTS (SELECT 1 FROM sidata.PublishedRun AS p WHERE p.Name = N''current'' AND p.SummaryCollectionTime = l.CollectionTime) THEN 1 ELSE 0 END' ELSE N'0' END;
 DECLARE @q nvarchar(max) = N'SELECT N''Detailed'' AS Grain, c.CollectionId, c.CollectionTime, c.Status, c.RetiredAt,
-       CASE WHEN c.RetiredAt IS NOT NULL AND EXISTS (SELECT 1 FROM sidata.Finding AS f WHERE f.CollectionId = c.CollectionId) THEN 1 ELSE 0 END AS HasRows, ' + @pend + N' AS Pending, ' + @pubD + N' AS Published, c.RetiredWhy
+       CASE WHEN c.RetiredAt IS NOT NULL AND EXISTS (SELECT 1 FROM sidata.Finding AS f WHERE f.CollectionId = c.CollectionId) THEN 1 ELSE 0 END AS HasRows, ' + @pend + N' AS Pending, ' + @pubD + N' AS Published, c.RetiredWhy, ' + @utD + N' AS Untrusted, ' + @uwD + N' AS UntrustedWhy
 FROM sidata.Collection AS c WHERE c.Kind = N''Detailed''';
 IF OBJECT_ID('sidata.SummaryLoad') IS NOT NULL AND COL_LENGTH('sidata.SummaryLoad', 'RetiredAt') IS NOT NULL AND OBJECT_ID('sidata.SummaryRow') IS NOT NULL
     SET @q += N'
 UNION ALL
 SELECT N''Summary'', CAST(NULL AS int), l.CollectionTime, l.Status, l.RetiredAt,
-       CASE WHEN l.RetiredAt IS NOT NULL AND EXISTS (SELECT 1 FROM sidata.SummaryRow AS s WHERE s.CollectionTime = l.CollectionTime) THEN 1 ELSE 0 END, 0, ' + @pubS + N', l.RetiredWhy
+       CASE WHEN l.RetiredAt IS NOT NULL AND EXISTS (SELECT 1 FROM sidata.SummaryRow AS s WHERE s.CollectionTime = l.CollectionTime) THEN 1 ELSE 0 END, 0, ' + @pubS + N', l.RetiredWhy, ' + @utS + N', ' + @uwS + N'
 FROM sidata.SummaryLoad AS l';
 SET @q += N' ORDER BY 1, 3 DESC';
 EXEC sp_executesql @q;
@@ -2409,7 +2423,9 @@ function Get-SIDataCollectionRetentionPlan {
         collection that is KEPT or acted on -- @{ Grain; CollectionId; CollectionTime; Status; Action; Why; Reason }:
           Keep     never touched (Reason says why)
           Retire   its rows are removed now; Why = 'abandoned' (a 'Loading' collection older than the newest complete one)
-                   | 'superseded' (a complete one older than the newest complete one and the one before it)
+                   | 'superseded' (a complete one older than the newest -KeepCollections complete ones)
+        -KeepCollections: how many complete collections per grain are kept (#1218; at least 2 whatever is given -- the newest
+        and the one before it are never removed; 2 when not given).
           Finish   marked by an earlier run whose removal did not finish -- the rest of its rows are removed now
         A marked collection with no rows left is not listed. The newest complete collection of a grain is never Retire.
         #746: a 'Loading' collection older than -StaleDays before -NowUtc that is not the newest collection of its grain and
@@ -2423,7 +2439,10 @@ function Get-SIDataCollectionRetentionPlan {
         the published one, belongs to no live run -- Retire 'stopped run' (-IdleReason says why). Never a complete one.
     #>
     param([AllowEmptyCollection()][object[]]$Collections = @(), [AllowEmptyCollection()][object[]]$CarryLinks = @(),
-          [datetime]$NowUtc = [datetime]::UtcNow, [int]$StaleDays = 7, [double]$IdleStaleHours = 0, $IdleBeforeUtc = $null, [string]$IdleReason = '')
+          [datetime]$NowUtc = [datetime]::UtcNow, [int]$StaleDays = 7, [double]$IdleStaleHours = 0, $IdleBeforeUtc = $null, [string]$IdleReason = '',
+          [int]$KeepCollections = 2)
+    # #1218: never below the old rule -- the newest complete collection and the one before it are always kept
+    $keepN = [Math]::Max(2, $KeepCollections)
     $g = { param($r, [string]$n) $v = $null; if ($r -is [System.Collections.IDictionary]) { if ($r.Contains($n)) { $v = $r[$n] } } elseif ($null -ne $r -and $r.PSObject.Properties[$n]) { $v = $r.$n }; if ($v -is [System.DBNull]) { $null } else { $v } }
     $rows = New-Object System.Collections.Generic.List[object]
     foreach ($r in @($Collections)) {
@@ -2434,6 +2453,8 @@ function Get-SIDataCollectionRetentionPlan {
         $rows.Add([pscustomobject]@{ Grain = $grain; CollectionId = $(if ($null -ne $id) { [int]$id } else { $null }); CollectionTime = $t; Status = [string](& $g $r 'Status')
                                      Retired = ($null -ne (& $g $r 'RetiredAt')); HasRows = ([int](& $g $r 'HasRows') -eq 1); Pending = ([int](& $g $r 'Pending') -eq 1)
                                      Published = ([int](& $g $r 'Published') -eq 1)
+                                     # #1226: its own verdict says it was built on incomplete source data (no verdict = trusted)
+                                     Untrusted = ([int](& $g $r 'Untrusted') -eq 1); UntrustedWhy = [string](& $g $r 'UntrustedWhy')
                                      # #892 B1: when and why it was marked (only a marked one has them)
                                      RetiredAt = (ConvertTo-SIDataUtc (& $g $r 'RetiredAt')); RetiredWhy = [string](& $g $r 'RetiredWhy') })
     }
@@ -2463,7 +2484,13 @@ function Get-SIDataCollectionRetentionPlan {
             $out.Add((& $item $x 'Finish' '' 'its rows were being removed when an earlier run stopped -- the rest is removed now'))
         }
         $live = @($all | Where-Object { -not $_.Retired })
-        $complete = @($live | Where-Object { $_.Status -eq 'Complete' })
+        $completeAll = @($live | Where-Object { $_.Status -eq 'Complete' })
+        # #1226: ONLY TRUSTED COLLECTIONS COUNT toward the kept ones -- a complete collection whose own verdict says it was built on
+        # incomplete source data never pushes a trusted one out. Fall-back: a grain with NO trusted complete collection keeps
+        # the old rule over every complete one (the database never grows without end while every run is untrusted).
+        $complete = @($completeAll | Where-Object { -not $_.Untrusted })
+        $trustRule = [bool]$complete.Count
+        if (-not $trustRule) { $complete = $completeAll }
         # #746: a run that stopped long ago, with a newer run of the same grain after it, is abandoned whether or not any
         # collection is complete -- never the newest collection of the grain, never one whose result waits to be completed
         $newestAny = if ($live.Count) { $live[0].CollectionTime } else { $null }
@@ -2487,16 +2514,28 @@ function Get-SIDataCollectionRetentionPlan {
         $newest = $complete[0]
         $keep = @{}
         $keep[[string]$newest.CollectionTime.Ticks] = 'the newest complete collection -- what every view shows'
-        if ($complete.Count -gt 1) { $keep[[string]$complete[1].CollectionTime.Ticks] = 'the complete collection before the newest -- the comparison between runs reads it' }
+        # #1218: the newest -KeepCollections complete ones (What changed, the collection lists and the history read them)
+        for ($ki = 1; $ki -lt [Math]::Min($keepN, $complete.Count); $ki++) {
+            $keep[[string]$complete[$ki].CollectionTime.Ticks] = [string]::Format($inv, 'one of the newest {0} complete collections -- What changed, the collection lists and the history read it', $keepN)
+        }
         # ONE TRUSTED RUN: the published run's collection is what every view shows -- kept, however many newer ones there are
-        foreach ($x in @($complete | Where-Object { $_.Published })) { $keep[[string]$x.CollectionTime.Ticks] = 'the published run -- what every view shows' }
+        foreach ($x in @($completeAll | Where-Object { $_.Published })) { $keep[[string]$x.CollectionTime.Ticks] = 'the published run -- what every view shows' }
+        # #1226 (Invardia 2026-11-13, the owner's "previous failed/incomplete collections must not be sent in -- they must be
+        # pruned"): AT MOST ONE untrusted collection is kept -- the newest, when it is newer than the newest trusted one: for
+        # diagnosis and for what the next run carries from; never shown, never sent. Every other untrusted one is removed (a
+        # collection a kept one carries rows from is kept by the carried-from rule below, by name, not by a count).
+        if ($trustRule) {
+            foreach ($x in @($completeAll | Where-Object { $_.Untrusted -and $_.CollectionTime -gt $newest.CollectionTime } | Select-Object -First 1)) {
+                if (-not $keep.ContainsKey([string]$x.CollectionTime.Ticks)) { $keep[[string]$x.CollectionTime.Ticks] = 'not trusted (built on incomplete source data), the newest such collection -- kept for diagnosis and for what the next run carries from; never shown, never sent' }
+            }
+        }
         # the collections a kept collection's not-complete reports show their last complete rows from (Detailed only), and theirs
         if ($grain -eq 'Detailed') {
-            $byId = @{}; foreach ($x in $complete) { if ($null -ne $x.CollectionId) { $byId[[string]$x.CollectionId] = $x } }
+            $byId = @{}; foreach ($x in $completeAll) { if ($null -ne $x.CollectionId) { $byId[[string]$x.CollectionId] = $x } }
             $changed = $true
             while ($changed) {
                 $changed = $false
-                foreach ($x in @($complete | Where-Object { $keep.ContainsKey([string]$_.CollectionTime.Ticks) })) {
+                foreach ($x in @($completeAll | Where-Object { $keep.ContainsKey([string]$_.CollectionTime.Ticks) })) {
                     if ($null -eq $x.CollectionId -or -not $from.ContainsKey([string]$x.CollectionId)) { continue }
                     foreach ($fid in $from[[string]$x.CollectionId]) {
                         $src = $byId[[string]$fid]
@@ -2520,7 +2559,16 @@ function Get-SIDataCollectionRetentionPlan {
                 $out.Add((& $item $x 'Retire' 'abandoned' ([string]::Format($inv, 'its run stopped or failed before it was complete; the newer collection of {0:yyyy-MM-dd HH:mm} UTC is complete', $newest.CollectionTime))))
                 continue
             }
-            $out.Add((& $item $x 'Retire' 'superseded' 'older than the newest complete collection and the one before it'))
+            # #1226: an untrusted complete collection older than the newest trusted one: never shown, never counted -- removed
+            if ($trustRule -and $x.Untrusted) {
+                $why = if ($x.CollectionTime -gt $newest.CollectionTime) { 'built on incomplete source data, and a newer collection like it is the one kept' }
+                       else { [string]::Format($inv, 'built on incomplete source data; the newer trusted collection of {0:yyyy-MM-dd HH:mm} UTC replaces it', $newest.CollectionTime) }
+                # (Invardia 2026-11-13) the line at removal names the collection's OWN verdict, so a read-back shows which went and why
+                if ("$($x.UntrustedWhy)".Trim()) { $why += ('; its run''s own verdict: {0}' -f "$($x.UntrustedWhy)".Trim()) }
+                $out.Add((& $item $x 'Retire' 'untrusted' $why))
+                continue
+            }
+            $out.Add((& $item $x 'Retire' 'superseded' ([string]::Format($inv, 'older than the newest {0} complete collections', $keepN))))
         }
     }
     , $out.ToArray()
@@ -2540,10 +2588,10 @@ function Get-SIDataRetireMarkSql {
     #>
     param([Parameter(Mandatory)][ValidateSet('Detailed', 'Summary')][string]$Grain, [switch]$Idle)
     if ($Grain -eq 'Summary') {
-        return @'
+        $sum = @'
 SET NOCOUNT ON;
 DECLARE @stale datetime2(3) = TRY_CONVERT(datetime2(3), NULLIF(@StaleBefore, N''), 126);
--- ONE TRUSTED RUN: the published run's Summary is never marked, whatever the caller asks (in ONE transaction
+{TRUST}-- ONE TRUSTED RUN: the published run's Summary is never marked, whatever the caller asks (in ONE transaction
 -- under the publisher's app lock, the pointer checked again in the UPDATE)
 SET XACT_ABORT ON;
 BEGIN TRANSACTION;
@@ -2559,14 +2607,14 @@ END
 UPDATE l SET RetiredAt = SYSUTCDATETIME(), RetiredWhy = LEFT(@Why, 32)
 FROM sidata.SummaryLoad AS l
 WHERE l.CollectionTime = CONVERT(datetime2(3), @CollectionTime, 126) AND l.RetiredAt IS NULL AND (@pubT IS NULL OR l.CollectionTime <> @pubT)
-  AND ((SELECT COUNT(*) FROM sidata.SummaryLoad AS x WHERE x.Status = N'Complete' AND x.RetiredAt IS NULL AND x.CollectionTime > l.CollectionTime)
-      >= CASE WHEN l.Status = N'Complete' THEN 2 ELSE 1 END
+  AND ({GUARD}
     OR (l.Status <> N'Complete' AND @stale IS NOT NULL AND l.CollectionTime < @stale
         AND EXISTS (SELECT 1 FROM sidata.SummaryLoad AS y WHERE y.RetiredAt IS NULL AND y.CollectionTime > l.CollectionTime)));
 DECLARE @n int = @@ROWCOUNT;
 COMMIT TRANSACTION;
 SELECT @n;
 '@
+        return $sum.Replace('{TRUST}', (Get-SIDataRetireTrustSql -Part Declare -Grain 'Summary')).Replace('{GUARD}', (Get-SIDataRetireTrustSql -Part Guard -Grain 'Summary'))
     }
     $idleDeclare = ''; $idleCase = ''
     if ($Idle) {
@@ -2601,8 +2649,7 @@ END
 UPDATE c SET RetiredAt = SYSUTCDATETIME(), RetiredWhy = LEFT(@Why, 32)
 FROM sidata.Collection AS c
 WHERE c.CollectionId = @c AND c.Kind = N'Detailed' AND c.RetiredAt IS NULL AND (@pub IS NULL OR c.CollectionId <> @pub)
-  AND ((SELECT COUNT(*) FROM sidata.Collection AS x WHERE x.Kind = N'Detailed' AND x.Status = N'Complete' AND x.RetiredAt IS NULL AND x.CollectionTime > c.CollectionTime)
-      >= CASE WHEN c.Status = N'Complete' THEN 2 ELSE 1 END
+  AND ({GUARD}
     OR (c.Status <> N'Complete' AND @stale IS NOT NULL AND c.CollectionTime < @stale
         AND EXISTS (SELECT 1 FROM sidata.Collection AS y WHERE y.Kind = N'Detailed' AND y.RetiredAt IS NULL AND y.CollectionTime > c.CollectionTime)){CASE});
 DECLARE @n int = @@ROWCOUNT;
@@ -2611,7 +2658,35 @@ IF @n > 0 AND COL_LENGTH('sidata.Collection', 'ViewsReadyAt') IS NOT NULL
 COMMIT TRANSACTION;
 SELECT @n;
 '@
-    $sql.Replace('{IDLE}', $idleDeclare).Replace('{CASE}', $idleCase)
+    $sql.Replace('{IDLE}', ($idleDeclare + (Get-SIDataRetireTrustSql -Part Declare -Grain 'Detailed'))).Replace('{CASE}', $idleCase).Replace('{GUARD}', (Get-SIDataRetireTrustSql -Part Guard -Grain 'Detailed'))
+}
+
+function Get-SIDataRetireTrustSql {
+    <#
+        #1226 ONLY TRUSTED COLLECTIONS COUNT -- the database's own half of the rule (Get-SIDataCollectionRetentionPlan). -Part
+        Declare: @ut, the collections of the grain whose own verdict (sidata.CollectionTrust) says untrusted (none when the table
+        is not there: every collection counts, as before). -Part Guard: the mark is accepted for
+          a TRUSTED complete collection      -- only with 2 newer trusted complete ones not marked;
+          an UNTRUSTED complete collection   -- with 1 newer complete one of any kind (at most one untrusted collection is kept:
+                                                the newest; the newest complete collection of a grain is never marked);
+          a collection not complete          -- with 1 newer complete one (the old rule).
+        The guard reads the outer alias of the mark's UPDATE: c (Detailed, sidata.Collection) or l (Summary, sidata.SummaryLoad).
+    #>
+    param([Parameter(Mandatory)][ValidateSet('Declare', 'Guard')][string]$Part, [Parameter(Mandatory)][ValidateSet('Detailed', 'Summary')][string]$Grain)
+    if ($Part -eq 'Declare') {
+        return @"
+DECLARE @ut TABLE (CollectionTime datetime2(3) NOT NULL PRIMARY KEY);
+IF OBJECT_ID('sidata.CollectionTrust') IS NOT NULL
+    INSERT @ut (CollectionTime) EXEC sp_executesql N'SELECT DISTINCT CollectionTime FROM sidata.CollectionTrust WHERE Grain = N''$Grain'' AND Trusted = 0';
+
+"@
+    }
+    if ($Grain -eq 'Detailed') { $o = 'c'; $from = "sidata.Collection AS x WHERE x.Kind = N'Detailed' AND x.Status = N'Complete' AND x.RetiredAt IS NULL AND x.CollectionTime > c.CollectionTime" }
+    else { $o = 'l'; $from = "sidata.SummaryLoad AS x WHERE x.Status = N'Complete' AND x.RetiredAt IS NULL AND x.CollectionTime > l.CollectionTime" }
+    $trustedNewer = "(SELECT COUNT(*) FROM $from AND NOT EXISTS (SELECT 1 FROM @ut AS u2 WHERE u2.CollectionTime = x.CollectionTime))"
+    $anyNewer = "(SELECT COUNT(*) FROM $from)"
+    $isUt = "EXISTS (SELECT 1 FROM @ut AS u WHERE u.CollectionTime = $o.CollectionTime)"
+    "(($o.Status = N'Complete' AND NOT $isUt AND $trustedNewer >= 2)`n      OR ($o.Status = N'Complete' AND $isUt AND $anyNewer >= 1)`n      OR ($o.Status <> N'Complete' AND $anyNewer >= 1))"
 }
 
 $script:SIDataRetireTables = [ordered]@{
@@ -2631,7 +2706,7 @@ function Get-SIDataRetireBatchSql {
     param([Parameter(Mandatory)][ValidateSet('Detailed', 'Summary')][string]$Grain,
           [Parameter(Mandatory)][ValidateSet('IssueContext', 'RaStage', 'RaDefenderKey', 'Recommendation', 'Finding', 'SummaryAsset', 'SummaryRow')][string]$Table,
           [switch]$DataSyncMarkedBefore)
-    $since = if ($DataSyncMarkedBefore -and $Grain -eq 'Detailed') { " AND m.RetiredAt < CONVERT(datetime2(0), @MarkedBefore, 126) AND m.RetiredWhy IN (N'superseded', N'abandoned', N'stopped run')" } else { '' }
+    $since = if ($DataSyncMarkedBefore -and $Grain -eq 'Detailed') { " AND m.RetiredAt < CONVERT(datetime2(0), @MarkedBefore, 126) AND m.RetiredWhy IN (N'superseded', N'abandoned', N'stopped run', N'untrusted')" } else { '' }
     $marked = if ($Grain -eq 'Summary') { "EXISTS (SELECT 1 FROM sidata.SummaryLoad AS m WHERE m.CollectionTime = CONVERT(datetime2(3), @CollectionTime, 126) AND m.RetiredAt IS NOT NULL)" }
               else { "EXISTS (SELECT 1 FROM sidata.Collection AS m WHERE m.CollectionId = CONVERT(int, @CollectionId) AND m.Kind = N'Detailed' AND m.RetiredAt IS NOT NULL$since)" }
     $where = switch ($Table) {
@@ -2649,7 +2724,7 @@ $script:SIDataRetireRangeKeys = [ordered]@{ Finding = 'FindingId'; Recommendatio
 # the mark every range statement carries (the collection marked; with @mb, only a mark the data sync made before it) -- the range
 # driver's own text (kept byte for byte in its statement; a test holds the two equal), used by the bounds of several ranges and each
 # of those ranges (@c, @mb declared by the statement)
-$script:SIDataRetireMarkExpr = "EXISTS (SELECT 1 FROM sidata.Collection AS m WHERE m.CollectionId = @c AND m.Kind = N'Detailed' AND m.RetiredAt IS NOT NULL AND (@mb IS NULL OR (m.RetiredAt < @mb AND m.RetiredWhy IN (N'superseded', N'abandoned', N'stopped run'))))"
+$script:SIDataRetireMarkExpr = "EXISTS (SELECT 1 FROM sidata.Collection AS m WHERE m.CollectionId = @c AND m.Kind = N'Detailed' AND m.RetiredAt IS NOT NULL AND (@mb IS NULL OR (m.RetiredAt < @mb AND m.RetiredWhy IN (N'superseded', N'abandoned', N'stopped run', N'untrusted'))))"
 # the time one range (or one wave of ranges at once) aims at: the next range's size follows it (Get-SIDataNextSize); a wake-up's
 # removal ends two of them before the next wake-up (Get-SIDataHousekeepingWindow)
 $script:SIDataRetireAimMs = 5000
@@ -2670,7 +2745,7 @@ function Get-SIDataRetireRangeSql {
     #>
     param([Parameter(Mandatory)][ValidateSet('Finding', 'Recommendation')][string]$Table)
     $k = $script:SIDataRetireRangeKeys[$Table]
-    $mark = "EXISTS (SELECT 1 FROM sidata.Collection AS m WHERE m.CollectionId = @c AND m.Kind = N'Detailed' AND m.RetiredAt IS NOT NULL AND (@mb IS NULL OR (m.RetiredAt < @mb AND m.RetiredWhy IN (N'superseded', N'abandoned', N'stopped run'))))"
+    $mark = "EXISTS (SELECT 1 FROM sidata.Collection AS m WHERE m.CollectionId = @c AND m.Kind = N'Detailed' AND m.RetiredAt IS NOT NULL AND (@mb IS NULL OR (m.RetiredAt < @mb AND m.RetiredWhy IN (N'superseded', N'abandoned', N'stopped run', N'untrusted'))))"
     $markQ = $mark.Replace("'", "''")
     @"
 SET NOCOUNT ON;
@@ -3099,7 +3174,10 @@ function Invoke-SIDataCollectionRetention {
           [scriptblock]$ShouldStop,
           # 2026-11-10 -Pace (the wake-up with nothing going, Invoke-SIDataStoppedRunCleanup): the large tables go in several key
           # ranges at once (Invoke-SIDataRetireRangesWide); the hashtable is kept by the caller and tells it how wide it went
-          [hashtable]$Pace)
+          [hashtable]$Pace,
+          # #1218: how many complete collections per grain are kept (Resolve-SIDataKeepCollections: SI_Data_KeepCollections,
+          # fewer while the database is 70 % full or more); at least 2. Not given = 2, the old rule -- every product caller passes it
+          [int]$KeepCollections = 2)
     if (-not $Log) { $Log = { param([string]$level, [string]$msg) Write-Host ('[{0}] {1}' -f $level, $msg) } }
     $staleText = if ($StaleDays -gt 0) { Format-SIDataSqlTime -Time ($NowUtc.ToUniversalTime().AddDays(-$StaleDays)) } else { '' }
     $idleText = if ($null -ne $IdleBeforeUtc) { Format-SIDataSqlTime -Time (([datetime]$IdleBeforeUtc).ToUniversalTime()) } elseif ($IdleStaleHours -gt 0) { Format-SIDataSqlTime -Time ($NowUtc.ToUniversalTime().AddHours(-$IdleStaleHours)) } else { '' }
@@ -3120,7 +3198,7 @@ function Invoke-SIDataCollectionRetention {
         $links = @(@(& $Invoke (Get-SIDataRetentionCarrySql) @{} 'reader') | ForEach-Object { $_ } | Where-Object { $null -ne $_ })
         # the plan answers as ONE array (', $out.ToArray()'): assigned first, then enumerated -- @(...) around the call would
         # make it a list holding that array as its one item
-        $planRaw = Get-SIDataCollectionRetentionPlan -Collections $state -CarryLinks $links -NowUtc $NowUtc -StaleDays $StaleDays -IdleStaleHours $IdleStaleHours -IdleBeforeUtc $IdleBeforeUtc -IdleReason $IdleReason
+        $planRaw = Get-SIDataCollectionRetentionPlan -Collections $state -CarryLinks $links -NowUtc $NowUtc -StaleDays $StaleDays -IdleStaleHours $IdleStaleHours -IdleBeforeUtc $IdleBeforeUtc -IdleReason $IdleReason -KeepCollections $KeepCollections
         $plan = @(foreach ($x in @($planRaw)) { if ($null -ne $x) { $x } })
         # #882: only the kinds asked for are acted on (the rest of the plan is kept as it is, and said as kept)
         if (@($OnlyWhy).Count) { $plan = @(foreach ($x in $plan) { if ($x.Action -in 'Retire', 'Finish' -and @($OnlyWhy) -notcontains [string]$x.Why) { $x.Action = 'Keep'; $x.Reason = 'left to the data sync and to a wake-up with no run running' }; $x }) }
@@ -3139,7 +3217,7 @@ function Invoke-SIDataCollectionRetention {
                 # mark (#882) made BEFORE the running pipeline run started goes the same way as the data sync's marks -- the
                 # run that could have been loading it is over, and a marked collection is never derived or shown again. A mark
                 # made during this run still waits (the rule below), and the owner floor still applies.
-                elseif ($x.Action -eq 'Finish' -and [string]$x.RetiredWhy -notin 'superseded', 'abandoned', 'stopped run') { $x.Action = 'Keep'; $x.Reason = 'marked for another reason -- its rows are removed by a wake-up with no run going' }
+                elseif ($x.Action -eq 'Finish' -and [string]$x.RetiredWhy -notin 'superseded', 'abandoned', 'stopped run', 'untrusted') { $x.Action = 'Keep'; $x.Reason = 'marked for another reason -- its rows are removed by a wake-up with no run going' }
                 elseif ($x.Action -eq 'Finish' -and ($null -eq $x.RetiredAt -or $x.RetiredAt -ge $markedBefore)) { $x.Action = 'Keep'; $x.Reason = 'marked after the running pipeline run started -- its rows are removed once that run is over' }
                 elseif ($x.Action -eq 'Finish' -and $x.Status -ne 'Complete' -and $x.CollectionTime -ge $floor) { $x.Action = 'Keep'; $x.Reason = 'still loading and started after the Risk Analysis going now -- a live run may own it' }
                 $x })
@@ -3169,6 +3247,9 @@ function Invoke-SIDataCollectionRetention {
                 if ($isIdle) { $mp['IdleBefore'] = $idleText }
                 $m = [int](& $Invoke (Get-SIDataRetireMarkSql -Grain $p.Grain -Idle:([bool]$isIdle)) $mp 'scalar')
                 if ($m -ne 1) { $out.Refused += $p; continue }
+                # framework IMAGE-PRUNE / TRUST point 5 (Invardia 2026-11-12): THE DECISION IS SAID PER COLLECTION, recorded (the
+                # mark) BEFORE any of its rows is removed. Never fails the step.
+                try { & $Log 'INFO' ('collections : collection {0} ({1}, {2}) marked removed{3} -- {4}' -f $prm.CollectionId, $p.Grain, $tText, $(if ([string]$p.Why -eq 'untrusted') { ' as untrusted' } else { '' }), $(if ("$($p.Reason)".Trim()) { "$($p.Reason)".Trim() } else { [string]$p.Why })) } catch { }
                 if ($MarkOnly) { $marked.Add($p); continue }
             }
             # #1038 part 3: THE ONE REMOVAL (Remove-SIDataCollectionRows) -- the seam a partition truncate takes over (part 2)
@@ -3183,6 +3264,8 @@ function Invoke-SIDataCollectionRetention {
             # a removal its time budget cut short is marked (RetiredAt) and finished by the next call (Finish) -- never shown again
             if (-not $rm.Done -or [datetime]::UtcNow -ge $deadline) { $out.Stopped = $true; break }
             $out.Removed += $p
+            # ... and its result as it goes (the trend totals stay)
+            try { & $Log 'INFO' ('collections : collection {0} ({1}, {2}): its findings are removed ({3} row(s)); its totals for the trends stay' -f $prm.CollectionId, $p.Grain, $tText, (@($rm.Rows.Values) | Measure-Object -Sum).Sum) } catch { }
         }
         $out['Marked'] = $marked.ToArray()
         if ($MarkOnly) {
@@ -3708,7 +3791,7 @@ function Invoke-SIDataStoppedRunCleanup {
         batch, and the moment one starts the removal stops between two ranges. #1063 (owner 2026-11-03: "Both"): WHILE a
         pipeline run goes (with -RaRunning), the #882 marks are made AND the rows of collections marked BEFORE the run began
         are removed (#892's -FinishOnly guards), paced by the database's load, giving way to a data out. It never removes the newest complete collection
-        or the one before it (#717 -- the plan and the database's mark), never the published one. Progress -- collections and
+        or the one before it (#717 -- the plan and the database's mark), nor any of the newest -KeepCollections (#1218), never the published one. Progress -- collections and
         rows left, paused and why -- is recorded in cfg.InstallState 'Housekeeping' (Write-SIDataHousekeepingProgress); the
         hourly heartbeat sends the rows left (Pipeline.housekeepingRowsLeft). Never blocks or fails anything else.
         #1063 (3.0.30): reached by EVERY wake-up of the runner, also one during a run (the container entry's FlowBusy path,
@@ -3731,7 +3814,10 @@ function Invoke-SIDataStoppedRunCleanup {
           [string]$Holder = $(if ($env:CONTAINER_APP_JOB_EXECUTION_NAME) { [string]$env:CONTAINER_APP_JOB_EXECUTION_NAME } else { '{0}:{1}' -f [Environment]::MachineName, $PID }),
           [string]$WakeCron = '', [scriptblock]$NextRunUtc,
           # the wake-up's own beat (no fresh beat = dead), called before every range and batch -- at most once a minute by the caller
-          [scriptblock]$Beat)
+          [scriptblock]$Beat,
+          # #1218: how many complete collections per grain the plan keeps -- the runner passes the count the last data sync
+          # decided (Get-SIDataKeepCollectionsForWakeUp); at least 2, not given = 2
+          [int]$KeepCollections = 2)
     if (-not $Log) { $Log = { param([string]$level, [string]$msg) Write-Host ('[{0}] {1}' -f $level, $msg) } }
     $out = [ordered]@{ Status = 'skipped'; Why = ''; Retention = $null; Loading = $null; LoadingRows = $null; Housekeeping = ''; LeaseHeld = $false }
     $hkStarted = [datetime]::UtcNow
@@ -3886,7 +3972,7 @@ function Invoke-SIDataStoppedRunCleanup {
             # starting at the planned width drove the database to its limit before the first load reading)
             $pace = @{ Width = 1; Target = $target; Max = [Math]::Max(1, $max); ConnectionInfo = $ci; HeldBack = $false; WidthUsed = 0; Log = $Log }
         }
-        $ret = Invoke-SIDataCollectionRetention -Invoke $Invoke -Log $Log -NowUtc $NowUtc -IdleStaleHours $IdleStaleHours -TimeBudgetSeconds $TimeBudgetSeconds -ShouldStop $stop -Pace $pace
+        $ret = Invoke-SIDataCollectionRetention -Invoke $Invoke -Log $Log -NowUtc $NowUtc -IdleStaleHours $IdleStaleHours -TimeBudgetSeconds $TimeBudgetSeconds -ShouldStop $stop -Pace $pace -KeepCollections $KeepCollections
         $retEnd = [datetime]::UtcNow
         $out.Retention = $ret
         $out.Status = if ($ret.Status -eq 'failed') { 'failed' } else { 'ok' }
@@ -3988,4 +4074,143 @@ function Get-SIDataFill {
     if ($f.Warn) { & $Log 'WARN' ('database    : ' + $f.Text) }
     elseif ($null -ne $f.Percent) { & $Log 'INFO' ('database    : ' + $f.Text) }
     $f
+}
+
+# ------------------------------------------------------------------------------------------------------------------
+#  HOW MANY COLLECTIONS ARE KEPT (#1218, owner 2026-11-12, replaces #717's "newest complete + ONE before it"): "Last 7
+#  runs" -- "If a database passes 70% full, SI keeps fewer and warns instead of hitting the limit."
+#    THE SETTING   SI_Data_KeepCollections: the newest N complete collections per grain keep their findings (default 3 -- owner 2026-11-12;
+#                  never below 2 -- the newest and the one before it; a value that is not a whole number = 3).
+#    THE DATABASE  no hard cap: while the database is at or above 70 % of its maximum, one collection fewer is kept per run
+#                  (never below 2), said in ONE plain warning line (how full, how many kept, what the customer can do: a
+#                  larger database tier, or a lower setting). Below 70 % the setting applies again (the removed
+#                  collections do not come back; the kept count grows by one per run).
+#    PER RUN       the count the data sync decided is stored in sidata.ViewState 'keep-collections' as '<count>|<newest
+#                  complete collection time>': a second call in the same run (the data sync marks twice) and the pipeline
+#                  runner's wake-ups use it -- one step down per NEW complete collection, never one per call.
+# ------------------------------------------------------------------------------------------------------------------
+
+$script:SIDataKeepCollectionsDefault = 3   # owner 2026-11-12 ~20:20Z: "min last 2 plus latest, total 3" (was 7, #1218)
+$script:SIDataKeepCollectionsFullPercent = 70
+
+function Get-SIDataKeepCollectionsSetting {
+    <# PURE. SI_Data_KeepCollections from a name -> value map: a whole number, at least 2; not set or not a whole number = 3. #>
+    param([hashtable]$Globals = @{})
+    $raw = if ($Globals.ContainsKey('SI_Data_KeepCollections') -and $null -ne $Globals['SI_Data_KeepCollections']) { "$($Globals['SI_Data_KeepCollections'])".Trim() } else { '' }
+    $n = 0
+    if (-not $raw -or -not [int]::TryParse($raw, [Globalization.NumberStyles]::Integer, [Globalization.CultureInfo]::InvariantCulture, [ref]$n)) { return $script:SIDataKeepCollectionsDefault }
+    [Math]::Max(2, $n)
+}
+
+function Get-SIDataKeepStateReadSql {
+    "SELECT CASE WHEN OBJECT_ID('sidata.ViewState') IS NULL THEN N'' ELSE ISNULL((SELECT TOP (1) Value FROM sidata.ViewState WHERE Name = N'keep-collections'), N'') END AS KeepCollectionsState;"
+}
+
+function Get-SIDataKeepStateWriteSql {
+    "IF OBJECT_ID('sidata.ViewState') IS NOT NULL BEGIN UPDATE sidata.ViewState SET Value = @Value, UpdatedAt = SYSUTCDATETIME() WHERE Name = N'keep-collections'; IF @@ROWCOUNT = 0 INSERT sidata.ViewState (Name, Value) VALUES (N'keep-collections', @Value); END"
+}
+
+function ConvertFrom-SIDataKeepState {
+    <# PURE. '<count>|<mark>' -> @{ Keep; Mark }, or $null when it is not that (never guessed). #>
+    param($Value)
+    if ($null -eq $Value -or $Value -is [System.DBNull]) { return $null }
+    $p = ([string]$Value).Split('|')
+    $n = 0
+    if ($p.Count -lt 2 -or -not [int]::TryParse($p[0].Trim(), [Globalization.NumberStyles]::Integer, [Globalization.CultureInfo]::InvariantCulture, [ref]$n) -or $n -lt 2) { return $null }
+    [pscustomobject]@{ Keep = $n; Mark = $p[1].Trim() }
+}
+
+function Get-SIDataKeepCollectionsDecision {
+    <#
+        PURE. How many complete collections per grain are kept this run.
+          -Setting       SI_Data_KeepCollections (Get-SIDataKeepCollectionsSetting)
+          -FillPercent   how full the database is (Get-SIDataFillVerdict .Percent; $null = unknown -- the setting applies)
+          -Stored        the last decision (ConvertFrom-SIDataKeepState) or $null
+          -NewestMark    the newest complete collection's time now (text); -LiveComplete how many complete collections of
+                         that grain are kept now (not marked removed)
+        Returns @{ Keep; Setting; Full; Percent; Reduced; Mark; Text }. Full = at or above -FullPercent: one fewer than kept
+        before (never below 2) when a new complete collection came since the last decision, else the same as decided then.
+        Text = the one warning line while Full, else ''.
+    #>
+    param([int]$Setting = $script:SIDataKeepCollectionsDefault, $FillPercent = $null, $Stored = $null, [string]$NewestMark = '', [int]$LiveComplete = 0,
+          [double]$FullPercent = 70, $UsedMb = $null, $MaxMb = $null)
+    $inv = [Globalization.CultureInfo]::InvariantCulture
+    $set = [Math]::Max(2, $Setting)
+    $full = ($null -ne $FillPercent -and -not ($FillPercent -is [System.DBNull]) -and [double]$FillPercent -ge $FullPercent)
+    $keep = $set
+    if ($full) {
+        if ($Stored -and [int]$Stored.Keep -ge 2 -and [string]$Stored.Mark -eq $NewestMark) {
+            # the same newest collection as the last decision (a second call in the same run, a wake-up): no further step
+            $keep = [Math]::Min($set, [int]$Stored.Keep)
+        } else {
+            # a new complete collection since: one fewer than was kept before it came
+            $prev = $set
+            if ($Stored -and [int]$Stored.Keep -ge 2) { $prev = [Math]::Min($prev, [int]$Stored.Keep) }
+            if ($LiveComplete -gt 0) { $prev = [Math]::Min($prev, [Math]::Max(2, $LiveComplete - 1)) }
+            $keep = $prev - 1
+        }
+        $keep = [Math]::Max(2, $keep)
+    }
+    $text = ''
+    if ($full) {
+        $size = if ($null -ne $UsedMb -and $null -ne $MaxMb) { [string]::Format($inv, ' ({0:0.#} of {1:0.#} GB)', ([double]$UsedMb / 1024.0), ([double]$MaxMb / 1024.0)) } else { '' }
+        $text = if ($keep -lt $set) {
+            [string]::Format($inv, 'the Pro database is {0:0.#} % full{1}: SecurityInsight now keeps the findings of the newest {2} complete collections instead of {3}, one fewer each run while it stays this full (never fewer than 2), so it does not reach its limit. To keep {3}: choose a larger database tier, or set fewer collections to keep (SI_Data_KeepCollections).', [double]$FillPercent, $size, $keep, $set)
+        } else {
+            [string]::Format($inv, 'the Pro database is {0:0.#} % full{1}: SecurityInsight keeps the findings of the newest {2} complete collections, the fewest it keeps. Choose a larger database tier before it is full -- when it is full, nothing new can be stored.', [double]$FillPercent, $size, $keep)
+        }
+    }
+    [pscustomobject]@{ Keep = [int]$keep; Setting = [int]$set; Full = [bool]$full; Percent = $FillPercent; Reduced = ($keep -lt $set); Mark = $NewestMark; Text = $text }
+}
+
+function Get-SIDataKeepCollectionsNow {
+    <# PURE. From Get-SIDataRetentionStateSql's rows: @{ Mark (the newest complete Detailed collection's time, else the
+       newest complete Summary one's, as text; '' = none); LiveComplete (how many complete ones of that grain are not marked) }. #>
+    param([AllowEmptyCollection()][object[]]$Collections = @())
+    $g = { param($r, [string]$n) $v = $null; if ($r -is [System.Collections.IDictionary]) { if ($r.Contains($n)) { $v = $r[$n] } } elseif ($null -ne $r -and $r.PSObject.Properties[$n]) { $v = $r.$n }; if ($v -is [System.DBNull]) { $null } else { $v } }
+    foreach ($grain in 'Detailed', 'Summary') {
+        $c = @(foreach ($r in @($Collections)) {
+            if ($null -eq $r -or [string](& $g $r 'Grain') -ne $grain -or [string](& $g $r 'Status') -ne 'Complete' -or $null -ne (& $g $r 'RetiredAt')) { continue }
+            $t = ConvertTo-SIDataUtc (& $g $r 'CollectionTime'); if ($null -ne $t) { $t }
+        })
+        if ($c.Count) {
+            $newest = @($c | Sort-Object -Descending)[0]
+            return [pscustomobject]@{ Mark = (Format-SIDataSqlTime -Time $newest); LiveComplete = $c.Count }
+        }
+    }
+    [pscustomobject]@{ Mark = ''; LiveComplete = 0 }
+}
+
+function Resolve-SIDataKeepCollections {
+    <#
+        THE DATA SYNC'S CALL, once per run before it marks: the keep count of this run (Get-SIDataKeepCollectionsDecision),
+        from the setting, how full the database is, the stored last decision and the collections now -- stored again
+        (sidata.ViewState 'keep-collections') unless -DryRun. While the database is 70 % full or more: ONE warning line.
+        NEVER throws: whatever cannot be read counts as unknown (the setting, or the last decision, applies).
+    #>
+    param([Parameter(Mandatory)][scriptblock]$Invoke, [int]$Setting = $script:SIDataKeepCollectionsDefault, [switch]$DryRun, [scriptblock]$Log)
+    if (-not $Log) { $Log = { param([string]$level, [string]$msg) Write-Host ('[{0}] {1}' -f $level, $msg) } }
+    $fill = $null; $stored = $null; $now = [pscustomobject]@{ Mark = ''; LiveComplete = 0 }
+    try { $fill = Get-SIDataFillVerdict -Value (& $Invoke (Get-SIDataFillSql) @{} 'scalar') } catch { $fill = $null }
+    try { $stored = ConvertFrom-SIDataKeepState -Value (& $Invoke (Get-SIDataKeepStateReadSql) @{} 'scalar') } catch { $stored = $null }
+    try { $now = Get-SIDataKeepCollectionsNow -Collections @(@(& $Invoke (Get-SIDataRetentionStateSql) @{} 'reader') | ForEach-Object { $_ } | Where-Object { $null -ne $_ }) } catch { }
+    $d = Get-SIDataKeepCollectionsDecision -Setting $Setting -FillPercent $(if ($fill) { $fill.Percent } else { $null }) -Stored $stored -NewestMark ([string]$now.Mark) -LiveComplete ([int]$now.LiveComplete) `
+            -FullPercent $script:SIDataKeepCollectionsFullPercent -UsedMb $(if ($fill) { $fill.UsedMb } else { $null }) -MaxMb $(if ($fill) { $fill.MaxMb } else { $null })
+    if ($d.Full) { & $Log 'WARN' ('collections : ' + $d.Text) }
+    else { & $Log 'INFO' ([string]::Format([Globalization.CultureInfo]::InvariantCulture, 'collections : the findings of the newest {0} complete collections of each kind are kept (SI_Data_KeepCollections)', $d.Keep)) }
+    if (-not $DryRun -and $d.Mark) {
+        try { $null = & $Invoke (Get-SIDataKeepStateWriteSql) @{ Value = ('{0}|{1}' -f $d.Keep, $d.Mark) } 'nonquery' } catch { }
+    }
+    $d
+}
+
+function Get-SIDataKeepCollectionsForWakeUp {
+    <# The pipeline runner's wake-up: the count the last data sync decided (never more than the setting now), else the
+       setting. Never throws. #>
+    param([Parameter(Mandatory)][scriptblock]$Invoke, [int]$Setting = $script:SIDataKeepCollectionsDefault)
+    $set = [Math]::Max(2, $Setting)
+    $stored = $null
+    try { $stored = ConvertFrom-SIDataKeepState -Value (& $Invoke (Get-SIDataKeepStateReadSql) @{} 'scalar') } catch { $stored = $null }
+    if ($stored) { return [int][Math]::Max(2, [Math]::Min($set, [int]$stored.Keep)) }
+    $set
 }

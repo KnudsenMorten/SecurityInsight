@@ -2770,6 +2770,20 @@ CREATE TABLE sidata.RaReportStatus (
     CheckedAt       DATETIME2(0)   NOT NULL CONSTRAINT DF_RaReportStatus_CheckedAt DEFAULT SYSUTCDATETIME(),
     CONSTRAINT PK_RaReportStatus PRIMARY KEY (CollectionTime, Grain, ReportName)
 );
+-- #1226 ADDED 2026-11-12 (additive, a new table): THE COLLECTION'S OWN TRUST VERDICT -- what Risk Analysis decided about the
+-- source data THIS collection was built on (Get-SIUpstreamOutcome + the role-read exception), written by Risk Analysis with
+-- the collection. Trusted = 0: built on a source run that ended partial -- nothing is sent out from it (the data sync reads
+-- this row by the collection's own time and grain). No row (an older Risk Analysis, or the check could not run) = the data
+-- sync's own check of the source runs. Internal state: never shown to a customer as a score.
+IF OBJECT_ID('sidata.CollectionTrust') IS NULL
+CREATE TABLE sidata.CollectionTrust (
+    CollectionTime  DATETIME2(3)   NOT NULL,
+    Grain           NVARCHAR(16)   NOT NULL,
+    Trusted         BIT            NOT NULL,
+    Why             NVARCHAR(2000) NULL,
+    WrittenUtc      DATETIME2(0)   NOT NULL CONSTRAINT DF_CollectionTrust_WrittenUtc DEFAULT SYSUTCDATETIME(),
+    CONSTRAINT PK_CollectionTrust PRIMARY KEY (CollectionTime, Grain)
+);
 -- #690 (34) ADDED 2026-10-15 (additive, nullable): the report's QUERY FINGERPRINT at this run -- SHA-256 of what the report
 -- asks (its query as authored, before the run's substitutions, plus its tier / severity scope; Get-RAReportQueryFingerprint).
 -- A finding that leaves a report whose fingerprint changed since the finding was last seen closes as 'report changed', never

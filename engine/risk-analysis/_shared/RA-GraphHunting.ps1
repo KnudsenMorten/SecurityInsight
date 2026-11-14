@@ -211,6 +211,10 @@ function Invoke-RAResolveLookups {
     return $Query
 }
 
+# #1216: the bucket loop's stop for 504 answers on the next query (0 = none) and the last call's count of 504 answers
+$script:RAGatewayTimeoutStopAt = 0
+$script:_LastGraphHuntingGatewayTimeouts = 0
+
 function Invoke-GraphHuntingQuery {
     [CmdletBinding()]
     param(
@@ -237,6 +241,15 @@ function Invoke-GraphHuntingQuery {
         # an answer of any other query hands nothing off: no number of an earlier answer may be booked against it
         $script:RADfcLast = $null
     }
+
+    # #1216: the caller's stop for 504 Gateway Timeout answers on THIS query (a query slice the bucket loop can split in halves,
+    # RA-AutoBucketing.ps1 Get-RAGatewayTimeoutStopAt). Taken once and cleared, so a nested call (a lookup's key query) never
+    # inherits it; 0 = no stop (every attempt, as before). The count of attempts answered 504 is handed back in
+    # $script:_LastGraphHuntingGatewayTimeouts (set when the call fails).
+    $__gwStopAt = [int]$script:RAGatewayTimeoutStopAt
+    $script:RAGatewayTimeoutStopAt = 0
+    $__gwHere = 0
+    $script:_LastGraphHuntingGatewayTimeouts = 0
 
     # 2026-05-02 -- 2-phase post-augment plan holder. Populated by Resolve-ProfileAugmentPlan
     # in the EG+CL hybrid block below, consumed after AH submission to attach alias cols
@@ -1107,6 +1120,17 @@ if ($looksAuth) {
                 throw
             }
 
+            # #1216: a 504 Gateway Timeout is counted; at the caller's stop the same query is not asked again -- the slice is
+            # too heavy for the gateway at its size and the caller splits it in halves (a one-off 504 still retries below)
+            if ((Get-Command -Name Test-RABucketGatewayTimeout -ErrorAction SilentlyContinue) -and (Test-RABucketGatewayTimeout -Err $_)) {
+                $__gwHere++
+                $script:_LastGraphHuntingGatewayTimeouts = $__gwHere
+                if ($__gwStopAt -gt 0 -and $__gwHere -ge $__gwStopAt) {
+                    Write-Warn2 ("advanced hunting answered 504 Gateway Timeout for this query slice (attempt {0}/{1}) -- too heavy for the gateway at this size, not asked again as the same query: it is split in halves" -f $attempt, $MaxRetries)
+                    throw
+                }
+            }
+
             if ($attempt -lt $MaxRetries) {
                 $sleepSec = if ($looksThrottle) { [math]::Min(60, 5 * $attempt) }
                             else { [math]::Min(20, 2 * $attempt) }
@@ -1131,6 +1155,7 @@ if ($looksAuth) {
         # (not for a part asked ahead: its own run says what happened)
         # SUP-2026-00496: advanced hunting's own failure is the LAST attempt listed, so the WARN names what really failed
         if (-not ($null -ne $script:SIHuntingPrefetch -and $script:SIHuntingPrefetch.Capture)) { Flush-SupersededAttempts -LastPath 'advanced-hunting' -LastMessage $_.Exception.Message -Quiet:$NoFailureWarning }
+        $script:_LastGraphHuntingGatewayTimeouts = $__gwHere   # #1216: THIS call's attempts answered 504 (a nested call may have reset it)
         throw
     }
 }

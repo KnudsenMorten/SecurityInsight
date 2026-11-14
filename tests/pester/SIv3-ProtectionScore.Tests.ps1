@@ -230,7 +230,9 @@ Describe 'Pro: the Detailed mail waits for the STORED score (owner 2026-10-22: o
         $ra = [IO.File]::ReadAllText((Join-Path $script:Root 'engine\risk-analysis\Invoke-RiskAnalysis.ps1'))
         # the decision is made in the key figures' setup (RA-KpiTally.ps1 New-RAKpiState, 2026-10-31)
         $kt = [IO.File]::ReadAllText((Join-Path $script:Root 'engine\risk-analysis\_shared\RA-KpiTally.ps1'))
-        $kt | Should -Match '\$script:RAProtectionFromStore = \(Get-RAReportGrainLabel'
+        # #1212: the rule is one function (Test-RAKpiProtectionFromStore), also read by the set-based Top 50 / key figures
+        $kt | Should -Match '\$script:RAProtectionFromStore = \[bool\]\(Test-RAKpiProtectionFromStore\)'
+        $kt | Should -Match '(?s)function Test-RAKpiProtectionFromStore \{.{0,800}\(Get-RAReportGrainLabel -ReportTemplate \(\[string\]\$global:ReportTemplate\)\) -ne ''Summary'''
         $kt | Should -Match "-not \[string\]::IsNullOrWhiteSpace\(\[string\]\`$global:SI_ProSettingsVersion\) -and \[bool\]\`$script:RAStreamOn"
         $ra | Should -Match '(?s)if \(\$script:RAProtectionFromStore\) \{.{0,1600}Invoke-SIRaMailOutbox -Invoke \$__oInv -Role producer.{0,1500}-ProtectionPending.{0,400}Add-SIRaMailOutbox -Invoke \$__oInv.{0,900}\$__sendNow = \$false'
         $ra | Should -Match "(?s)\} catch \{.{0,300}ConvertTo-RAReportMailHtml -Kpi \`$kpi @__mailArgs -GroupingsHtml \`$__sgHtml -ProtectionReason \(Get-SIProtectionReason 'no-wait'"

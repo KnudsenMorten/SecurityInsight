@@ -43,6 +43,17 @@ $script:SIJobFlow = @{
     StartRetries           = 1
     StartRetryBackoff      = 60
     NeverStartedMaxSeconds = 120
+    # THE PLATFORM'S WORD MUST BE SETTLED (independent review 2026-11-13). Log Analytics delivers the Container Apps events
+    # late and out of order -- a ContainerStarted can arrive minutes after the pod's end event. "Azure never started the
+    # container" is said only when the execution's own end event is at least ContainerEventsLagMinutes old and still no
+    # ContainerStarted arrived; before that the answer is "not known yet": the step is neither failed nor started again, the
+    # runner asks again (at most every StartDecideRecheckSeconds) and decides on a later pass. At StartDecideMaxMinutes after
+    # it saw the execution end it decides on what it has (a start it cannot tell is 'unknown' -- never started again). The
+    # wake-up check that closes a step whose runner never saw its end waits longer than that (EndedGraceMinutes).
+    ContainerEventsLagMinutes  = 15
+    StartDecideMaxMinutes      = 30
+    StartDecideRecheckSeconds  = 120
+    EndedGraceMinutes          = 35
     # A RUNNING step that shows no sign of progress is REPORTED, never stopped (owner 2026-10-12: "Warn only"): no new log
     # line and no run-health record for SilentAfterMinutes -> ONE warning for that step in that run. Asked for at most
     # every ProgressCheckMinutes, and only once the step has run that long.
@@ -1113,15 +1124,40 @@ function Get-SIJobFlowFailureClass {
         not unknown) AND either a START row known absent (any duration -- live 2026-10-23 a platform outage held pods
         unstarted for 314 s / 377 s) or, when the store cannot tell, a run of at most -MaxSeconds. A transcript that
         cannot be checked is 'unknown' -- never retried, whatever the store says.
-        Returns @{ Class = never-started | engine-failed | unknown | not-applicable; Retry; Signal; Why }.
+          -HasContainerStarted  the PLATFORM's own events for THIS execution (ContainerAppSystemLogs, by its replica):
+                            $false = Azure scheduled the replica but never started its container (no ContainerStarted) --
+                            the engine cannot have run, whatever the duration; $true = the container started; $null = no
+                            event of it could be read. (Live 2026-11-13, internal: two Container Apps start blips; the
+                            correlation step's pod was scheduled and never started, twice, but the run-health store could not
+                            tell and it ran over 120 s -> judged "not a start failure", not retried, a whole run lost.)
+                            $false is given only on SETTLED events (ConvertFrom-SIJobFlowContainerStartRows).
+          -ContainerStartPending  the platform events are not settled yet (the container was scheduled, no ContainerStarted
+                            has arrived, and its end is younger than ContainerEventsLagMinutes or not delivered): where the
+                            answer would decide the class, the class is 'deciding' -- "not known yet": never failed, never
+                            started again; the runner asks again later. Where the rest of the evidence already decides
+                            (the engine's own records, both signals known absent, a short run) it decides as before.
+        Returns @{ Class = never-started | engine-failed | deciding | unknown | not-applicable; Retry; Signal; Why }.
     #>
     param([AllowEmptyString()][string]$ErrorClass, $HasStartRecord, $HasTranscript, [double]$DurationSeconds,
-          [int]$MaxSeconds = $script:SIJobFlow.NeverStartedMaxSeconds, [int]$Attempts = 1, [int]$Retries = $script:SIJobFlow.StartRetries)
+          [int]$MaxSeconds = $script:SIJobFlow.NeverStartedMaxSeconds, [int]$Attempts = 1, [int]$Retries = $script:SIJobFlow.StartRetries,
+          $HasContainerStarted = $null, [bool]$ContainerStartPending = $false)
     $mk = { param($c, $r, $sig, $why) [pscustomobject]@{ Class = $c; Retry = [bool]$r; Signal = $sig; Why = $why } }
     if ($ErrorClass -ne 'job-failed') { return (& $mk 'not-applicable' $false '' ('a step that {0} is not a start failure' -f $(if ($ErrorClass) { "ended '$ErrorClass'" } else { 'did not fail' }))) }
     if ($HasStartRecord -eq $true) { return (& $mk 'engine-failed' $false 'run-health' 'the engine recorded its start, so the job itself failed -- it is not started again') }
     if ($HasTranscript -eq $true) { return (& $mk 'engine-failed' $false 'transcript' 'the engine wrote a run log, so the job itself failed -- it is not started again') }
-    if ($HasTranscript -ne $false) { return (& $mk 'unknown' $false '' 'whether the job started could not be told (its run logs could not be read) -- it is not started again') }
+    # the platform's own word that the container never started: a platform failure, started again at any duration -- only
+    # after the engine's own evidence above (a START record or a run log of it always means "it ran")
+    if ($HasContainerStarted -eq $false) {
+        return (& $mk 'never-started' ($Attempts -le $Retries) 'platform-events' ('Azure scheduled the step''s container but never started it (an Azure platform problem); the execution ended after {0:N0} s' -f $DurationSeconds))
+    }
+    # the platform's events are not settled yet: only where their answer would decide (a run log that cannot be read, or a
+    # run longer than -MaxSeconds when the store cannot tell) is the step held as "not known yet"
+    $wait = [bool]($ContainerStartPending -and $null -eq $HasContainerStarted)
+    $waitWhy = 'whether Azure started the step''s container is not known yet (its events arrive late) -- the pipeline waits for them; nothing is started again before it knows'
+    if ($HasTranscript -ne $false) {
+        if ($wait) { return (& $mk 'deciding' $false 'platform-events' $waitWhy) }
+        return (& $mk 'unknown' $false '' 'whether the job started could not be told (its run logs could not be read) -- it is not started again')
+    }
     # Live 2026-10-23: Azure could not start any container for 13 minutes -- two executions ran 314 s and 377 s (pods
     # created, never started, BackoffLimitExceeded) with no run log and no START row. Both signals known absent is the
     # evidence that the engine never ran, whatever the duration: no fixed time bound decides it then.
@@ -1129,6 +1165,7 @@ function Get-SIJobFlowFailureClass {
         return (& $mk 'never-started' ($Attempts -le $Retries) 'transcript+duration+run-health' ('the execution ended after {0:N0} s without a run log and without recording its start' -f $DurationSeconds))
     }
     $sig = 'transcript+duration'
+    if ($DurationSeconds -gt $MaxSeconds -and $wait) { return (& $mk 'deciding' $false 'platform-events' $waitWhy) }
     if ($DurationSeconds -gt $MaxSeconds) { return (& $mk 'unknown' $false $sig ('the execution ran {0:N0} s (over {1} s) without a run log -- not a start failure, it is not started again' -f $DurationSeconds, $MaxSeconds)) }
     & $mk 'never-started' ($Attempts -le $Retries) $sig ('the execution ended after {0:N0} s without a run log{1}' -f $DurationSeconds, $(if ($HasStartRecord -eq $false) { ' and without recording its start' } else { '' }))
 }
@@ -1172,6 +1209,74 @@ function Test-SIJobFlowTranscriptInWindow {
     $false
 }
 
+function Get-SIJobFlowContainerStartQuery {
+    <#
+        PURE. The KQL that asks the PLATFORM whether the container of -Execution ever started: the Container Apps events of
+        its replicas (ContainerAppSystemLogs, ReplicaName '<execution>-<suffix>') within [-StartedUtc - 2 min, -EndedUtc +
+        5 min]. Scheduled = AssigningReplica events, Started = ContainerStarted events (both carry the replica name -- read
+        live 2026-11-13: 274 of 274), Ended = the job's BackoffLimitExceeded in the window (it carries the job, not the
+        replica): the END of the event stream has arrived, so a missing ContainerStarted is not just a late one (Log
+        Analytics does not deliver in order, least of all during the incidents this is for -- review 2026-11-13). $null for
+        a name that is not an execution name (never put into the query).
+    #>
+    param([Parameter(Mandatory)][string]$Execution, [Parameter(Mandatory)][datetime]$StartedUtc, [Parameter(Mandatory)][datetime]$EndedUtc)
+    if ($Execution -notmatch '^[a-z0-9][a-z0-9\-]{2,80}$') { return $null }
+    # the job is the execution without its last part (caj-si-asset-correlation-uxf5u22 -> caj-si-asset-correlation)
+    $job = $Execution -replace '-[a-z0-9]+$', ''
+    $a = $StartedUtc.ToUniversalTime().AddMinutes(-2).ToString('yyyy-MM-ddTHH:mm:ssZ', [Globalization.CultureInfo]::InvariantCulture)
+    $b = $EndedUtc.ToUniversalTime().AddMinutes(5).ToString('yyyy-MM-ddTHH:mm:ssZ', [Globalization.CultureInfo]::InvariantCulture)
+    # Ended ties the end to THIS execution (reviews 2026-11-13): its own pod's end (PodDeletion of its replica), or a
+    # BackoffLimitExceeded of the job whose text NAMES this execution. A backoff event that names no execution is never
+    # taken as this one's end: an EARLIER execution's backoff inside the window would otherwise end it. EndAt = when that
+    # end happened -- the answer is settled only once it is ContainerEventsLagMinutes old (ConvertFrom-...StartRows).
+    $endCond = "(Reason == 'PodDeletion' and ReplicaName startswith '$Execution-') or (Reason == 'BackoffLimitExceeded' and JobName == '$job' and Ex == '$Execution')"
+    ("ContainerAppSystemLogs | where TimeGenerated between (datetime($a) .. datetime($b)) " +
+     "| where ReplicaName startswith '$Execution-' or JobName == '$job' or Log has 'Job Execution ''$job-' " +
+     "| extend Ex = extract('Job Execution .([a-z0-9-]+).', 1, Log) " +
+     "| summarize Scheduled = countif(Reason == 'AssigningReplica' and ReplicaName startswith '$Execution-'), " +
+     "Started = countif(Reason == 'ContainerStarted' and ReplicaName startswith '$Execution-'), " +
+     "OwnEnd = countif(Reason == 'PodDeletion' and ReplicaName startswith '$Execution-'), " +
+     "JobEnd = countif(Reason == 'BackoffLimitExceeded' and JobName == '$job' and Ex == '$Execution'), " +
+     "EndAt = maxif(TimeGenerated, $endCond) " +
+     "| extend Ended = iff(OwnEnd > 0 or JobEnd > 0, 1, 0)")
+}
+
+function Read-SIJobFlowContainerStartRows {
+    <# PURE. Get-SIJobFlowContainerStartQuery's answer, read at -NowUtc -> @{ Started; Pending }.
+         Started $true  = the container started (a ContainerStarted of this execution's replica arrived);
+         Started $false = SETTLED "never started": scheduled, no ContainerStarted, and this execution's own end (EndAt) is at
+                          least -LagMinutes (ContainerEventsLagMinutes) old -- Log Analytics delivers late and out of order,
+                          so a younger end proves nothing about a ContainerStarted still on its way;
+         Started $null  = not told. Pending $true when it may still be told (scheduled, no ContainerStarted, and the end not
+                          delivered yet or younger than -LagMinutes / its time unreadable); $false when there is no event of
+                          the execution at all (as before: nothing to wait for). #>
+    param([AllowNull()][object[]]$Rows, [datetime]$NowUtc = [datetime]::UtcNow, [int]$LagMinutes = $script:SIJobFlow.ContainerEventsLagMinutes)
+    $no = [pscustomobject]@{ Started = $null; Pending = $false }
+    $r = @(@($Rows) | Where-Object { $_ })
+    if (-not $r.Count) { return $no }
+    $sc = 0L; $st = 0L; $en = 0L
+    try { $sc = [long]$r[0].Scheduled; $st = [long]$r[0].Started; if ($r[0].PSObject.Properties['Ended']) { $en = [long]$r[0].Ended } } catch { return $no }
+    if ($st -gt 0) { return [pscustomobject]@{ Started = $true; Pending = $false } }
+    if ($sc -le 0) { return $no }
+    $endAt = $null
+    if ($en -gt 0 -and $r[0].PSObject.Properties['EndAt'] -and $null -ne $r[0].EndAt -and "$($r[0].EndAt)".Trim()) {
+        try {
+            $endAt = if ($r[0].EndAt -is [datetime]) { ([datetime]$r[0].EndAt).ToUniversalTime() }
+                     else { [datetime]::Parse([string]$r[0].EndAt, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::AdjustToUniversal -bor [Globalization.DateTimeStyles]::AssumeUniversal) }
+        } catch { $endAt = $null }
+    }
+    if ($endAt -and ($NowUtc.ToUniversalTime() - $endAt).TotalMinutes -ge $LagMinutes) { return [pscustomobject]@{ Started = $false; Pending = $false } }
+    [pscustomobject]@{ Started = $null; Pending = $true }
+}
+
+function ConvertFrom-SIJobFlowContainerStartRows {
+    <# PURE. Read-SIJobFlowContainerStartRows' Started only: $true (the container started); $false (SETTLED: scheduled,
+       never started, and this execution's own end is at least -LagMinutes old); $null otherwise (no event of the
+       execution, its end not delivered yet or too young: never "never started" on an answer that may still change). #>
+    param([AllowNull()][object[]]$Rows, [datetime]$NowUtc = [datetime]::UtcNow, [int]$LagMinutes = $script:SIJobFlow.ContainerEventsLagMinutes)
+    (Read-SIJobFlowContainerStartRows -Rows $Rows -NowUtc $NowUtc -LagMinutes $LagMinutes).Started
+}
+
 function New-SIJobFlowStartEvidence {
     <#
         The container flow's "did the engine start?" probe: Probe($Job, $Execution, $StartedUtc, $EndedUtc) ->
@@ -1187,7 +1292,8 @@ function New-SIJobFlowStartEvidence {
     $engines = @{}; foreach ($k in @($Map.Jobs.Keys)) { if ($Map.Jobs[$k].Engine) { $engines[[string]$k] = [string]$Map.Jobs[$k].Engine } }
     New-SIJobFlowSeams -Fields @{ Workspace = $WorkspaceResourceId; Account = $StorageAccount; Query = $Query; ListBlobs = $ListBlobs; Engines = $engines } -Methods @{
         Probe = {
-            param($Job, $Execution, $StartedUtc, $EndedUtc)
+            # $NowUtc: when the runner asks (the platform events are settled against it); default the clock
+            param($Job, $Execution, $StartedUtc, $EndedUtc, $NowUtc)
             $row = $null; $tr = $null; $endReason = $null
             if (($this.Query -or $this.Workspace) -and $StartedUtc) {
                 try {
@@ -1225,7 +1331,21 @@ function New-SIJobFlowStartEvidence {
                     $tr = if ($ever) { [bool](Select-SIJobFlowStepLog -Names $names -Engine $teng -Key $key -StartedUtc ([datetime]$StartedUtc) -EndedUtc ([datetime]$EndedUtc)) } else { $null }
                 } catch { $tr = $null }
             }
-            [pscustomobject]@{ HasStartRecord = $row; HasTranscript = $tr; EndReason = $endReason }
+            # the platform's own events of THIS execution: was its container ever started? ($null when they cannot be read)
+            # ($false only on SETTLED events; Pending = not known yet, the runner asks again later)
+            $cs = $null; $csPending = $false
+            if (($this.Query -or $this.Workspace) -and $StartedUtc -and $EndedUtc -and $Execution) {
+                try {
+                    $ckql = Get-SIJobFlowContainerStartQuery -Execution ([string]$Execution) -StartedUtc ([datetime]$StartedUtc) -EndedUtc ([datetime]$EndedUtc)
+                    if ($ckql) {
+                        $cr = @(if ($this.Query) { & $this.Query $ckql } else { Invoke-SILogLaQuery -WorkspaceResourceId $this.Workspace -Query $ckql }) | Where-Object { $_ }
+                        $csNow = if ($NowUtc) { ([datetime]$NowUtc).ToUniversalTime() } else { [datetime]::UtcNow }
+                        $csr = Read-SIJobFlowContainerStartRows -Rows @($cr) -NowUtc $csNow
+                        $cs = $csr.Started; $csPending = [bool]$csr.Pending
+                    }
+                } catch { $cs = $null; $csPending = $false }
+            }
+            [pscustomobject]@{ HasStartRecord = $row; HasTranscript = $tr; EndReason = $endReason; HasContainerStarted = $cs; ContainerStartPending = $csPending }
         }
     }
 }
@@ -1735,11 +1855,12 @@ function Get-SIJobFlowEndedExecutionCloses {
         a producer that SUCCEEDED does not end the step -- its parts do -- so only Failed / Stopped close it).
         CLOSES ONLY: a step that is Running, with a recorded execution (never a VM process 'pid@...'), found BY NAME in the
         list, with an ended status (Succeeded / Failed / Degraded / Cancelled / Stopped) AND an end time at least
-        -GraceMinutes ago (20: longer than a working runner needs -- it polls every 30 s, and its pause before judging a
-        failure is at most 15 minutes). Running / Processing / not in the list / no end time = nothing. A run that has ended:
+        -GraceMinutes ago (EndedGraceMinutes, 35: longer than a working runner needs -- it polls every 30 s, its pause
+        before judging a failure is at most 15 minutes, and it may wait up to StartDecideMaxMinutes (30) after a failed
+        execution's end for Azure's late events before it decides whether the container started; it was 20 before that wait existed). Running / Processing / not in the list / no end time = nothing. A run that has ended:
         nothing. Never stops anything. Returns @(@{ Order; Job; Execution; Status; State; ErrorClass; Error; EndedUtc }).
     #>
-    param($State, [hashtable]$ExecutionsByJob = @{}, [Parameter(Mandatory)][datetime]$NowUtc, [int]$GraceMinutes = 20, [hashtable]$PartsJobs = @{})
+    param($State, [hashtable]$ExecutionsByJob = @{}, [Parameter(Mandatory)][datetime]$NowUtc, [int]$GraceMinutes = $script:SIJobFlow.EndedGraceMinutes, [hashtable]$PartsJobs = @{})
     $out = New-Object System.Collections.Generic.List[object]
     if (-not $State -or [string]$State.State -in $script:SIJobFlow.RunFinished) { return @() }
     $now = $NowUtc.ToUniversalTime()
@@ -1956,6 +2077,10 @@ function Invoke-SIJobFlow {
         [int]$StartRetries = $script:SIJobFlow.StartRetries,
         [int]$StartRetryBackoffSeconds = $script:SIJobFlow.StartRetryBackoff,
         [int]$NeverStartedMaxSeconds = $script:SIJobFlow.NeverStartedMaxSeconds,
+        # "not known yet": how long after a failed execution's end the runner waits for Azure's late events, and how often it
+        # asks again meanwhile (ContainerEventsLagMinutes / StartDecideMaxMinutes above)
+        [int]$StartDecideMaxMinutes = $script:SIJobFlow.StartDecideMaxMinutes,
+        [int]$StartDecideRecheckSeconds = $script:SIJobFlow.StartDecideRecheckSeconds,
         # #306: what this run is -- the pipeline (default), one stage (-Target = stage id), one step (-Target = job), or the
         # pipeline from a step (from-step = -FromStep) -- who asked for it, the queue request it serves, the slot it is for
         # (a queued scheduled run), the run id (the queue names it before the run starts), the note, and the lock's
@@ -2123,6 +2248,8 @@ function Invoke-SIJobFlow {
     $silentSaid = @{}; $progressAsked = @{}
     # a step that has run longer than its step timeout: said once per step (this run) -- never stopped
     $overdueSaid = @{}
+    # a failed step held "not known yet" (its container's start not settled): step order -> @{ Execution; EndSeenUtc; AskedUtc }
+    $deciding = @{}
     # si-flow-1203: a run / step much longer than usual for this install -- said once (the run: its note says it; a step:
     # its RetryReason), never stopped. The usual lengths are worked out once, from the OTHER runs read (-History).
     $longUsual = $null; $longRunSaid = $false; $longStepSaid = @{}
@@ -2451,6 +2578,36 @@ function Invoke-SIJobFlow {
         & $saveNow
         if ($OnStep) { try { & $OnStep $state $st 'Start' } catch { } ; if ($st.State -in @('Failed', 'Skipped')) { try { & $OnStep $state $st 'End' } catch { } } }
     }
+    # RESTART SAFETY (review 2026-11-13): every start AGAIN of a step -- its container never started, its job was stopped at
+    # its run limit, a first collection's restart -- goes through here. As the first start: a job that is already running is
+    # not started a second time, the step FOLLOWS that execution (its log line and the run's note say so). Before a NEW
+    # start, what the earlier execution started is stopped the way a failed step's end does (its queue workers / the parts
+    # of its collection; their runs closed first), so a run that really did go on writes nothing beside the new one.
+    # Throws when the start fails (the caller records start-failed). Dot-sourced: it reads and sets this function's variables.
+    $startAgain = {
+        param($st)
+        $saOld = [pscustomobject]@{ Job = [string]$st.Job; Order = $st.Order; StartedUtc = $st.StartedUtc; Execution = [string]$st.Execution }
+        $st.State = 'Starting'; $st.ErrorClass = ''; $st.Error = ''; $st.EndedUtc = $null; $st.StartedUtc = ([datetime](& $Now)).ToUniversalTime()
+        & $saveNow
+        $saLive = $null
+        if ($Running) {
+            try { $saLive = & $Running $st.Job }
+            catch { $saLive = $null; & $Log 'INFO' ('step {0} {1}: whether its job is already running could not be checked ({2}) -- it is started again' -f $st.Order, $st.Job, $_.Exception.Message) }
+        }
+        $st.Attempts = [int]$st.Attempts + 1
+        if ($saLive -and [string]$saLive.Execution -and [string]$saLive.Execution -ne $saOld.Execution) {
+            $st.Execution = [string]$saLive.Execution; $st.State = 'Running'
+            $saSince = ''
+            if ($saLive.StartedUtc) { $st.StartedUtc = ([datetime]$saLive.StartedUtc).ToUniversalTime(); $saSince = ', started {0:u}' -f $st.StartedUtc }
+            & $Log 'INFO' ('step {0} {1}: its job is already running ({2}{3}) -- the pipeline follows that run instead of starting it again (attempt {4})' -f $st.Order, $st.Job, $st.Execution, $saSince, $st.Attempts)
+            $state.Note = ('{0} {1} was already running ({2}{3}) -- the pipeline followed that run instead of starting it again.' -f [string]$state.Note, $st.Job, $st.Execution, $saSince).Trim()
+            if ($state.Note.Length -gt 400) { $state.Note = $state.Note.Substring(0, 400) }
+        } else {
+            & $stopStepWork $saOld
+            $st.Execution = [string](& $Start $st.Job); $st.State = 'Running'
+            & $Log 'INFO' ('step {0} {1}: started again ({2}, attempt {3})' -f $st.Order, $st.Job, $st.Execution, $st.Attempts)
+        }
+    }
     # one poll of one running step ($st). Dot-sourced: it reads and sets this function's variables.
     $pollStep = {
         param($st)
@@ -2535,7 +2692,9 @@ function Invoke-SIJobFlow {
         # SELF-HEALING: the step's job (or the producer / a worker of its collection) was stopped at its OWN run limit --
         # the limit is raised by the update's sizing rule and the step is started again, ONCE in this run.
         # A stop Azure reports for a job at its own run limit is first recorded Interrupted (class 'stopped'): checked here too.
-        if ($ended -and $LimitHit -and $RaiseLimit -and ($st.State -in @('Failed', 'TimedOut') -or ($st.State -eq 'Interrupted' -and [string]$st.ErrorClass -eq 'stopped'))) {
+        # (a step held "not known yet" below was asked this on its first pass already)
+        $limitAsked = $deciding.ContainsKey([string]$st.Order) -and [string]$deciding[[string]$st.Order].Execution -eq [string]$st.Execution
+        if ($ended -and -not $limitAsked -and $LimitHit -and $RaiseLimit -and ($st.State -in @('Failed', 'TimedOut') -or ($st.State -eq 'Interrupted' -and [string]$st.ErrorClass -eq 'stopped'))) {
             $hit = $null
             try { $hit = & $LimitHit $st.Job $st.Execution $(if ($st.StartedUtc) { ([datetime]$st.StartedUtc).ToUniversalTime() } else { $tNow }) }
             catch { & $Log 'WARN' ('step {0} {1}: whether it was stopped at its run limit could not be checked ({2})' -f $st.Order, $st.Job, $_.Exception.Message) }
@@ -2555,14 +2714,10 @@ function Invoke-SIJobFlow {
                         & $Log 'WARN' ('step {0} {1}: {2}' -f $st.Order, $st.Job, $healLine)
                         $st.RetryReason = $healLine; $st.Error = $healLine; $st.ErrorClass = 'run-limit-raised'
                         if ($OnStep) { try { & $OnStep $state $st 'Heal' } catch { } }
-                        $st.State = 'Starting'; $st.ErrorClass = ''; $st.Error = ''; $st.EndedUtc = $null; $st.StartedUtc = ([datetime](& $Now)).ToUniversalTime()
-                        & $saveNow
                         # the job's limit changed: read again (and said again) for the second start
                         $jobLimits.Remove([string]$st.Job); $saidLimit.Remove([string]$st.Job)
                         try {
-                            $st.Attempts = [int]$st.Attempts + 1
-                            $st.Execution = [string](& $Start $st.Job); $st.State = 'Running'; $ended = $false
-                            & $Log 'INFO' ('step {0} {1}: started again ({2}, attempt {3})' -f $st.Order, $st.Job, $st.Execution, $st.Attempts)
+                            . $startAgain $st; $ended = $false
                         } catch {
                             $st.State = 'Failed'; $st.ErrorClass = 'start-failed'; $st.Error = [string]$_.Exception.Message; $tNow = ([datetime](& $Now)).ToUniversalTime()
                         }
@@ -2575,29 +2730,59 @@ function Invoke-SIJobFlow {
         }
         # Working rule 4: a container that died before the engine ran is a PLATFORM failure -- started again; a
         # failure of the engine itself never is. Classified only after the pause, so the engine's records arrive.
+        # "NOT KNOWN YET" (review 2026-11-13): the platform's events of this execution are not settled -- the step is HELD in
+        # 'Running' (nothing that needs it starts, nothing is started again, it is not failed) and asked again on a later pass
+        # of this loop, at most every StartDecideRecheckSeconds, against the same window (the end this runner first saw).
+        # At StartDecideMaxMinutes after that end it decides on what it has (no platform answer = as before 3.1.16: a start
+        # that cannot be told is 'unknown', never started again). A runner that stops meanwhile: the next one resumes the run,
+        # follows the step and decides the same way from the moment it sees the end.
+        $dk = [string]$st.Order
+        $dHeld = $deciding.ContainsKey($dk) -and [string]$deciding[$dk].Execution -eq [string]$st.Execution
+        if ($ended -and $StartEvidence -and $st.State -eq 'Failed' -and $st.ErrorClass -eq 'job-failed' -and $dHeld -and
+            ($tNow - [datetime]$deciding[$dk].AskedUtc).TotalSeconds -lt $StartDecideRecheckSeconds -and
+            ($tNow - [datetime]$deciding[$dk].EndSeenUtc).TotalMinutes -lt $StartDecideMaxMinutes) {
+            # not time to ask again yet: still held
+            $st.State = 'Running'; $st.ErrorClass = ''; $st.Error = ''; $ended = $false
+        }
         if ($ended -and $StartEvidence -and $st.State -eq 'Failed' -and $st.ErrorClass -eq 'job-failed') {
             $began = if ($st.StartedUtc) { ([datetime]$st.StartedUtc).ToUniversalTime() } else { $tNow }
-            if ($StartRetryBackoffSeconds -gt 0) { & $Sleep $StartRetryBackoffSeconds }
+            # the pause before the first look only (the engine's records have time to arrive); a held step is asked again as is
+            if (-not $dHeld -and $StartRetryBackoffSeconds -gt 0) { & $Sleep $StartRetryBackoffSeconds }
+            $endSeen = if ($dHeld) { [datetime]$deciding[$dk].EndSeenUtc } else { $tNow }
+            $evNow = ([datetime](& $Now)).ToUniversalTime()
             $ev = $null
-            try { $ev = if ($StartEvidence -is [scriptblock]) { & $StartEvidence $st.Job $st.Execution $began $tNow } else { $StartEvidence.Probe($st.Job, $st.Execution, $began, $tNow) } }
+            try { $ev = if ($StartEvidence -is [scriptblock]) { & $StartEvidence $st.Job $st.Execution $began $endSeen $evNow } else { $StartEvidence.Probe($st.Job, $st.Execution, $began, $endSeen, $evNow) } }
             catch { & $Log 'WARN' ('step {0} {1}: whether it started could not be checked ({2})' -f $st.Order, $st.Job, $_.Exception.Message) }
             $hasRow = if ($ev -and $ev.PSObject.Properties['HasStartRecord']) { $ev.HasStartRecord } else { $null }
             $hasLog = if ($ev -and $ev.PSObject.Properties['HasTranscript']) { $ev.HasTranscript } else { $null }
-            $cls = Get-SIJobFlowFailureClass -ErrorClass $st.ErrorClass -HasStartRecord $hasRow -HasTranscript $hasLog -DurationSeconds ($tNow - $began).TotalSeconds `
-                       -MaxSeconds $NeverStartedMaxSeconds -Attempts ([int]$st.Attempts) -Retries $StartRetries
-            if ($cls.Class -eq 'never-started' -and $cls.Retry) {
+            $hasCs = if ($ev -and $ev.PSObject.Properties['HasContainerStarted']) { $ev.HasContainerStarted } else { $null }
+            $csWait = [bool]($ev -and $ev.PSObject.Properties['ContainerStartPending'] -and $ev.ContainerStartPending)
+            $pastBound = ($evNow - $endSeen).TotalMinutes -ge $StartDecideMaxMinutes
+            $cls = Get-SIJobFlowFailureClass -ErrorClass $st.ErrorClass -HasStartRecord $hasRow -HasTranscript $hasLog -DurationSeconds ($endSeen - $began).TotalSeconds `
+                       -MaxSeconds $NeverStartedMaxSeconds -Attempts ([int]$st.Attempts) -Retries $StartRetries -HasContainerStarted $hasCs -ContainerStartPending ($csWait -and -not $pastBound)
+            if ($cls.Class -eq 'deciding') {
+                if (-not $dHeld) {
+                    $deciding[$dk] = @{ Execution = [string]$st.Execution; EndSeenUtc = $endSeen; AskedUtc = $evNow }
+                    & $Log 'INFO' ('step {0} {1}: its execution {2} ended failed; {3} (at most {4} minutes)' -f $st.Order, $st.Job, $st.Execution, $cls.Why, $StartDecideMaxMinutes)
+                } else { $deciding[$dk].AskedUtc = $evNow }
+                $st.State = 'Running'; $st.ErrorClass = ''; $st.Error = ''; $ended = $false
+            } else {
+                if ($dHeld) {
+                    $deciding.Remove($dk)
+                    if ($csWait -and $pastBound) { & $Log 'WARN' ('step {0} {1}: whether Azure started its container could still not be told {2} minutes after its execution ended -- decided on the rest of the evidence' -f $st.Order, $st.Job, $StartDecideMaxMinutes) }
+                }
+            }
+            if ($ended -and $cls.Class -eq 'never-started' -and $cls.Retry) {
                 $failedExec = [string]$st.Execution
                 $st.RetryReason = Get-SIJobFlowRetryText -Kind retried -Execution $failedExec
                 & $Log 'WARN' ('step {0} {1}: {2} -- {3}' -f $st.Order, $st.Job, $st.RetryReason, $cls.Why)
-                $st.State = 'Starting'; $st.ErrorClass = ''; $st.Error = ''; $st.EndedUtc = $null; $st.StartedUtc = ([datetime](& $Now)).ToUniversalTime()
-                & $saveNow
                 try {
-                    $st.Attempts = [int]$st.Attempts + 1
-                    $st.Execution = [string](& $Start $st.Job); $st.State = 'Running'; $ended = $false
-                    & $Log 'INFO' ('step {0} {1}: started again ({2}, attempt {3})' -f $st.Order, $st.Job, $st.Execution, $st.Attempts)
+                    . $startAgain $st; $ended = $false
                 } catch {
                     $st.State = 'Failed'; $st.ErrorClass = 'start-failed'; $st.Error = [string]$_.Exception.Message; $tNow = ([datetime](& $Now)).ToUniversalTime()
                 }
+            } elseif (-not $ended) {
+                # held as "not known yet" (above): nothing more is judged on this pass
             } elseif ($cls.Class -eq 'never-started') {
                 $st.ErrorClass = 'never-started'; $st.Error = Get-SIJobFlowRetryText -Kind gave-up -Attempts ([int]$st.Attempts)
             } else {
@@ -2651,12 +2836,8 @@ function Invoke-SIJobFlow {
                     $againLine = Get-SIPipelineFirstRunRestartText -Job ([string]$st.Job) -Why ([string]$st.Error) -Restart ($doneAgain + 1) -Of $FirstRunRestarts
                     & $Log 'WARN' ('step {0} {1}: {2}' -f $st.Order, $st.Job, $againLine)
                     $st.RetryReason = (@([string]$st.RetryReason, $againLine) | Where-Object { $_ }) -join ' | '
-                    $st.State = 'Starting'; $st.ErrorClass = ''; $st.Error = ''; $st.EndedUtc = $null; $st.StartedUtc = ([datetime](& $Now)).ToUniversalTime()
-                    & $saveNow
                     try {
-                        $st.Attempts = [int]$st.Attempts + 1
-                        $st.Execution = [string](& $Start $st.Job); $st.State = 'Running'; $ended = $false
-                        & $Log 'INFO' ('step {0} {1}: started again ({2}, attempt {3})' -f $st.Order, $st.Job, $st.Execution, $st.Attempts)
+                        . $startAgain $st; $ended = $false
                     } catch {
                         $st.State = 'Failed'; $st.ErrorClass = 'start-failed'; $st.Error = [string]$_.Exception.Message; $tNow = ([datetime](& $Now)).ToUniversalTime()
                     }

@@ -184,6 +184,20 @@ function Write-UpdLog([string]$m) {
     if (Get-Command -Name Set-SIUpdateWatchLine -ErrorAction SilentlyContinue) { Set-SIUpdateWatchLine -Step ("$global:SI_UpdaterStep") }
     if (Get-Command -Name Invoke-SIUpdaterLockBeat -ErrorAction SilentlyContinue) { $null = Invoke-SIUpdaterLockBeat -What ("$global:SI_UpdaterStep") }
 }
+# The end of an update's output reaches the log (found 2026-11-13: the last minutes of a finished update never arrived in
+# Log Analytics -- the container ended before its last lines were shipped). At the very end of the execution, on every
+# way out: the console is flushed, the update waits a short, fixed time (-Seconds, 15 by default; never more than 30) so
+# the log agent ships what was written, and flushes once more. Never throws; changes nothing the update did.
+function Complete-SIUpdaterOutput {
+    param([int]$Seconds = 15, [scriptblock]$Sleep)
+    if ($Seconds -lt 0) { $Seconds = 0 }
+    if ($Seconds -gt 30) { $Seconds = 30 }
+    try { [Console]::Out.Flush() } catch { }
+    try { [Console]::Error.Flush() } catch { }
+    if ($Seconds -gt 0) { try { if ($Sleep) { & $Sleep $Seconds } else { Start-Sleep -Seconds $Seconds } } catch { } }
+    try { [Console]::Out.Flush() } catch { }
+    try { [Console]::Error.Flush() } catch { }
+}
 # #427: records a failure of this run for Invardia's uplink (SI-UpdaterTelemetry.ps1); without that file, nothing
 function Add-SIUpdaterFailureIf([string]$Step, [string]$Text, [string]$Code = '') {
     $c = Get-Command -Name Add-SIUpdaterFailure -ErrorAction SilentlyContinue
@@ -976,7 +990,7 @@ function Invoke-SIUpdaterRoll {
     $notRestored = @($recorded | Where-Object { "$($_.Step)" -eq 'restore' })
     Write-UpdLog $(if ($code -eq 0) { 'engine jobs are on the approved version' }
                    elseif ($notRestored.Count) { "the update FAILED (exit $code) -- $($notRestored.Count) job restore(s) failed: see the update log, restore them by hand" }
-                   else { "the update FAILED (exit $code) -- every changed job was restored to its previous image" })
+                   else { Get-SIUpdaterUpdateFailedLine -Code $code -SelfMoved:(Test-SIUpdaterSelfMovedEarly) })
     # framework rule 11g: a build pool the release could not bring back to 0 agents (or removed and could not make again) is
     # reported as its own failure line ALSO when the update succeeded -- it never changes the update's result
     if ($code -eq 0 -and $global:SI_UpdateFailures) {
@@ -987,7 +1001,7 @@ function Invoke-SIUpdaterRoll {
             foreach ($f in $recorded) { Add-SIUpdaterFailureIf ([string]$f.Step) ([string]$f.Text) ([string]$f.Code) }
         } else {
             $rollStep = if (Get-Command -Name ConvertTo-SIUpdaterRollStep -ErrorAction SilentlyContinue) { ConvertTo-SIUpdaterRollStep -Stage ([string]$global:SI_UpdateStage) } else { 'roll' }
-            Add-SIUpdaterFailureIf $rollStep $(if ("$global:SI_UpdateFirstWarn".Trim()) { [string]$global:SI_UpdateFirstWarn } else { "the engine update ended with exit code $code; every changed job was restored" })
+            Add-SIUpdaterFailureIf $rollStep $(if ("$global:SI_UpdateFirstWarn".Trim()) { [string]$global:SI_UpdateFirstWarn } elseif (Test-SIUpdaterSelfMovedEarly) { "the engine update ended with exit code $code after the engine jobs and the updater moved to the new release; the failed step is tried again by the next run" } else { "the engine update ended with exit code $code; every changed job was restored" })
         }
     }
     $global:SI_UpdaterStep = 'post-roll'
@@ -1441,20 +1455,28 @@ if (-not $DefineOnly) {
     if (Get-Command -Name Start-SIUpdateWatch -ErrorAction SilentlyContinue) { try { $null = Start-SIUpdateWatch -QuietMinutes 20 } catch { } }
     # framework rule 11g: ONE build-pool session for the whole run -- every image of the update (the queued web app / MCP /
     # updater builds, the engine build of the release, the self-roll) scales the pool up lazily before its first build, and
-    # the pool goes back to 0 agents in the finally, read back; a run that builds nothing never touches it
-    $siPoolOwn = [bool](Get-Command -Name Open-SIBuildPoolSession -ErrorAction SilentlyContinue)
-    if ($siPoolOwn) { $null = Open-SIBuildPoolSession }
-    try { $rc = Invoke-SIUpdater } catch {
-        Write-UpdLog ("FAILED: {0}" -f $_.Exception.Message)
-        Add-SIUpdaterFailureIf $(if ("$global:SI_UpdaterStep".Trim()) { "$global:SI_UpdaterStep" } else { 'updater' }) $_.Exception.Message
+    # the pool goes back to 0 agents in the finally, read back; a run that builds nothing never touches it.
+    # (The outer try: the end of the output reaches the log on EVERY way out -- a success, a failure, a throw in the steps
+    # after the run -- through Complete-SIUpdaterOutput in its finally, right before the exit.)
+    try {
+        $siPoolOwn = [bool](Get-Command -Name Open-SIBuildPoolSession -ErrorAction SilentlyContinue)
+        if ($siPoolOwn) { $null = Open-SIBuildPoolSession }
+        try { $rc = Invoke-SIUpdater } catch {
+            Write-UpdLog ("FAILED: {0}" -f $_.Exception.Message)
+            Add-SIUpdaterFailureIf $(if ("$global:SI_UpdaterStep".Trim()) { "$global:SI_UpdaterStep" } else { 'updater' }) $_.Exception.Message
+        } finally {
+            if ($siPoolOwn) { try { $null = Close-SIUpdaterBuildPool } catch { } }
+        }
+        # #506: the tracked run's last stage (done / failed / rolled back / waiting); never changes the exit code
+        try { if (Get-Command -Name Stop-SIUpdateTrack -ErrorAction SilentlyContinue) { $null = Stop-SIUpdateTrack -ExitCode $rc } } catch { }
+        if (Get-Command -Name Stop-SIUpdateWatch -ErrorAction SilentlyContinue) { Stop-SIUpdateWatch }
+        $null = Invoke-SIUpdaterFailureReport -ExitCode $rc -StartedAt $updStarted
+        # the update's own sign of life ends with it (a later update or the pipeline never waits 15 minutes for a finished one)
+        if (Get-Command -Name Unregister-SIUpdaterExecutionBeat -ErrorAction SilentlyContinue) { Unregister-SIUpdaterExecutionBeat }
+        # (Write-Host, not Write-UpdLog: the run's lock and its watch are already let go -- this line must not touch them)
+        Write-Host ("[{0:u}] the update run has ended" -f [datetime]::UtcNow)
     } finally {
-        if ($siPoolOwn) { try { $null = Close-SIUpdaterBuildPool } catch { } }
+        Complete-SIUpdaterOutput
     }
-    # #506: the tracked run's last stage (done / failed / rolled back / waiting); never changes the exit code
-    try { if (Get-Command -Name Stop-SIUpdateTrack -ErrorAction SilentlyContinue) { $null = Stop-SIUpdateTrack -ExitCode $rc } } catch { }
-    if (Get-Command -Name Stop-SIUpdateWatch -ErrorAction SilentlyContinue) { Stop-SIUpdateWatch }
-    $null = Invoke-SIUpdaterFailureReport -ExitCode $rc -StartedAt $updStarted
-    # the update's own sign of life ends with it (a later update or the pipeline never waits 15 minutes for a finished one)
-    if (Get-Command -Name Unregister-SIUpdaterExecutionBeat -ErrorAction SilentlyContinue) { Unregister-SIUpdaterExecutionBeat }
     exit $rc
 }

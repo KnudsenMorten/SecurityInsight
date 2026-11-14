@@ -716,6 +716,7 @@
       "settings": [
         "SI_LogRetentionDays",
         "SI_Pro_DataRetentionDays",
+        "SI_Data_KeepCollections",
         "SI_Pro_ConfigBackupRetentionDays"
       ]
     },
@@ -4741,6 +4742,36 @@
         "docUrl": "https://invardia.com/docs/si/settings/SI_CVE_RequireExploit/",
         "confirmWhen": "on",
         "confirm": "When on, every CVE without a known exploit is removed from the reports. Much shorter reports, but unexploited vulnerabilities are hidden. Hides every vulnerability without a known exploit from the reports: real, patchable exposure becomes invisible to readers. Reversible at once (the next report shows them again)."
+      }
+    },
+    {
+      "name": "SI_Data_KeepCollections",
+      "label": "Collections kept with all their findings",
+      "group": "Data & retention",
+      "type": "int",
+      "engines": [],
+      "edition": "community",
+      "secret": false,
+      "advanced": true,
+      "default": null,
+      "defaultText": "3 collections (the newest and the 2 before it; never fewer than 2)",
+      "description": "How many complete collections of each kind (Risk Analysis Detailed and Summary) keep all their findings in the Pro database: the newest ones, so What changed, the collection lists and the history pages go back that many runs. Older collections keep only their totals for the trends. While the database is 70 % full or more, one fewer is kept each run (never fewer than 2) and the run says so in a warning; below 70 % this number applies again. Default 3, at least 2.",
+      "purpose": "How many complete collections of each kind (Risk Analysis Detailed and Summary) keep all their findings in the Pro database -- the newest ones. What changed, the collection lists and the history pages go back that many runs; older collections keep only their totals for the trends.",
+      "effect": "More keeps more runs to open and compare, and grows the database by about one run's findings per extra collection; fewer keeps a smaller database. While the database is 70 % full or more, SecurityInsight keeps one fewer each run (never fewer than 2) and the run says so in a warning; below 70 % this number applies again. Collections already removed do not come back -- the kept number grows again by one per run.",
+      "whenToChange": "Lower it when the database keeps filling up and a larger database tier is not an option; raise it when you need to look further back than the last 3 runs.",
+      "unit": "collections",
+      "min": 2,
+      "card": "How long data is kept",
+      "info": {
+        "what": "How many complete collections of each kind (Risk Analysis Detailed and Summary) keep all their findings in the Pro database -- the newest ones. What changed, the collection lists and the history pages go back that many runs; older collections keep only their totals for the trends.",
+        "whenChanged": "More keeps more runs to open and compare, and grows the database by about one run's findings per extra collection; fewer keeps a smaller database. While the database is 70 % full or more, SecurityInsight keeps one fewer each run (never fewer than 2) and the run says so in a warning; below 70 % this number applies again. Collections already removed do not come back -- the kept number grows again by one per run.",
+        "risk": "A lower value PERMANENTLY removes the findings of the older collections at the next data sync (their totals for the trends stay); What changed, the collection lists and the history then go back fewer runs. Cannot be undone. A higher value grows the database by about one run's findings per extra collection.",
+        "requires": "Nothing else.",
+        "default": "3 collections (the newest and the 2 before it; never fewer than 2)",
+        "recommended": "Keep 3 (the newest and the 2 before it).",
+        "docUrl": "https://invardia.com/docs/si/settings/SI_Data_KeepCollections/",
+        "confirmWhen": "lower",
+        "confirm": "A lower value PERMANENTLY removes the findings of the older collections at the next data sync (their totals for the trends stay); What changed, the collection lists and the history then go back fewer runs. Cannot be undone. A higher value grows the database by about one run's findings per extra collection."
       }
     },
     {

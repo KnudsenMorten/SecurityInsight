@@ -111,6 +111,46 @@ Describe 'classifying a failed step (pure)' {
         # the store cannot be read / holds no row of this engine, the run logs cannot be read: unknown
         (Get-SIJobFlowFailureClass -ErrorClass 'job-failed' -HasStartRecord $null -HasTranscript $null -DurationSeconds 31).Retry | Should -BeFalse
     }
+    It 'THE PLATFORM SAYS THE CONTAINER NEVER STARTED (live 2026-11-13, internal: correlation 158 s / 187 s, store cannot tell) -> never-started, retried, any duration' {
+        $c = Get-SIJobFlowFailureClass -ErrorClass 'job-failed' -HasStartRecord $null -HasTranscript $false -DurationSeconds 158 -Attempts 1 -Retries 1 -HasContainerStarted $false
+        $c.Class | Should -Be 'never-started'; $c.Retry | Should -BeTrue; $c.Signal | Should -Be 'platform-events'
+        $c.Why | Should -Match 'Azure scheduled the step''s container but never started it'
+        (Get-SIJobFlowFailureClass -ErrorClass 'job-failed' -HasStartRecord $null -HasTranscript $null -DurationSeconds 187 -HasContainerStarted $false).Class | Should -Be 'never-started' -Because 'the platform''s own word needs no run-log read'
+        (Get-SIJobFlowFailureClass -ErrorClass 'job-failed' -HasStartRecord $null -HasTranscript $false -DurationSeconds 158 -Attempts 2 -Retries 1 -HasContainerStarted $false).Retry | Should -BeFalse -Because 'the retry count still holds'
+    }
+    It 'the engine''s own evidence still wins over the platform events; a started container (or no events) keeps the old rule' {
+        (Get-SIJobFlowFailureClass -ErrorClass 'job-failed' -HasStartRecord $true -HasTranscript $false -DurationSeconds 158 -HasContainerStarted $false).Class | Should -Be 'engine-failed'
+        (Get-SIJobFlowFailureClass -ErrorClass 'job-failed' -HasStartRecord $null -HasTranscript $true -DurationSeconds 158 -HasContainerStarted $false).Class | Should -Be 'engine-failed'
+        (Get-SIJobFlowFailureClass -ErrorClass 'job-failed' -HasStartRecord $null -HasTranscript $false -DurationSeconds 158 -HasContainerStarted $true).Class | Should -Be 'unknown' -Because 'the container started: the 120 s rule as before'
+        (Get-SIJobFlowFailureClass -ErrorClass 'job-failed' -HasStartRecord $null -HasTranscript $false -DurationSeconds 158).Class | Should -Be 'unknown' -Because 'no platform events: as before'
+        (Get-SIJobFlowFailureClass -ErrorClass 'timeout' -HasStartRecord $null -HasTranscript $false -DurationSeconds 5 -HasContainerStarted $false).Class | Should -Be 'not-applicable'
+    }
+    It 'the platform-event query: this execution''s replicas, the step''s window; a name that is not an execution never reaches a query' {
+        $q = Get-SIJobFlowContainerStartQuery -Execution 'caj-si-asset-correlation-uxf5u22' -StartedUtc ([datetime]::SpecifyKind([datetime]'2026-11-13T02:20:57', 'Utc')) -EndedUtc ([datetime]::SpecifyKind([datetime]'2026-11-13T02:23:35', 'Utc'))
+        $q | Should -Match "^ContainerAppSystemLogs \|"
+        $q | Should -Match "ReplicaName startswith 'caj-si-asset-correlation-uxf5u22-'"
+        $q | Should -Match 'datetime\(2026-11-13T02:18:57Z\) \.\. datetime\(2026-11-13T02:28:35Z\)'
+        $q | Should -Match "Started = countif\(Reason == 'ContainerStarted' and ReplicaName startswith 'caj-si-asset-correlation-uxf5u22-'\)"
+        # reviews 2026-11-13: the end is THIS execution's -- its own pod's end, or a backoff event of the job that NAMES this
+        # execution; when that end happened (EndAt) decides whether the answer is settled
+        $q | Should -Match "OwnEnd = countif\(Reason == 'PodDeletion' and ReplicaName startswith 'caj-si-asset-correlation-uxf5u22-'\)"
+        $q | Should -Match "JobEnd = countif\(Reason == 'BackoffLimitExceeded' and JobName == 'caj-si-asset-correlation' and Ex == 'caj-si-asset-correlation-uxf5u22'\)"
+        $q | Should -Match ([regex]::Escape("EndAt = maxif(TimeGenerated, (Reason == 'PodDeletion' and ReplicaName startswith 'caj-si-asset-correlation-uxf5u22-') or (Reason == 'BackoffLimitExceeded' and JobName == 'caj-si-asset-correlation' and Ex == 'caj-si-asset-correlation-uxf5u22'))"))
+        $q | Should -Match ([regex]::Escape('Ended = iff(OwnEnd > 0 or JobEnd > 0, 1, 0)'))
+        $q | Should -Not -Match 'Others' -Because 'a backoff event that names no execution is never this execution''s end (an earlier one''s inside the window ended it)'
+        Get-SIJobFlowContainerStartQuery -Execution "x' or 1==1 //" -StartedUtc $script:T0 -EndedUtc $script:T0 | Should -BeNullOrEmpty
+    }
+    It 'reading the answer: scheduled and never started -> $false; started -> $true; nothing (not readable / not delivered yet) -> $null, never "never started"' {
+        $now = [datetime]::SpecifyKind([datetime]'2026-11-13T03:00:00', 'Utc')
+        ConvertFrom-SIJobFlowContainerStartRows -NowUtc $now -Rows @([pscustomobject]@{ Scheduled = 1; Started = 0; Ended = 1; EndAt = '2026-11-13T02:40:00Z' }) | Should -BeFalse -Because 'scheduled, never started, and this execution''s end arrived 20 minutes ago: settled'
+        ConvertFrom-SIJobFlowContainerStartRows -NowUtc $now -Rows @([pscustomobject]@{ Scheduled = 1; Started = 0; Ended = 1; EndAt = '2026-11-13T02:58:00Z' }) | Should -BeNullOrEmpty -Because 'the end is 2 minutes old: a ContainerStarted may still be on its way'
+        ConvertFrom-SIJobFlowContainerStartRows -NowUtc $now -Rows @([pscustomobject]@{ Scheduled = 1; Started = 0; Ended = 1 }) | Should -BeNullOrEmpty -Because 'an end with no time is never settled'
+        ConvertFrom-SIJobFlowContainerStartRows -Rows @([pscustomobject]@{ Scheduled = 1; Started = 0; Ended = 0 }) | Should -BeNullOrEmpty -Because 'review 2026-11-13: the end not delivered yet -- a ContainerStarted may still be on its way'
+        ConvertFrom-SIJobFlowContainerStartRows -Rows @([pscustomobject]@{ Scheduled = 1; Started = 1 }) | Should -BeTrue
+        ConvertFrom-SIJobFlowContainerStartRows -Rows @([pscustomobject]@{ Scheduled = 0; Started = 0 }) | Should -BeNullOrEmpty
+        ConvertFrom-SIJobFlowContainerStartRows -Rows @() | Should -BeNullOrEmpty
+        ConvertFrom-SIJobFlowContainerStartRows -Rows @([pscustomobject]@{ Mine = 0; Stamped = 3 }) | Should -BeNullOrEmpty -Because 'another query''s row is no answer'
+    }
     It 'a timeout, a start ARM refused, an interruption are not start failures of the container' {
         foreach ($k in 'timeout', 'start-failed', 'interrupted', '') {
             $c = Get-SIJobFlowFailureClass -ErrorClass $k -HasStartRecord $false -HasTranscript $false -DurationSeconds 5
@@ -284,6 +324,13 @@ Describe 'the runner: everything else is a real failure and is never retried' {
         $r = Invoke-RetryFlow -Jobs @('endpoint') -Arm $arm -Evidence (New-Evidence -Rows @{ 'caj-si-endpoint-e1' = $false })
         (Get-Step $r 'endpoint').Attempts | Should -Be 1; $r.State | Should -Be 'Failed'
     }
+    It 'WIRING (live 2026-11-13): the same unsure case, but the PLATFORM says the container never started -> started again, the run succeeds' {
+        $arm = New-RetryArm -Outcomes @{ 'endpoint' = @('Failed', 'Succeeded') }
+        $r = Invoke-RetryFlow -Jobs @('endpoint') -Arm $arm -Evidence { param($j, $e, $s, $t) [pscustomobject]@{ HasStartRecord = $false; HasTranscript = $null; HasContainerStarted = $false } }
+        $st = Get-Step $r 'endpoint'
+        $st.Attempts | Should -Be 2; $st.State | Should -Be 'Success'; $r.State | Should -Be 'Succeeded'
+        ($script:Logs -join "`n") | Should -Match 'Azure scheduled the step''s container but never started it'
+    }
     It 'a probe that cannot read anything is unsure: not retried, said' {
         $arm = New-RetryArm -Outcomes @{ 'endpoint' = @('Failed', 'Succeeded') }
         $r = Invoke-RetryFlow -Jobs @('endpoint') -Arm $arm -Evidence (New-Evidence -Throw)
@@ -303,6 +350,156 @@ Describe 'the runner: everything else is a real failure and is never retried' {
     }
 }
 
+Describe 'the platform''s word must be SETTLED: Azure''s events arrive late (review 2026-11-13)' {
+    BeforeAll {
+        # the real probe over a scripted workspace: the run-health store cannot tell (no stamped row), no run-log listing
+        # (unknown), and the container events of the execution answer, call by call, the next scripted row (the last repeats).
+        # A row's EndAt is minutes relative to the run's start (T0); $null = no end event delivered.
+        function New-PlatformProbe {
+            param([object[]]$Answers)
+            $script:Plat = @{ Answers = @($Answers); Calls = (New-Object System.Collections.Generic.List[object]) }
+            $p = New-SIJobFlowStartEvidence -Query {
+                param($k)
+                if ($k -notmatch '^ContainerAppSystemLogs') { return [pscustomobject]@{ Mine = 0; Stamped = 0 } }
+                $i = [Math]::Min($script:Plat.Calls.Count, $script:Plat.Answers.Count - 1)
+                $script:Plat.Calls.Add($script:Clock)
+                $a = $script:Plat.Answers[$i]
+                $row = [ordered]@{ Scheduled = 1; Started = [int]$a.Started; OwnEnd = 0; JobEnd = 0; Ended = 0; EndAt = $null }
+                if ($null -ne $a.EndMin) { $row.OwnEnd = 1; $row.Ended = 1; $row.EndAt = $script:T0.AddMinutes([double]$a.EndMin).ToString('yyyy-MM-ddTHH:mm:ssZ') }
+                [pscustomobject]$row
+            }
+            $script:PlatProbe = $p
+            { param($j, $e, $s, $t, $n) $script:PlatProbe.Probe($j, $e, $s, $t, $n) }
+        }
+        function Invoke-PlatFlow {
+            param($Arm, $Evidence, [scriptblock]$Running, [scriptblock]$StopWorkers)
+            $script:Clock = $script:T0; $script:Sleeps = New-Object System.Collections.Generic.List[int]; $script:Logs.Clear()
+            $script:SavedStates = New-Object System.Collections.Generic.List[string]
+            $p = @{ Definition = (New-SIDefaultJobFlow -Installed @('endpoint') -Map $script:Map); Seams = (New-SIJobFlowArmSeams -SubscriptionId 'sub' -ResourceGroup 'rg' -Arm $Arm)
+                    Save = { param($s) $script:SavedStates.Add([string](@($s.Steps | Where-Object { $_.Job -eq 'endpoint' })[0].State)) }
+                    Now = $script:NowSb; Sleep = $script:SleepSb; Log = $script:LogSb; Map = $script:Map; PollSeconds = 30; Previous = $null; Force = $true; StartRetries = 1; StartEvidence = $Evidence }
+            if ($Running) { $p.Running = $Running }
+            if ($StopWorkers) { $p.StopWorkers = $StopWorkers }
+            Invoke-SIJobFlow @p
+        }
+    }
+    It 'the contract values are named: 15 minutes of delivery lag, 30 minutes at most, the wake-up check waits longer than that' {
+        $script:SIJobFlow.ContainerEventsLagMinutes | Should -Be 15
+        $script:SIJobFlow.StartDecideMaxMinutes | Should -Be 30
+        $script:SIJobFlow.EndedGraceMinutes | Should -BeGreaterThan $script:SIJobFlow.StartDecideMaxMinutes
+    }
+    It 'reading the events (pure): started / settled never-started / not known yet / nothing to wait for' {
+        $now = [datetime]::SpecifyKind([datetime]'2026-11-13T03:00:00', 'Utc')
+        $r = Read-SIJobFlowContainerStartRows -NowUtc $now -Rows @([pscustomobject]@{ Scheduled = 1; Started = 0; Ended = 1; EndAt = '2026-11-13T02:58:00Z' })
+        $r.Started | Should -BeNullOrEmpty; $r.Pending | Should -BeTrue -Because 'PodDeletion 2 minutes old and no ContainerStarted: not known yet'
+        $r = Read-SIJobFlowContainerStartRows -NowUtc $now -Rows @([pscustomobject]@{ Scheduled = 1; Started = 0; Ended = 1; EndAt = ([datetime]::SpecifyKind([datetime]'2026-11-13T02:40:00', 'Utc')) })
+        $r.Started | Should -BeFalse; $r.Pending | Should -BeFalse -Because 'PodDeletion 20 minutes old and still no ContainerStarted: settled'
+        (Read-SIJobFlowContainerStartRows -NowUtc $now -Rows @([pscustomobject]@{ Scheduled = 1; Started = 0; Ended = 1; EndAt = '2026-11-13T02:45:00Z' })).Started | Should -BeFalse -Because 'exactly 15 minutes'
+        (Read-SIJobFlowContainerStartRows -NowUtc $now -Rows @([pscustomobject]@{ Scheduled = 1; Started = 0; Ended = 1; EndAt = 'not a time' })).Pending | Should -BeTrue -Because 'an end time that cannot be read is never settled'
+        $r = Read-SIJobFlowContainerStartRows -NowUtc $now -Rows @([pscustomobject]@{ Scheduled = 1; Started = 1; Ended = 1; EndAt = '2026-11-13T02:58:00Z' })
+        $r.Started | Should -BeTrue; $r.Pending | Should -BeFalse
+        $r = Read-SIJobFlowContainerStartRows -NowUtc $now -Rows @([pscustomobject]@{ Scheduled = 0; Started = 0; Ended = 0 })
+        $r.Started | Should -BeNullOrEmpty; $r.Pending | Should -BeFalse -Because 'no event of the execution: nothing to wait for (as before)'
+    }
+    It 'an EARLIER execution''s BackoffLimitExceeded that does not name this execution is not this execution''s end' {
+        # the query counts a backoff only by this execution's name; what it then answers for this execution: no end -> not
+        # settled -> never "never started"
+        $q = Get-SIJobFlowContainerStartQuery -Execution 'caj-si-endpoint-e2' -StartedUtc $script:T0 -EndedUtc $script:T0.AddMinutes(3)
+        $q | Should -Match ([regex]::Escape("JobEnd = countif(Reason == 'BackoffLimitExceeded' and JobName == 'caj-si-endpoint' and Ex == 'caj-si-endpoint-e2')"))
+        $q | Should -Not -Match ([regex]::Escape("countif(Reason == 'BackoffLimitExceeded' and JobName == 'caj-si-endpoint')"))
+        $r = Read-SIJobFlowContainerStartRows -NowUtc $script:T0.AddHours(1) -Rows @([pscustomobject]@{ Scheduled = 1; Started = 0; OwnEnd = 0; JobEnd = 0; Ended = 0; EndAt = $null })
+        $r.Started | Should -BeNullOrEmpty; $r.Pending | Should -BeTrue
+    }
+    It 'the class (pure): not settled is "deciding" only where the platform''s answer would decide; past the bound it is as before' {
+        $c = Get-SIJobFlowFailureClass -ErrorClass 'job-failed' -HasStartRecord $null -HasTranscript $null -DurationSeconds 158 -ContainerStartPending $true
+        $c.Class | Should -Be 'deciding'; $c.Retry | Should -BeFalse; $c.Why | Should -Match 'not known yet'
+        (Get-SIJobFlowFailureClass -ErrorClass 'job-failed' -HasStartRecord $null -HasTranscript $false -DurationSeconds 600 -ContainerStartPending $true).Class | Should -Be 'deciding'
+        (Get-SIJobFlowFailureClass -ErrorClass 'job-failed' -HasStartRecord $true -HasTranscript $null -DurationSeconds 158 -ContainerStartPending $true).Class | Should -Be 'engine-failed' -Because 'the engine''s own record decides at once'
+        (Get-SIJobFlowFailureClass -ErrorClass 'job-failed' -HasStartRecord $false -HasTranscript $false -DurationSeconds 600 -ContainerStartPending $true).Class | Should -Be 'never-started' -Because 'both signals known absent decide as before'
+        (Get-SIJobFlowFailureClass -ErrorClass 'job-failed' -HasStartRecord $null -HasTranscript $false -DurationSeconds 30 -ContainerStartPending $true).Class | Should -Be 'never-started' -Because 'a short run with no run log decides as before'
+        (Get-SIJobFlowFailureClass -ErrorClass 'job-failed' -HasStartRecord $null -HasTranscript $null -DurationSeconds 158 -ContainerStartPending $false).Class | Should -Be 'unknown'
+    }
+    It 'ContainerStarted ARRIVES LATE: the first read (scheduled, PodDeletion 2 min old, no ContainerStarted) is "not known yet" -- no restart; the next read says started -- no restart' {
+        $arm = New-RetryArm -Outcomes @{ 'endpoint' = @('Failed', 'Succeeded') }
+        $ev = New-PlatformProbe -Answers @(@{ Started = 0; EndMin = -1 }, @{ Started = 1; EndMin = -1 })
+        $r = Invoke-PlatFlow -Arm $arm -Evidence $ev
+        $s = Get-Step $r 'endpoint'
+        @($script:Arm.Starts | Where-Object { $_ -eq 'endpoint' }).Count | Should -Be 1 -Because 'it really ran: never a second run (the close-loop mail would go out twice)'
+        $s.Attempts | Should -Be 1
+        $s.State | Should -Be 'Failed'; $s.ErrorClass | Should -Be 'job-failed'
+        $script:Plat.Calls.Count | Should -Be 2
+        ($script:Plat.Calls[1] - $script:Plat.Calls[0]).TotalSeconds | Should -BeGreaterOrEqual $script:SIJobFlow.StartDecideRecheckSeconds -Because 'asked again at most every 2 minutes'
+        ($script:Logs -join "`n") | Should -Match 'is not known yet'
+        # while it was not known, the step was never recorded failed
+        $saved = @($script:SavedStates)
+        $firstFailed = [array]::IndexOf($saved, 'Failed')
+        $firstFailed | Should -BeGreaterThan 3 -Because 'held Running through the passes that waited'
+        @($saved[$firstFailed..($saved.Count - 1)] | Where-Object { $_ -ne 'Failed' }).Count | Should -Be 0 -Because 'recorded failed only at the decision, and from then on'
+        @($saved[0..($firstFailed - 1)] | Where-Object { $_ -notin @('Waiting', 'Starting', 'Running') }).Count | Should -Be 0
+    }
+    It 'PodDeletion 20 min old and no ContainerStarted: never-started -- started again ONCE, the run succeeds' {
+        $arm = New-RetryArm -Outcomes @{ 'endpoint' = @('Failed', 'Succeeded') }
+        $ev = New-PlatformProbe -Answers @(@{ Started = 0; EndMin = -19 })
+        $r = Invoke-PlatFlow -Arm $arm -Evidence $ev
+        $s = Get-Step $r 'endpoint'
+        $s.State | Should -Be 'Success'; $s.Attempts | Should -Be 2; $r.State | Should -Be 'Succeeded'
+        @($script:Arm.Starts | Where-Object { $_ -eq 'endpoint' }).Count | Should -Be 2
+        $script:Plat.Calls.Count | Should -Be 1 -Because 'settled on the first read: decided at once'
+        ($script:Logs -join "`n") | Should -Match 'Azure scheduled the step''s container but never started it'
+    }
+    It 'an end 1 min old that stays without ContainerStarted is waited for, then -- once 15 min old -- decided never-started and started again once' {
+        $arm = New-RetryArm -Outcomes @{ 'endpoint' = @('Failed', 'Succeeded') }
+        $ev = New-PlatformProbe -Answers @(@{ Started = 0; EndMin = -1 })
+        $r = Invoke-PlatFlow -Arm $arm -Evidence $ev
+        $s = Get-Step $r 'endpoint'
+        $s.State | Should -Be 'Success'; $s.Attempts | Should -Be 2
+        @($script:Arm.Starts | Where-Object { $_ -eq 'endpoint' }).Count | Should -Be 2
+        $script:Plat.Calls.Count | Should -BeGreaterThan 1
+        ($script:Plat.Calls[-1] - $script:T0.AddMinutes(-1)).TotalMinutes | Should -BeGreaterOrEqual 15 -Because 'decided only once the end was 15 minutes old'
+    }
+    It 'PAST THE BOUND: events that never settle -> after 30 minutes "unknown" as before 3.1.16, never started again' {
+        $arm = New-RetryArm -Outcomes @{ 'endpoint' = @('Failed', 'Succeeded') }
+        $ev = New-PlatformProbe -Answers @(@{ Started = 0; EndMin = $null })
+        $r = Invoke-PlatFlow -Arm $arm -Evidence $ev
+        $s = Get-Step $r 'endpoint'
+        $s.State | Should -Be 'Failed'; $s.ErrorClass | Should -Be 'job-failed'; $s.Attempts | Should -Be 1
+        @($script:Arm.Starts | Where-Object { $_ -eq 'endpoint' }).Count | Should -Be 1
+        ($script:Plat.Calls[-1] - $script:Plat.Calls[0]).TotalMinutes | Should -BeGreaterOrEqual 28
+        ($script:Clock - $script:T0).TotalMinutes | Should -BeLessThan 40 -Because 'bounded: the runner never waits on for ever'
+        ($script:Logs -join "`n") | Should -Match 'could still not be told 30 minutes after its execution ended'
+        $r.State | Should -Be 'Failed'
+    }
+    It 'RESTART SAFETY: a restart that finds the job already running follows that execution and starts none' {
+        $arm = New-RetryArm -Outcomes @{ 'endpoint' = @('Failed') }
+        $script:Arm.Exec['caj-si-endpoint-x9'] = 'Succeeded'
+        $script:RunningAsked = 0
+        $running = { param($j) $script:RunningAsked++; if ($script:RunningAsked -ge 2) { [pscustomobject]@{ Execution = 'caj-si-endpoint-x9'; StartedUtc = $script:Clock.AddSeconds(-20) } } else { $null } }
+        $r = Invoke-PlatFlow -Arm $arm -Evidence { param($j, $e, $s, $t, $n) [pscustomobject]@{ HasStartRecord = $false; HasTranscript = $null; HasContainerStarted = $false; ContainerStartPending = $false } } -Running $running
+        $s = Get-Step $r 'endpoint'
+        @($script:Arm.Starts | Where-Object { $_ -eq 'endpoint' }).Count | Should -Be 1 -Because 'the restart started no second execution'
+        $script:RunningAsked | Should -Be 2 -Because 'the first start and the restart both ask'
+        $s.Execution | Should -Be 'caj-si-endpoint-x9'; $s.State | Should -Be 'Success'; $s.Attempts | Should -Be 2
+        ($script:Logs -join "`n") | Should -Match 'already running \(caj-si-endpoint-x9.*follows that run instead of starting it again'
+        $r.Note | Should -Match 'was already running \(caj-si-endpoint-x9'
+    }
+    It 'RESTART SAFETY: before the new start, the earlier execution''s step work (its workers) is stopped' {
+        $arm = New-RetryArm -Outcomes @{ 'endpoint' = @('Failed', 'Succeeded') }
+        $script:Stops = New-Object System.Collections.Generic.List[object]
+        $sw = { param($j, $since, $e) $script:Stops.Add([pscustomobject]@{ Job = $j; Since = $since; Execution = $e; StartsBefore = $script:Arm.Starts.Count }) }
+        $r = Invoke-PlatFlow -Arm $arm -Evidence { param($j, $e, $s, $t, $n) [pscustomobject]@{ HasStartRecord = $false; HasTranscript = $null; HasContainerStarted = $false } } -StopWorkers $sw
+        (Get-Step $r 'endpoint').State | Should -Be 'Success'
+        $script:Stops.Count | Should -Be 1
+        $script:Stops[0].Execution | Should -Be 'caj-si-endpoint-e1' -Because 'the EARLIER execution''s work'
+        $script:Stops[0].Since | Should -Be $script:T0 -Because 'since the earlier execution started'
+        $script:Stops[0].StartsBefore | Should -Be 1 -Because 'stopped before the second start'
+    }
+    It 'RESTART SAFETY WIRING: no restart path calls the start seam directly any more' {
+        $src = [IO.File]::ReadAllText([IO.Path]::Combine($script:SIRoot, 'engine', '_shared', 'SI-JobFlow.ps1'))
+        @([regex]::Matches($src, [regex]::Escape('. $startAgain $st'))).Count | Should -Be 3 -Because 'never-started, run limit, first collection'
+        @([regex]::Matches($src, [regex]::Escape('$st.Execution = [string](& $Start $st.Job)'))).Count | Should -Be 1 -Because 'only inside the restart helper'
+    }
+}
+
 Describe 'the evidence probe (container) and the record' {
     It 'reads the START record of the execution; no stamped row of THIS engine (an empty store) means "cannot tell"' {
         $kql = Get-SIJobFlowStartRecordQuery -Execution 'caj-si-asset-trend-tdkx9w2' -StartedUtc ([datetime]::SpecifyKind([datetime]'2026-10-05T05:01:07', 'Utc')) -Engine 'asset-trend'
@@ -315,10 +512,19 @@ Describe 'the evidence probe (container) and the record' {
         Get-SIJobFlowStartRecordQuery -Execution "x' or 1==1 //" -StartedUtc $script:T0 -Engine 'x' | Should -BeNullOrEmpty -Because 'a name that is not an execution never reaches a query'
         Get-SIJobFlowStartRecordQuery -Execution 'caj-si-x-e1' -StartedUtc $script:T0 -Engine "x' or 1==1" | Should -BeNullOrEmpty
         # the probe asks for the map's engine of the job (ptc -> privilege-tier-classifier)
-        $script:Kql = ''
-        $null = (New-SIJobFlowStartEvidence -Query { param($k) $script:Kql = $k; [pscustomobject]@{ Mine = 0; Stamped = 3 } }).Probe('ptc', 'caj-si-ptc-e1', $script:T0, $script:T0.AddSeconds(31))
-        $script:Kql | Should -Match "Engine == 'privilege-tier-classifier'"
+        $script:Kqls = New-Object System.Collections.Generic.List[string]
+        $null = (New-SIJobFlowStartEvidence -Query { param($k) $script:Kqls.Add($k); [pscustomobject]@{ Mine = 0; Stamped = 3 } }).Probe('ptc', 'caj-si-ptc-e1', $script:T0, $script:T0.AddSeconds(31))
+        @($script:Kqls | Where-Object { $_ -match "Engine == 'privilege-tier-classifier'" }).Count | Should -Be 1 -Because 'the START record query (the platform-event query is asked too)'
         $t0 = $script:T0; $t1 = $script:T0.AddSeconds(31)
+        # the platform's events of the execution: scheduled, never started -> HasContainerStarted $false; the store's row is no answer to it
+        $pp = New-SIJobFlowStartEvidence -Query { param($k) if ($k -match '^ContainerAppSystemLogs') { [pscustomobject]@{ Scheduled = 1; Started = 0; Ended = 1; EndAt = $t1 } } else { [pscustomobject]@{ Mine = 0; Stamped = 0 } } }.GetNewClosure()
+        $pe = $pp.Probe('asset-correlation', 'caj-si-asset-correlation-uxf5u22', $t0, $t1, $t1.AddMinutes(16))
+        $pe.HasContainerStarted | Should -BeFalse; $pe.ContainerStartPending | Should -BeFalse
+        $py = $pp.Probe('asset-correlation', 'caj-si-asset-correlation-uxf5u22', $t0, $t1, $t1.AddMinutes(2))
+        $py.HasContainerStarted | Should -BeNullOrEmpty -Because 'the end is 2 minutes old: not settled'
+        $py.ContainerStartPending | Should -BeTrue
+        (New-SIJobFlowStartEvidence -Query { param($k) [pscustomobject]@{ Mine = 0; Stamped = 12 } }).Probe('x', 'caj-si-x-e1', $t0, $t1).HasContainerStarted | Should -BeNullOrEmpty
+        (New-SIJobFlowStartEvidence -Query { param($k) if ($k -match '^ContainerAppSystemLogs') { throw 'forbidden' } else { [pscustomobject]@{ Mine = 0; Stamped = 12 } } }).Probe('x', 'caj-si-x-e1', $t0, $t1).HasContainerStarted | Should -BeNullOrEmpty -Because 'a read that fails tells nothing'
         $p = New-SIJobFlowStartEvidence -Query { param($k) [pscustomobject]@{ Mine = 0; Stamped = 12 } } -ListBlobs { param($pre) @('run-logs/ptc/ptc_container_20261004T010000Z.log', 'run-logs/asset-trend/asset-trend_container_20261004T050000Z.log') }
         $e = $p.Probe('asset-trend', 'caj-si-asset-trend-e1', $t0, $t1)
         $e.HasStartRecord | Should -BeFalse; $e.HasTranscript | Should -BeFalse

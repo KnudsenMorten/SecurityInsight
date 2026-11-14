@@ -2468,6 +2468,16 @@
       "advanced": false,
       "group": "Data & retention"
     },
+    "SI_Data_KeepCollections": {
+      "label": "Collections kept with all their findings",
+      "purpose": "How many complete collections of each kind (Risk Analysis Detailed and Summary) keep all their findings in the Pro database -- the newest ones. What changed, the collection lists and the history pages go back that many runs; older collections keep only their totals for the trends.",
+      "defaultText": "3 collections (the newest and the 2 before it; never fewer than 2)",
+      "effect": "More keeps more runs to open and compare, and grows the database by about one run's findings per extra collection; fewer keeps a smaller database. While the database is 70 % full or more, SecurityInsight keeps one fewer each run (never fewer than 2) and the run says so in a warning; below 70 % this number applies again. Collections already removed do not come back -- the kept number grows again by one per run.",
+      "whenToChange": "Lower it when the database keeps filling up and a larger database tier is not an option; raise it when you need to look further back than the last 3 runs.",
+      "unit": "collections",
+      "advanced": true,
+      "group": "Data & retention"
+    },
     "SI_RA_SourceFirstSeen": {
       "label": "Read Defender's first sighting of each vulnerability",
       "purpose": "Risk Analysis reads Defender for Endpoint's software vulnerabilities export once per run for the first time each CVE was seen on each device (si_source_first_seen).",
@@ -6011,6 +6021,7 @@
       "settings": [
         "SI_LogRetentionDays",
         "SI_Pro_DataRetentionDays",
+        "SI_Data_KeepCollections",
         "SI_Pro_ConfigBackupRetentionDays"
       ]
     },

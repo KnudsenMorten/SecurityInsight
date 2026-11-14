@@ -31,7 +31,14 @@
     exchange as the tag check (setup\_shared\SI-AcrBuild.ps1 Get-SIAcrPullToken) with the delete right added. No module,
     no CLI, nothing else in Azure is changed.
 
-    AFTER: the registry is read again and the number of images left is said per repository -- one plain line each in the
+    THE FRAMEWORK IMAGE-PRUNE CONTRACT (Invardia framework/REQUIREMENTS.md, IMAGE-PATCH-1, 2026-11-12) is what this file
+    implements: the release record is written BEFORE the first delete (not written = nothing deleted); a heartbeat on the
+    update's own lock at least once a minute while it works (tried at most every 15 s, also when it fails); each
+    repository's plan ("N images, K kept, D to delete") said before its deletes and its result right after, every line at
+    once; kept images and child manifests counted apart.
+
+    AFTER: the registry is read again (again a few times, with short pauses, while a deleted image is still listed: the
+    registry completes its deletes after it answers them) and the number of images left is said per repository -- one plain line each in the
     run log, and in the update record (cfg.InstallState 'ImagePrune' for the web app and the heartbeat; the Key Vault
     release record). A failure here never fails the update: it is said, and the next update prunes again.
 
@@ -203,7 +210,20 @@ function New-SIUpdaterRegistrySeam {
         List -> @{ Found; Manifests (@{ Digest; Tags; MediaType; DeleteEnabled }) } (Found $false = no such repository); THROWS
         when it cannot be read. Manifest -> the parsed manifest, $null when it cannot be read. Delete -> @{ Ok; Status; Why }.
     #>
-    param([Parameter(Mandatory)][string]$LoginServer, [Parameter(Mandatory)][scriptblock]$Rest, [scriptblock]$Token)
+    param([Parameter(Mandatory)][string]$LoginServer, [Parameter(Mandatory)][scriptblock]$Rest, [scriptblock]$Token,
+          [scriptblock]$Beat, [int]$BeatSeconds = 15)
+    # framework IMAGE-PRUNE CONTRACT point 4, inside long registry work: -Beat is tried before EVERY HTTP request (token
+    # calls, each page of a listing, each manifest, each delete) -- at most once per -BeatSeconds whatever its outcome, so a
+    # failing beat never slows the clean-up. A single request that blocks cannot beat while it waits: its own time limit
+    # (the REST seam's) is then the longest gap.
+    if ($Beat) {
+        $inner = $Rest; $beatAt = @{ t = [datetime]::MinValue }
+        $Rest = {
+            $now = [datetime]::UtcNow
+            if ($BeatSeconds -le 0 -or ($now - $beatAt.t).TotalSeconds -ge $BeatSeconds) { $beatAt.t = $now; try { $null = & $Beat 'a registry call' } catch { } }
+            & $inner @args
+        }.GetNewClosure()
+    }
     if (-not $Token) { $Token = { param($Resource) Get-SIAzureToken -Resource $Resource } }
     $login = $LoginServer.Trim().TrimEnd('/')
     $cache = @{}
@@ -277,13 +297,31 @@ function Invoke-SIUpdaterImagePrune {
         of the release record's 'current'), nor is a base-layer image of a kept image. Nothing at all when: -On is $false;
         -Healthy is $false (the update and its read-back did not end well); -RegistryResourceGroup is not -InstallResourceGroup;
         -Current or -Previous is not Ok (not readable / nothing recorded -- nothing can be proven old).
-        Returns @{ Done; Reason; Repos (@{ Repo; Before; Kept; Deleted; Failed; Left; Line }); Lines }. Never throws.
+        Returns @{ Done; Reason; Repos (@{ Repo; Before; Kept; Deleted; Failed; Left; Pending; Line }); Lines }. Never throws.
+        Left = the images listed at the last read-back; Pending = the deleted images the registry still listed then (its
+        deletes complete after it answers them: the listing is read again a few times before that is said).
     #>
     param([bool]$On = $true, [bool]$Healthy, [Parameter(Mandatory)][hashtable]$Registry, $Current, $Previous, [object[]]$Recorded = @(),
-          [AllowEmptyString()][string]$RegistryResourceGroup = '', [AllowEmptyString()][string]$InstallResourceGroup = '')
+          [AllowEmptyString()][string]$RegistryResourceGroup = '', [AllowEmptyString()][string]$InstallResourceGroup = '',
+          [scriptblock]$Beat, [scriptblock]$Log, [int]$BeatSeconds = 15, [scriptblock]$Sleep)
+    # the read-back's pauses while the registry completes its deletes: three re-reads at most, 30 seconds in all per
+    # repository (-Sleep { param($Seconds) } is the test seam)
+    $settleWaits = @(5, 10, 15)
+    if (-not $Sleep) { $Sleep = { param($s) Start-Sleep -Seconds $s } }
+    # Live 2026-11-12 (internal, 3.1.12): the clean-up of a registry with hundreds of old images ran past 15 minutes without a
+    # sign of life, and the pipeline's watchdog stopped the update as dead -- before one line was written. So -Beat
+    # { param($What) } is called at every registry call (the update's own sign of life; the caller limits it to one a minute),
+    # and -Log { param($Line) } writes every line the moment it is known (each repository's plan before its deletes, its
+    # result right after), so a stopped clean-up still leaves what it did. A failure of either never stops the clean-up.
     $lines = New-Object System.Collections.Generic.List[string]
     $repos = New-Object System.Collections.Generic.List[object]
-    $none = { param($why) $lines.Add($why); [pscustomobject]@{ Done = $false; Reason = $why; Repos = @(); Lines = $lines.ToArray() } }
+    $say = { param($l) $lines.Add($l); if ($Log) { try { $null = & $Log $l } catch { } } }
+    # framework IMAGE-PRUNE CONTRACT point 4: a heartbeat at least once a minute, rate-limited -- a beat is TRIED at most once
+    # per -BeatSeconds whatever its outcome (a failing beat is not retried at every registry call: with a slow or unreachable
+    # database that would slow the clean-up to hours); 0 = at every registry call (tests)
+    $beatAt = @{ t = [datetime]::MinValue }
+    $tick = { param($w) if ($Beat) { $now = [datetime]::UtcNow; if ($BeatSeconds -le 0 -or ($now - $beatAt.t).TotalSeconds -ge $BeatSeconds) { $beatAt.t = $now; try { $null = & $Beat $w } catch { } } } }
+    $none = { param($why) & $say $why; [pscustomobject]@{ Done = $false; Reason = $why; Repos = @(); Lines = $lines.ToArray() } }
     if (-not $On) { return (& $none 'old images: the clean-up is off (SI_Updater_ImagePrune = off) -- every image is kept') }
     if (-not $Healthy) { return (& $none 'old images: not cleaned up -- the update did not end healthy, so every image is kept') }
     if ("$RegistryResourceGroup".Trim() -and "$InstallResourceGroup".Trim() -and "$RegistryResourceGroup".Trim() -ine "$InstallResourceGroup".Trim()) {
@@ -306,7 +344,8 @@ function Invoke-SIUpdaterImagePrune {
 
     foreach ($repo in $appRepos) {
         $ls = $null
-        try { $ls = & $Registry.List $repo } catch { $lines.Add(('{0}: not cleaned up -- its images could not be listed ({1}); every image is kept' -f $repo, $_.Exception.Message)); $layersKnown = $false; continue }
+        & $tick ('reading ' + $repo)
+        try { $ls = & $Registry.List $repo } catch { & $say ('{0}: not cleaned up -- its images could not be listed ({1}); every image is kept' -f $repo, $_.Exception.Message); $layersKnown = $false; continue }
         if (-not $ls.Found) { continue }
         $mans = @($ls.Manifests)
         $byTag = @{}; foreach ($m in $mans) { foreach ($t in @($m.Tags)) { $byTag[[string]$t] = $m.Digest } }
@@ -318,29 +357,34 @@ function Invoke-SIUpdaterImagePrune {
         }
         # every kept image read: a multi-platform one keeps its children; its layers feed the base check. Unreadable = keep the repository.
         $unreadable = $false
+        $children = New-Object 'System.Collections.Generic.HashSet[string]'   # contract point 5: kept images and child manifests apart
         foreach ($dg in @($keep)) {
+            & $tick ('reading ' + $repo)
             $mf = & $Registry.Manifest $repo $dg
             $info = Get-SIUpdaterManifestLayers -Manifest $mf
             if ($info.Kind -eq 'index') {
                 foreach ($c in @($info.Children)) {
-                    $null = $keep.Add($c)
+                    if ($keep.Add($c)) { $null = $children.Add($c) }
+                    & $tick ('reading ' + $repo)
                     $ci = Get-SIUpdaterManifestLayers -Manifest (& $Registry.Manifest $repo $c)
                     if ($ci.Kind -eq 'image') { $keptLayers.Add(@($ci.Layers)) } else { $layersKnown = $false }
                 }
             } elseif ($info.Kind -eq 'image') { $keptLayers.Add(@($info.Layers)) }
             elseif (@($mans | Where-Object { $_.Digest -eq $dg }).Count) { $unreadable = $true; $layersKnown = $false }
         }
-        if ($unreadable) { $lines.Add(('{0}: not cleaned up -- an image it runs could not be read; every image is kept' -f $repo)); continue }
+        if ($unreadable) { & $say ('{0}: not cleaned up -- an image it runs could not be read; every image is kept' -f $repo); continue }
         $del = @($mans | Where-Object { -not $keep.Contains($_.Digest) })
-        $plan.Add([pscustomobject]@{ Repo = $repo; Base = $false; Before = $mans.Count; Keep = @($mans | Where-Object { $keep.Contains($_.Digest) } | ForEach-Object { $_.Digest }); Delete = $del; Missing = $missing })
+        $plan.Add([pscustomobject]@{ Repo = $repo; Base = $false; Before = $mans.Count; Keep = @($mans | Where-Object { $keep.Contains($_.Digest) } | ForEach-Object { $_.Digest }); Delete = $del; Missing = $missing
+                                     Children = @($mans | Where-Object { $children.Contains($_.Digest) }).Count })
     }
 
     foreach ($repo in $baseRepos) {
         $ls = $null
-        try { $ls = & $Registry.List $repo } catch { $lines.Add(('{0}: not cleaned up -- its images could not be listed ({1}); every image is kept' -f $repo, $_.Exception.Message)); continue }
+        & $tick ('reading ' + $repo)
+        try { $ls = & $Registry.List $repo } catch { & $say ('{0}: not cleaned up -- its images could not be listed ({1}); every image is kept' -f $repo, $_.Exception.Message); continue }
         if (-not $ls.Found -or -not @($ls.Manifests).Count) { continue }
         $mans = @($ls.Manifests)
-        if (-not $layersKnown -or -not $keptLayers.Count) { $lines.Add(('{0}: not cleaned up -- the layers of the images it may serve could not all be read; every image is kept' -f $repo)); continue }
+        if (-not $layersKnown -or -not $keptLayers.Count) { & $say ('{0}: not cleaned up -- the layers of the images it may serve could not all be read; every image is kept' -f $repo); continue }
         $keep = New-Object 'System.Collections.Generic.HashSet[string]'
         $byTag = @{}; foreach ($m in $mans) { foreach ($t in @($m.Tags)) { $byTag[[string]$t] = $m.Digest } }
         foreach ($r in @($keepRefs | Where-Object { [string]$_.Repo -eq $repo })) {
@@ -349,38 +393,56 @@ function Invoke-SIUpdaterImagePrune {
         }
         foreach ($m in $mans) {
             if ($keep.Contains($m.Digest)) { continue }
+            & $tick ('reading ' + $repo)
             $info = Get-SIUpdaterManifestLayers -Manifest (& $Registry.Manifest $repo $m.Digest)
             if ($info.Kind -ne 'image' -or -not @($info.Layers).Count) { $null = $keep.Add($m.Digest); continue }   # cannot be proven unused
             foreach ($kl in $keptLayers) { if (Test-SIUpdaterLayerPrefix -Base @($info.Layers) -Image @($kl)) { $null = $keep.Add($m.Digest); break } }
         }
         $del = @($mans | Where-Object { -not $keep.Contains($_.Digest) })
-        $plan.Add([pscustomobject]@{ Repo = $repo; Base = $true; Before = $mans.Count; Keep = @($mans | Where-Object { $keep.Contains($_.Digest) } | ForEach-Object { $_.Digest }); Delete = $del; Missing = 0 })
+        $plan.Add([pscustomobject]@{ Repo = $repo; Base = $true; Before = $mans.Count; Keep = @($mans | Where-Object { $keep.Contains($_.Digest) } | ForEach-Object { $_.Digest }); Delete = $del; Missing = 0; Children = 0 })
     }
 
     foreach ($p in $plan) {
         $deleted = 0; $failed = 0; $locked = 0; $why = ''
+        $okDel = New-Object System.Collections.Generic.List[string]   # the digests the registry took as deleted
+        # the plan, said BEFORE the deletes (written at once through -Log; not one of the result lines)
+        $kids = if ($p.Children) { (' ({0} of them child manifests of multi-platform images)' -f $p.Children) } else { '' }
+        if ($Log) { try { $null = & $Log ("{0}: {1} {2}, {3} kept{4}, {5} to delete" -f $p.Repo, $p.Before, $(if ($p.Base) { "base images" } else { "images" }), @($p.Keep).Count, $kids, @($p.Delete).Count) } catch { } }
+        $n = 0; $deletable = @($p.Delete | Where-Object { $_.DeleteEnabled }).Count
         foreach ($m in @($p.Delete)) {
             if (-not $m.DeleteEnabled) { $locked++; continue }
+            $n++; & $tick ("deleting {0} ({1} of {2})" -f $p.Repo, $n, $deletable)
             $d = & $Registry.Delete $p.Repo $m.Digest
-            if ($d -and $d.Ok) { $deleted++ } else { $failed++; if (-not $why -and $d) { $why = [string]$d.Why } }
+            if ($d -and $d.Ok) { $deleted++; $okDel.Add([string]$m.Digest) } else { $failed++; if (-not $why -and $d) { $why = [string]$d.Why } }
         }
-        # the read-back: what is left, and that every kept image is still there
-        $left = -1; $lost = 0
-        try {
-            $after = & $Registry.List $p.Repo
-            $am = @(if ($after.Found) { $after.Manifests })
-            $left = $am.Count
-            $have = @{}; foreach ($m in $am) { $have[$m.Digest] = $true }
-            foreach ($k in @($p.Keep)) { if (-not $have.ContainsKey($k)) { $lost++ } }
-        } catch { $left = -1 }
+        # the read-back: what is left, and that every kept image is still there. The registry completes a delete AFTER it
+        # answers it (live 2026-11-13: "3 left" right after the deletes, 2 a moment later), so while an image it took as
+        # deleted is still listed the listing is read again, a few times with short pauses (each a sign of life); still
+        # listed after the last one = said as deletes still completing, with the count seen.
+        $left = -1; $lost = 0; $pending = 0; $read = 0
+        for ($try = 0; ; $try++) {
+            & $tick ('reading ' + $p.Repo)
+            try {
+                $after = & $Registry.List $p.Repo
+                $am = @(if ($after.Found) { $after.Manifests })
+                $have = @{}; foreach ($m in $am) { $have[$m.Digest] = $true }
+                $left = $am.Count; $read++
+                $lost = 0; foreach ($k in @($p.Keep)) { if (-not $have.ContainsKey($k)) { $lost++ } }
+                $pending = 0; foreach ($k in $okDel) { if ($have.ContainsKey($k)) { $pending++ } }
+            } catch { break }   # a re-read that fails keeps what the read before it saw (none = could not be read back)
+            if ($pending -eq 0 -or $try -ge $settleWaits.Count) { break }
+            & $tick ('waiting for the deletes of {0} to complete' -f $p.Repo)
+            try { & $Sleep $settleWaits[$try] } catch { }
+        }
         $what = if ($p.Base) { 'base images' } else { 'images' }
-        $line = if ($left -lt 0) { ('{0}: {1} old {2} deleted; what is left could not be read back' -f $p.Repo, $deleted, $what) }
+        $line = if ($read -eq 0) { ('{0}: {1} old {2} deleted; what is left could not be read back' -f $p.Repo, $deleted, $what) }
+                elseif ($pending) { ('{0}: {1} old {2} deleted, {3} listed right after -- deletes still completing ({4} of the deleted images still listed; the registry removes them shortly)' -f $p.Repo, $deleted, $what, $left, $pending) }
                 else { ('{0}: {1} old {2} deleted, {3} left (this release and the one before{4})' -f $p.Repo, $deleted, $what, $left, $(if ($p.Base) { ', and the base layers they are built on' } else { '' })) }
         if ($failed) { $line += ('; {0} could not be deleted ({1}) -- kept, the next update tries again' -f $failed, $(if ($why) { $why } else { 'no answer' })) }
         if ($locked) { $line += ('; {0} locked against deletion -- kept' -f $locked) }
         if ($lost) { $line += ('; WARNING: {0} image(s) that should be kept are not there any more' -f $lost) }
-        $lines.Add($line)
-        $repos.Add([pscustomobject]@{ Repo = $p.Repo; Base = $p.Base; Before = $p.Before; Kept = @($p.Keep).Count; Deleted = $deleted; Failed = $failed; Left = $left; Line = $line })
+        & $say $line
+        $repos.Add([pscustomobject]@{ Repo = $p.Repo; Base = $p.Base; Before = $p.Before; Kept = @($p.Keep).Count; Children = [int]$p.Children; Deleted = $deleted; Failed = $failed; Left = $left; Pending = $pending; Line = $line })
     }
     $total = 0; foreach ($r in $repos) { $total += $r.Deleted }
     [pscustomobject]@{ Done = $true; Reason = ('old images: {0} deleted in {1} repositor{2}' -f $total, $repos.Count, $(if ($repos.Count -eq 1) { 'y' } else { 'ies' })); Repos = $repos.ToArray(); Lines = $lines.ToArray() }
@@ -461,8 +523,12 @@ function Invoke-SIUpdaterImagePruneStep {
     param([Parameter(Mandatory)][string]$ResourceGroup, [Parameter(Mandatory)][string]$AcrName, [Parameter(Mandatory)][string]$SubscriptionId,
           [bool]$Healthy, $Before, [AllowEmptyString()][string]$Version = '', [AllowEmptyString()][string]$PreviousVersion = '',
           [string]$UpdaterJob = 'caj-si-updater', [scriptblock]$Get, [scriptblock]$ReadSecret, [scriptblock]$WriteSecret, $Store,
-          [hashtable]$Registry, $After)
+          [hashtable]$Registry, $After, [scriptblock]$Beat)
     try {
+        # the update's sign of life during the clean-up (Invoke-SIUpdaterLockBeat: at most one beat a minute); every line written at once
+        # (-MinSeconds 30 + the clean-up's own 15-second try limit: a beat at most ~45 s apart -- the contract's once a minute)
+        if (-not $Beat -and (Get-Command -Name Invoke-SIUpdaterLockBeat -ErrorAction SilentlyContinue)) { $Beat = { param($w) $null = Invoke-SIUpdaterLockBeat -What ("old images: " + $w) -MinSeconds 30 } }
+        $logLine = { param($l) Write-UpdLog $l }
         $mode = Get-SIUpdaterImagePruneMode -Value (Get-SIUpdaterImagePruneSetting -Get $Get)
         if (-not $mode.On) { Write-UpdLog ('old images: the clean-up is {0} -- every image is kept' -f $mode.Reason); return $null }
         if (-not $Healthy) { Write-UpdLog 'old images: not cleaned up -- the update did not end healthy, so every image is kept'; return $null }
@@ -484,23 +550,39 @@ function Invoke-SIUpdaterImagePruneStep {
                 $prevSnap = [pscustomobject]@{ Ok = $false; Refs = @(); Reason = 'this release ran already before this update and the release before it is not recorded -- the previous release is not known' }
             }
         }
-        if (-not $Registry) { $Registry = New-SIUpdaterRegistrySeam -LoginServer $login -Rest (Get-SIUpdaterRest) }
-        $res = Invoke-SIUpdaterImagePrune -On $true -Healthy $Healthy -Registry $Registry -Current $After -Previous $prevSnap -Recorded $recorded `
-                   -RegistryResourceGroup ([string]$acr.resourceGroup) -InstallResourceGroup $ResourceGroup
-        foreach ($l in @($res.Lines)) { Write-UpdLog $l }
-        if ($res.Done) { Write-UpdLog $res.Reason }
+        if (-not $Registry) { $Registry = New-SIUpdaterRegistrySeam -LoginServer $login -Rest (Get-SIUpdaterRest) -Beat $Beat }
         # the release record: written only from what was read back after a healthy update (the next update's 'previous');
         # the same release again keeps the record's previous release as it is -- never this release as its own previous
-        if ($WriteSecret -and $After -and $After.Ok) {
-            if ($sameRelease) {
-                $prevRefs = @(if ($rec) { @($rec.Previous) })
-                $prevVer = if ($rec) { [string]$rec.PreviousVersion } else { '' }
-            } else {
-                $prevRefs = @(if ($Before -and $Before.Ok) { @($Before.Refs) } elseif ($rec) { @($rec.Current) })
-                $prevVer = if ("$PreviousVersion".Trim()) { $PreviousVersion } elseif ($rec) { $rec.CurrentVersion } else { '' }
+        $prevRefs = @(); $prevVer = ''
+        if ($sameRelease) {
+            $prevRefs = @(if ($rec) { @($rec.Previous) })
+            $prevVer = if ($rec) { [string]$rec.PreviousVersion } else { '' }
+        } else {
+            $prevRefs = @(if ($Before -and $Before.Ok) { @($Before.Refs) } elseif ($rec) { @($rec.Current) })
+            $prevVer = if ("$PreviousVersion".Trim()) { $PreviousVersion } elseif ($rec) { $rec.CurrentVersion } else { '' }
+        }
+        $canRecord = [bool]($After -and $After.Ok)
+        # framework IMAGE-PRUNE CONTRACT point 5: the release record is written BEFORE the first delete. A record that cannot
+        # be written (or no place to write it) = NOTHING is deleted this time, said once; the next update tries again.
+        $recWritten = $false
+        if ($canRecord -and $WriteSecret) {
+            try { $null = & $WriteSecret $script:SIImagePruneRecordSecret (ConvertTo-SIUpdaterReleaseImageRecord -Version $Version -Current @($After.Refs) -PreviousVersion $prevVer -Previous $prevRefs -Result $null); $recWritten = $true }
+            catch { Write-UpdLog ('old images: not cleaned up -- the release record could not be written before the deletes ({0}); every image is kept, the next update tries again' -f $_.Exception.Message) }
+        } elseif ($canRecord) {
+            Write-UpdLog 'old images: not cleaned up -- there is no place to write the release record before the deletes; every image is kept'
+        }
+        if ($canRecord -and -not $recWritten) {
+            $res = [pscustomobject]@{ Done = $false; Reason = 'old images: not cleaned up -- the release record was not written before the deletes'; Repos = @(); Lines = @('old images: not cleaned up -- the release record was not written before the deletes') }
+        } else {
+            # (what runs now not read back: the clean-up itself refuses and says so -- nothing is deleted)
+            $res = Invoke-SIUpdaterImagePrune -On $true -Healthy $Healthy -Registry $Registry -Current $After -Previous $prevSnap -Recorded $recorded `
+                       -RegistryResourceGroup ([string]$acr.resourceGroup) -InstallResourceGroup $ResourceGroup -Beat $Beat -Log $logLine
+            if ($res.Done) { Write-UpdLog $res.Reason }
+            # the record again, now with what the clean-up did (best effort: the record before the deletes is already there)
+            if ($recWritten) {
+                try { $null = & $WriteSecret $script:SIImagePruneRecordSecret (ConvertTo-SIUpdaterReleaseImageRecord -Version $Version -Current @($After.Refs) -PreviousVersion $prevVer -Previous $prevRefs -Result $res) }
+                catch { Write-UpdLog ('NOTE: old images: what the clean-up did could not be added to the release record ({0}) -- the record written before the deletes stands' -f $_.Exception.Message) }
             }
-            try { $null = & $WriteSecret $script:SIImagePruneRecordSecret (ConvertTo-SIUpdaterReleaseImageRecord -Version $Version -Current @($After.Refs) -PreviousVersion $prevVer -Previous $prevRefs -Result $res) }
-            catch { Write-UpdLog ('NOTE: old images: the release record could not be written ({0}) -- the next update reads the images before it rolls, as this one did' -f $_.Exception.Message) }
         }
         if ($Store -and (Get-Command -Name Save-SIUpdaterInstallStateValue -ErrorAction SilentlyContinue)) { $null = Save-SIUpdaterInstallStateValue -Store $Store -Name 'ImagePrune' -Value (ConvertTo-SIUpdaterImagePruneValue -Result $res) }
         $res

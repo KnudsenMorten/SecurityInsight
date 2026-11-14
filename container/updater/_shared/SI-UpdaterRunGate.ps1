@@ -456,7 +456,11 @@ function Register-SIUpdaterExecutionBeat {
     if (-not $Beat -and -not (Get-Command -Name Enter-SIExecutionLock -ErrorAction SilentlyContinue)) { return $false }
     $lockStore = if ($Beat) { $null } elseif ($Store -and $Store.Invoke) { New-SIExecutionLockStore -Invoke $Store.Invoke } else { $null }
     if (-not $Beat -and -not $lockStore) { return $false }
-    $global:SI_UpdaterExecBeat = [pscustomobject]@{ Store = $lockStore; Holder = $Holder; Beat = $Beat; LastUtc = [datetime]::MinValue; Beats = 0 }
+    # Server / Database: where the row lives -- the release's update script beats it from a runspace of its own while one of
+    # its database statements runs (setup\_shared\SI-UpdateSqlBeat.ps1), on a connection of its own
+    $global:SI_UpdaterExecBeat = [pscustomobject]@{ Store = $lockStore; Holder = $Holder; Beat = $Beat; LastUtc = [datetime]::MinValue; Beats = 0
+                                                    Server = $(if ($Store -and $Store.PSObject.Properties['Server']) { [string]$Store.Server } else { '' })
+                                                    Database = $(if ($Store -and $Store.PSObject.Properties['Database']) { [string]$Store.Database } else { '' }) }
     $ok = $false
     try { $ok = if ($Beat) { [bool](& $Beat $Holder 'start') } else { [bool](Enter-SIExecutionLock -Store $lockStore -Lock 'updater' -Holder $Holder -What 'an update of SecurityInsight: start') } } catch { $ok = $false }
     if ($ok) { $global:SI_UpdaterExecBeat.LastUtc = [datetime]::UtcNow; $global:SI_UpdaterExecBeat.Beats = 1 }

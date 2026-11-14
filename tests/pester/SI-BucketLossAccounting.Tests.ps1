@@ -305,7 +305,7 @@ Describe '🔴 EXECUTION -- every recording line is RUN from the shipped source,
             $b = $script:b; $bucketNo = $script:bucketNo; $bucketCountToUse = $script:bucketCountToUse
             $errMsg = $script:errMsg; $bucketTransientRetries = $script:bucketTransientRetries
             $depth = $script:depth; $pN = $script:pN; $pT = $script:pT
-            $j = $script:j; $subFanOut = $script:subFanOut; $subErr = $script:subErr
+            $j = $script:j; $subFanOut = $script:subFanOut; $pFan = $script:subFanOut; $subErr = $script:subErr
             $whyLost = $script:whyLost; $lb = $script:lb; $capBucket = $script:capBucket
             $dbNo = $script:dbNo; $conv = $script:conv; $dbErr = $script:dbErr; $skippedIdx = $script:skippedIdx
             $subConv = $script:subConv; $subWhy = $script:subWhy; $q = $script:q; $thisParentKey = $script:thisParentKey
@@ -329,7 +329,7 @@ Describe '🔴 EXECUTION -- every recording line is RUN from the shipped source,
             $b = $script:b; $bucketNo = $script:bucketNo; $bucketCountToUse = $script:bucketCountToUse
             $errMsg = $script:errMsg; $bucketTransientRetries = $script:bucketTransientRetries
             $depth = $script:depth; $pN = $script:pN; $pT = $script:pT
-            $j = $script:j; $subFanOut = $script:subFanOut; $subErr = $script:subErr
+            $j = $script:j; $subFanOut = $script:subFanOut; $pFan = $script:subFanOut; $subErr = $script:subErr
             $whyLost = $script:whyLost; $lb = $script:lb; $capBucket = $script:capBucket
             $dbNo = $script:dbNo; $conv = $script:conv; $dbErr = $script:dbErr; $skippedIdx = $script:skippedIdx
             $subConv = $script:subConv; $subWhy = $script:subWhy; $q = $script:q; $thisParentKey = $script:thisParentKey

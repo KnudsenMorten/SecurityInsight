@@ -253,12 +253,19 @@ Describe 'the Azure OpenAI key reaches the jobs as a Key Vault reference (#215, 
         @(Get-SIContainerIdentityGrantPlan -Mode ManagedIdentity -ShodanKeyVaultId '/kv/a' -OpenAIKeyVaultId '/kv/a' | Where-Object { $_.Role -eq 'Key Vault Secrets User' }).Count | Should -Be 1
         @(Get-SIContainerIdentityGrantPlan -Mode ManagedIdentity -ShodanKeyVaultId '/kv/a' -OpenAIKeyVaultId '/kv/b' | Where-Object { $_.Role -eq 'Key Vault Secrets User' }).Count | Should -Be 2
     }
-    It 'WIRING -- setup decides AI from the endpoint / deployment / version, builds the key with the helper, and never needs the key value' {
+    It 'WIRING -- setup decides AI from the endpoint / deployment (#1257: no key, the API version defaults), a legacy key only as a Key Vault reference built by the helper, never required' {
         $b = Get-Content -Raw (Join-Path $script:SIRoot 'Bootstrap-ContainerAppJob.ps1')
-        $b | Should -Match '\$haveOpenAiSettings = -not \(@\(''OpenAI_endpoint'',''OpenAI_deployment'',''OpenAI_apiVersion''\)'
+        $b | Should -Match '\$haveOpenAiSettings = -not \(@\(''OpenAI_endpoint'',''OpenAI_deployment''\)'
+        $b | Should -Match "if \(\`$haveOpenAiSettings -and \[string\]::IsNullOrWhiteSpace\(\[string\]\`$global:OpenAI_apiVersion\)\) \{ \`$global:OpenAI_apiVersion = '2024-08-01-preview' \}"
         $b | Should -Match "Resolve-SIJobKeyVaultSecret -Alias 'openai-apikey'"
         $b | Should -Not -Match "'openai-apikey=\{0\}' -f"
         $b | Should -Match '-OpenAIKeyVaultId '
+        # the endpoint / deployment / version reach the job on their own; the key reference only when a legacy key is there
+        $b | Should -Match "(?s)if \(\`$openAiSecret\) \{\s*\`$secretArgs \+= @\(\`$openAiSecret\)\s*\`$envArgs\s+\+= @\('OPENAI_APIKEY=secretref:openai-apikey'\)\s*\}\s*if \(\`$haveOpenAiSettings\) \{\s*\`$envArgs\s+\+= @\(""OPENAI_ENDPOINT="
+        # the containers never require the key
+        $ra = Get-Content -Raw (Join-Path $script:SIRoot 'container\Start-RiskAnalysisInContainer.ps1')
+        $ra | Should -Not -Match "Get-RequiredEnv 'OPENAI_APIKEY'"
+        $ra | Should -Match "Get-OptionalEnv 'OPENAI_APIKEY' ''"
     }
 }
 

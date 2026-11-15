@@ -66,7 +66,9 @@ BeforeAll {
     Mock Invoke-SIArm { Invoke-FakeArm -Method $Method -Path $Path }
     Mock Invoke-SIAzRestMethod { Invoke-FakeRest -Method $Method -Path $Path -Payload $Payload }
     $script:BaseArgs = @{ SubscriptionId = $script:Sub; ResourceGroupName = 'rg-si'; Location = 'westeurope'; AccountName = 'oai-si-x'; DeploymentName = 'chat'
-                      WriteModelDumps = $false; WaitForAccountReady = $false }
+                      WriteModelDumps = $false; WaitForAccountReady = $false
+                      # #1257: the sign-in check sends real requests to the deployment -- covered by SIv3-OpenAIRights instead
+                      SkipAccessCheck = $true }
     function script:Invoke-OpenAIScript([hashtable]$Extra = @{}) {
         $a = @{}; foreach ($k in $script:BaseArgs.Keys) { $a[$k] = $script:BaseArgs[$k] }; foreach ($k in $Extra.Keys) { $a[$k] = $Extra[$k] }
         $global:BuildSummaryByAI = $null

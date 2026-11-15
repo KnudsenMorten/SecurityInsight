@@ -13,6 +13,27 @@ SecurityInsight Pro and the Pro trial install from invardia.com, never from GitH
 [invardia.com/trial](https://invardia.com/trial/), and your installation page there gives your two lines.
 <!-- /install lines -->
 
+## v3.1.24 — AI without a key
+
+### Security
+- **AI works without a key.** With AI turned on and the Azure OpenAI endpoint and deployment set, SecurityInsight signs
+  in to your Azure OpenAI resource with its own identities: the engines, the AI summary and the web chat. No key is
+  stored or needed. SecurityInsight's identities need the role "Cognitive Services OpenAI User" on that resource; you or
+  your support partner give it, and SecurityInsight never gives itself a role. Each update checks the role and says
+  plainly what is missing.
+- **A key from an older setup is only a fallback.** An installation that still has a key keeps working: the key is used
+  only when the sign-in with SecurityInsight's own identity is refused, and the run log says once which way AI signed in.
+
+### Fixes
+- **The web chat follows your AI settings.** Each update gives the web chat the endpoint and deployment from your
+  settings, and takes them away when AI is turned off. The web app restarts only when a value changed.
+- **The engines follow your AI settings.** Each update gives the engines the endpoint and deployment from your settings,
+  so a change on the Settings page reaches them without a new install.
+- **Get Started no longer asks for a key.** The AI step is done when AI is on and the endpoint and deployment are set.
+  The key field stays only for older setups and is marked optional.
+- **The Azure OpenAI check script starts after a sign-in.** The downloaded check script no longer stops at once when it
+  is run after signing in with an application.
+
 ## v3.1.23.1 — new MCP clients find Microsoft's sign-in by themselves
 
 ### Security

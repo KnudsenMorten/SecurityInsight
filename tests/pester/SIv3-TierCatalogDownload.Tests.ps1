@@ -110,7 +110,10 @@ Describe 'the setting: which source this run uses (owner 2026-11-11: download by
         Test-SITierCatalogAIAvailable -AIIntegration $null -RunAI $true -Endpoint 'https://x.openai.azure.com' -Deployment 'gpt' -ApiKey 'k' | Should -BeFalse -Because 'AI integration is off by default'
         Test-SITierCatalogAIAvailable -AIIntegration $false -RunAI $true -Endpoint 'https://x.openai.azure.com' -Deployment 'gpt' -ApiKey 'k' | Should -BeFalse
         Test-SITierCatalogAIAvailable -AIIntegration $true -RunAI $false -Endpoint 'https://x.openai.azure.com' -Deployment 'gpt' -ApiKey 'k' | Should -BeFalse
-        Test-SITierCatalogAIAvailable -AIIntegration $true -RunAI $true -Endpoint 'https://x.openai.azure.com' -Deployment 'gpt' -ApiKey '' | Should -BeFalse
+        # #1257: no key needed -- the engine signs in as its own identity; endpoint + deployment are what is required
+        Test-SITierCatalogAIAvailable -AIIntegration $true -RunAI $true -Endpoint 'https://x.openai.azure.com' -Deployment 'gpt' -ApiKey '' | Should -BeTrue
+        Test-SITierCatalogAIAvailable -AIIntegration $true -RunAI $true -Endpoint 'https://x.openai.azure.com' -Deployment '' -ApiKey 'k' | Should -BeFalse
+        Test-SITierCatalogAIAvailable -AIIntegration $true -RunAI $true -Endpoint '' -Deployment 'gpt' -ApiKey 'k' | Should -BeFalse
         # an install that never chose 'ai': whatever its AI settings, the download
         (Resolve-SITierCatalogSource -Value 'invardia' -AIAvailable (Test-SITierCatalogAIAvailable -AIIntegration $true -RunAI $true -Endpoint 'https://x.openai.azure.com' -Deployment 'gpt' -ApiKey 'k')).Source | Should -Be 'invardia'
     }

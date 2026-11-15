@@ -488,10 +488,12 @@ $reqGlobals = @(
     'SI_StorageAccount',
     'SI_WorkspaceResourceId','SI_DceName','SI_DcrResourceGroup'
 )
-# #215: the endpoint / deployment / API version decide whether the install HAS Azure OpenAI; the key may be a Key
-# Vault reference (resolved below), so its value is not required here.
-$haveOpenAiSettings = -not (@('OpenAI_endpoint','OpenAI_deployment','OpenAI_apiVersion') |
+# #215: the endpoint / deployment decide whether the install HAS Azure OpenAI; the key may be a Key Vault reference
+# (resolved below), so its value is not required here. #1257: no key at all is needed (the engine signs in as its own
+# identity), and an unset API version takes the engines' default (Get-SIOpenAIApiVersion).
+$haveOpenAiSettings = -not (@('OpenAI_endpoint','OpenAI_deployment') |
     Where-Object { [string]::IsNullOrWhiteSpace((Get-Variable -Name $_ -ValueOnly -Scope Global -ErrorAction SilentlyContinue)) })
+if ($haveOpenAiSettings -and [string]::IsNullOrWhiteSpace([string]$global:OpenAI_apiVersion)) { $global:OpenAI_apiVersion = '2024-08-01-preview' }
 $shodanForJobs = @($global:SI_Shodan_ApiKey, $global:SHODAN_ApiKey | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) }) | Select-Object -First 1
 # The customer's non-secret settings for every job (#170/#187). Secret-looking and container-owned names are
 # refused by Get-SIConfigEnvArgs; bootstrap's own SI_Bootstrap_* knobs and very large values are not passed.
@@ -1236,10 +1238,14 @@ foreach ($engine in $Engines) {
         Write-SIJobSecretNote -Plan $aiPlan -JobName $jobName
         $aiPlan.SecretArg
     }
+    # #1257: the endpoint / deployment / API version reach the job whenever Azure OpenAI is configured -- the engine signs in
+    # as its own identity, no key needed; the key (a Key Vault reference) only as the fallback when one is there (REMOVE-ME #1257)
     if ($openAiSecret) {
         $secretArgs += @($openAiSecret)
-        $envArgs    += @('OPENAI_APIKEY=secretref:openai-apikey',
-                         "OPENAI_ENDPOINT=$($global:OpenAI_endpoint)",
+        $envArgs    += @('OPENAI_APIKEY=secretref:openai-apikey')
+    }
+    if ($haveOpenAiSettings) {
+        $envArgs    += @("OPENAI_ENDPOINT=$($global:OpenAI_endpoint)",
                          "OPENAI_DEPLOYMENT=$($global:OpenAI_deployment)",
                          "OPENAI_APIVERSION=$($global:OpenAI_apiVersion)")
     }

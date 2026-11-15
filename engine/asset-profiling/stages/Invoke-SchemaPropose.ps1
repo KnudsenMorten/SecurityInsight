@@ -89,9 +89,8 @@ function Invoke-SISchemaProposeAi {
             (Get-SIOpenAIApiVersion))
 
     try {
-        $resp = Invoke-RestMethod -Method Post -Uri $url `
-            -Headers @{ 'api-key' = $global:OpenAI_apiKey; 'Content-Type' = 'application/json' } `
-            -Body $body -ErrorAction Stop
+        # #1257: the engine's own identity first, the key only as the fallback (engine/_shared/SI-OpenAIAuth.ps1)
+        $resp = Invoke-SIOpenAIChat -Uri $url -Body $body
         return ($resp.choices[0].message.content | ConvertFrom-Json)
     } catch {
         Write-Warning ('SchemaPropose AI call failed: {0}' -f $_.Exception.Message)

@@ -9,7 +9,7 @@ public static class AiSummaryNote
 {
     public const string Off = "The AI summary is turned off at this install.";
 
-    public const string HowToTurnOn = "To turn it on: an Azure OpenAI deployment in your subscription, then the settings OpenAI_endpoint and OpenAI_deployment, the key stored in your Key Vault (OpenAI_apiKey), and the Risk Analysis setting BuildSummaryByAI on.";
+    public const string HowToTurnOn = "To turn it on: an Azure OpenAI deployment in your subscription, then the settings OpenAI_endpoint and OpenAI_deployment, the role \"Cognitive Services OpenAI User\" on that Azure OpenAI resource for SecurityInsight's identities (no key is needed), and the Risk Analysis setting BuildSummaryByAI on.";
 
     /// What the Top 50 risky assets page shows instead of the run's list.
     public const string TopAssetsFromDatabase = "The Risk Analysis run kept no Top 50 list, so the list below is built from the database: the active CIs by Criticality Tier (Tier 0 first), then Weighted Risk Score -- the same order as the mail.";

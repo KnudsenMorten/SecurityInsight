@@ -278,8 +278,9 @@ function Invoke-SIOpenAIClassify {
     )
 
     $sys = Get-SISystemPromptForEngine -Engine $Engine
-    # Get-SIOpenAIApiVersion (the api-version fallback, #257) lives beside the AI gate.
-    if (-not (Get-Command -Name Get-SIOpenAIApiVersion -ErrorAction SilentlyContinue)) {
+    # Get-SIOpenAIApiVersion (the api-version fallback, #257) lives beside the AI gate, which also loads the AI sign-in
+    # (Invoke-SIOpenAIChat, #1257).
+    if (-not (Get-Command -Name Get-SIOpenAIApiVersion -ErrorAction SilentlyContinue) -or -not (Get-Command -Name Invoke-SIOpenAIChat -ErrorAction SilentlyContinue)) {
         . (Join-Path (Split-Path -Parent $PSScriptRoot) 'shared\Test-SIAIEnabled.ps1')
     }
 
@@ -350,9 +351,8 @@ function Invoke-SIOpenAIClassify {
             $global:OpenAI_deployment,
             (Get-SIOpenAIApiVersion))
 
-    $resp = Invoke-RestMethod -Method Post -Uri $url `
-        -Headers @{ 'api-key' = $global:OpenAI_apiKey; 'Content-Type' = 'application/json' } `
-        -Body $body
+    # #1257: the engine's own identity first, the key only as the fallback (engine/_shared/SI-OpenAIAuth.ps1)
+    $resp = Invoke-SIOpenAIChat -Uri $url -Body $body
 
     $content = $resp.choices[0].message.content
     return ($content | ConvertFrom-Json)

@@ -84,17 +84,19 @@
                                Vault. The state is read on every load (stored / waiting / the updater's reason) and stays until it
                                changes. The input's name says "secret", so the audit trail never records it. *@
                             var ks = Model.AiKeyState;
+                            @* #1257: no key is needed (SecurityInsight signs in with its own identities) -- the box stays only for
+                               an older setup that still uses a key, and "no key" is never shown as something missing. *@
                             <div class="gs-inline gs-aikey" data-gs-ai-key>
-                                <label for="gs-aikey">Azure OpenAI key</label>
+                                <label for="gs-aikey">Azure OpenAI key (optional, older setups only)</label>
                                 <input id="gs-aikey" type="password" name="@SI.Management.Web.Settings.AiKeyStore.FormField" autocomplete="new-password" spellcheck="false" />
                                 @if (ks is not null)
                                 {
                                     <span class="gs-keystate gs-keystate-@ks.State.ToString().ToLowerInvariant()" data-gs-ai-key-state="@ks.State.ToString().ToLowerInvariant()" role="status">
-                                        @(ks.State switch { SecretState.Stored => "✓ ", SecretState.Failed => "! ", _ => "" })@ks.Text
+                                        @(ks.State switch { SecretState.Stored => "✓ ", SecretState.Failed => "! ", _ => "" })@(ks.State == SecretState.NotSet ? "No key -- not needed: SecurityInsight signs in with its own identities." : ks.Text)
                                     </span>
                                 }
                                 @if (Model.AiKeyError is { } kerr) { <p class="set-error" data-gs-ai-key-error>@kerr</p> }
-                                <p class="hint">Paste the key from the Azure portal (your Azure OpenAI resource &gt; Keys and Endpoint) and save. It is handed to SecurityInsight's updater encrypted, and the updater stores it in your Key Vault -- leave it empty to keep the key already stored.</p>
+                                <p class="hint">Leave this empty: SecurityInsight signs in to your Azure OpenAI resource with its own identities, once they have the role "Cognitive Services OpenAI User" on it. Only an older setup that still uses a key pastes it here; it is handed to SecurityInsight's updater encrypted and stored in your Key Vault, and it is used only if the sign-in with SecurityInsight's own identities is refused.</p>
                             </div>
                             if (Model.AdvancedFields.Count > 0)
                             {

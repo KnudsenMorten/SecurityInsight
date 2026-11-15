@@ -46,6 +46,8 @@ $script:SIInstallLedgerDatabase = 'sqldb-si-identity'
 # framework SEC-08: the database setup job caj-si-dbinit (step db-job) and the one add-and-wait policy for a group member
 . ([IO.Path]::Combine($PSScriptRoot, 'SI-DbInitJob.ps1'))
 if (-not (Get-Command -Name Invoke-SIGroupMemberAddRetry -ErrorAction SilentlyContinue)) { . ([IO.Path]::Combine($PSScriptRoot, 'SI-GroupMemberAdd.ps1')) }
+# #1257 AI without a key: the engine's and the web chat's right on the Azure OpenAI resource -- read only (Get-SIOpenAIRightsState)
+if (-not (Get-Command -Name Get-SIOpenAIRightsState -ErrorAction SilentlyContinue)) { . ([IO.Path]::Combine($PSScriptRoot, 'SI-OpenAIRights.ps1')) }
 
 # ---- PRO-COMMUNITY-SAME (owner 2026-11-11): the engine jobs of every install, and the Invardia Support app's database
 # access at install -- the SAME in both editions (moved here from SI-GuidedInstallPro.ps1, which keeps only the licence and
@@ -1419,6 +1421,27 @@ function Get-SIInstallDataStepTable {
         $wp = (Invoke-SIInstallArmTry -Ctx $ctx -Command 'Get-SIUserAssignedIdentity' -Arguments ([ordered]@{ ResourceGroupName = $n.ResourceGroup; Name = (Get-SISetupComponentName -Names $n -Key WebIdentity); ErrorAction = 'SilentlyContinue' })).Value
         $webPrincipal = ([string](Get-SIInstallProp $wp 'PrincipalId')).Trim()
         if ($webPrincipal -match '^[0-9a-fA-F-]{36}$') { $reg.WebIdentityPrincipalId = $webPrincipal }
+        # #1257 AI without a key: with AI on, the web identity (web chat inference -- the named exception, scoped to the chat
+        # resource) and the engine's identity need "Cognitive Services OpenAI User" on the Azure OpenAI resource the endpoint
+        # names. CHECKED ONLY (READ, never granted: the customer or Invardia gives it on the control plane, owner 2026-11-15);
+        # a missing one is a support step at the end of this step, never a stop (the updater checks again on every update).
+        $oaiSupport = @()
+        if ([bool]$v['aiClassification'] -and [string]$v['openAiEndpoint']) {
+            $oaiPrincipals = @()
+            if ($webPrincipal -match '^[0-9a-fA-F-]{36}$') { $oaiPrincipals += [pscustomobject]@{ PrincipalId = $webPrincipal; Name = 'web'; Identity = (Get-SISetupComponentName -Names $n -Key WebIdentity) } }
+            $enginePrincipal = ([string]$ctx.Facts['identityPrincipalId']).Trim()
+            if ($enginePrincipal -match '^[0-9a-fA-F-]{36}$') { $oaiPrincipals += [pscustomobject]@{ PrincipalId = $enginePrincipal; Name = 'engine'; Identity = [string]$n.ManagedIdentity } }
+            $__oaiCtx = $ctx
+            # a READ seam: GET only (Get-SIOpenAIRightsState sends nothing else; anything else is refused here too)
+            $oaiArm = { param([string]$Method, [string]$Path, [string]$ApiVersion, $Body)
+                if ($Method -ne 'GET') { throw ('the Azure OpenAI rights check only reads (refused: {0})' -f $Method) }
+                Invoke-SIInstallAz -Ctx $__oaiCtx -Command 'Invoke-SIArm' -Arguments ([ordered]@{ Method = 'GET'; Path = $Path; ApiVersion = $ApiVersion; AllowNotFound = $true }) }
+            $oai = Get-SIOpenAIRightsState -Arm $oaiArm -SubscriptionId ([string]$v['subscriptionId']) -Endpoint ([string]$v['openAiEndpoint']) -Principals $oaiPrincipals
+            foreach ($l in @($oai.Lines)) { Write-SIInstallConsole -Ctx $ctx -Text $l -Color $(if ($l -match 'support step|NOT CHECKED') { 'Yellow' } else { 'Gray' }) }
+            if ($oai.ResourceId) { $ctx.Facts['openAiResourceId'] = [string]$oai.ResourceId }
+            $oaiSupport = @($oai.Support | Where-Object { $_ })
+            if ($oai.State -eq 'not-checked' -and -not $oaiSupport.Count) { $oaiSupport += @($oai.Lines | Where-Object { $_ -match 'NOT CHECKED' }) }
+        }
         $reg.Fqdn = $fqdn
         $regResult2 = Invoke-SIInstallScript -Ctx $ctx -RelativePath 'pro-management/deploy/New-SIManagementAppRegistration.ps1' -Arguments $reg
         Assert-SIInstallScriptOk -Ctx $ctx -What 'The web app''s sign-in address' -Result $regResult2
@@ -1468,6 +1491,11 @@ function Get-SIInstallDataStepTable {
         if ($keyRingTasks.Count) {
             return (New-SIInstallResult -State 'warning' -Message ($msg + ' The web app''s sign-in keys are not protected with its Key Vault key yet: you may not give the web app its role on the key.') `
                 -Action ([ordered]@{ text = ($keyRingTasks -join "`n"); command = $ctx.ResumeCommand }))
+        }
+        if (@($oaiSupport).Count) {
+            # #1257: AI answers once this role is given (a legacy key, when one is set, is used meanwhile); the updater checks on every update
+            return (New-SIInstallResult -State 'warning' -Message ($msg + ' The AI features may not sign in to your Azure OpenAI resource with their own identity yet: give them the role below on the resource (your support partner can do it for you).') `
+                -Action ([ordered]@{ text = (@($oaiSupport) -join "`n"); command = $ctx.ResumeCommand }))
         }
         New-SIInstallResult -Message $msg
     }

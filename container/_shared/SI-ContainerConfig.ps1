@@ -235,15 +235,17 @@ function Import-SIConfigFromEnv {
 
 function Resolve-SIContainerAi {
     <#
-      PURE (#184). Azure OpenAI is OPTIONAL: configured only when all four settings are present. AI is ON
-      only when it is configured AND asked for (SI_ENABLE_AI, or $global:SI_EnableAI_<engine> passed through).
-      Asked for but not configured -> OFF, with a reason the log states. Returns @{ Configured; Enabled; Reason }.
+      PURE (#184). Azure OpenAI is OPTIONAL: configured only when endpoint and deployment are present (#1257: NO KEY is
+      needed -- the engine signs in as its own identity; apiKey is only the legacy fallback; an unset API version takes
+      the engines' default, Get-SIOpenAIApiVersion). AI is ON only when it is configured AND asked for (SI_ENABLE_AI, or
+      $global:SI_EnableAI_<engine> passed through). Asked for but not configured -> OFF, with a reason the log states.
+      Returns @{ Configured; Enabled; Reason }.
     #>
     param(
         [hashtable]$OpenAi = @{},
         [bool]$Requested = $false
     )
-    $need = 'apiKey', 'endpoint', 'deployment', 'apiVersion'
+    $need = 'endpoint', 'deployment'
     $have = @($need | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$OpenAi[$_]) })
     $configured = ($have.Count -eq $need.Count)
     if (-not $Requested) { return [pscustomobject]@{ Configured = $configured; Enabled = $false; Reason = 'AI classification is off (not requested)' } }

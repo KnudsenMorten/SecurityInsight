@@ -14,15 +14,20 @@
       Engine == 'identity' is hard-disabled regardless (catalog-driven since
         52; AOAI is never appropriate for identity tier classification).
 
-    AI also requires creds (OpenAI_apiKey/endpoint/deployment); when missing,
-    the gate returns $false even if the opt-in is set so callers don't blow up
-    on credential resolution.
+    AI also requires the Azure OpenAI endpoint + deployment; when missing, the
+    gate returns $false even if the opt-in is set. #1257: NO KEY is needed -- the
+    engine signs in to Azure OpenAI as its own identity (engine/_shared/
+    SI-OpenAIAuth.ps1, loaded below); a configured OpenAI_apiKey is only the
+    fallback.
 
     Used by:
       Invoke-Classify.ps1     -- per-asset Classify call
       Invoke-Enrich.ps1       -- signal-map / asset-group AI helpers
       Invoke-SchemaPropose.ps1 -- schema-discovery propose
 #>
+
+# #1257: the AI sign-in (the engine's identity first, the key only as the fallback) -- every AI caller loads this file
+if (-not (Get-Command -Name Invoke-SIOpenAIChat -ErrorAction SilentlyContinue)) { . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) '_shared/SI-OpenAIAuth.ps1') }
 
 function Test-SIAIEnabled {
     [CmdletBinding()]
@@ -56,12 +61,12 @@ function Test-SIAIEnabled {
                [bool](Get-Variable -Name $enablePerEngine -ValueOnly -Scope Global -ErrorAction SilentlyContinue)
     if (-not $optedIn) { return $false }
 
-    # Creds present?
-    if (-not ($global:OpenAI_apiKey -and $global:OpenAI_endpoint -and $global:OpenAI_deployment)) {
+    # Endpoint + deployment present? (#1257: no key needed -- the engine signs in as its own identity)
+    if (-not ($global:OpenAI_endpoint -and $global:OpenAI_deployment)) {
         return $false
     }
 
-    # The key goes ONLY to an Azure OpenAI endpoint (https, an Azure OpenAI / AI services host): another one is left out
+    # The token (or the fallback key) goes ONLY to an Azure OpenAI endpoint (https, an Azure OpenAI / AI services host): another one is left out
     # and said once per session -- AI is skipped, the run goes on.
     $why = Test-SIOpenAIEndpoint -Endpoint ([string]$global:OpenAI_endpoint)
     if ($why) {

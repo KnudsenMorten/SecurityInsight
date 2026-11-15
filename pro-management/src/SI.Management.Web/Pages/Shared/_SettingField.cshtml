@@ -14,7 +14,7 @@ var info = s.MoreInfo;
 @* SETTING-INFO-1: a destructive or security-reducing value asks first -- the page's save reads data-confirm-when /
    data-confirm and compares data-current with the value about to be saved (wwwroot/js/app/settings.js) *@
 <div class="set-field@(f.Editor == EditorKind.Chips ? " wide" : "")" id="s-@n" data-show-when="@Model.ShowWhen" hidden="@Model.Hidden" data-setting="@n" data-search="@search" data-changed="@(f.Changed ? "true" : "false")"
-     data-confirm-when="@(string.IsNullOrWhiteSpace(info.ConfirmWhen) ? null : info.ConfirmWhen)" data-confirm="@(string.IsNullOrWhiteSpace(info.ConfirmWhen) ? null : info.Confirm)" data-current="@(f.Text ?? "")" data-title="@s.Title">
+     data-confirm-when="@(string.IsNullOrWhiteSpace(info.ConfirmWhen) ? null : info.ConfirmWhen)" data-confirm="@(string.IsNullOrWhiteSpace(info.ConfirmWhen) ? null : info.Confirm)" data-current="@(f.Text ?? "")" data-title="@(Model.Label ?? s.Title)">
     <label class="set-label" for="@id">@(Model.Label ?? s.Title)@if (f.Changed) {<span class="set-dot" title="Changed from the default"><span class="sr-only"> (changed from the default)</span></span>}</label>
     @switch (f.Editor)
     {
@@ -43,7 +43,7 @@ var info = s.MoreInfo;
             break;
         case EditorKind.Select when s.Editor == "radio" && s.Values is { Count: > 0 }:
         @* #446: a choice the catalog marks "editor": "radio" is a set of radio buttons -- every option visible, not hidden in a list *@
-        <div class="set-radios" role="radiogroup" aria-label="@s.Title">
+        <div class="set-radios" role="radiogroup" aria-label="@(Model.Label ?? s.Title)">
             @foreach (var v in s.Values!)
             {
                 <label class="set-radio"><input type="radio" name="v:@n" value="@v" checked="@(string.Equals(v, f.Text, StringComparison.OrdinalIgnoreCase))" disabled="@(!editable)" data-choice-of="@n" /> @s.ChoiceLabel(v)</label>
@@ -108,7 +108,7 @@ var info = s.MoreInfo;
             <button type="submit" class="link small" name="reset:@n" value="1" formnovalidate data-reset="@n">Reset to default</button>
         }
         <details class="set-info">
-            <summary title="More info about this setting"><span>More info</span><span class="sr-only"> about @s.Title</span></summary>
+            <summary title="More info about this setting"><span>More info</span><span class="sr-only"> about @(Model.Label ?? s.Title)</span></summary>
             <dl data-more-info>
                 <dt>What it does</dt><dd>@info.What</dd>
                 @if (s.Type == "bool")

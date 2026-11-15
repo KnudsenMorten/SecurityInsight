@@ -886,12 +886,9 @@ $itemsJson
         temperature = 0.1
     } | ConvertTo-Json -Depth 6 -Compress
 
-    $headers = @{
-        "Content-Type" = "application/json; charset=utf-8"
-        "api-key"      = $global:OpenAI_ApiKey
-    }
-
-    $uri = "$($global:OpenAI_Endpoint)/openai/deployments/$($global:OpenAI_Deployment)/chat/completions?api-version=$($global:OpenAI_ApiVersion)"
+    # #1257: no key in the request headers -- Invoke-SIOpenAIChat signs in as the engine's own identity first and uses the
+    # key (OpenAI_ApiKey) only as the fallback (engine/_shared/SI-OpenAIAuth.ps1)
+    $uri ="$($global:OpenAI_Endpoint)/openai/deployments/$($global:OpenAI_Deployment)/chat/completions?api-version=$($global:OpenAI_ApiVersion)"
 
     # Required OpenAI settings. A missing/empty value only matters when AI is actually
     # used -- so it must NOT halt the whole engine. Instead surface a clear ERROR and
@@ -899,9 +896,9 @@ $itemsJson
     # the classifier still completes, the AI summary just isn't delivered for these
     # items. (Empty config previously THREW here and crashed the entire run; that also
     # masked the real cause when an upstream optional-secret pull left the key unset.)
+    # #1257: the key is NOT required (the engine signs in as its own identity; a key is only the fallback)
     $missingAI = @(
         @(
-            @{ Name = 'OpenAI_ApiKey';     Value = $global:OpenAI_ApiKey },
             @{ Name = 'OpenAI_Endpoint';   Value = $global:OpenAI_Endpoint },
             @{ Name = 'OpenAI_Deployment'; Value = $global:OpenAI_Deployment }
         ) | Where-Object { [string]::IsNullOrWhiteSpace([string]$_.Value) } | ForEach-Object { $_.Name }
@@ -919,11 +916,11 @@ $itemsJson
         # SAID ONCE PER RUN, and only as an error-free INFO when nothing is configured: Azure OpenAI is optional
         # (the Community default has none), so "not configured" is a choice, not a fault. Measured on an upgraded
         # Community install: one [ERROR] line per chunk -- 52 per run -- for a setting the customer never had to make.
-        # A PARTIAL configuration (some of the three set) is a real mistake and is a warning, still once.
+        # A PARTIAL configuration (one of the two set) is a real mistake and is a warning, still once.
         if (-not $script:PtcAINotConfiguredSaid) {
             $script:PtcAINotConfiguredSaid = $true
-            if ($missingAI.Count -ge 3) {
-                Write-Log ("AI tiering is not configured (no Azure OpenAI settings), so it is not used: roles and permissions keep the tier they had in the previous catalog, and new ones are left for manual review (Tier 99). To use it, set OpenAI_Endpoint, OpenAI_Deployment and OpenAI_ApiKey in config\SecurityInsight.custom.ps1 or in this engine's LauncherConfig.custom.ps1.") "INFO"
+            if ($missingAI.Count -ge 2) {
+                Write-Log ("AI tiering is not configured (no Azure OpenAI settings), so it is not used: roles and permissions keep the tier they had in the previous catalog, and new ones are left for manual review (Tier 99). To use it, set OpenAI_Endpoint and OpenAI_Deployment in config\SecurityInsight.custom.ps1 or in this engine's LauncherConfig.custom.ps1.") "INFO"
             } else {
                 Write-Log ("AI tiering is only partly configured -- missing: $($missingAI -join ', '). Set the missing value(s) in config\SecurityInsight.custom.ps1 or in this engine's LauncherConfig.custom.ps1. Until then AI tiering is not used: known tiers are kept from the previous catalog and new items are left for manual review (Tier 99).") "WARN"
             }
@@ -942,12 +939,18 @@ $itemsJson
     # producing malformed JSON when descriptions contain non-ASCII or special characters
     $bodyBytes = [System.Text.Encoding]::UTF8.GetBytes($body)
 
+    # #1257: the AI sign-in (the engine's own identity first, the key only as the fallback)
+    if (-not (Get-Command -Name Invoke-SIOpenAIChat -ErrorAction SilentlyContinue)) { . ([IO.Path]::Combine((Split-Path -Parent $PSScriptRoot), '_shared', 'SI-OpenAIAuth.ps1')) }
+
     $attempt = 0
     while ($attempt -lt $maxRetries) {
         $attempt++
+        # the engine has no access to Azure OpenAI and no key is set (said once by SI-OpenAIAuth.ps1): no retries, no
+        # further requests in this run -- the items stay unresolved and keep their previous tier
+        if ([bool](Get-Variable -Scope Global -Name SI_OpenAINoAccess -ValueOnly -ErrorAction Ignore)) { break }
         try {
             Write-Log "  [$label] attempt $attempt/$maxRetries..." "INFO"
-            $response = Invoke-RestMethod -Uri $uri -Method POST -Headers $headers -Body $bodyBytes -ErrorAction Stop
+            $response = Invoke-SIOpenAIChat -Uri $uri -Body $bodyBytes -ContentType 'application/json; charset=utf-8'
 
             # Defensive null-checks on the response shape. Azure OpenAI can return a
             # 200-OK body that's an error envelope (content-filter trigger, token

@@ -1,5 +1,21 @@
 # What's new in SecurityInsight
 
+## 3.1.24 · 2026-11-15 · Security
+
+AI works without a key: SecurityInsight signs in to your Azure OpenAI resource with its own identities.
+
+### New features
+
+- **AI works without a key** - Turn AI on and set the Azure OpenAI endpoint and deployment. SecurityInsight signs in with its own identities, so no key is stored. Give them the role Cognitive Services OpenAI User on the resource, or ask your support partner.
+
+### Fixes
+
+- **The web chat follows your AI settings** - Each update gives the web chat the endpoint and deployment from your settings, and removes them when AI is off. The web app restarts only when a value changed.
+- **The engines follow your AI settings** - A change of the endpoint or deployment on the Settings page reaches the engines with the next update.
+- **An older key is only a fallback** - An installation that still has a key keeps working. The key is used only when the sign-in with SecurityInsight's own identity is refused.
+- **Get Started no longer asks for a key** - The AI step is done when AI is on and the endpoint and deployment are set. The key field is optional and only for older setups.
+- **The Azure OpenAI check script starts after sign-in** - The downloaded check script no longer stops at once when it is run after signing in with an application.
+
 ## 3.1.23.1 · 2026-11-15 · Security
 
 New MCP clients find Microsoft's sign-in by themselves, and stop and update never stops a run it could not read.

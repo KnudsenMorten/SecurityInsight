@@ -63,7 +63,8 @@ Describe 'Azure OpenAI only partly configured (a real mistake)' {
         $script:Log.Clear()
         $script:PtcAINotConfiguredSaid = $null
         $global:SI_PrivilegeTierClassifier_RunAI = $null
-        $global:OpenAI_ApiKey = $null; $global:OpenAI_Endpoint = 'https://x.openai.azure.com'; $global:OpenAI_Deployment = 'gpt'
+        # #1257: the key is not needed (the engine signs in as its own identity) -- a missing DEPLOYMENT is the partial case
+        $global:OpenAI_ApiKey = $null; $global:OpenAI_Endpoint = 'https://x.openai.azure.com'; $global:OpenAI_Deployment = $null
     }
     AfterAll { $global:OpenAI_Endpoint = $null; $global:OpenAI_Deployment = $null }
 
@@ -71,6 +72,7 @@ Describe 'Azure OpenAI only partly configured (a real mistake)' {
         $null = Invoke-Chunks 5
         @($script:Log).Count | Should -Be 1
         $script:Log[0].Level | Should -Be 'WARN'
-        $script:Log[0].Message | Should -Match 'OpenAI_ApiKey'
+        $script:Log[0].Message | Should -Match 'OpenAI_Deployment'
+        $script:Log[0].Message | Should -Not -Match 'OpenAI_ApiKey' -Because '#1257: no key is required'
     }
 }

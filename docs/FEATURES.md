@@ -2,7 +2,7 @@
 
 This is the delivered feature set of **SecurityInsight**, written in plain language for IT
 admins, security teams and decision-makers. Everything listed here is built and in production
-use. It is grouped by area and is safe to share publicly. (Status as of 2026-11-06, SecurityInsight 3.0.53.)
+use. It is grouped by area and is safe to share publicly. (Status as of 2026-11-15, SecurityInsight 3.1.23.)
 
 SecurityInsight turns your Microsoft security telemetry into a **risk-based, prioritized** view
 of what to fix first. It profiles every asset (endpoint, identity, Azure resource, public IP),
@@ -355,6 +355,25 @@ feature here working normally.
   app and the MCP server can read the data they show, and nothing more: no right to start, stop or change jobs, no owner
   or contributor role, no right to give rights to anyone, no right to push images and no right to manage the Key Vault.
   Every update checks this and removes anything more, read back.
+- **The MCP server is behind Microsoft's sign-in too.** ✅ 2026-11-15 (3.1.23) -- The MCP server answers only requests
+  that carry a valid Microsoft sign-in, and still checks the token and the person's SecurityInsight role itself. Only
+  its health answer is open, and it carries no data.
+- **The web app verifies who signed in.** ✅ 2026-11-15 (3.1.23) -- With Microsoft's sign-in, the person comes only from
+  a sign-in token the web app verifies itself (signature, tenant, audience), never from a header alone. A refused save
+  says who refused it.
+- **No Key Vault access for the web app.** ✅ 2026-11-15 (3.1.23) -- Once Microsoft's sign-in is on, the web app keeps
+  its sign-in keys in the installation's own storage and holds no Key Vault role at all. Open pages stay signed in
+  through the move, and every step is read back.
+- **Every public address is checked.** ✅ 2026-11-15 (3.1.23) -- Each update lists every part of the installation that
+  is reachable from the internet and reports any that is not behind Microsoft's sign-in. Every release that touches
+  sign-in is also checked from outside, as an anonymous visitor would try it, before it goes further.
+- **The earlier sign-in leaves nothing behind.** ✅ 2026-11-15 (3.1.23) -- After the switch to Microsoft's sign-in, the
+  settings and the database tables of the earlier sign-in are removed and read back; anything else it left is reported.
+- **The updater only reads group membership.** ✅ 2026-11-15 (3.1.23) -- The updater holds no right to change any group
+  membership. It checks that the database setup job's membership is in place and, when it is not, names the support
+  step. Setup makes that membership direct and permanent, so nothing has to be renewed.
+- **Security fixes of the .NET packages are applied.** ✅ 2026-11-12 (3.1.11) -- The web app and the MCP server build on
+  the patched .NET package release, so a scanner finds none of the earlier package versions in the images.
 
 ## 12. Performance & scale
 
@@ -406,6 +425,12 @@ feature here working normally.
 - **Vendor support's database admin access is time-limited only.** ✅ 2026-11-09 -- Vendor support holds no standing
   administrator right in your SecurityInsight databases or their SQL administrator group: it keeps read-only access, and
   every change it makes runs under a temporary grant you agreed to, opened for that task and closed again.
+- **An update stays alive during long database work.** ✅ 2026-11-13 (3.1.16) -- A long database statement of an update
+  reports every 5 minutes that the update is still working, so a working update is never stopped as if it had hung; a
+  real hang is still stopped. The updater moves itself to the new version as soon as the engine jobs are healthy.
+- **A short network fault to the database is tried again.** ✅ 2026-11-14 (3.1.18) -- When the connection to the
+  database fails for a moment while it is being set up, also in its secure handshake, SecurityInsight tries again after
+  a short wait instead of stopping the run.
 - **Patching after a run is not counted as a data problem.** ✅ 2026-10-18 -- When SecurityInsight checks its stored results against your live sources, a vulnerability you fixed after the collection is counted and shown as drift, not as a missing finding. Your install stays healthy while you patch, and a finding that existed at collection time but is missing still raises a warning.
 
 ## 14. Documentation

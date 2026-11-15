@@ -222,10 +222,12 @@ $global:BuildSummaryByAI = Test-SITruthy $global:BuildSummaryByAI
 if ($global:BuildSummaryByAI) {
     if ($raEnv.Contains('BuildSummaryByAI')) {
         # Asked for by setup itself: Azure OpenAI must reach the job, or the run stops and says which part is missing.
-        $global:OpenAI_apiKey     = Get-RequiredEnv 'OPENAI_APIKEY'
+        # #1257: the key is OPTIONAL -- the engine signs in as its own identity; a key is only the fallback (REMOVE-ME #1257)
+        $global:OpenAI_apiKey     = Get-OptionalEnv 'OPENAI_APIKEY' ''
         $global:OpenAI_endpoint   = Get-RequiredEnv 'OPENAI_ENDPOINT'
         $global:OpenAI_deployment = Get-RequiredEnv 'OPENAI_DEPLOYMENT'
-        $global:OpenAI_apiVersion = Get-RequiredEnv 'OPENAI_APIVERSION'
+        # #1257: endpoint + deployment are enough; an unset API version takes the engines' default
+        $global:OpenAI_apiVersion = Get-OptionalEnv 'OPENAI_APIVERSION' ''
     } else {
         $aiParts = @{ apiKey = (Get-OptionalEnv 'OPENAI_APIKEY'); endpoint = (Get-OptionalEnv 'OPENAI_ENDPOINT')
                       deployment = (Get-OptionalEnv 'OPENAI_DEPLOYMENT'); apiVersion = (Get-OptionalEnv 'OPENAI_APIVERSION') }

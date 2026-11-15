@@ -395,6 +395,88 @@ function Invoke-SIUpdaterWebJobRightsStep {
     } catch { Write-UpdLog ('WARNING: internet-facing identities: not checked ({0}) -- the next update tries again' -f $_.Exception.Message); $null }
 }
 
+function Read-SIUpdaterAiSettingRows {
+    <#
+        #1257: the AI settings rows of cfg.Setting (SI_EnableAI, OpenAI_endpoint, OpenAI_deployment, OpenAI_apiVersion; the
+        solution scope). @{ Known; Rows } -- Known = $false when there is no database or it could not be read (then no step
+        changes anything on a guess).
+    #>
+    param($Store)
+    if (-not ($Store -and $Store.Invoke)) { return [pscustomobject]@{ Known = $false; Rows = @() } }
+    try {
+        $rows = @(& $Store.Invoke "IF OBJECT_ID('cfg.Setting') IS NOT NULL SELECT Name, ValueJson FROM cfg.Setting WHERE Scope = N'solution' AND Name IN (N'SI_EnableAI', N'OpenAI_endpoint', N'OpenAI_deployment', N'OpenAI_apiVersion')" @{} 'reader' | ForEach-Object { $_ })
+        [pscustomobject]@{ Known = $true; Rows = $rows }
+    } catch { [pscustomobject]@{ Known = $false; Rows = @() } }
+}
+
+function Invoke-SIUpdaterAiSettingsStep {
+    <#
+        #1257 AI WITHOUT A KEY -- THE AI SETTINGS REACH THE WEB CHAT AND THE ENGINES (setup\_shared\SI-AiSettings.ps1,
+        Invoke-SIAiSettings): with SI_EnableAI true the web app gets Chat__Endpoint / Chat__Deployment and every engine job
+        OPENAI_ENDPOINT / OPENAI_DEPLOYMENT / OPENAI_APIVERSION from the database settings; with AI off the web app's two are
+        removed. A PATCH only where a value differs (a new web revision only then), read back. Never a key. Settings that
+        could not be read = nothing changed. On every run, also an apply-settings run (a saved setting arrives there).
+        SI_UPDATER_AI_SETTINGS = plan on the job: the plan only. NEVER throws.
+        Seams (tests): -Arm { param($Method, $Path, $ApiVersion, $Body) }, -Lib, -Sleep, -SettingRows + -SettingsKnown.
+    #>
+    param([Parameter(Mandatory)][string]$SubscriptionId, [Parameter(Mandatory)][string]$ResourceGroup, $Store, [hashtable]$Env = @{},
+          [scriptblock]$Arm, [string]$Lib = '', [scriptblock]$Sleep, [object[]]$SettingRows, [bool]$SettingsKnown = $true)
+    try {
+        $file = if ($Lib) { $Lib } elseif ($siAutoRoot) { [IO.Path]::Combine($siAutoRoot, 'setup', '_shared', 'SI-AiSettings.ps1') } else { '' }
+        if (-not $file -or -not (Test-Path -LiteralPath $file)) { return $null }
+        # dot-sourced and called HERE, in this scope (never from a .GetNewClosure() block: see Invoke-SIUpdaterSupportQueue)
+        . $file
+        if (-not $Arm) { $Arm = { param([string]$Method, [string]$Path, [string]$ApiVersion, $Body) Invoke-SIUpdaterArm -Method $Method -Path $Path -ApiVersion $ApiVersion -Body $Body -AllowNotFound:($Method -eq 'GET') } }
+        if ($null -eq $SettingRows) { $read = Read-SIUpdaterAiSettingRows -Store $Store; $SettingRows = @($read.Rows); $SettingsKnown = [bool]$read.Known }
+        $mode = if ($Env.ContainsKey('SI_UPDATER_AI_SETTINGS')) { [string]$Env['SI_UPDATER_AI_SETTINGS'] } else { [string][Environment]::GetEnvironmentVariable('SI_UPDATER_AI_SETTINGS') }
+        $plan = ("$mode".Trim() -ieq 'plan')
+        $global:SI_UpdaterStep = 'settings'
+        $rgId = '/subscriptions/{0}/resourceGroups/{1}' -f $SubscriptionId, $ResourceGroup
+        $jobs = @()
+        $want = Get-SIAiSettingsWant -Settings (ConvertFrom-SIAiSettingRows -Rows $SettingRows) -Known $SettingsKnown
+        if ($want.State -eq 'on') { $jobs = @((& $Arm 'GET' ($rgId + '/providers/Microsoft.App/jobs') '2025-07-01' $null).value) }
+        $p = @{ Arm = $Arm; SubscriptionId = $SubscriptionId; ResourceGroup = $ResourceGroup; WebAppName = (Get-SIUpdaterInstallName -Role web -Env $Env)
+                Jobs = $jobs; Settings = (ConvertFrom-SIAiSettingRows -Rows $SettingRows); Known = $SettingsKnown; WhatIf = $plan }
+        if ($Sleep) { $p['Sleep'] = $Sleep }
+        $r = Invoke-SIAiSettings @p
+        foreach ($l in @($r.Lines)) { Write-UpdLog $(if ($l -match 'could not|does not read back|not checked|but ') { 'WARNING: ' + $l } else { $l }) }
+        $r
+    } catch { Write-UpdLog ('WARNING: AI settings: not checked ({0}) -- the next update tries again' -f $_.Exception.Message); $null }
+}
+
+function Invoke-SIUpdaterOpenAIRightsStep {
+    <#
+        #1257 AI WITHOUT A KEY: when the install has Azure OpenAI configured (OpenAI_endpoint -- the Pro setting, else a job's
+        OPENAI_ENDPOINT, else the web app's Chat__Endpoint), whether the engine's identity and the web app's identity (web
+        chat) hold "Cognitive Services OpenAI User" on THAT resource -- READ ONLY (setup\_shared\SI-OpenAIRights.ps1,
+        Get-SIOpenAIRightsState). SecurityInsight never grants it: the customer or Invardia does, on the control plane; a
+        missing one is a support step in the log -- never a failed update. Not configured: nothing is read.
+        NEVER throws. Seams (tests): -Arm { param($Method, $Path, $ApiVersion, $Body) }, -Lib, -SettingRows.
+    #>
+    param([Parameter(Mandatory)][string]$SubscriptionId, [Parameter(Mandatory)][string]$ResourceGroup, $Store, [hashtable]$Env = @{},
+          [scriptblock]$Arm, [string]$Lib = '', [object[]]$SettingRows)
+    try {
+        $file = if ($Lib) { $Lib } elseif ($siAutoRoot) { [IO.Path]::Combine($siAutoRoot, 'setup', '_shared', 'SI-OpenAIRights.ps1') } else { '' }
+        if (-not $file -or -not (Test-Path -LiteralPath $file)) { return $null }
+        # dot-sourced and called HERE, in this scope (never from a .GetNewClosure() block: see Invoke-SIUpdaterSupportQueue)
+        . $file
+        # a READ seam: GET only (the check sends nothing else; anything else is refused here too)
+        if (-not $Arm) { $Arm = { param([string]$Method, [string]$Path, [string]$ApiVersion, $Body) if ($Method -ne 'GET') { throw ('the Azure OpenAI rights check only reads (refused: {0})' -f $Method) }; Invoke-SIUpdaterArm -Method GET -Path $Path -ApiVersion $ApiVersion -AllowNotFound } }
+        $rgId = '/subscriptions/{0}/resourceGroups/{1}' -f $SubscriptionId, $ResourceGroup
+        $api = Get-SIOpenAIRightsApi
+        $jobs = @((& $Arm 'GET' ($rgId + '/providers/Microsoft.App/jobs') $api.Apps $null).value)
+        $apps = @((& $Arm 'GET' ($rgId + '/providers/Microsoft.App/containerApps') $api.Apps $null).value)
+        if ($null -eq $SettingRows) { $SettingRows = @((Read-SIUpdaterAiSettingRows -Store $Store).Rows) }
+        $endpoint = Resolve-SIOpenAIEndpointSetting -SettingRows $SettingRows -Jobs $jobs -Apps $apps
+        if (-not $endpoint) { return $null }
+        $principals = @(Get-SIOpenAIRightsPrincipals -Jobs $jobs -Apps $apps -WebAppName (Get-SIUpdaterInstallName -Role web -Env $Env))
+        $global:SI_UpdaterStep = 'settings'
+        $r = Get-SIOpenAIRightsState -Arm $Arm -SubscriptionId $SubscriptionId -Endpoint $endpoint -Principals $principals
+        foreach ($l in @($r.Lines)) { Write-UpdLog $(if ($l -match 'NOT CHECKED|support step') { 'WARNING: ' + $l } else { $l }) }
+        $r
+    } catch { Write-UpdLog ('WARNING: Azure OpenAI rights: not checked ({0}) -- the next update checks again' -f $_.Exception.Message); $null }
+}
+
 function Invoke-SIUpdaterIdentityNamesStep {
     <#
         #1145 THE IDENTITY NAMES (framework §5.5): the release's setup\_shared\SI-IdentityNamesStep.ps1 with this run's seams --
@@ -1381,6 +1463,12 @@ function Invoke-SIUpdaterCore {
     # SECURE-WEB-1: the internet-facing identities lose any job / owner / contributor / role-assignment right, read back --
     # on EVERY run, before anything else may return (an apply-settings run included). Never fails or holds the update.
     $null = Invoke-SIUpdaterWebJobRightsStep -SubscriptionId $sub -ResourceGroup $rg
+    # #1257: AI without a key -- the database's AI settings to the web chat (Chat__*) and the engine jobs (OPENAI_*), read
+    # back; then the engine's (and the web chat's) right on the configured Azure OpenAI resource CHECKED (read only: the
+    # customer or Invardia grants it; missing = a support step). Also in an apply-settings run (a saved setting arrives
+    # there). Never fails or holds the update.
+    $null = Invoke-SIUpdaterAiSettingsStep -SubscriptionId $sub -ResourceGroup $rg -Store $proStore -Env $Env
+    $null = Invoke-SIUpdaterOpenAIRightsStep -SubscriptionId $sub -ResourceGroup $rg -Store $proStore -Env $Env
     if ($updMode -eq 'apply-settings') {
         if ($proSql -and $proDb -and -not $proStore) { throw "the Pro settings database could not be opened: $proStoreError" }
         Write-UpdLog 'apply-settings run: the settings handed over in the web app were applied -- nothing else runs'

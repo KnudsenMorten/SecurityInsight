@@ -7665,10 +7665,13 @@ if (-not $script:_RATopListsOnly) {
 if ([bool]$global:BuildSummaryByAI -or [long]$script:RAViewCount -gt 0) {
     if (-not $script:_RATopListsOnly) {
 
-    # Resolve AI config from GLOBAL OpenAI_* variables (single source of truth)
+    # Resolve AI config from GLOBAL OpenAI_* variables (single source of truth). #1257: no key is needed -- the AI summary
+    # signs in as the engine's own identity (engine/_shared/SI-OpenAIAuth.ps1); OpenAI_apiKey is only the fallback
+    # (REMOVE-ME #1257: AI_apiKey goes with the key fallback).
     if (-not [string]::IsNullOrWhiteSpace($global:OpenAI_apiKey)) {
         $global:AI_apiKey = $global:OpenAI_apiKey
     }
+    if (-not (Get-Command -Name Invoke-SIOpenAIChat -ErrorAction SilentlyContinue)) { . (Join-Path (Split-Path -Parent $PSScriptRoot) '_shared/SI-OpenAIAuth.ps1') }
     if (-not [string]::IsNullOrWhiteSpace($global:OpenAI_deployment)) {
         $global:AI_deployment = $global:OpenAI_deployment
     }
@@ -7678,6 +7681,8 @@ if ([bool]$global:BuildSummaryByAI -or [long]$script:RAViewCount -gt 0) {
 
         $endpoint   = $global:OpenAI_endpoint
         $apiVersion = $global:OpenAI_apiVersion
+        # #1257: endpoint + deployment are enough -- an unset API version takes the engines' one default
+        if ([string]::IsNullOrWhiteSpace($apiVersion) -and (Get-Command -Name Get-SIOpenAIApiVersion -ErrorAction SilentlyContinue)) { $apiVersion = Get-SIOpenAIApiVersion }
 
         if ([string]::IsNullOrWhiteSpace($endpoint))        { throw "BuildSummaryByAI is enabled, but Global:OpenAI_endpoint is missing." }
         if ([string]::IsNullOrWhiteSpace($global:AI_deployment)) { throw "BuildSummaryByAI is enabled, but Global:OpenAI_deployment is missing." }
@@ -7695,8 +7700,7 @@ if ([bool]$global:BuildSummaryByAI -or [long]$script:RAViewCount -gt 0) {
         }
     }
 
-    # Validation
-    if ([string]::IsNullOrWhiteSpace($global:AI_apiKey))     { throw "BuildSummaryByAI is enabled, but Global:OpenAI_apiKey is missing." }
+    # Validation (#1257: the key is not required -- the engine's identity signs in)
     if ([string]::IsNullOrWhiteSpace($global:AI_deployment)) { throw "BuildSummaryByAI is enabled, but Global:OpenAI_deployment is missing." }
 
     Write-Host "[AI] URI = $($global:AI_Uri)"
@@ -8732,12 +8736,17 @@ Rules:
             # attempt builds its own.
             $response = $null; $__aiErr = ''
             $__aiMax = if ($global:AI_MaxAttempts) { [int]$global:AI_MaxAttempts } else { 4 }
+            # #1257: the engine's own identity first (a bearer token); the key only as the fallback (said once); neither:
+            # the AI summary fails alone with the plain message (the catch below), the report goes on without it
+            $__aiAuth = Get-SIOpenAIAuthHeader
+            if ($__aiAuth.Mode -eq 'None') { throw $__aiAuth.Reason }
+            Write-Host ("[AI] sign-in = {0}" -f $(if ($__aiAuth.Mode -eq 'ManagedIdentity') { "the engine's identity" } else { 'a key (fallback)' }))
             for ($__aiAtt = 1; $__aiAtt -le $__aiMax; $__aiAtt++) {
                 $request = [System.Net.Http.HttpRequestMessage]::new(
                     [System.Net.Http.HttpMethod]::Post,
                     $global:AI_Uri
                 )
-                $request.Headers.Add("api-key", $global:AI_apiKey)
+                foreach ($__aiH in @($__aiAuth.Headers.Keys)) { $request.Headers.Add([string]$__aiH, [string]$__aiAuth.Headers[$__aiH]) }
                 $request.Headers.Add("Accept", "text/event-stream")
                 $request.Content = [System.Net.Http.StringContent]::new(
                     $body,
@@ -8758,6 +8767,15 @@ Rules:
                 }
                 if ($response -and $response.IsSuccessStatusCode) { break }
                 $__aiCode = if ($response) { [int]$response.StatusCode } else { 0 }
+                # #1257: the engine's identity was refused (401 / 403): the key when one is configured, sent at once (not
+                # counted as an attempt); no key: the AI summary fails alone with the plain message
+                if ($__aiAuth.Mode -eq 'ManagedIdentity' -and (Test-SIOpenAIAuthRefused -StatusCode $__aiCode)) {
+                    try { $response.Dispose() } catch { }
+                    $__aiAuth = Switch-SIOpenAIToKey -Reason ("Azure OpenAI refused the engine's identity (HTTP {0})" -f $__aiCode)
+                    if ($__aiAuth.Mode -eq 'None') { throw $__aiAuth.Reason }
+                    $__aiAtt--
+                    continue
+                }
                 if ($response) { $__aiErr = "HTTP ${__aiCode}: " + $response.Content.ReadAsStringAsync().GetAwaiter().GetResult() }
                 $__aiTransient = ($__aiCode -eq 0 -or $__aiCode -eq 408 -or $__aiCode -eq 429 -or $__aiCode -ge 500)
                 if (-not $__aiTransient -or $__aiAtt -ge $__aiMax) { throw "Azure OpenAI returned $__aiErr" }

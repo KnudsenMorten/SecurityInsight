@@ -50,6 +50,10 @@ Describe 'AI turned off sends nothing' {
         $global:OpenAI_ApiKey = 'k'; $global:OpenAI_Endpoint = 'https://x.openai.azure.com'; $global:OpenAI_Deployment = 'd'; $global:OpenAI_ApiVersion = 'v'
         $global:AI_MaxRetries = 2; $global:AI_MaxTokens = 100
         $script:PtcAICallsUsed = 0
+        # #1257: no engine identity in a test -- the key fallback is used (SI-OpenAIAuth.ps1; SIv3-OpenAIManagedIdentity covers both)
+        Reset-SIOpenAIAuthState
+        Mock Get-SIOpenAIAccessToken { throw 'no engine identity in this test' }
+        Mock Write-Warning { }
     }
     AfterEach { Remove-Variable -Scope Global -Name SI_PrivilegeTierClassifier_RunAI -ErrorAction SilentlyContinue }
 

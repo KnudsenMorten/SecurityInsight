@@ -78,7 +78,15 @@ param(
     # verifies each resource exists and prints the same summary block you'd
     # get after a real provisioning run. Useful for re-running Step3 as an
     # ongoing "is my OpenAI still healthy?" check without making changes.
-    [switch]$ValidateOnly
+    [switch]$ValidateOnly,
+
+    # #1257 AI without a key: the sign-in check at the end says which way works -- the key, an Entra token (as the person
+    # running this), and whether the ENGINE's identity may use the resource. The engine's identity is read by name
+    # (default id-si-engine) in -EngineIdentityResourceGroup (default: -InstallResourceGroupName, else -ResourceGroupName).
+    [string]$EngineIdentityName = 'id-si-engine',
+    [string]$EngineIdentityResourceGroup,
+    # skip the sign-in check (it sends one tiny request to the deployment per way of signing in)
+    [switch]$SkipAccessCheck
 )
 
 #Requires -Version 7.0   # after the help and the param block: before the help, it hides the help from Get-Help
@@ -111,11 +119,17 @@ $ScriptRoot = if ($PSScriptRoot -and -not [string]::IsNullOrWhiteSpace($PSScript
 # #1102: a private install's account follows rule 11 (Test-SISqlServerPrivate, Get-SIOpenAIPrivatePlan)
 . (Join-Path $ScriptRoot '_shared\SI-SetupArm.ps1')
 . (Join-Path $ScriptRoot '_shared\SI-OpenAIPrivate.ps1')
+# #1257: which way of signing in to Azure OpenAI works (Test-SIOpenAIAccessPaths, Get-SIOpenAIRightsPlan)
+. (Join-Path $ScriptRoot '_shared\SI-OpenAIRights.ps1')
+# the shared Azure OpenAI seam: the sign-in check's probe goes through it (Get-SIOpenAIProbeStatus)
+. ([IO.Path]::Combine((Split-Path -Parent $ScriptRoot), 'engine', '_shared', 'SI-OpenAIAuth.ps1'))
 function Get-SISetupRgTag {
-    $ring    = if (@('r0', 'r1', 'r2', 'prod') -contains "$($global:SI_Ring)".Trim()) { "$($global:SI_Ring)".Trim() } else { 'prod' }
-    $hosting = if ("$($global:SI_Bootstrap_ResourceGroupName)".Trim()) { 'ca' } else { 'vm' }
-    $edition = Resolve-SISetupEdition -SIRoot (Split-Path -Parent $ScriptRoot) -LicenceValue ([string]$global:SI_License)
-    ConvertTo-SIAzTagHashtable -Tags (Get-SIResourceGroupTags -Ring $ring -Edition $edition -Hosting $hosting -Tenant (Resolve-SITenantTag) -Owner ([string]$global:SI_Owner))
+    # unset launcher values are $null, never a strict-mode error (Get-SIValidateGlobal below)
+    $ringV   = "$(Get-SIValidateGlobal 'SI_Ring')".Trim()
+    $ring    = if (@('r0', 'r1', 'r2', 'prod') -contains $ringV) { $ringV } else { 'prod' }
+    $hosting = if ("$(Get-SIValidateGlobal 'SI_Bootstrap_ResourceGroupName')".Trim()) { 'ca' } else { 'vm' }
+    $edition = Resolve-SISetupEdition -SIRoot (Split-Path -Parent $ScriptRoot) -LicenceValue ([string](Get-SIValidateGlobal 'SI_License'))
+    ConvertTo-SIAzTagHashtable -Tags (Get-SIResourceGroupTags -Ring $ring -Edition $edition -Hosting $hosting -Tenant (Resolve-SITenantTag) -Owner ([string](Get-SIValidateGlobal 'SI_Owner')))
 }
 #region ================= API VERSIONING ==========================
 # Management-plane API version (ARM) used for:
@@ -139,24 +153,32 @@ $InferenceApiVersion = "2025-01-01-preview"
 #
 # The defaults here are PLATFORM-NEUTRAL only -- model preference,
 # capacity, SKU order, etc. They are safe to ship to the community repo.
+# A launcher value that is NOT set is $null here, never an error: under Set-StrictMode -Version Latest a bare read of an
+# unset $global:X THROWS ("The variable '$global:SubscriptionId' cannot be retrieved because it has not been set") -- which
+# broke the published, self-unpacking script when it was invoked with `& $script -SubscriptionId ...` after a sign-in
+# (tests/pester/SIv3-OpenAIValidateDefaults.Tests.ps1).
+function Get-SIValidateGlobal {
+    param([Parameter(Mandatory)][string]$Name)
+    Get-Variable -Scope Global -Name $Name -ValueOnly -ErrorAction Ignore
+}
 $ScriptDefaults = @{
-    SubscriptionId      = $global:SubscriptionId
-    ResourceGroupName   = $global:ResourceGroupName
-    Location            = $global:Location
-    AccountName         = $global:AccountName
-    DeploymentName      = $global:DeploymentName
+    SubscriptionId      = Get-SIValidateGlobal 'SubscriptionId'
+    ResourceGroupName   = Get-SIValidateGlobal 'ResourceGroupName'
+    Location            = Get-SIValidateGlobal 'Location'
+    AccountName         = Get-SIValidateGlobal 'AccountName'
+    DeploymentName      = Get-SIValidateGlobal 'DeploymentName'
 
     # Preferred default (may not be supported; script will try others)
-    ModelName           = if ($global:ModelName)    { $global:ModelName }    else { 'gpt-4.1-mini' }
-    ModelVersion        = if ($global:ModelVersion) { $global:ModelVersion } else { 'latest' }
+    ModelName           = if (Get-SIValidateGlobal 'ModelName')    { Get-SIValidateGlobal 'ModelName' }    else { 'gpt-4.1-mini' }
+    ModelVersion        = if (Get-SIValidateGlobal 'ModelVersion') { Get-SIValidateGlobal 'ModelVersion' } else { 'latest' }
 
-    Capacity            = if ($global:Capacity)            { [int]$global:Capacity }            else { 100 }
-    PublicNetworkAccess = if ($global:PublicNetworkAccess) { $global:PublicNetworkAccess }      else { 'Enabled' }
-    WaitForAccountReady = if ($null -ne $global:WaitForAccountReady) { [bool]$global:WaitForAccountReady } else { $true }
+    Capacity            = if (Get-SIValidateGlobal 'Capacity')            { [int](Get-SIValidateGlobal 'Capacity') }       else { 100 }
+    PublicNetworkAccess = if (Get-SIValidateGlobal 'PublicNetworkAccess') { Get-SIValidateGlobal 'PublicNetworkAccess' }   else { 'Enabled' }
+    WaitForAccountReady = if ($null -ne (Get-SIValidateGlobal 'WaitForAccountReady')) { [bool](Get-SIValidateGlobal 'WaitForAccountReady') } else { $true }
 
-    DeploymentSkuOrder  = if ($global:DeploymentSkuOrder) { @($global:DeploymentSkuOrder) } else { @('GlobalStandard') }
+    DeploymentSkuOrder  = if (Get-SIValidateGlobal 'DeploymentSkuOrder') { @(Get-SIValidateGlobal 'DeploymentSkuOrder') } else { @('GlobalStandard') }
 
-    WriteModelDumps     = if ($null -ne $global:WriteModelDumps) { [bool]$global:WriteModelDumps } else { $true }
+    WriteModelDumps     = if ($null -ne (Get-SIValidateGlobal 'WriteModelDumps')) { [bool](Get-SIValidateGlobal 'WriteModelDumps') } else { $true }
 }
 
 # Hard guard: customer-specific values must be present (from launcher or -param)
@@ -755,7 +777,7 @@ Write-Host "  Copy into LauncherConfig.custom.ps1 (SecurityInsight_RiskAnalysis)
 Write-Host "  (the BuildSummaryByAI master toggle is REQUIRED -- without it, the engine ignores the OpenAI_* values and skips the AI summary entirely)" -ForegroundColor Yellow
 Write-Host ""
 Write-Host  "    `$Global:BuildSummaryByAI           = `$true"                     -ForegroundColor Green
-Write-Host ("    `$Global:OpenAI_apiKey              = `"{0}`"" -f $AI_apiKey)     -ForegroundColor White
+Write-Host ("    `$Global:OpenAI_apiKey              = `"{0}`"   # optional: only the fallback -- the engine signs in with its own identity (see section 10)" -f $AI_apiKey)     -ForegroundColor White
 Write-Host ("    `$Global:OpenAI_endpoint            = `"{0}`"" -f $AI_endpoint)   -ForegroundColor White
 Write-Host ("    `$Global:OpenAI_deployment          = `"{0}`"" -f $AI_deployment) -ForegroundColor White
 Write-Host ("    `$Global:OpenAI_apiVersion          = `"{0}`"" -f $AI_apiVersion) -ForegroundColor White
@@ -772,6 +794,46 @@ $global:OpenAI_endpoint            = $AI_endpoint
 $global:OpenAI_deployment          = $AI_deployment
 $global:OpenAI_apiVersion          = $AI_apiVersion
 $global:OpenAI_MaxTokensPerRequest = 16384
+
+# ----------------------------------------------------------------------------
+# #1257 AI without a key: which way of signing in works. The engine signs in as its OWN identity (no key) when that identity
+# holds "Cognitive Services OpenAI User" on this resource; the key is only the fallback. One tiny request per way of
+# signing in (the key; an Entra token as the person running this), and a read of the engine identity's role here.
+# ----------------------------------------------------------------------------
+function Invoke-SIOpenAIAccessCheck {
+    Set-StrictMode -Off
+    $uri = '{0}/openai/deployments/{1}/chat/completions?api-version={2}' -f $AI_endpoint, $DeploymentName, $InferenceApiVersion
+    $body = @{ messages = @(@{ role = 'user'; content = 'ping' }); max_tokens = 1 } | ConvertTo-Json -Depth 5 -Compress
+    # the probe through the shared Azure OpenAI seam (engine\_shared\SI-OpenAIAuth.ps1: the host is checked first)
+    $send = {
+        param($Headers)
+        Get-SIOpenAIProbeStatus -Uri $uri -Headers $Headers -Body $body -TimeoutSec 60
+    }.GetNewClosure()
+    $getToken = { Get-SIAzureToken -Resource 'https://cognitiveservices.azure.com/' }
+    # the engine's identity: read by name, then its role on this account (or above it)
+    $has = $null
+    $engRg = if ($EngineIdentityResourceGroup) { $EngineIdentityResourceGroup } elseif ($InstallResourceGroupName) { $InstallResourceGroupName } else { $ResourceGroupName }
+    try {
+        $eng = Get-SIUserAssignedIdentity -ResourceGroupName $engRg -Name $EngineIdentityName -SubscriptionId $SubscriptionId -ErrorAction SilentlyContinue
+        $engPid = if ($eng) { [string]$eng.PrincipalId } else { '' }
+        if ($engPid) {
+            $f = [uri]::EscapeDataString(("principalId eq '{0}'" -f $engPid))
+            $res = Invoke-SIAzRestMethod -Method GET -Path ('{0}/providers/Microsoft.Authorization/roleAssignments?api-version=2022-04-01&$filter={1}' -f $AccountId, $f)
+            if ([int]$res.StatusCode -eq 200) {
+                $assign = @(($res.Content | ConvertFrom-Json).value)
+                $plan = Get-SIOpenAIRightsPlan -Assignments $assign -Principals @([pscustomobject]@{ PrincipalId = $engPid; Name = 'engine'; Identity = $EngineIdentityName }) -ResourceId $AccountId
+                $has = (@($plan.Present).Count -gt 0)
+            } else { Write-Log WARN ("The engine identity's roles on the account could not be read (HTTP {0}) -- not checked." -f $res.StatusCode) }
+        } else { Write-Log WARN ("The engine identity '{0}' was not found in resource group '{1}' -- not checked (use -EngineIdentityName / -EngineIdentityResourceGroup)." -f $EngineIdentityName, $engRg) }
+    } catch { Write-Log WARN ("The engine identity could not be checked: {0}" -f $_.Exception.Message) }
+    Test-SIOpenAIAccessPaths -Send $send -GetToken $getToken -Key ([string]$AI_apiKey) -EngineHasRight $has
+}
+if (-not $SkipAccessCheck -and $account -and $AI_endpoint) {
+    Write-Section "10) How the engine signs in to Azure OpenAI"
+    $__access = Invoke-SIOpenAIAccessCheck
+    foreach ($l in @($__access.Lines)) { Write-Host ('  ' + $l) -ForegroundColor $(if ($l -match '^Result' -and $__access.Engine -ne 'has access') { 'Yellow' } else { 'White' }) }
+    Write-Host ''
+}
 
 # ----------------------------------------------------------------------------
 # Exit code: non-zero if -ValidateOnly found any MISSING resource

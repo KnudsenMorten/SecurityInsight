@@ -25,6 +25,11 @@ BeforeAll {
     function script:Write-Log { param([string]$Message, [string]$Level = 'INFO') [void]$script:Log.Add([pscustomobject]@{ Level = $Level; Message = $Message }) }
     function script:Start-Sleep { param($Seconds, $Milliseconds) }
     function script:Test-SIOpenAIEndpoint { param([string]$Endpoint) '' }
+    # #1257: the AI sign-in the engine uses (Invoke-SIOpenAIChat); no engine identity here, so the key fallback answers
+    . (Join-Path $script:SIRoot 'engine\_shared\SI-OpenAIAuth.ps1')
+    Reset-SIOpenAIAuthState
+    # in the SAME scope as the dot-sourced file, so this replaces its token function
+    function Get-SIOpenAIAccessToken { throw 'no engine identity in this test' }
     $script:AICalls = 0
     function script:Invoke-RestMethod {
         param($Uri, $Method, $Headers, $Body, $ErrorAction)

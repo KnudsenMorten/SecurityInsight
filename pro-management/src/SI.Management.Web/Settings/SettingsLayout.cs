@@ -176,6 +176,9 @@ public static class SettingsLayout
         var t = DefaultText(s);
         if (t.Length > 0 && t.Length <= 40 && !t.Contains('\n')) return t;
         var p = s.DefaultPlain;
+        // what happens when the field is left empty is the whole point of the text ("Left empty: the mail server user name"):
+        // kept whole when it fits, never cut at its colon
+        if (p.StartsWith("Left empty", StringComparison.OrdinalIgnoreCase) && p.Length <= 40) return p;
         if (p.StartsWith("Not set", StringComparison.OrdinalIgnoreCase)) return "Not set";
         if (p.Length <= 28) return p;
         // the first clause of a long default ("24 MB (fits a 25 MB limit)" -> "24 MB")

@@ -225,9 +225,10 @@ public static class GetStartedGuide
             "The safety checks hold back an unusual change (for example many tickets closed at once) until an Admin decides. Nothing should be left waiting.",
             "/Admin/Guards", "Open Guards (safety checks)", Guards, Fields: ["SI_Guards_Enabled"]),
         // operator 2026-10-09: "there must be one on/off. on = on for all" -- ONE switch, then the connection; the per-engine
-        // switches are advanced overrides on the Settings page. The key itself goes into Key Vault (the page's key field).
+        // switches are advanced overrides on the Settings page. #1257 (owner 2026-11-15, "only modern and secure"): NO KEY --
+        // SecurityInsight signs in to Azure OpenAI with its own identities; the key field stays only for older setups.
         new("ai", "AI integration", false,
-            "Turn AI integration on to let SecurityInsight use your own Azure OpenAI resource for every engine that has an AI step (classifying assets the rules cannot place, and AI summaries). Then give the endpoint and the deployment, and paste the key once: SecurityInsight stores it in your Key Vault and keeps only its name.",
+            "Turn AI integration on to let SecurityInsight use your own Azure OpenAI resource for every engine that has an AI step (classifying assets the rules cannot place, AI summaries and the chat). Then give the endpoint and the deployment. No key is needed: SecurityInsight signs in with its own identities. On the Azure OpenAI resource, give SecurityInsight's identities the role \"Cognitive Services OpenAI User\" (in the Azure portal: the resource > Access control (IAM)), or ask your support partner to do it.",
             "/Admin/Settings?q=OpenAI", "Open Settings", Ai, Fields: [AiSwitch, "OpenAI_endpoint", "OpenAI_deployment", "OpenAI_apiKey"]),
     };
 
@@ -459,9 +460,10 @@ public static class GetStartedGuide
         return f.OpenHolds == 0 ? new(true, "nothing held") : new(false, Plural(f.OpenHolds, "held change set waits", "held change sets wait") + " for a decision");
     }
 
-    /// The Azure OpenAI connection every AI feature uses: endpoint, deployment and key all set (the key as a value or a
-    /// Key Vault secret name).
-    public static readonly IReadOnlyList<string> AiSettings = ["OpenAI_endpoint", "OpenAI_deployment", "OpenAI_apiKey"];
+    /// The Azure OpenAI connection every AI feature uses: the endpoint and the deployment. #1257: no key -- SecurityInsight
+    /// signs in with its own identities (the role "Cognitive Services OpenAI User" on the resource); OpenAI_apiKey is only
+    /// an optional leftover of older setups and never makes the step look unfinished.
+    public static readonly IReadOnlyList<string> AiSettings = ["OpenAI_endpoint", "OpenAI_deployment"];
 
     /// The one AI switch: on = AI for every engine that has an AI step.
     public const string AiSwitch = "SI_EnableAI";
@@ -479,16 +481,13 @@ public static class GetStartedGuide
             var dep = MailMode.Plain(MailMode.RowOf(f.Settings, "OpenAI_deployment")?.ValueJson)?.Trim();
             return new(true, "AI is on -- connected to " + (string.IsNullOrEmpty(dep) ? "your deployment" : dep));
         }
-        if (missing.SequenceEqual(new[] { "OpenAI_apiKey" }))
-            return new(false, "AI is on, but the key is not in Key Vault yet -- paste the Azure OpenAI key below and save; SecurityInsight stores it in your Key Vault");
         return new(false, "AI is on, but the " + string.Join(" and ", missing.Select(AiLabel)) + " " + (missing.Count == 1 ? "is" : "are") + " not set yet -- fill " + (missing.Count == 1 ? "it" : "them") + " in below");
     }
 
     private static string AiLabel(string name) => name switch
     {
         "OpenAI_endpoint" => "endpoint",
-        "OpenAI_deployment" => "deployment",
-        _ => "key",
+        _ => "deployment",
     };
 
     private static bool IsSet(IReadOnlyList<SettingRow> rows, string name)

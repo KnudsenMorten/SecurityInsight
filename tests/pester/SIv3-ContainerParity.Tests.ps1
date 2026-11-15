@@ -217,7 +217,9 @@ Describe 'the job''s Risk Analysis env vars win only when present -- precedence 
     }
     It 'an AI summary switched on only in the config, without Azure OpenAI on the job, runs without it instead of failing' {
         $c = Get-Code 'container\Start-RiskAnalysisInContainer.ps1'
-        $c | Should -Match "(?s)if \(\`$raEnv\.Contains\('BuildSummaryByAI'\)\) \{.{0,200}Get-RequiredEnv 'OPENAI_APIKEY'"
+        # #1257: the endpoint is still required there; the key is optional (the engine signs in as its own identity)
+        $c | Should -Match "(?s)if \(\`$raEnv\.Contains\('BuildSummaryByAI'\)\) \{.{0,400}Get-RequiredEnv 'OPENAI_ENDPOINT'"
+        $c | Should -Match "Get-OptionalEnv 'OPENAI_APIKEY' ''"
         $c | Should -Match '(?s)Resolve-SIContainerAi -OpenAi \$aiParts -Requested \$true.{0,600}\$global:BuildSummaryByAI = \$false'
     }
 }

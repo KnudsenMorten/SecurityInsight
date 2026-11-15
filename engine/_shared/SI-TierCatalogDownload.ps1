@@ -52,7 +52,9 @@ function Get-SITierCatalogTierSectionNames {
 
 function Test-SITierCatalogAIAvailable {
     <# PURE (its inputs default to the settings). May the classifier build the catalog with AI in this install (the opt-in
-       is only valid then)? AI integration on, the classifier's own switch not off, and the Azure OpenAI settings set. #>
+       is only valid then)? AI integration on, the classifier's own switch not off, and the Azure OpenAI endpoint and
+       deployment set. #1257: no key is needed (the engine signs in as its own identity); -ApiKey is kept for callers and
+       is not read. #>
     param($RunAI = $global:SI_PrivilegeTierClassifier_RunAI,
           [AllowEmptyString()][string]$Endpoint = [string]$global:OpenAI_Endpoint,
           [AllowEmptyString()][string]$Deployment = [string]$global:OpenAI_Deployment,
@@ -61,7 +63,7 @@ function Test-SITierCatalogAIAvailable {
     $on = { param($x) if ($null -eq $x) { return $false }; if ($x -is [bool]) { return $x }; ("$x").Trim().ToLowerInvariant() -in @('true', '1', 'yes', 'on') }
     if (-not (& $on $AIIntegration)) { return $false }
     if ($RunAI -eq $false -or "$RunAI".Trim() -eq 'False' -or "$RunAI".Trim() -eq '0') { return $false }
-    foreach ($v in @($Endpoint, $Deployment, $ApiKey)) { if ([string]::IsNullOrWhiteSpace($v)) { return $false } }
+    foreach ($v in @($Endpoint, $Deployment)) { if ([string]::IsNullOrWhiteSpace($v)) { return $false } }
     $true
 }
 
@@ -82,7 +84,7 @@ function Resolve-SITierCatalogSource {
         if ($AIAvailable) { $src = 'ai' }
         else {
             $src = 'invardia'
-            $warn = "The privilege tier catalog is set to be built here with AI (SI_PrivilegeTierCatalog_Source = 'ai'), but AI cannot be used by the privilege tier classifier (AI integration is off, its AI switch is off, or the Azure OpenAI endpoint, deployment or key is not set). The daily classified catalog is downloaded instead."
+            $warn = "The privilege tier catalog is set to be built here with AI (SI_PrivilegeTierCatalog_Source = 'ai'), but AI cannot be used by the privilege tier classifier (AI integration is off, its AI switch is off, or the Azure OpenAI endpoint or deployment is not set). The daily classified catalog is downloaded instead."
         }
     } else {
         $src = 'invardia'

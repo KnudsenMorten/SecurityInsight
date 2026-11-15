@@ -111,7 +111,7 @@ secret you paste is handed encrypted to the updater, which stores it in the Key 
 | Key Vault | Key Vault Secrets Officer | Keep the licence, the install key and the update state |
 | Key Vault | Key Vault Crypto Officer | The key the web app's secret hand-over is encrypted with (it never leaves the vault) |
 | SecurityInsight database | The role `si_updater`: DDL to apply a release's schema, and EXECUTE on the signed grant procedure | Apply the release's database changes without any admin. See [SQL access](sql-access). |
-| Microsoft Graph (application permissions, granted by setup) | PrivilegedAssignmentSchedule.ReadWrite.AzureADGroup, PrivilegedAssignmentSchedule.Read.AzureADGroup, RoleManagementPolicy.Read.AzureADGroup, GroupMember.Read.All, Application.Read.All | Keep the database setup job a member of SecurityInsight's SQL admin group (role-assignable): make and renew its active PIM-for-Groups membership, read the group's PIM policy and read the membership back. Never RoleManagement.ReadWrite.Directory. |
+| Microsoft Graph (application permissions, granted by setup) | GroupMember.Read.All, Application.Read.All | Read whether the database setup job is still a member of SecurityInsight's SQL admin group (role-assignable). Read only: the updater never changes that membership. The guided install sets it, and the support partner restores it through the Support app if it is missing. Never RoleManagement.ReadWrite.Directory, and no longer the PIM-for-Groups permissions or the group's PIM policy read (an update takes them off). |
 
 ## Asset tagging's identity (opt-in)
 

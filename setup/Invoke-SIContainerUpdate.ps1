@@ -1604,6 +1604,11 @@ function Invoke-SIUpdateSigninStore {
         }
         if (-not $app) { return $null }
         if ((Get-SISigninFrontChoice -App $app) -eq 'own') { return $null }   # its own sign-in, chosen: no front to prepare for
+        # SECURE-WEB-1: Microsoft's built-in sign-in is on (SI_Web_BuiltInAuth=1): no front runs, so its store (the key
+        # signin-front-dp and the web identity's right on it) is not prepared -- the updater has taken that right away
+        $builtIn = $false
+        foreach ($c0 in @($app.properties.template.containers)) { foreach ($e0 in @($c0.env)) { if ($e0 -and [string]$e0.name -eq 'SI_Web_BuiltInAuth' -and "$($e0.value)".Trim() -eq '1') { $builtIn = $true } } }
+        if ($builtIn) { Info ('sign-in front store: {0} signs users in with Microsoft''s built-in sign-in -- no sign-in front, nothing to prepare' -f $webName); return $null }
         Step '9g. SIGN-IN FRONT STORE'
         if (-not $kvName) { Warn ('sign-in front store: the install''s Key Vault is not known here (SI_UPDATER_KEY_VAULT / SI_KeyVaultName) -- not checked; the front keeps what it runs.'); return $null }
         $id = Get-SISigninFrontWebIdentity -App $app

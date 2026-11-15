@@ -10,6 +10,9 @@
       * -SkipUpdate; the version read back (updated / stepped aside); no run running = straight to the update;
       * it never starts a pipeline step (only caj-si-flow with SI_FLOW_CANCEL=1 and the updater are ever started);
       * the one start-body builder (New-SIJobStartTemplate) and the updater's body unchanged.
+      * #1158: a cancel only on a run the run record NAMES (read, with its id) -- a record that could not be read means
+        nothing is cancelled and nothing is started (refused-run-unread), in a Support session after a read through the
+        support grant; the real script path wired to that decision.
     Offline; PS 5.1 and 7.
 #>
 
@@ -206,10 +209,12 @@ Describe '0. the plan (the only output without -Apply)' {
         @(Get-StartCalls).Count | Should -Be 0
         $r.Outcome | Should -Be 'plan'
     }
-    It 'the run record cannot be read here: what runs is read from Azure, and said' {
+    It '#1158: the run record cannot be read here: said, and refused -- nothing started, even in the plan' {
         New-TestWorld -Running $true
-        $null = Invoke-TestRun -NoSql
-        ($script:Said -join "`n") | Should -Match 'running run    : the run record is not read here \(the database does not answer from here \(test\)\) -- what runs is read from Azure: a run is going'
+        $r = Invoke-TestRun -NoSql
+        $r.Outcome | Should -Be 'refused-run-unread'; $r.ExitCode | Should -Be 1
+        ($script:Said -join "`n") | Should -Match 'running run    : NOT READ -- the database does not answer from here \(test\); nothing is stopped or started'
+        @(Get-StartCalls).Count | Should -Be 0
     }
     It '-RunId of another run than the running one: refused, nothing started' {
         New-TestWorld -Running $true
@@ -256,10 +261,13 @@ Describe 'THE ORDER: the updater is never started before the stop is confirmed' 
         foreach ($s in '== 0. PLAN', '1. CANCEL:', '2. WAIT:', '3. START:', '4. WAIT:', '5. SUMMARY:') { @($script:Said | Where-Object { $_.StartsWith($s) }).Count | Should -Be 1 -Because $s }
         @($script:W.Audit) | Should -Be @('job.flowrun.cancel', 'job.execution.start')
     }
-    It 'the audit row cannot be written where the database does not answer: said, the run goes on' {
+    It 'the audit row cannot be written (the database refuses the write, the run record reads): said, the run goes on' {
         New-TestWorld -Running $true
-        $r = Invoke-TestRun -Apply -NoSql
-        ($script:Said -join "`n") | Should -Match 'audit: not written from here \(the database does not answer from here \(test\)\) -- the cancel execution writes job\.flowrun\.stop itself'
+        $noWrite = { param([string]$Query, $Params, [string]$Mode) if ($Query -match 'INSERT cfg\.AuditEvent') { throw 'The INSERT permission was denied on the object ''AuditEvent''.' }; & $script:Sql $Query $Params $Mode }
+        $script:Said = New-Object System.Collections.Generic.List[string]
+        $r = Invoke-SIStopRunAndUpdate -Arm $script:Arm -SubscriptionId $script:Sub -ResourceGroup $script:Rg -Reason 'the run hangs on the old release' -Apply -PollSeconds 30 -By 'support (test)' `
+                 -Sql $noWrite -ReadUpdateState $script:ReadState -Sleep $script:Sleep -Now $script:Now -Say { param($l, $c) $script:Said.Add($l) }
+        ($script:Said -join "`n") | Should -Match 'audit: job\.flowrun\.cancel NOT written'
         $r.Outcome | Should -Be 'updated'
         @($script:W.AtUpdaterStart) | Should -BeNullOrEmpty
     }
@@ -345,11 +353,11 @@ Describe '#1150: -Apply reads the run state AGAIN right before it starts the upd
         $r.Outcome | Should -Be 'updated'
         ($script:Said -join "`n") | Should -Match '3\. READ AGAIN: no pipeline run is running'
     }
-    It 'a young wake-up of the runner (the run record not read here): waited for; it ends -> the updater starts' {
+    It 'a young wake-up of the runner (the run record reads no run): waited for; it ends -> the updater starts' {
         New-TestWorld -Running $false
         $script:W.Wake = New-TestExec 'caj-si-flow-wake' 'Running' $script:T0.AddMinutes(-1); $script:W.WakePolls = 1; $script:W.WakeAge = 0
         $script:W.Ex['caj-si-flow'].Add($script:W.Wake)
-        $r = Invoke-TestRun -Apply -NoSql
+        $r = Invoke-TestRun -Apply
         ($script:Said -join "`n") | Should -Match 'waiting before the start: a wake-up of the pipeline runner executes \(caj-si-flow caj-si-flow-wake'
         @(Get-StartCalls | Where-Object { $_.Path -match 'caj-si-updater' }).Count | Should -Be 1
         $r.Outcome | Should -Be 'updated'
@@ -359,7 +367,7 @@ Describe '#1150: -Apply reads the run state AGAIN right before it starts the upd
         $script:W.Wake = New-TestExec 'caj-si-flow-wake' 'Running' $script:T0.AddSeconds(-30); $script:W.WakePolls = 999; $script:W.WakeAge = 0
         $script:W.Ex['caj-si-flow'].Add($script:W.Wake)
         $a = @{ Arm = $script:Arm; SubscriptionId = $script:Sub; ResourceGroup = $script:Rg; Reason = 'the run hangs on the old release'; Apply = $true; PollSeconds = 30; By = 'support (test)'
-                ReadUpdateState = $script:ReadState; Sleep = $script:Sleep; Now = $script:Now; Say = { param($l, $c) }; SqlWhy = 'not here (test)'; WakeWaitMinutes = 2 }
+                ReadUpdateState = $script:ReadState; Sleep = $script:Sleep; Now = $script:Now; Say = { param($l, $c) }; Sql = $script:Sql; WakeWaitMinutes = 2 }
         $r = Invoke-SIStopRunAndUpdate @a
         $r.Outcome | Should -Be 'run-started'
         $r.Summary | Should -Match 'still after 2 min'
@@ -371,7 +379,7 @@ Describe '#1150: -Apply reads the run state AGAIN right before it starts the upd
         $script:W.Wake = New-TestExec 'caj-si-flow-wake0' 'Running' $script:T0.AddSeconds(-20); $script:W.WakePolls = 999; $script:W.WakeAge = 0
         $script:W.Ex['caj-si-flow'].Add($script:W.Wake)
         $a = @{ Arm = $script:Arm; SubscriptionId = $script:Sub; ResourceGroup = $script:Rg; Reason = 'security release'; Apply = $true; PollSeconds = 30; By = 'support (test)'
-                ReadUpdateState = $script:ReadState; Sleep = $script:Sleep; Now = $script:Now; Say = { param($l, $c) }; SqlWhy = 'not here (test)'; WakeWaitMinutes = 2 }
+                ReadUpdateState = $script:ReadState; Sleep = $script:Sleep; Now = $script:Now; Say = { param($l, $c) }; Sql = $script:Sql; WakeWaitMinutes = 2 }
         $r = Invoke-SIStopRunAndUpdate @a
         @(Get-StartCalls | Where-Object { $_.Path -match 'caj-si-updater' }).Count | Should -Be 1 -Because "outcome '$($r.Outcome)': $($r.Summary)"
         $r.Outcome | Should -Be 'updated'
@@ -601,5 +609,146 @@ Describe 'the audit rows where vendor support holds no standing database admin (
         $t = [IO.File]::ReadAllText([IO.Path]::Combine($script:SIRoot, 'setup', 'Stop-SIRunAndUpdate.ps1'))
         $t | Should -Match ([regex]::Escape('if ($support -and -not $SupportGrant -and (Get-Command -Name Invoke-InvardiaSupportSql -ErrorAction SilentlyContinue))'))
         $t | Should -Match ([regex]::Escape('$SupportGrant = New-SISupportGrantSeams -SubscriptionId $SubscriptionId -ResourceGroup $ResourceGroupName'))
+    }
+}
+
+Describe '#1158: a cancel only on a run the run record NAMES -- never on a record that could not be read' {
+    # live 2026-11-09 (an idle install: a 21-second stand-alone job taken for a run, SI_FLOW_CANCEL=1 sent) and 2026-11-14 (a
+    # 5 h 36 min pipeline run cancelled blind): the Support app is read-only in the database, the read of cfg.FlowRun was
+    # refused, and the plan decided "a run is going" from what executed in Azure.
+    BeforeAll {
+        $script:G2 = @{ Reader = $false; Owner = $false; Opens = (New-Object System.Collections.Generic.List[string]); Closes = 0; Refuse = $false }
+        $script:SqlDenied = {
+            param([string]$Query, $Params, [string]$Mode)
+            if ($Query -match 'AS IsReadOnly') { return , @(@{ UserName = 'Invardia Support'; IsOwner = [int]$script:G2.Owner; IsReader = [int]$script:G2.Reader; IsReadOnly = 1 }) }
+            if ($Query -match 'FROM cfg\.FlowRun\b' -and -not ($script:G2.Reader -or $script:G2.Owner)) { throw 'The SELECT permission was denied on the object ''FlowRun'', database ''sqldb-x'', schema ''cfg''.' }
+            if ($Query -match 'INSERT cfg\.AuditEvent' -and -not $script:G2.Owner) { throw 'The INSERT permission was denied on the object ''AuditEvent''.' }
+            & $script:Sql $Query $Params $Mode
+        }
+        $script:Grant2 = @{
+            Open = { param($Level, $Reason) $script:G2.Opens.Add([string]$Level); if ($script:G2.Refuse) { throw 'The grant job caj-si-support-grant execution x ended ''Failed'' (exit 3 = no consent on record in the product).' }
+                     if ($Level -eq 'setup') { $script:G2.Owner = $true } else { $script:G2.Reader = $true }; [pscustomobject]@{ Level = $Level; MaxUntil = '2026-11-04T11:00:00Z' } }
+            Close = { param($Reason) $script:G2.Closes++; $script:G2.Owner = $false; $script:G2.Reader = $false }
+            Sleep = { param($s) }; ReadBackTries = 2; ReadBackSeconds = 0
+        }
+        function script:Reset-G2([bool]$Refuse = $false) { $script:G2.Reader = $false; $script:G2.Owner = $false; $script:G2.Opens.Clear(); $script:G2.Closes = 0; $script:G2.Refuse = $Refuse }
+        function script:Invoke-DeniedRun {
+            param([switch]$Apply, [System.Collections.IDictionary]$Grant, [string]$RunId = '')
+            $script:Said = New-Object System.Collections.Generic.List[string]
+            $a = @{ Arm = $script:Arm; SubscriptionId = $script:Sub; ResourceGroup = $script:Rg; Reason = 'the run hangs on the old release'; RunId = $RunId; Apply = $Apply; PollSeconds = 30
+                    By = 'Invardia support (test)'; Sql = $script:SqlDenied; ReadUpdateState = $script:ReadState; Sleep = $script:Sleep; Now = $script:Now; Say = { param($l, $c) $script:Said.Add($l) } }
+            if ($Grant) { $a.SupportGrant = $Grant }
+            Invoke-SIStopRunAndUpdate @a
+        }
+        function script:Add-StandAloneJob {
+            $sm = New-TestJob 'caj-si-sign-in-report'; $script:W.Jobs = @($script:W.Jobs) + $sm
+            $script:W.Ex['caj-si-sign-in-report'] = New-Object System.Collections.Generic.List[object]
+            $script:W.Ex['caj-si-sign-in-report'].Add((New-TestExec 'caj-si-sign-in-report-1' 'Running' $script:T0.AddSeconds(-21)))
+        }
+    }
+
+    It '(a) the record is refused + the run''s jobs execute in Azure: NO cancel, NO updater, refused-run-unread, exit 1' {
+        New-TestWorld -Running $true; Reset-G2
+        $r = Invoke-DeniedRun -Apply
+        $r.Outcome | Should -Be 'refused-run-unread'; $r.Mode | Should -Be 'refused'; $r.ExitCode | Should -Be 1
+        @($script:W.Calls | Where-Object { $_.Method -ne 'GET' }) | Should -BeNullOrEmpty -Because 'NEGATIVE: no start, no cancel, nothing written in Azure'
+        @($r.Started) | Should -BeNullOrEmpty
+        $script:W.Audit.Count | Should -Be 0
+        $r.Summary | Should -Match 'nothing was cancelled and nothing was started: the run record could not be read \(.*SELECT permission was denied on the object ''FlowRun'''
+        $r.Summary | Should -Match 'a job executing in Azure is never taken for a run \(executing now: .*caj-si-identity caj-si-identity-s1'
+        $r.Summary | Should -Match 'start the updater plainly \(it waits for a running run by itself\), or run this again once the run record can be read'
+        ($script:Said -join "`n") | Should -Match 'will           : nothing: the run record could not be read'
+        @($script:Said | Where-Object { $_ -like 'REFUSED: *' }).Count | Should -Be 1
+        $script:W.Run.State | Should -Be 'Running' -Because 'the run goes on, untouched'
+    }
+    It '(a) an idle install with only a 21-second stand-alone job executing: NO cancel (the live case of 2026-11-09)' {
+        New-TestWorld -Running $false; Reset-G2; Add-StandAloneJob
+        $r = Invoke-DeniedRun -Apply
+        $r.Outcome | Should -Be 'refused-run-unread'
+        @(Get-StartCalls).Count | Should -Be 0
+    }
+    It '(a) -RunId given but the record is refused: still NO cancel (the id alone is never enough)' {
+        New-TestWorld -Running $true; Reset-G2
+        $r = Invoke-DeniedRun -Apply -RunId 'run-8'
+        $r.Outcome | Should -Be 'refused-run-unread'
+        @(Get-StartCalls).Count | Should -Be 0
+    }
+    It '(a) the plan alone says it the same way (nothing started, exit 1)' {
+        New-TestWorld -Running $true; Reset-G2
+        $r = Invoke-DeniedRun
+        $r.Outcome | Should -Be 'refused-run-unread'; $r.ExitCode | Should -Be 1
+        @(Get-StartCalls).Count | Should -Be 0
+    }
+    It '(b) the record READ names a running run: the cancel as today -- once, for that run, then the update' {
+        New-TestWorld -Running $true
+        $r = Invoke-TestRun -Apply
+        $starts = @(Get-StartCalls)
+        $starts[0].Path | Should -Match '/jobs/caj-si-flow/start'
+        (Get-BodyEnv $starts[0].Body)['SI_FLOW_CANCEL_RUN'] | Should -Be 'run-8'
+        @($starts | Where-Object { $_.Path -match 'caj-si-flow' }).Count | Should -Be 1
+        $r.Outcome | Should -Be 'updated'
+    }
+    It '(c) the record READ names no running run: no cancel, the update as today' {
+        New-TestWorld -Running $false
+        $r = Invoke-TestRun -Apply
+        @(Get-StartCalls | Where-Object { $_.Path -match 'caj-si-flow' }).Count | Should -Be 0
+        @(Get-StartCalls | Where-Object { $_.Path -match 'caj-si-updater' }).Count | Should -Be 1
+        $r.Outcome | Should -Be 'updated'
+    }
+    It 'a Support session, read-only: the record is read through the support grant (troubleshoot, closed again) -- then the cancel as today' {
+        New-TestWorld -Running $true; Reset-G2
+        $r = Invoke-DeniedRun -Apply -Grant $script:Grant2
+        $r.Outcome | Should -Be 'updated' -Because $r.Summary
+        $script:G2.Opens[0] | Should -Be 'troubleshoot'
+        $script:G2.Closes | Should -Be $script:G2.Opens.Count -Because 'every grant opened is closed again'
+        $script:G2.Reader | Should -BeFalse; $script:G2.Owner | Should -BeFalse
+        (Get-BodyEnv (@(Get-StartCalls)[0].Body))['SI_FLOW_CANCEL_RUN'] | Should -Be 'run-8'
+        ($script:Said -join "`n") | Should -Match 'opening the support grant \(troubleshoot, at most 1 h\) for: the read of the run record before any stop'
+        ($script:Said -join "`n") | Should -Match 'running run    : run-8'
+    }
+    It 'a Support session, the grant refused: refused-run-unread, nothing started, the grant''s answer said' {
+        New-TestWorld -Running $true; Reset-G2 $true
+        $r = Invoke-DeniedRun -Apply -Grant $script:Grant2
+        $r.Outcome | Should -Be 'refused-run-unread'
+        @(Get-StartCalls).Count | Should -Be 0
+        $r.Summary | Should -Match 'through the support grant: .*no consent on record'
+    }
+    It 'the decision: <Why> -> <Want>' -ForEach @(
+        @{ Why = 'record not read, the run''s jobs execute';  Run = $null;                                RunId = '';      Act = @{ Runner = @('caj-si-flow r (5 h 36 min)'); Steps = @('caj-si-x s (1 h)') }; Want = 'refuse-unread'; Id = '' }
+        @{ Why = 'record not read, a stand-alone job';         Run = $null;                                RunId = '';      Act = @{ Steps = @('caj-si-signin-methods e (21 s)') }; Want = 'refuse-unread'; Id = '' }
+        @{ Why = 'record not read, -RunId given';              Run = $null;                                RunId = 'run-8'; Act = @{};  Want = 'refuse-unread'; Id = '' }
+        @{ Why = 'record not read, nothing executes';          Run = $null;                                RunId = '';      Act = @{};  Want = 'refuse-unread'; Id = '' }
+        @{ Why = 'record names a running run without an id';   Run = @{ Running = $true; Id = '' };        RunId = '';      Act = @{};  Want = 'refuse-unread'; Id = '' }
+        @{ Why = 'record names running run-8';                 Run = @{ Running = $true; Id = 'run-8' };   RunId = '';      Act = @{};  Want = 'cancel'; Id = 'run-8' }
+        @{ Why = 'record names run-8, -RunId run-8';           Run = @{ Running = $true; Id = 'run-8' };   RunId = 'run-8'; Act = @{};  Want = 'cancel'; Id = 'run-8' }
+        @{ Why = 'record names run-8, -RunId run-5';           Run = @{ Running = $true; Id = 'run-8' };   RunId = 'run-5'; Act = @{};  Want = 'refuse'; Id = '' }
+        @{ Why = 'record read, no run, jobs execute';          Run = @{ Running = $false; Id = 'run-7' };  RunId = '';      Act = @{ Steps = @('caj-si-x s (1 min)') }; Want = 'none'; Id = '' }
+    ) {
+        $run = if ($Run) { [pscustomobject]@{ Running = $Run.Running; Id = $Run.Id } } else { $null }
+        $act = [pscustomobject]@{ Runner = @($Act.Runner | Where-Object { $_ }); Steps = @($Act.Steps | Where-Object { $_ }); Wakes = @($Act.Wakes | Where-Object { $_ }) }
+        $d = Get-SIStopRunCancelDecision -Run $run -RunWhy 'denied (test)' -RunId $RunId -Activity $act
+        $d.Verdict | Should -Be $Want
+        $d.RunId | Should -Be $Id
+    }
+    It 'ASSERT-WIRING: the real script (setup\Stop-SIRunAndUpdate.ps1 -Apply) refuses on a refused record -- no cancel, exit 1' {
+        New-TestWorld -Running $true; Reset-G2
+        $p = [IO.Path]::Combine($script:SIRoot, 'setup', 'Stop-SIRunAndUpdate.ps1')
+        $global:LASTEXITCODE = 0
+        $r = @(. $p -ResourceGroupName $script:Rg -SubscriptionId $script:Sub -Reason 'the run hangs on the old release' -Arm $script:Arm -Sql $script:SqlDenied -ReadUpdateState $script:ReadState -Sleep $script:Sleep -Now $script:Now -By 'support (test)' -Apply 6>$null) | Where-Object { $_ -and $_.PSObject.Properties['Outcome'] } | Select-Object -Last 1
+        $r.Outcome | Should -Be 'refused-run-unread'
+        $global:LASTEXITCODE | Should -Be 1
+        @($script:W.Calls | Where-Object { $_.Method -ne 'GET' }) | Should -BeNullOrEmpty
+    }
+    It 'ASSERT-WIRING (static): the engine decides a run ONLY through Get-SIStopRunCancelDecision, and the cancel start sits behind its verdict' {
+        $src = [IO.File]::ReadAllText([IO.Path]::Combine($script:SIRoot, 'setup', '_shared', 'SI-StopRunAndUpdate.ps1'))
+        $body = $src.Substring($src.IndexOf('function Invoke-SIStopRunAndUpdate'))
+        $body = $body.Substring(0, $body.IndexOf("`nfunction Write-SIStopRunAudit"))
+        $body | Should -Match ([regex]::Escape('$dec = Get-SIStopRunCancelDecision -Run $rv -RunWhy $runRead.Why -RunId $RunId -Activity $act'))
+        $body | Should -Match ([regex]::Escape('$running = ($dec.Verdict -eq ''cancel'')'))
+        ([regex]::Matches($body, '\$running = ')).Count | Should -Be 1 -Because 'nothing else may set "a run is going"'
+        $body | Should -Not -Match 'Runner\)\.Count \+ @\(\$act\.Steps\)\.Count' -Because 'NEGATIVE: what executes in Azure never decides a cancel'
+        $guard = $body.IndexOf('if ($dec.Verdict -ne ''cancel'' -or -not $targetId) { throw')
+        $cancel = $body.IndexOf('{0}/{1}/start?api-version={2}'' -f $inst.Base, $c.FlowJob')
+        $guard | Should -BeGreaterThan 0; $cancel | Should -BeGreaterThan $guard
     }
 }

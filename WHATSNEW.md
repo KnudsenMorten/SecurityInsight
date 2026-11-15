@@ -1,5 +1,34 @@
 # What's new in SecurityInsight
 
+## 3.1.23.1 · 2026-11-15 · Security
+
+New MCP clients find Microsoft's sign-in by themselves, and stop and update never stops a run it could not read.
+
+### New features
+
+- **New MCP clients find Microsoft's sign-in themselves** - The MCP server tells an MCP client where to sign in with Microsoft and what to ask for, so a new client connects without extra setup. You sign in as yourself and see only what your SecurityInsight role allows.
+
+### Fixes
+
+- **A run is never stopped blind** - When the run's record cannot be read, nothing is stopped or started, and it says how to go on.
+
+## 3.1.23 · 2026-11-15 · Security
+
+Every public address is behind Microsoft's sign-in, with fewer rights behind it.
+
+### New features
+
+- **The MCP server is behind Microsoft's sign-in** - Like the web app, the MCP server now answers only requests that carry a valid Microsoft sign-in. It still checks the token and the person's role itself.
+- **Every public address is checked** - Each update lists every part of the installation that is reachable from the internet and reports any that is not behind Microsoft's sign-in.
+
+### Fixes
+
+- **The web app verifies who signed in** - With Microsoft's sign-in, the web app takes the person only from a sign-in token it verifies itself, never from a header alone.
+- **No Key Vault access for the web app** - The web app keeps its sign-in keys in its own storage, so it no longer holds any right on the Key Vault.
+- **The updater only reads group membership** - The updater no longer holds the right to change group memberships. It only checks that the database job's membership is in place and says when it is not.
+- **Leftovers of the earlier sign-in are removed** - After the switch, the earlier sign-in's settings and its database tables are removed, each step read back. Anything else is reported.
+- **A refused save says who refused it** - When a save is refused, the message now says whether SecurityInsight or the sign-in layer refused it, and what to do.
+
 ## 3.1.22 · 2026-11-15 · Security
 
 Saving works again with Microsoft's sign-in.

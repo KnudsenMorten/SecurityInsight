@@ -17,6 +17,10 @@
                     web container's own port (read back) -- and again: refused, and /.auth/login/aad sends to Microsoft
                     Entra. A failed read-back or probe PUTS BACK the web app exactly as it was (ingress, the front
                     container) without the setting, then the sign-in that ran before, and says so.
+                    AFTER a switch that read back (Invoke-SIBuiltInAuthKeyRingMove): the web app keeps its sign-in keys in
+                    the token-store container (DataProtection__BlobUri, read back), and once it runs on that, id-si-web's
+                    Key Vault key roles (signin-front-dp, SI-Web-KeyRing) are removed and read back -- a refusal is a
+                    Support-app step.
     Nothing is written to Microsoft Entra except the redirect URIs of the sign-in app registration the updater owns. A
     missing federated credential, a missing data right and shared-key access left on are said as Support-app steps.
 
@@ -245,7 +249,10 @@ function Get-SIBuiltInAuthSecretPatch {
     param([Parameter(Mandatory)]$App, [Parameter(Mandatory)][ValidatePattern('^[0-9a-fA-F-]{36}$')][string]$IdentityClientId,
           [hashtable]$SecretValues = @{}, [ValidateSet('keep', 'on', 'off')][string]$Setting = 'on',
           [switch]$RemoveFront, [int]$WebPort = 0, [string]$FrontName = $script:SIBuiltInAuthFrontName,
-          [string]$SecretName = $script:SIBuiltInAuthSecretName, [string]$SettingName = $script:SIBuiltInAuthSettingName)
+          [string]$SecretName = $script:SIBuiltInAuthSecretName, [string]$SettingName = $script:SIBuiltInAuthSettingName,
+          # other settings of the web container to set (name -> value) in the same PATCH; the template is then in the body
+          # even with -Setting keep, and the rest of it stays as read
+          [hashtable]$WebEnv = @{})
     $name = $SecretName.ToLowerInvariant()
     $want = $IdentityClientId.Trim().ToLowerInvariant()
     $cfg = ConvertTo-SIBuiltInAuthHashtable (Get-SIBuiltInAuthProp $App @('properties', 'configuration'))
@@ -280,16 +287,24 @@ function Get-SIBuiltInAuthSecretPatch {
     $list.Add([ordered]@{ name = $name; value = $want })
     $cfg['secrets'] = $list.ToArray()
     $props = [ordered]@{ configuration = $cfg }
-    if ($Setting -ne 'keep') {
+    if ($Setting -ne 'keep' -or $WebEnv.Count) {
         $tpl = ConvertTo-SIBuiltInAuthHashtable (Get-SIBuiltInAuthProp $App @('properties', 'template'))
         if ($tpl -and $tpl.Contains('revisionSuffix')) { $tpl.Remove('revisionSuffix') }
         $i = Get-SIBuiltInAuthWebContainerIndex -App $App
         if ($tpl -and $i -ge 0) {
             $c = $tpl.containers[$i]
-            $now = Get-SIBuiltInAuthSetting -App $App -Name $SettingName
-            $envs = @(@($c['env']) | Where-Object { $null -ne $_ -and [string]$_['name'] -ne $SettingName })
-            if ($Setting -eq 'on') { $envs += [ordered]@{ name = $SettingName; value = '1' }; if ($now -ne '1') { $changed = $true } }
-            elseif ($now) { $changed = $true }
+            $envs = @(@($c['env']) | Where-Object { $null -ne $_ })
+            if ($Setting -ne 'keep') {
+                $now = Get-SIBuiltInAuthSetting -App $App -Name $SettingName
+                $envs = @($envs | Where-Object { [string]$_['name'] -ne $SettingName })
+                if ($Setting -eq 'on') { $envs += [ordered]@{ name = $SettingName; value = '1' }; if ($now -ne '1') { $changed = $true } }
+                elseif ($now) { $changed = $true }
+            }
+            foreach ($n in @($WebEnv.Keys | ForEach-Object { [string]$_ } | Sort-Object)) {
+                $v = [string]$WebEnv[$n]
+                if ((Get-SIBuiltInAuthSetting -App $App -Name $n) -cne $v.Trim()) { $changed = $true }
+                $envs = @($envs | Where-Object { [string]$_['name'] -ne $n }) + @([ordered]@{ name = $n; value = $v })
+            }
             $c['env'] = @($envs)
             if ($RemoveFront) {
                 $keep = @(@($tpl.containers) | Where-Object { $null -ne $_ -and [string]$_['name'] -ne $FrontName })
@@ -594,7 +609,9 @@ function Invoke-SIBuiltInAuthConverge {
     $lines = New-Object System.Collections.Generic.List[string]
     $support = New-Object System.Collections.Generic.List[string]
     $trace = ''
-    $res = { param([bool]$Ok, [string]$State) [pscustomobject]@{ Ok = $Ok; State = $State; Lines = $lines.ToArray(); Support = $support.ToArray(); Trace = $trace } }
+    $tcUri = ''   # the token store's container (apply), for the key ring that follows the switch (Invoke-SIBuiltInAuthKeyRingMove)
+    $res = { param([bool]$Ok, [string]$State) [pscustomobject]@{ Ok = $Ok; State = $State; Lines = $lines.ToArray(); Support = $support.ToArray(); Trace = $trace
+                                                                 TokenContainerUri = $tcUri; WebPrincipalId = $(if ($id) { [string]$id.PrincipalId } else { '' }); WebIdentityName = $(if ($id) { [string]$id.Name } else { '' }) } }
     if ($Mode -eq 'off') { return (& $res $true 'off') }
     $web = ($AppId.TrimEnd('/') -split '/')[-1]
     $appPath = '{0}?api-version={1}' -f $AppId.TrimEnd('/'), $AppApiVersion
@@ -745,6 +762,7 @@ function Invoke-SIBuiltInAuthConverge {
             if (-not $ts.Ok -and -not $ts.ContainerUri) { return (& $res $false 'failed') }
             if (-not $ts.Ok -and -not @($ts.Support | Where-Object { $_ -match 'Storage Blob Data Contributor' }).Count) { return (& $res $false 'failed') }
             $opt['TokenStore'] = $true; $opt['TokenStoreContainerUri'] = $ts.ContainerUri; $opt['TokenStoreIdentityResourceId'] = $id.ResourceId
+            if ($ts.Ok) { $tcUri = [string]$ts.ContainerUri }
             if (-not $ts.Ok) { $lines.Add((& $supportLine)); return (& $res $false 'needs-support') }
         }
         if (-not $ficOk) { $lines.Add((& $supportLine)); return (& $res $false 'needs-support') }
@@ -894,6 +912,172 @@ function Invoke-SIBuiltInAuthConverge {
         } catch { $back.Add(('the sign-in configuration could NOT be put back ({0}) -- restore it by hand' -f $_.Exception.Message)) }
         $lines.Add(('{0}: Microsoft''s built-in sign-in was NOT switched on: {1}; {2}' -f $web, $why, ($back -join '; ')))
         return (& $res $false 'rolled-back')
+    }
+}
+
+# ============================================================================================================== 6. NO KEY VAULT RIGHT AFTER THE SWITCH
+
+$script:SIBuiltInAuthKeyRingSetting = 'DataProtection__BlobUri'
+$script:SIBuiltInAuthKeyRingBlob    = 'dataprotection/keys.xml'
+$script:SIBuiltInAuthKvCryptoRoleId = 'e147488a-f6f5-4113-8e2d-b22465e65bf6'   # Key Vault Crypto Service Encryption User
+$script:SIBuiltInAuthWebKeyNames    = @('signin-front-dp', 'SI-Web-KeyRing')
+
+function Get-SIBuiltInAuthKeyRingBlobUri {
+    <# PURE. The blob the web app keeps its sign-in keys in: <token-store container>/dataprotection/keys.xml. #>
+    param([Parameter(Mandatory)][string]$ContainerUri)
+    '{0}/{1}' -f $ContainerUri.Trim().TrimEnd('/'), $script:SIBuiltInAuthKeyRingBlob
+}
+
+function Select-SIBuiltInAuthWebKeyAssignments {
+    <# PURE. Of -Assignments (as ARM lists them), the ones that give -PrincipalId "Key Vault Crypto Service Encryption User" AT
+       EXACTLY -KeyScope (never above it, never another identity's). #>
+    param([object[]]$Assignments = @(), [Parameter(Mandatory)][string]$PrincipalId, [Parameter(Mandatory)][string]$KeyScope)
+    $ks = $KeyScope.TrimEnd('/').ToLowerInvariant()
+    @(@($Assignments) | Where-Object {
+            $_ -and [string](Get-SIBuiltInAuthProp $_ @('id')) -and
+            "$(Get-SIBuiltInAuthProp $_ @('properties', 'principalId'))".Trim() -ieq $PrincipalId.Trim() -and
+            ("$(Get-SIBuiltInAuthProp $_ @('properties', 'roleDefinitionId'))" -split '/')[-1] -ieq $script:SIBuiltInAuthKvCryptoRoleId -and
+            "$(Get-SIBuiltInAuthProp $_ @('properties', 'scope'))".TrimEnd('/').ToLowerInvariant() -eq $ks })
+}
+
+function Test-SIBuiltInAuthRevisionRuns {
+    <# PURE. Does the web app as read (-App) run a revision that is the latest, ready, Healthy and running, whose template
+       (-Revision as read) carries -Name = -Value? @{ Ok; Why }. #>
+    param($App, $Revision, [Parameter(Mandatory)][string]$Name, [Parameter(Mandatory)][string]$Value)
+    $latest = [string](Get-SIBuiltInAuthProp $App @('properties', 'latestRevisionName'))
+    $ready = [string](Get-SIBuiltInAuthProp $App @('properties', 'latestReadyRevisionName'))
+    if (-not $latest) { return [pscustomobject]@{ Ok = $false; Why = 'the web app names no revision' } }
+    if ($latest -ne $ready) { return [pscustomobject]@{ Ok = $false; Why = ('its revision {0} is not ready yet' -f $latest) } }
+    if (-not $Revision) { return [pscustomobject]@{ Ok = $false; Why = ('its revision {0} could not be read' -f $latest) } }
+    $h = [string](Get-SIBuiltInAuthProp $Revision @('properties', 'healthState'))
+    if ($h -ne 'Healthy') { return [pscustomobject]@{ Ok = $false; Why = ('its revision {0} is {1}, not Healthy' -f $latest, $(if ($h) { $h } else { 'of no known health' })) } }
+    $rs = [string](Get-SIBuiltInAuthProp $Revision @('properties', 'runningState'))
+    if ($rs -and $rs -notmatch '^(?i)(Running|RunningAtMaxScale)$') { return [pscustomobject]@{ Ok = $false; Why = ('its revision {0} is {1}' -f $latest, $rs) } }
+    $has = $false
+    foreach ($c in @(Get-SIBuiltInAuthProp $Revision @('properties', 'template', 'containers'))) {
+        foreach ($e in @(Get-SIBuiltInAuthProp $c @('env'))) { if ($e -and [string](Get-SIBuiltInAuthProp $e @('name')) -eq $Name -and "$(Get-SIBuiltInAuthProp $e @('value'))".Trim() -eq $Value.Trim()) { $has = $true } }
+    }
+    if (-not $has) { return [pscustomobject]@{ Ok = $false; Why = ('its revision {0} does not run with {1} yet' -f $latest, $Name) } }
+    [pscustomobject]@{ Ok = $true; Why = '' }
+}
+
+function Invoke-SIBuiltInAuthKeyRingMove {
+    <#
+        AFTER A SUCCESSFUL SWITCH (Invoke-SIBuiltInAuthConverge: applied / in-place, read back) the web identity gives up its
+        Key Vault rights (framework SECURE-WEB-1: the internet-facing identity holds no Key Vault role):
+          1. DataProtection__BlobUri on the web container = <token-store container>/dataprotection/keys.xml (the web identity
+             already holds Storage Blob Data Contributor on that container): ONE PATCH, every secret kept, read back. The web
+             app then keeps its sign-in keys in that blob with no Key Vault, and moves the keys from before in once at start
+             (pro-management/src/SI.Management.Web/Auth/BlobKeyRing.cs).
+          2. ONLY once the web app runs on it -- its latest revision ready, Healthy, running, with that setting -- and its
+             address answers (/healthz: the page, or the built-in sign-in's refusal):
+          3. id-si-web's "Key Vault Crypto Service Encryption User" AT the keys signin-front-dp and SI-Web-KeyRing is removed
+             and read back gone. ONLY that identity, ONLY that role, ONLY at those two key scopes -- nothing else is touched.
+             The updater's role right may be conditioned and refuse: a 401 / 403 is a SUPPORT STEP ("the Support app
+             removes ..."), never a failure of the update.
+        -Arm / -Probe / -Sleep: the converge's seams. -VaultId: the install's Key Vault (its ARM id; '' = the rights are not
+        checked, said). NEVER THROWS. Returns @{ Ok; State; Lines; Support }:
+          State  waiting (the web app does not run on the blob yet: the rights stay) | removed | in-place | needs-support |
+                 failed
+    #>
+    param([Parameter(Mandatory)][scriptblock]$Arm, [Parameter(Mandatory)][string]$AppId, [Parameter(Mandatory)][string]$ContainerUri,
+          [Parameter(Mandatory)][string]$PrincipalId, [string]$IdentityName = 'id-si-web', [AllowEmptyString()][string]$VaultId = '',
+          [scriptblock]$Probe, [scriptblock]$Sleep = { param($s) Start-Sleep -Seconds $s },
+          [int]$Tries = 6, [int]$PauseSeconds = 10, [int]$RevisionTries = 18,
+          [string]$AppApiVersion = $script:SIBuiltInAuthAppApi, [string]$RoleApiVersion = $script:SIBuiltInAuthRoleApi)
+    $lines = New-Object System.Collections.Generic.List[string]
+    $support = New-Object System.Collections.Generic.List[string]
+    $res = { param([bool]$Ok, [string]$State) [pscustomobject]@{ Ok = $Ok; State = $State; Lines = $lines.ToArray(); Support = $support.ToArray() } }
+    $web = ($AppId.TrimEnd('/') -split '/')[-1]
+    $appPath = '{0}?api-version={1}' -f $AppId.TrimEnd('/'), $AppApiVersion
+    $listPath = '{0}/listSecrets?api-version={1}' -f $AppId.TrimEnd('/'), $AppApiVersion
+    $name = $script:SIBuiltInAuthKeyRingSetting
+    try {
+        $blob = Get-SIBuiltInAuthKeyRingBlobUri -ContainerUri $ContainerUri
+        $app = & $Arm 'GET' $appPath $null
+        if (-not $app) { $lines.Add(('{0}: its sign-in keys were not moved -- the web app was not found' -f $web)); return (& $res $false 'failed') }
+        # ---- 1. the setting ----
+        if ((Get-SIBuiltInAuthSetting -App $app -Name $name) -ne $blob) {
+            $id = Get-SIBuiltInAuthWebIdentity -App $app -Name $IdentityName
+            if (-not $id) { $lines.Add(('{0}: its sign-in keys were not moved -- the web app''s managed identity {1} could not be read' -f $web, $IdentityName)); return (& $res $false 'failed') }
+            $sv = ConvertTo-SIBuiltInAuthSecretValues (& $Arm 'POST' $listPath $null)
+            $sp = Get-SIBuiltInAuthSecretPatch -App $app -IdentityClientId $id.ClientId -SecretValues $sv -Setting keep -WebEnv @{ $name = $blob }
+            if ($sp.MissingSecrets.Count) { $lines.Add(('{0}: its sign-in keys were NOT moved -- the web app''s secret(s) {1} could not be read, and a write would blank them; nothing was changed' -f $web, ($sp.MissingSecrets -join ', '))); return (& $res $false 'failed') }
+            $null = & $Arm 'PATCH' $appPath $sp.Body
+            $ok = $false
+            for ($i = 1; $i -le $Tries; $i++) {
+                try {
+                    $now = & $Arm 'GET' $appPath $null
+                    $sb = ConvertTo-SIBuiltInAuthSecretValues (& $Arm 'POST' $listPath $null)
+                    $lost = @(@($sv.Keys) | Where-Object { -not $sb.ContainsKey($_) })
+                    if ((Get-SIBuiltInAuthSetting -App $now -Name $name) -eq $blob -and -not $lost.Count) { $ok = $true; break }
+                } catch { }
+                if ($i -lt $Tries) { & $Sleep $PauseSeconds }
+            }
+            if (-not $ok) { $lines.Add(('{0}: its sign-in keys were NOT moved -- {1} does not read back; the Key Vault rights stay, the next update checks again' -f $web, $name)); return (& $res $false 'failed') }
+            $lines.Add(('{0}: keeps its sign-in keys in its own key store {1} from now on, without Key Vault (read back; every secret kept)' -f $web, $blob))
+        }
+        # ---- 2. the web app runs on it ----
+        $run = [pscustomobject]@{ Ok = $false; Why = 'not read yet' }
+        for ($i = 1; $i -le $RevisionTries; $i++) {
+            try {
+                $a = & $Arm 'GET' $appPath $null
+                $rn = [string](Get-SIBuiltInAuthProp $a @('properties', 'latestRevisionName'))
+                $rev = if ($rn) { & $Arm 'GET' ('{0}/revisions/{1}?api-version={2}' -f $AppId.TrimEnd('/'), $rn, $AppApiVersion) $null } else { $null }
+                $run = Test-SIBuiltInAuthRevisionRuns -App $a -Revision $rev -Name $name -Value $blob
+            } catch { $run = [pscustomobject]@{ Ok = $false; Why = $_.Exception.Message } }
+            if ($run.Ok) { break }
+            if ($i -lt $RevisionTries) { & $Sleep $PauseSeconds }
+        }
+        if (-not $run.Ok) { $lines.Add(('{0}: the web app does not run on its own key store yet ({1}) -- its Key Vault rights stay; the next update checks again' -f $web, $run.Why)); return (& $res $true 'waiting') }
+        $fqdn = [string](Get-SIBuiltInAuthProp $app @('properties', 'configuration', 'ingress', 'fqdn'))
+        if ($Probe -and $fqdn) {
+            $p = $null; $answers = $false
+            for ($i = 1; $i -le $Tries; $i++) {
+                try { $p = & $Probe ("https://$fqdn/healthz") } catch { $p = $null }
+                if ($p -and ([int]$p.Status -eq 200 -or (Test-SIBuiltInAuthAnonymousRefused -Probe $p))) { $answers = $true; break }
+                if ($i -lt $Tries) { & $Sleep $PauseSeconds }
+            }
+            if (-not $answers) { $lines.Add(('{0}: the web app runs on its own key store, but its address answered HTTP {1} -- its Key Vault rights stay; the next update checks again' -f $web, $(if ($p) { [int]$p.Status } else { 0 }))); return (& $res $true 'waiting') }
+        }
+        # ---- 3. the Key Vault rights go ----
+        if (-not "$VaultId".Trim()) { $lines.Add(('{0}: runs on its own key store; the install''s Key Vault is not known here, so {1}''s Key Vault rights were not checked' -f $web, $IdentityName)); return (& $res $true 'waiting') }
+        $removed = 0; $failed = 0
+        foreach ($k in $script:SIBuiltInAuthWebKeyNames) {
+            $scope = '{0}/keys/{1}' -f $VaultId.Trim().TrimEnd('/'), $k
+            $step = 'the Support app removes {0}''s role "Key Vault Crypto Service Encryption User" on the key {1} ({2}) -- the web app no longer uses it' -f $IdentityName, $k, $scope
+            $lp = "{0}/providers/Microsoft.Authorization/roleAssignments?api-version={1}&`$filter=principalId eq '{2}'" -f $scope, $RoleApiVersion, $PrincipalId
+            $have = $null
+            try { $have = @(Select-SIBuiltInAuthWebKeyAssignments -Assignments @(Get-SIBuiltInAuthProp (& $Arm 'GET' $lp $null) @('value')) -PrincipalId $PrincipalId -KeyScope $scope) }
+            catch {
+                if ("$($_.Exception.Message)" -match '(?i)\b(401|403)\b|AuthorizationFailed|Forbidden') { $support.Add($step); continue }
+                $lines.Add(('{0}: {1}''s rights on the key {2} could not be read ({3}) -- the next update checks again' -f $web, $IdentityName, $k, $_.Exception.Message)); $failed++; continue
+            }
+            foreach ($as in $have) {
+                $aid = [string](Get-SIBuiltInAuthProp $as @('id'))
+                try { $null = & $Arm 'DELETE' ('{0}?api-version={1}' -f $aid, $RoleApiVersion) $null }
+                catch {
+                    if ("$($_.Exception.Message)" -match '(?i)\b(401|403)\b|AuthorizationFailed|Forbidden') { $support.Add($step); continue }
+                    $lines.Add(('{0}: {1}''s role on the key {2} could NOT be removed ({3}) -- the next update tries again' -f $web, $IdentityName, $k, $_.Exception.Message)); $failed++; continue
+                }
+                $gone = $false
+                for ($i = 1; $i -le $Tries; $i++) {
+                    try { if (-not (& $Arm 'GET' ('{0}?api-version={1}' -f $aid, $RoleApiVersion) $null)) { $gone = $true; break } } catch { }
+                    if ($i -lt $Tries) { & $Sleep $PauseSeconds }
+                }
+                if ($gone) { $removed++; $lines.Add(('{0}: {1} no longer holds "Key Vault Crypto Service Encryption User" on the key {2} (removed; read back)' -f $web, $IdentityName, $k)) }
+                else { $failed++; $lines.Add(('{0}: {1}''s role on the key {2} was removed but still reads back -- the next update checks again' -f $web, $IdentityName, $k)) }
+            }
+        }
+        foreach ($s in $support) { $lines.Add(('{0}: Support-app step: {1}' -f $web, $s)) }
+        if ($failed) { return (& $res $false 'failed') }
+        if ($support.Count) { return (& $res $true 'needs-support') }
+        if ($removed) { return (& $res $true 'removed') }
+        $lines.Add(('{0}: runs on its own key store; {1} holds no Key Vault right on its keys' -f $web, $IdentityName))
+        return (& $res $true 'in-place')
+    } catch {
+        $lines.Add(('{0}: its sign-in keys could not be checked ({1}) -- the Key Vault rights stay; the next update tries again' -f $web, $_.Exception.Message))
+        return (& $res $false 'failed')
     }
 }
 

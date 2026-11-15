@@ -10,6 +10,10 @@
       0. PLAN    what runs now (the running pipeline run -- id, trigger, step, age -- and every running execution of the
                  install's jobs), the installed version against the one the install's ring serves (the updater's own last
                  manifest check, read only), and what will happen. Without -Apply this is all.
+                 #1158: a cancel is decided ONLY from the run record that was READ (Get-SIStopRunCancelDecision) -- never
+                 from what executes in Azure. A record that cannot be read (in a Support session: also not through the
+                 support grant, troubleshoot, opened for that read and closed again) = REFUSED (refused-run-unread):
+                 nothing is cancelled, nothing is started.
       1. CANCEL  the product's way (#700): caj-si-flow started ONCE with SI_FLOW_CANCEL=1, SI_FLOW_CANCEL_REASON,
                  SI_AUDIT_STARTED_BY (and SI_FLOW_CANCEL_RUN when the run is known) -- the runner's own
                  Invoke-SIPipelineCancelRun marks, stops, releases and audits (job.flowrun.stop). Read back: the execution.
@@ -202,6 +206,54 @@ function Read-SIStopRunRun {
     if (-not $Sql) { return [pscustomobject]@{ View = $null; Why = $(if ($SqlWhy) { $SqlWhy } else { 'the install''s database is not reachable from here' }) } }
     try { [pscustomobject]@{ View = (Get-SIStopRunRunView -Run ((New-SIJobFlowSqlStore -Invoke $Sql).Load())); Why = '' } }
     catch { [pscustomobject]@{ View = $null; Why = ('the run record could not be read ({0})' -f $_.Exception.Message) } }
+}
+
+function Read-SIStopRunRunWithGrant {
+    <# #1158: the run record read through the support grant -- a Support session at an install where the Support app is
+       read-only in the database (just-in-time support access: "The SELECT permission was denied on the object 'FlowRun'").
+       The grant is opened at level troubleshoot (db_datareader) for this one read and closed again (Invoke-SISupportWithGrant,
+       each said in one line). Never throws: @{ View; Why } as Read-SIStopRunRun -- View $null when it still cannot be read. #>
+    param([Parameter(Mandatory)][scriptblock]$Sql, [Parameter(Mandatory)][System.Collections.IDictionary]$SupportGrant, [string]$FirstWhy = '', [scriptblock]$Say)
+    $ga = Get-SISupportGrantArgs -SupportGrant $SupportGrant -Say $Say
+    $ga['Purpose'] = 'the read of the run record before any stop'; $ga['Tool'] = 'Stop-SIRunAndUpdate'; $ga['GrantLevel'] = 'troubleshoot'
+    # 'audit' = never throws (Done / Why say it); the block is a READ -- nothing is written
+    $ga['WriteKind'] = 'audit'
+    $ga['Do'] = { $srr = Read-SIStopRunRun -Sql $Sql; if (-not $srr.View) { throw $srr.Why }; $srr.View }
+    $ga['Probe'] = { & $Sql (Get-SISupportAccessProbeSql) @{} 'reader' }
+    $g = $null
+    try { $g = Invoke-SISupportWithGrant @ga } catch { return [pscustomobject]@{ View = $null; Why = ('{0}; through the support grant: {1}' -f $FirstWhy, $_.Exception.Message) } }
+    if ($g -and $g.Done -and $g.Value) { return [pscustomobject]@{ View = $g.Value; Why = '' } }
+    [pscustomobject]@{ View = $null; Why = ('{0}; through the support grant: {1}' -f $FirstWhy, $(if ($g -and $g.Why) { $g.Why } else { 'not read' })) }
+}
+
+function Get-SIStopRunCancelDecision {
+    <#
+        PURE. #1158 THE ONE RULE FOR A CANCEL (live 2026-11-09 / 2026-11-14: the run record could not be read, the plan took a
+        job executing in Azure for a run and sent SI_FLOW_CANCEL=1 -- once on a 21-second stand-alone job, once on a 5 h run).
+        A cancel is decided ONLY from the run record that was READ: -Run is its view (Get-SIStopRunRunView; $null = it could
+        not be read here, -RunWhy says why). What executes in Azure (-Activity) is never taken for a run here -- it is only said.
+        Returns @{ Verdict; RunId; Why }:
+          cancel         the record was read and names a RUNNING run with its id (and -RunId, when given, is that run)
+          none           the record was read and no run is running (or -RunId is not running) -- nothing to cancel
+          refuse         -RunId names another run than the running one
+          refuse-unread  the record could not be read, or names a running run without an id: nothing is cancelled and
+                         nothing is started, whatever executes in Azure
+    #>
+    param($Run, [string]$RunWhy = '', [string]$RunId = '', $Activity)
+    $o = { param($v, $id, $w) [pscustomobject]@{ Verdict = $v; RunId = $id; Why = $w } }
+    $want = "$RunId".Trim()
+    $unread = {
+        param([string]$what)
+        $ex = @(@($Activity.Runner) + @($Activity.Steps) + @($Activity.Wakes) | Where-Object { $_ })
+        & $o 'refuse-unread' '' ('{0}, so nothing is stopped and nothing is started -- a job executing in Azure is never taken for a run ({1}). To update: start the updater plainly (it waits for a running run by itself), or run this again once the run record can be read' -f $what, $(if ($ex.Count) { 'executing now: ' + ($ex -join ', ') } else { 'nothing executes now' }))
+    }
+    if (-not $Run) { return (& $unread ('the run record could not be read ({0})' -f $(if ("$RunWhy".Trim()) { "$RunWhy".Trim() } else { 'not read here' }))) }
+    if ($Run.Running -and -not "$($Run.Id)".Trim()) { return (& $unread 'the run record names a running run without its id') }
+    if ($Run.Running) {
+        if ($want -and $want -ne [string]$Run.Id) { return (& $o 'refuse' '' ('run {0} is not the running run ({1} is) -- nothing was cancelled and the updater was not started (it would only step aside for {1})' -f $want, $Run.Id)) }
+        return (& $o 'cancel' ([string]$Run.Id) ('the run record names running run {0}' -f $Run.Id))
+    }
+    & $o 'none' '' $(if ($want) { 'run {0} is not running' -f $want } else { 'no pipeline run is running (read from the run record)' })
 }
 
 function Get-SIStopRunVersions {
@@ -437,7 +489,7 @@ function Format-SIStopRunPlan {
         elseif ($rv.Id) { $l.Add(('running run    : none -- the last run {0} is {1}' -f $rv.Id, $rv.State.ToLowerInvariant())) }
         else { $l.Add('running run    : none -- no pipeline run recorded') }
     } else {
-        $l.Add(('running run    : the run record is not read here ({0}) -- what runs is read from Azure: {1}' -f $Plan.RunWhy, $(if ($Plan.Running) { 'a run is going' } else { 'no run is going' })))
+        $l.Add(('running run    : NOT READ -- {0}; nothing is stopped or started on what executes in Azure' -f $Plan.RunWhy))
     }
     foreach ($x in @($Plan.Activity.Runner)) { $l.Add(('executing      : {0}  [the pipeline runner]' -f $x)) }
     foreach ($x in @($Plan.Activity.Steps)) { $l.Add(('executing      : {0}' -f $x)) }
@@ -455,8 +507,10 @@ function Format-SIStopRunPlan {
 function Invoke-SIStopRunAndUpdate {
     <#
         The whole run (steps 0-5, see the file header). Returns @{ Mode (plan | applied | refused); Outcome (plan |
-        nothing-to-stop | stopped | timeout | refused | updated | not-updated | update-running | start-failed | run-started); Plan;
-        Lines; Summary; Started (what this run started: job + execution); ExitCode }.
+        nothing-to-stop | stopped | timeout | refused | refused-run-unread | updated | not-updated | update-running | start-failed
+        | run-started); Plan; Lines; Summary; Started (what this run started: job + execution); ExitCode }.
+        refused-run-unread (#1158, exit 1, plan and -Apply alike): the run record could not be read (also not through the
+        support grant in a Support session) -- nothing is cancelled and nothing is started.
     #>
     param(
         [Parameter(Mandatory)][scriptblock]$Arm,
@@ -511,6 +565,9 @@ function Invoke-SIStopRunAndUpdate {
     $t0 = & $nowU
     $act = Get-SIStopRunActivity -Executions $ex -FlowJob $c.FlowJob -NowUtc $t0
     $runRead = Read-SIStopRunRun -Sql $Sql -SqlWhy $SqlWhy
+    # #1158: a Support session where the Support app is read-only in the database reads the run record through the support
+    # grant (troubleshoot, opened for this read and closed again)
+    if (-not $runRead.View -and $Sql -and $SupportGrant) { $runRead = Read-SIStopRunRunWithGrant -Sql $Sql -SupportGrant $SupportGrant -FirstWhy $runRead.Why -Say $sayGrant }
     $rv = $runRead.View
     $updName = if ($inst.Updater) { [string]$inst.Updater.name } else { '' }
     $updRunning = @()
@@ -522,17 +579,17 @@ function Invoke-SIStopRunAndUpdate {
     $ver0 = Get-SIStopRunVersions -Updater $inst.Updater -UpdateStateJson $st0.Json -UpdateStateWhy $st0.Why
     # #1150: the next scheduled run, when it is near (the plan warns; -Apply reads the run state again before the start)
     $slotWarn = Get-SIStopRunSlotWarning -Due (Read-SIStopRunDue -Sql $Sql -NowUtc $t0) -NowUtc $t0 -WithinMinutes $SlotWarnMinutes
-    # is a run going? The run record when it can be read here; else what runs in Azure (the runner or a step)
-    $running = if ($rv) { [bool]$rv.Running } else { (@($act.Runner).Count + @($act.Steps).Count) -gt 0 }
-    $targetId = if ($rv -and $rv.Running) { $rv.Id } else { "$RunId".Trim() }
-    $refuse = ''
-    if ("$RunId".Trim() -and $rv) {
-        if ($rv.Running -and $rv.Id -ne "$RunId".Trim()) { $refuse = ('run {0} is not the running run ({1} is) -- nothing was cancelled and the updater was not started (it would only step aside for {1})' -f "$RunId".Trim(), $rv.Id) }
-        elseif (-not $rv.Running) { $running = $false }
-    }
+    # #1158: is a run going? ONLY the run record that was READ decides (Get-SIStopRunCancelDecision) -- never what executes in
+    # Azure: an unreadable record = nothing is cancelled and nothing is started
+    $dec = Get-SIStopRunCancelDecision -Run $rv -RunWhy $runRead.Why -RunId $RunId -Activity $act
+    $running = ($dec.Verdict -eq 'cancel')
+    $targetId = [string]$dec.RunId
+    $refuse = if ($dec.Verdict -eq 'refuse') { $dec.Why } else { '' }
+    $unread = if ($dec.Verdict -eq 'refuse-unread') { $dec.Why } else { '' }
     if (-not $inst.Flow -and $running) { $refuse = ('the install has no {0} job, so the run cannot be cancelled the product''s way -- nothing was started' -f $c.FlowJob) }
     $will = New-Object System.Collections.Generic.List[string]
     if ($refuse) { $will.Add('nothing: ' + $refuse) }
+    elseif ($unread) { $will.Add('nothing: ' + $unread) }
     else {
         if ($running) {
             $will.Add(('1. cancel: start {0} once with SI_FLOW_CANCEL=1{1} (reason: {2}; by: {3})' -f $c.FlowJob, $(if ($targetId) { ', SI_FLOW_CANCEL_RUN=' + $targetId } else { '' }), $why, $by))
@@ -560,6 +617,12 @@ function Invoke-SIStopRunAndUpdate {
         & $emit ('5. SUMMARY: ' + $sum) 'Green'
         return (& $result $(if ($Apply) { 'applied' } else { 'plan' }) 'already-current' $sum 0 $plan)
     }
+    if ($unread) {
+        & $emit ('REFUSED: ' + $unread) 'Red'
+        $sum = 'nothing was cancelled and nothing was started: ' + $unread
+        & $emit ('5. SUMMARY: ' + $sum) 'Red'
+        return (& $result 'refused' 'refused-run-unread' $sum 1 $plan)
+    }
     if (-not $Apply) {
         & $emit 'PLAN ONLY -- nothing was started. Run again with -Apply to do it.' 'Yellow'
         return (& $result 'plan' 'plan' 'plan only: nothing was started' 0 $plan)
@@ -568,6 +631,8 @@ function Invoke-SIStopRunAndUpdate {
     # ---- 1. CANCEL ----
     $cancelExec = ''; $stopLine = 'no run was running'
     if ($running) {
+        # #1158: the last guard before a cancel -- only a run the run record named, by its id
+        if ($dec.Verdict -ne 'cancel' -or -not $targetId) { throw ('no cancel: {0} -- nothing was started' -f $dec.Why) }
         $flowJob = & $Arm 'GET' ('{0}/{1}?api-version={2}' -f $inst.Base, $c.FlowJob, $c.ArmApi) $null
         if (-not $flowJob) { throw ('{0} could not be read -- nothing was started' -f $c.FlowJob) }
         $envC = [ordered]@{ SI_FLOW_CANCEL = '1'; SI_FLOW_CANCEL_REASON = $why; SI_AUDIT_STARTED_BY = $by; SI_FLOW_TRIGGER = 'manual' }
@@ -744,7 +809,11 @@ function Write-SIStopRunAudit {
           [System.Collections.IDictionary]$SupportGrant, [scriptblock]$Say)
     if (-not $Sql) { return ('not written from here ({0}){1}' -f $(if ($SqlWhy) { $SqlWhy } else { 'the install''s database is not reachable' }), $(if ($Action -eq 'job.flowrun.cancel') { ' -- the cancel execution writes job.flowrun.stop itself' } else { '' })) }
     $warn = New-Object System.Collections.Generic.List[string]
-    $write = { Write-SIAuditEvent -Invoke $Sql -Action $Action -Actor $By -ActorSource 'setup' -Target $Target -Reason $Reason -OutcomeText $OutcomeText -After $After -Log { param($l, $m) $warn.Add($m) }.GetNewClosure() }
+    # the warning collector is made HERE: GetNewClosure copies only the variables of the scope it runs in, so made inside
+    # $write it held no $warn and a refused audit write THREW ("cannot call a method on a null-valued expression") -- after
+    # the cancel had been sent
+    $warnLog = { param($l, $m) $warn.Add($m) }.GetNewClosure()
+    $write = { Write-SIAuditEvent -Invoke $Sql -Action $Action -Actor $By -ActorSource 'setup' -Target $Target -Reason $Reason -OutcomeText $OutcomeText -After $After -Log $warnLog }
     if (-not $SupportGrant) { $ok = & $write }
     else {
         $ga = Get-SISupportGrantArgs -SupportGrant $SupportGrant -Say $Say

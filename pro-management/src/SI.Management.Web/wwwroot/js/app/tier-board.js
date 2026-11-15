@@ -2,7 +2,7 @@
 // exclusion or a rule change is posted in place: the button stays where it is, the answer is a toast, and the row, the
 // panel and the tile say "staged" until the change is committed. Nothing is written by staging. Without this file the
 // same form posts and the page comes back with the same message.
-import { toast } from "./ui.js";
+import { toast, SIGNIN_LAYER_REFUSED } from "./ui.js";
 
 function badge(doc, text) {
   var b = doc.createElement("span");
@@ -88,7 +88,8 @@ export function initTierBoard(doc) {
         if (res.ok) { form.querySelectorAll("input[name=Reason]").forEach(function (i) { i.value = ""; }); }
       })
       .catch(function () {
-        toast(status === 403 ? "Not allowed: your role cannot stage this change. Nothing was written." : "Not staged: the answer could not be read. Nothing was written.", "error");
+        // SecurityInsight's own refusal is JSON with its reason (shown above); a 403 that is not came from the sign-in layer
+        toast(status === 403 ? "Not staged: " + SIGNIN_LAYER_REFUSED + ". Nothing was written." : "Not staged: the answer could not be read. Nothing was written.", "error");
       })
       .finally(function () { if (button) { button.disabled = false; } });
   });

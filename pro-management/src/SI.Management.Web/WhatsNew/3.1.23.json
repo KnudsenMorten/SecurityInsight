@@ -1,0 +1,38 @@
+{
+  "version": "3.1.23",
+  "date": "2026-11-15",
+  "type": "security",
+  "summary": "Every public address is behind Microsoft's sign-in, with fewer rights behind it.",
+  "new": [
+    {
+      "title": "The MCP server is behind Microsoft's sign-in",
+      "text": "Like the web app, the MCP server now answers only requests that carry a valid Microsoft sign-in. It still checks the token and the person's role itself."
+    },
+    {
+      "title": "Every public address is checked",
+      "text": "Each update lists every part of the installation that is reachable from the internet and reports any that is not behind Microsoft's sign-in."
+    }
+  ],
+  "fixes": [
+    {
+      "title": "The web app verifies who signed in",
+      "text": "With Microsoft's sign-in, the web app takes the person only from a sign-in token it verifies itself, never from a header alone."
+    },
+    {
+      "title": "No Key Vault access for the web app",
+      "text": "The web app keeps its sign-in keys in its own storage, so it no longer holds any right on the Key Vault."
+    },
+    {
+      "title": "The updater only reads group membership",
+      "text": "The updater no longer holds the right to change group memberships. It only checks that the database job's membership is in place and says when it is not."
+    },
+    {
+      "title": "Leftovers of the earlier sign-in are removed",
+      "text": "After the switch, the earlier sign-in's settings and its database tables are removed, each step read back. Anything else is reported."
+    },
+    {
+      "title": "A refused save says who refused it",
+      "text": "When a save is refused, the message now says whether SecurityInsight or the sign-in layer refused it, and what to do."
+    }
+  ]
+}

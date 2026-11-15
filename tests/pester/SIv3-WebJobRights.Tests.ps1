@@ -1,7 +1,8 @@
 <#
     SECURE-WEB-1 (framework 12.11f, Invardia 2026-11-14): the internet-facing identities (the web app with its sign-in front,
     the MCP app) hold NO job, Owner / Contributor, role-assignment, registry-push or vault-admin right.
-      - the rights list marks web + mcp internetFacing and lists none of the forbidden roles for them (the gate lint)
+      - the rights list marks web + mcp internetFacing and lists none of the forbidden roles for them (the gate lint), and
+        every Key Vault role on them is held only without the built-in sign-in (one named open item: magic links)
       - the updater's converge removes such an assignment at the resource group or below, READS IT BACK, says one above the
         group as a support step, and a read that fails is "not checked" -- never "clean"
       - the identity move never copies a forbidden role to web / mcp (it still copies it to the engine)
@@ -53,6 +54,19 @@ Describe 'SECURE-WEB-1: the rights list (gate lint)' {
                 if ([string]$r.kind -eq 'azure-rbac') { $names | Should -Not -Contain ([string]$r.value) -Because "$($r.id) is on an internet-facing identity" }
             }
         }
+    }
+    It 'gives no internet-facing identity a standing Key Vault role: each one is held only without the built-in sign-in' {
+        # the ONE named exception: the magic-link secret read (conditional, off by default) -- an open item, never a pattern
+        $openItem = @('web.keyvault.SecretsUserMagicLinks')
+        $kv = @(foreach ($i in @($script:Rights.identities | Where-Object { $_.internetFacing })) {
+                @($i.rights | Where-Object { [string]$_.kind -eq 'keyvault' -or [string]$_.value -match '^(?i)Key Vault\b' }) })
+        $kv.Count | Should -BeGreaterThan 0 -Because 'the web identity''s key roles are listed (and explained)'
+        foreach ($r in $kv) {
+            if ($openItem -contains [string]$r.id) { [string]$r.status | Should -Be 'conditional' -Because $r.id; continue }
+            [string]$r.status | Should -Be 'only-without-built-in-signin' -Because "$($r.id) is a Key Vault role on an internet-facing identity"
+            [string]$r.note | Should -Match 'Invoke-SIBuiltInAuthKeyRingMove' -Because "$($r.id) names what takes it away"
+        }
+        @($script:Rights.statusValues.PSObject.Properties.Name) | Should -Contain 'only-without-built-in-signin'
     }
     It 'gives no internet-facing identity a right to send mail or a Graph / Exchange WRITE right' {
         foreach ($i in @($script:Rights.identities | Where-Object { $_.internetFacing })) {

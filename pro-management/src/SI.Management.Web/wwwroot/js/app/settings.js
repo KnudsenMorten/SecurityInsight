@@ -2,7 +2,7 @@
 // (remembered per browser, ?cat= and #s-Name / #card-x deep links win), a filter over labels and help text, address
 // chips for lists, and a Save per card that answers in place -- green when saved, red with the reason when not.
 // Without this script every category is shown, a list is one item per line and Save reloads the page.
-import { toast, confirmDialog } from "./ui.js";
+import { toast, confirmDialog, refusalOf } from "./ui.js";
 
 var KEY = "siSettingsCat";
 var MAIL = /^[^@\s<>,;"]+@[^@\s<>,;"]+\.[^@\s<>,;"]+$/;
@@ -195,7 +195,12 @@ function save(form, submitter) {
   fetch(form.getAttribute("action") || window.location.pathname + "?handler=SaveCard", {
     method: "POST", body: new URLSearchParams(body), credentials: "same-origin", headers: { Accept: "application/json" },
   })
-    .then(function (r) { if (!r.ok) { throw new Error(r.status === 403 ? "you may not change these settings" : "HTTP " + r.status); } return r.json(); })
+    .then(function (r) {
+      // a 403 says who refused: SecurityInsight's own reason as it gave it, else the sign-in layer in front of the app
+      if (r.status === 403) { return refusalOf(r).then(function (x) { var e = new Error(x.message); e.whole = x.si; throw e; }); }
+      if (!r.ok) { throw new Error("HTTP " + r.status); }
+      return r.json();
+    })
     .then(function (res) {
       say(msg, res.message, res.ok);
       Object.keys(res.errors || {}).forEach(function (n) {
@@ -208,7 +213,7 @@ function save(form, submitter) {
         var sf = fieldOf(form, n); if (sf && sf.hasAttribute("data-confirm-when")) { markShown(sf); var v = nextValue(sf); if (v !== null) { sf.setAttribute("data-current", v); } }
       });
     })
-    .catch(function (err) { say(msg, "Not saved: " + err.message, false); toast("Not saved: " + err.message, "error"); })
+    .catch(function (err) { var t = err.whole ? err.message : "Not saved: " + err.message; say(msg, t, false); toast(t, "error"); })
     .then(function () { buttons.forEach(function (b) { b.disabled = false; }); });
 }
 

@@ -347,23 +347,12 @@ builder.Services.AddSingleton<SI.Management.Web.Updating.UpdateWindowState>();
 // container's disk every new revision (and the second replica) had its own, so a deploy signed every open page out and
 // refused its next save. One application name, so every revision reads the same keys. No database: the default (in memory).
 builder.Services.AddDataProtection().SetApplicationName("SecurityInsight Pro");
-if (AzureSqlExecutor.IsConfigured(estate))
-    builder.Services.AddOptions<Microsoft.AspNetCore.DataProtection.KeyManagement.KeyManagementOptions>()
-        // #1112: the key ring reads past the update window's guard (a sign-in cookie is still read while the notice shows)
-        .Configure<AzureSqlExecutor, ILoggerFactory>((o, sql, lf) => o.XmlRepository = new SqlKeyRing(sql, lf.CreateLogger<SqlKeyRing>()));
-// The stored keys are ENCRYPTED with a Key Vault key only the web app's identity may use (Auth/KeyRingProtection.cs; the
-// updater creates the key, grants it and sets DataProtection__KeyVaultKeyId). Not set = the keys are stored as before.
-var keyRingKeyId = builder.Configuration["DataProtection:KeyVaultKeyId"];
-if (!string.IsNullOrWhiteSpace(keyRingKeyId) && KeyVaultKeyRingWrapper.IsKeyId(keyRingKeyId))
-{
-    builder.Services.AddSingleton<IKeyRingKeyWrapper>(sp => new KeyVaultKeyRingWrapper(sp.GetRequiredService<Azure.Core.TokenCredential>(), keyRingKeyId.Trim()));
-    builder.Services.AddOptions<Microsoft.AspNetCore.DataProtection.KeyManagement.KeyManagementOptions>()
-        .Configure<IServiceProvider>((o, sp) => o.XmlEncryptor = new WrappedKeyXmlEncryptor(sp.GetRequiredService<IKeyRingKeyWrapper>()));
-    builder.Services.AddHostedService(sp => new KeyRingRotation(sp.GetRequiredService<Microsoft.AspNetCore.DataProtection.KeyManagement.IKeyManager>(),
-        sp.GetRequiredService<IKeyRingKeyWrapper>(),
-        sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<Microsoft.AspNetCore.DataProtection.KeyManagement.KeyManagementOptions>>().Value.XmlRepository,
-        sp.GetRequiredService<ILogger<KeyRingRotation>>()));
-}
+// Where the keys are kept (Auth/WebKeyRingSetup.cs): with DataProtection__BlobUri (the updater sets it after Microsoft's
+// built-in sign-in is on) in one blob of the install's token-store container with the web app's managed identity and NO Key
+// Vault (Auth/BlobKeyRing.cs; the ring before is moved in once); otherwise cfg.WebKeyRing (Auth/SqlKeyRing.cs),
+// ENCRYPTED with the Key Vault key when DataProtection__KeyVaultKeyId is set (Auth/KeyRingProtection.cs) --
+// exactly as before.
+WebKeyRingSetup.Add(builder.Services, builder.Configuration, AzureSqlExecutor.IsConfigured(estate));
 
 builder.Services.AddSingleton(sp =>
 {

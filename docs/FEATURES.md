@@ -343,6 +343,18 @@ feature here working normally.
 - **Every job gets the size it needs.** ✅ 2026-10-28 -- A new install gives every job the CPU and memory it needs, never below 2 CPU and 4 GiB. A size you set yourself is kept. (Checking and raising the sizes on every update arrives with the next update; until then an update leaves the sizes as they are.)
 - **An update never stops a running pipeline.** ✅ 2026-11-05 -- An update that finds a pipeline run going waits for the run to end and is installed between two runs; only you stop a run. An update also waits up to 90 minutes for its image build.
 - **The image build pool of a private install is never removed.** ✅ 2026-11-05 -- An update keeps the pool and only scales it to no agents between builds, so a private install can always build its next update.
+- **Microsoft's own sign-in in front of the web app.** ✅ 2026-11-15 -- The web app and its API sit behind the built-in
+  authentication of Azure Container Apps. Every visitor signs in with Microsoft Entra before any page of SecurityInsight
+  answers, so your organisation's Conditional Access, MFA and sign-in policies apply. Microsoft always shows the account
+  picker, so an admin can sign in with a separate admin account. No password and no client secret is stored anywhere:
+  the web app proves itself to Entra with its own managed identity. Who may do what is still decided inside
+  SecurityInsight, by its roles and the groups you give them. A request without a valid Microsoft sign-in -- also one
+  with made-up sign-in headers or tokens -- gets no data. It is switched on per installation by the support partner:
+  every step is read back, and anything that does not check out is put back as it was.
+- **The parts reachable from the internet hold only the rights they need.** ✅ 2026-11-14 -- The identities of the web
+  app and the MCP server can read the data they show, and nothing more: no right to start, stop or change jobs, no owner
+  or contributor role, no right to give rights to anyone, no right to push images and no right to manage the Key Vault.
+  Every update checks this and removes anything more, read back.
 
 ## 12. Performance & scale
 

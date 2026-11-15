@@ -23,8 +23,10 @@ public sealed record McpCallerDecision(bool Allowed, ToolCaller? Caller, string 
 /// <item>Reader: the read tools; Admin / SuperAdmin: also settings_read.</item>
 /// <item>Delegated (limited to scopes, "portal only"): refused here -- the MCP server does not apply scopes.</item>
 /// <item>No row, an unreadable table, no object id: refused (fail closed).</item>
-/// <item>An APPLICATION (an app-only token, no delegated scope): the framework's sign-in rule for a read-only MCP (owner
-/// 2026-10-31, APIDOC-1) -- answered with the read tools only, never settings_read, whatever app role it holds.</item>
+/// <item>PERSON-ONLY (framework SECURE-WEB-1 (3), the group standard, superseding APIDOC-1's read-only allowance): an
+/// APPLICATION's token (idtyp = app, or no delegated scope with a calling application) is refused, whatever app role it
+/// holds; a person's token must carry the dedicated delegated scope mcp.access in scp (a token for another scope of the
+/// app, e.g. the web app's user_impersonation, is refused).</item>
 /// </list>
 /// PURE (<see cref="Decide"/>); <see cref="McpCallerResolver"/> reads the table.
 /// </summary>
@@ -39,6 +41,23 @@ public static class McpCallerRule
     public const string NotListed = "This SecurityInsight installation gives you no role: ask a SuperAdmin to add you on Admin > Access (the MCP server answers the people this installation lists).";
     public const string DelegatedRefused = "Your SecurityInsight role (Delegated) is limited to its scopes in the web app; the MCP server answers Reader and up.";
     public const string TableUnreadable = "This installation's access list could not be read, so nothing was answered. Try again shortly.";
+    public const string AppRefused = "The SecurityInsight MCP server answers people only: sign in as yourself through your MCP client (an application's token is refused).";
+    public const string ScopeMissing = "This token was not issued for the SecurityInsight MCP server: your MCP client must ask for the scope api://<client id>/mcp.access.";
+
+    /// The dedicated delegated scope of the MCP server (framework SECURE-WEB-1 (3)).
+    public const string McpScope = McpDiscovery.ScopeName;
+
+    /// The delegated scopes in the token (scp, space-separated; both claim forms).
+    public static IReadOnlyList<string> Scopes(ClaimsPrincipal user) =>
+        user.FindAll("scp").Concat(user.FindAll(ScopeClaimLong))
+            .SelectMany(c => c.Value.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)).Distinct(StringComparer.Ordinal).ToList();
+
+    /// The token carries mcp.access (exact, case-sensitive as Entra issues it).
+    public static bool HasMcpScope(ClaimsPrincipal user) => Scopes(user).Contains(McpScope, StringComparer.Ordinal);
+
+    /// The endpoint policy's check: a person's delegated access token for mcp.access -- never an application, never an ID token.
+    public static bool IsPersonMcpToken(ClaimsPrincipal user) =>
+        user.Identity?.IsAuthenticated == true && !IsAppOnly(user) && !IsIdTokenShaped(user) && HasMcpScope(user);
 
     public static int Rank(string? role) => (role ?? "").Trim().ToLowerInvariant() switch
     {
@@ -88,7 +107,8 @@ public static class McpCallerRule
         if (user.Identity?.IsAuthenticated != true) return McpCallerDecision.No("not signed in");
         if (AppRoleRank(user) == 0) return McpCallerDecision.No("the token carries no SecurityInsight app role");
         if (IsIdTokenShaped(user)) return McpCallerDecision.No(IdTokenRefused);
-        if (IsAppOnly(user)) return new(true, ToolCaller.Unscoped(isAdmin: false), "application: the read tools");
+        if (IsAppOnly(user)) return McpCallerDecision.No(AppRefused);
+        if (!HasMcpScope(user)) return McpCallerDecision.No(ScopeMissing);
         if (rows is null) return McpCallerDecision.No(TableUnreadable);
         var oid = ObjectId(user);
         if (string.IsNullOrWhiteSpace(oid)) return McpCallerDecision.No(NotListed);
@@ -114,7 +134,7 @@ public sealed class McpCallerResolver(ISqlReader sql, TimeProvider? clock = null
 
     public async Task<McpCallerDecision> ResolveAsync(ClaimsPrincipal user, CancellationToken ct)
     {
-        // an application (and an ID token, refused) never needs the table (and must not wait on it)
+        // an application and an ID token (both refused) never need the table (and must not wait on it)
         if (McpCallerRule.IsAppOnly(user) || McpCallerRule.IsIdTokenShaped(user)) return McpCallerRule.Decide(user, Array.Empty<McpAccessRow>());
         return McpCallerRule.Decide(user, await RowsAsync(ct).ConfigureAwait(false));
     }

@@ -80,7 +80,11 @@ function Invoke-SIWebKeyRingConverge {
           # the words of the customer's action: the command that makes the grant
           [string]$GrantCommand = 'pro-management\deploy\Deploy-SIManagement.ps1 -SigninStoreKeyVaultName <your Key Vault> -Apply (as an Owner of the resource group)',
           # #1098: the web app's identity by name, for the customer task when the role may not be given
-          [AllowEmptyString()][string]$IdentityName = '')
+          [AllowEmptyString()][string]$IdentityName = '',
+          # SECURE-WEB-1: the web app's DataProtection__BlobUri today. Set = the web app keeps its sign-in keys in its own
+          # blob with NO Key Vault (Auth/BlobKeyRing.cs, after Microsoft's built-in sign-in is on): nothing here runs -- no
+          # key, no grant (setup never grants it again), no check, no setting
+          [AllowEmptyString()][string]$BlobRingEnv = '')
     $lines = New-Object System.Collections.Generic.List[string]; $report = New-Object System.Collections.Generic.List[string]; $action = New-Object System.Collections.Generic.List[string]
     $actions = New-Object System.Collections.Generic.List[object]; $warnings = New-Object System.Collections.Generic.List[object]
     $addAction = { param($t, $c) $action.Add($t); $actions.Add([pscustomobject]@{ Text = $t; Class = $c }) }
@@ -88,6 +92,10 @@ function Invoke-SIWebKeyRingConverge {
     $done = { param($ok) [pscustomobject]@{ Ok = [bool]$ok; KeyId = $keyId; Lines = $lines.ToArray(); Report = $report.ToArray(); CustomerAction = $action.ToArray()
                                             Actions = $actions.ToArray(); Warnings = $warnings.ToArray() } }
     $keyMade = $false
+    if ("$BlobRingEnv".Trim()) {
+        $lines.Add('web sign-in keys: kept in the web app''s own key store without Key Vault -- its Key Vault key is not used and the web app is given no right on it')
+        return (& $done $true)
+    }
     try {
         # 1. the key
         $g = & $KeyVault 'GET' ('{0}?api-version=7.4' -f $keyId) $null

@@ -10,9 +10,10 @@
     the sign-in front's schema and, when asked, the Invardia Support app's own database access -- is done by the install's
     own job caj-si-dbinit, as its own identity id-si-dbinit, a member of the SQL admin group. The guided install sets it up
     on a new install and every update keeps it present and runs it. An EXISTING install needs the job's identity added to the
-    SQL admin group ONCE, or the updater's Microsoft Graph permissions (three PIM-for-Groups + GroupMember.Read.All + Application.Read.All) (framework §4.5 G5; the updater
-    cannot grant them to itself): this script does both, then it starts the first run -- after which every update keeps the
-    membership current (renewed before it ends) and runs the job on its own.
+    SQL admin group ONCE, or the updater's Microsoft Graph read permissions (GroupMember.Read.All + Application.Read.All)
+    (framework §4.5 G5; the updater cannot grant them to itself): this script does
+    both, then it starts the first run -- after which every update READS the membership (G5a: never adds or renews it) and
+    runs the job on its own. This is also the support step when an update reports the membership missing.
 
     Run inside the environment's Support session (. Connect-InvardiaSupport.ps1 -Environment <handle> -Reason ...): every
     Azure and directory call goes through Invardia's recorder. It never signs in to the database itself.
@@ -20,10 +21,11 @@
     PLAN BY DEFAULT: reads the install (its jobs, apps, identities, the SQL server and its admin group) and says what it would
     do. -Apply, in order:
       1. the identity id-si-dbinit (made when it is not there, read back);
-      2. its membership of the SQL admin group -- added when it is not there (directly, else as an active PIM-for-Groups
-         member) and READ BACK from the identity's side (a group's member list hides service principals from many callers)
-         BEFORE the job is started; a PIM assignment that ends within 30 days is renewed (framework §4.5 G2-G4); the updater
-         identity is given its Microsoft Graph permissions (three PIM-for-Groups + GroupMember.Read.All + Application.Read.All), read back (G5);
+      2. its membership of the SQL admin group -- added when it is not there as a DIRECT, PERMANENT member (never a
+         PIM-for-Groups assignment, framework §4.5 G5a) and READ BACK from the identity's side (a group's member list hides
+         service principals from many callers) BEFORE the job is started; refused = stopped with the reason; the updater
+         identity is given its Microsoft Graph read permissions, read back, and the ones it no longer needs are taken
+         off, read back (G5, G5a);
       3. the job (made or brought up to date with the engine jobs' image and the install's identities);
       4. ONE run (the Invardia Support app's own database access is part of this run only: the Support session's own app,
          or -SupportAppId -- refused when it is not the session's), waited for; the verdict is the run's own status: the job
@@ -121,15 +123,14 @@ if (-not $Apply) {
 $mi = Set-SIDbInitIdentity -Arm $seams.Arm -SubscriptionId $SubscriptionId -ResourceGroup $ResourceGroup -Location $tpl.Location -Sleep $Sleep
 if (-not $mi.Ok) { & $say 'Red' $mi.Problem; if ($PassThru) { return [pscustomobject]$result }; exit 1 }
 & $say 'Green' ('identity {0}: {1} (client id {2})' -f $n.Identity, $(if ($mi.Made) { 'made' } else { 'there' }), $mi.ClientId)
-# ---- 2. the membership, converged and renewed (framework §4.5 G2-G4), read back BEFORE the job starts ----
+# ---- 2. the membership: a DIRECT, PERMANENT member (framework §4.5 G2 + G5a: never a PIM-for-Groups assignment), read back BEFORE the job starts ----
 $m = Sync-SIDbInitMembership -Graph $seams.Graph -PrincipalId $mi.PrincipalId -GroupId $gid -Sleep $Sleep
 if ($m.State -notin 'already', 'added') {
-    & $say 'Red' ('{0} -- the job is NOT started (a run before the membership exists would keep a token without the group). An Entra administrator adds the managed identity {1} to the SQL admin group; then run this again.' -f $m.Detail, $n.Identity)
+    & $say 'Red' ('{0} -- the job is NOT started (a run before the membership exists would keep a token without the group). Add the managed identity {1} to the SQL admin group as a direct member through the Support app; then run this again.' -f $m.Detail, $n.Identity)
     if ($PassThru) { return [pscustomobject]$result }; exit 1
 }
 & $say 'Green' $m.Detail
-if ($m.Renewal -and [string]$m.Renewal.State -in 'renewed', 'current', 'failed') { & $say $(if ($m.Renewal.State -eq 'failed') { 'Yellow' } else { 'Green' }) $m.Renewal.Detail }
-# ---- 2b. framework §4.5 G5: the updater identity's Microsoft Graph permissions (three PIM-for-Groups + GroupMember.Read.All + Application.Read.All), read back ----
+# ---- 2b. framework §4.5 G5: the updater identity's Microsoft Graph permissions, read back; G5a: the earlier PIM-for-Groups ones taken off ----
 $updP = @($principals | Where-Object { $_.component -eq 'updater' })[0]
 $updPid = if ($updP) { [string](@($ids | Where-Object { [string](Get-SIDbInitProp $_ @('properties', 'clientId')) -ieq [string]$updP.clientId } | ForEach-Object { Get-SIDbInitProp $_ @('properties', 'principalId') })[0]) } else { '' }
 if ($updPid) {

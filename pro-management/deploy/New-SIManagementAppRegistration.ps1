@@ -26,7 +26,7 @@
          working as Reader.
          Security-group ids in the sign-in token (groupMembershipClaims), so the web app's Access page can map groups.
          Identifier URI api://<appId>; v2 access tokens;
-         one delegated scope `Estate.Read` for user-delegated MCP clients (the app role still decides access);
+         the delegated scope `mcp.access` MCP clients ask for (framework SECURE-WEB-1; `Estate.Read` kept as it is), the app role and the Access page still decide access;
          web platform with ID-token issuance; the redirect + logout URLs when -Fqdn is given;
       2. its service principal, with "assignment required" = No (#765, owner 2026-10-19 "SI decides"): any person of
          the directory may sign in, and the web app shows them nothing until a SuperAdmin gives them a role on its Access
@@ -104,6 +104,8 @@ $graph = 'https://graph.microsoft.com/v1.0'
 . (Join-Path $PSScriptRoot 'SI-ManagementArm.ps1')
 # #852: the web app's own API for the sign-in front 1.4.0 (the scope user_impersonation + its organisation-wide consent)
 . (Join-Path $PSScriptRoot 'SI-SigninFrontApi.ps1')
+# framework SECURE-WEB-1 (3): the MCP server's own delegated scope mcp.access (the same definition the update converges)
+. ([IO.Path]::Combine((Split-Path -Parent (Split-Path -Parent $PSScriptRoot)), 'setup', '_shared', 'SI-McpScope.ps1'))
 $mode =if ($Apply) { 'APPLY' } else { 'PLAN (nothing is changed; add -Apply)' }
 
 # Stable ids, so a re-run patches the same roles and scope instead of minting new ones.
@@ -286,17 +288,25 @@ if (-not $app) {
 $clientId = [string]$app.appId
 # #852: the scope the sign-in front 1.4.0 asks for (user_impersonation) is sent WITH Estate.Read -- a PATCH replaces the
 # whole list, and Graph refuses to drop an enabled scope; an app that has it keeps its id
+# framework SECURE-WEB-1 (3): the MCP server's own delegated scope mcp.access (SI-McpScope.ps1) is sent WITH them too, and
+# every OTHER scope the app has (an update may have added one) is sent back as read -- nothing is ever dropped
 $siScopeId = $script:SISigninApiScopeId
+$mcpScopeId = $script:SIMcpScopeId
+$otherScopes = @()
 if ($app.id -notlike '<*') {
     try {
         $apiNow = Invoke-Graph -Method get -Url ("$graph/applications/{0}?`$select=api" -f $app.id) -Read -JustCreated
-        $mine = @(@($(if ($apiNow -and $apiNow.api) { $apiNow.api.oauth2PermissionScopes })) | Where-Object { $_ -and [string]$_.value -ceq 'user_impersonation' }) | Select-Object -First 1
+        $nowScopes = @(@($(if ($apiNow -and $apiNow.api) { $apiNow.api.oauth2PermissionScopes })) | Where-Object { $_ })
+        $mine = @($nowScopes | Where-Object { [string]$_.value -ceq 'user_impersonation' }) | Select-Object -First 1
         if ($mine -and [string]$mine.id) { $siScopeId = [string]$mine.id }
+        $mineMcp = @($nowScopes | Where-Object { [string]$_.value -ceq $script:SIMcpScope }) | Select-Object -First 1
+        if ($mineMcp -and [string]$mineMcp.id) { $mcpScopeId = [string]$mineMcp.id }
+        $otherScopes = @($nowScopes | Where-Object { [string]$_.value -cnotin @('Estate.Read', 'user_impersonation', $script:SIMcpScope) })
     } catch { }
 }
 Invoke-Graph -Method patch -Url ("$graph/applications/{0}" -f $app.id) -Body @{
     identifierUris = @("api://$clientId")
-    api = @{ requestedAccessTokenVersion = 2; oauth2PermissionScopes = @($scope, (New-SISigninApiScope -Id $siScopeId)) }
+    api = @{ requestedAccessTokenVersion = 2; oauth2PermissionScopes = @(@($scope, (New-SISigninApiScope -Id $siScopeId), (New-SIMcpApiScope -Id $mcpScopeId)) + @($otherScopes)) }
 } | Out-Null
 if ($Apply) {
     # read one second after the create it answered "not found" and stopped a new install: retried while it is "not there yet"
@@ -416,7 +426,7 @@ if ($WebIdentityPrincipalId) {
 
 Write-Host ''
 Write-Host ('  client id (AzureAd__ClientId):   {0}' -f $clientId)
-Write-Host ('  API (MCP token audience):        api://{0}   (a client asks for api://{0}/.default)' -f $clientId)
+Write-Host ('  API (MCP token audience):        api://{0}   (an MCP client asks for api://{0}/mcp.access)' -f $clientId)
 Write-Host ('  service principal object id:     {0}' -f $spId)
 if (-not $Fqdn) { Write-Host '  No redirect URI yet: re-run with -Fqdn <web app host> after the Container App exists.' -ForegroundColor Yellow }
 if (-not $Apply) { Write-Host 'Plan only -- nothing was changed. Re-run with -Apply to make these changes.' -ForegroundColor Yellow }

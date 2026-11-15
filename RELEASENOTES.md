@@ -13,6 +13,41 @@ SecurityInsight Pro and the Pro trial install from invardia.com, never from GitH
 [invardia.com/trial](https://invardia.com/trial/), and your installation page there gives your two lines.
 <!-- /install lines -->
 
+## v3.1.23.1 — new MCP clients find Microsoft's sign-in by themselves
+
+### Security
+- **A new MCP client finds Microsoft's sign-in by itself.** The MCP server tells an MCP client where to sign in and what
+  to ask for, so a new client connects without extra setup. Besides its health answer, only this sign-in information is
+  open, and neither carries any data.
+- **The MCP server answers people only.** A person signs in as themselves with the SecurityInsight MCP permission, and
+  sees only what their SecurityInsight role allows. An application signed in as itself is no longer answered: a tool
+  that used the MCP server that way now signs in as a person.
+
+### Fixes
+- **Stop and update never stops a run it could not read.** It stops a run only when it has read that run's record and
+  the record names the running run. When the record cannot be read, nothing is stopped and nothing is started, and it
+  says how to go on: start the update on its own (it waits for a running run by itself), or try again once the record
+  can be read.
+## v3.1.23 — every public address behind Microsoft's sign-in
+
+### Security
+- **The MCP server is behind Microsoft's sign-in too.** It answers only requests that carry a valid Microsoft sign-in,
+  and still checks the token and the person's role itself. Only its health answer is open, and it carries no data.
+- **Every public address is checked.** Each update lists every part of the installation that is reachable from the
+  internet and reports any that is not behind Microsoft's sign-in.
+- **The web app verifies who signed in.** With Microsoft's sign-in, the person comes only from a sign-in token the web
+  app verifies itself (signature, tenant, audience and age), never from a header alone.
+- **No Key Vault access for the web app.** After the switch, the web app keeps its sign-in keys in its own storage and
+  gives up its Key Vault rights, each step read back.
+- **The updater only reads group membership.** It no longer holds any right to change group memberships; it checks that
+  the database job's membership is in place and, when it is not, names the support step.
+- **Leftovers of the earlier sign-in are removed.** After the switch, its settings and its database tables are removed
+  and read back; anything else it left is reported.
+
+### Fixes
+- **A refused save says who refused it**: SecurityInsight's own message as given, or that the sign-in layer refused it
+  and the page should be reloaded.
+
 ## v3.1.22 — saving works with Microsoft's sign-in
 
 ### Fixes

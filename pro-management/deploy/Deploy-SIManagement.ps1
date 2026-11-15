@@ -529,12 +529,17 @@ if ("$SigninStoreKeyVaultName".Trim() -and $Apply -and $webApp -and $script:look
         try { $j = Invoke-SIArm -Method $m -Path $p -ApiVersion $api -Body $b; [pscustomobject]@{ Status = 200; Json = $j } }
         catch { [pscustomobject]@{ Status = $(if ("$($_.Exception.Message)" -match '(?i)\b(409|Conflict|RoleAssignmentExists)\b') { 409 } elseif ("$($_.Exception.Message)" -match 'HTTP(?: Status:)? (\d{3})') { [int]$Matches[1] } else { 0 }); Json = $null } } }
     $vault = $null; try { $vault = Get-SIKeyVaultArm -Name $kvName -SubscriptionId $SubscriptionId } catch { $vault = $null }
-    $curKr = ''; foreach ($e in @((Get-SIManagementProp $webApp @('properties', 'template', 'containers')) | Select-Object -First 1 | ForEach-Object { $_.env } | Where-Object { $_ })) { if ([string]$e.name -eq 'DataProtection__KeyVaultKeyId') { $curKr = [string]$e.value } }
+    $curKr = ''; $curBlobRing = ''
+    foreach ($e in @((Get-SIManagementProp $webApp @('properties', 'template', 'containers')) | Select-Object -First 1 | ForEach-Object { $_.env } | Where-Object { $_ })) {
+        if ([string]$e.name -eq 'DataProtection__KeyVaultKeyId') { $curKr = [string]$e.value }
+        # SECURE-WEB-1: the web app keeps its keys in its own blob (after the built-in sign-in): setup gives it no Key Vault right again
+        if ([string]$e.name -eq 'DataProtection__BlobUri') { $curBlobRing = [string]$e.value }
+    }
     # #1098: the key and the grant are made here and read back (the installer holds a temporary Key Vault Crypto Officer on
     # the vault for this, given by the guided install with its Secrets Officer and removed with it); the setting is then
     # written as the updater writes it, so the updater's first run finds nothing left to do
     $kr = Invoke-SIWebKeyRingConverge -Arm $armSeam -KeyVault $kvSeam -SetEnv { param($n, $v) Set-SIContainerAppEnvVar -ResourceGroupName $ResourceGroup -Name $AppName -SetEnv @("$n=$v") -SubscriptionId $SubscriptionId } `
-              -VaultName $kvName -VaultId $(if ($vault) { [string]$vault.id } else { '' }) -PrincipalIds @($webId.PrincipalId) -SubscriptionId $SubscriptionId -CurrentEnv $curKr -IdentityName $IdentityName
+              -VaultName $kvName -VaultId $(if ($vault) { [string]$vault.id } else { '' }) -PrincipalIds @($webId.PrincipalId) -SubscriptionId $SubscriptionId -CurrentEnv $curKr -IdentityName $IdentityName -BlobRingEnv $curBlobRing
     foreach ($l in @($kr.Lines)) { Write-Host ('  ' + $l) }
     foreach ($l in @($kr.Report)) { Write-Host ('  ' + $l + ' (the updater converges it on its next run)') -ForegroundColor Yellow }
     foreach ($l in @($(if ($kr.PSObject.Properties['CustomerAction']) { $kr.CustomerAction }))) { Write-Host ('  ' + $l) -ForegroundColor Yellow }
@@ -625,7 +630,7 @@ else { Write-Host '  -SigninStoreKeyVaultName not given: the update makes the st
 Write-Step 'The Entra app registration (New-SIManagementAppRegistration.ps1)'
 Write-Host ('  Register the web app''s redirect URI on client id {0}:' -f $SignInClientId)
 Write-Host ('    .\New-SIManagementAppRegistration.ps1 -TenantId {0} -Fqdn {1} -Apply' -f $TenantId, $fqdn)
-if (-not $NoMcp) { Write-Host ('  MCP clients ask for a token for api://{0}/.default and need the Admin or Viewer app role.' -f $SignInClientId) }
+if (-not $NoMcp) { Write-Host ('  MCP clients sign in as a person and ask for api://{0}/mcp.access (they find it at the MCP server''s /.well-known/oauth-protected-resource); the person needs an app role and a role on the Access page.' -f $SignInClientId) }
 
 Write-Host ''
 if ($Apply) {

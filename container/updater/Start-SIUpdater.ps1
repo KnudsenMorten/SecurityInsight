@@ -99,6 +99,9 @@ $siAutoRoot = Find-SIUpdaterLicenceRoot
 foreach ($siUpdLib in 'SI-UpdateRest.ps1', 'SI-AcrBuild.ps1', 'SI-NightlySchedule.ps1', 'SI-UpdateWatch.ps1', 'SI-WebKeyRing.ps1', 'SI-BuiltInAuth.ps1') {
     if ($siAutoRoot -and (Test-Path -LiteralPath ([IO.Path]::Combine($siAutoRoot, 'setup', '_shared', $siUpdLib)))) { . ([IO.Path]::Combine($siAutoRoot, 'setup', '_shared', $siUpdLib)) }
 }
+# SI-BuiltInAuthStandard.ps1: after the web app's switch, the MCP app behind Microsoft's authentication too, the sign-in
+# front's leftovers, and the standard's check (one summary line)
+if ($siAutoRoot -and (Test-Path -LiteralPath ([IO.Path]::Combine($siAutoRoot, 'setup', '_shared', 'SI-BuiltInAuthStandard.ps1')))) { . ([IO.Path]::Combine($siAutoRoot, 'setup', '_shared', 'SI-BuiltInAuthStandard.ps1')) }
 if ($siAutoRoot -and (Test-Path -LiteralPath ([IO.Path]::Combine($siAutoRoot, 'engine', '_shared', 'SI-ProAutomation.ps1')))) {
     . ([IO.Path]::Combine($siAutoRoot, 'engine', '_shared', 'SI-ProAutomation.ps1'))
 }
@@ -1459,11 +1462,19 @@ function Invoke-SIUpdaterBuiltInAuthStep {
         sign-in app registration gets the platform's callback -- the release before the switch) | apply (switch it on, read
         back, an anonymous request must be refused; anything else puts back what ran before). Magic links (the Settings page's
         SIWeb_MagicLinksEnabled) decide whether /MagicLink and /MagicLinkRequest open without a sign-in.
-        One line per outcome; a failure is said, never fails the update. -Converge / -Arm / -Graph / -Probe: test seams.
+        Then, in plan and apply (setup/_shared/SI-BuiltInAuthStandard.ps1, Invoke-SIBuiltInAuthStandardStep): the MCP app
+        behind Microsoft's authentication (bearer tokens only, Return401; apply only after the web app reads back switched),
+        the sign-in front's leftovers (removed or reported, never a failure) and the standard's summary line.
+        One line per outcome; a failure is said, never fails the update. -Converge / -Arm / -Graph / -Probe / -Standard /
+        -ListImages: test seams.
         Returns the converge's result, or $null when it was not called.
     #>
     param($Rc = 0, [hashtable]$Env = @{}, $Store, [string]$SubscriptionId, [string]$ResourceGroup,
-          [scriptblock]$Converge, [scriptblock]$Arm, [scriptblock]$Graph, [scriptblock]$Probe)
+          [scriptblock]$Converge, [scriptblock]$Arm, [scriptblock]$Graph, [scriptblock]$Probe, [scriptblock]$Standard, [scriptblock]$ListImages,
+          # test seams of the step after the switch (the key ring off Key Vault): the move itself, the install vault's ARM id
+          [scriptblock]$KeyRingMove, [string]$VaultId,
+          # test seams of the earlier sign-in's database tables (dropped after the switch): the drop, the release root
+          [scriptblock]$SigninDrop, [string]$SIRoot)
     try {
         $v = if ($Env.ContainsKey('SI_Updater_BuiltInAuth')) { "$($Env['SI_Updater_BuiltInAuth'])" } else { "$([Environment]::GetEnvironmentVariable('SI_Updater_BuiltInAuth'))" }
         if (-not "$v".Trim() -or "$v".Trim() -match '^(?i)off$') { return $null }
@@ -1489,6 +1500,61 @@ function Invoke-SIUpdaterBuiltInAuthStep {
         $r = & $Converge $args1
         foreach ($l in @($r.Lines)) { if ("$l".Trim()) { Write-UpdLog $(if ($r.Ok) { "$l" } else { 'WARNING: ' + "$l" }) } }
         if ((-not $r.Ok) -and ($r.State -in @('failed', 'rolled-back')) -and (Get-Command -Name Add-SIUpdaterFailureIf -ErrorAction SilentlyContinue)) { Add-SIUpdaterFailureIf 'post-roll' ((@($r.Lines) | Select-Object -Last 1) -join '') }
+        # SECURE-WEB-1: ONLY after a switch that read back (apply: applied / in-place), the web app's sign-in keys move to the
+        # token-store container and THEN id-si-web's Key Vault key roles go (Invoke-SIBuiltInAuthKeyRingMove). Never before.
+        $tcu = if ($r -and $r.PSObject.Properties['TokenContainerUri']) { "$($r.TokenContainerUri)".Trim() } else { '' }
+        $wpid = if ($r -and $r.PSObject.Properties['WebPrincipalId']) { "$($r.WebPrincipalId)".Trim() } else { '' }
+        if ($mode -eq 'apply' -and $r.Ok -and $r.State -in @('applied', 'in-place') -and $tcu -and $wpid) {
+            if (-not $KeyRingMove) { $KeyRingMove = { param($a) Invoke-SIBuiltInAuthKeyRingMove @a } }
+            $kvName = if ($Env.ContainsKey('SI_UPDATER_KEY_VAULT')) { "$($Env['SI_UPDATER_KEY_VAULT'])".Trim() } else { "$([Environment]::GetEnvironmentVariable('SI_UPDATER_KEY_VAULT'))".Trim() }
+            # (-VaultId given = the test seam; otherwise the install's vault by its name)
+            $kvArmId = if ($PSBoundParameters.ContainsKey('VaultId')) { "$VaultId" } else { '' }
+            if ($kvName -and -not $PSBoundParameters.ContainsKey('VaultId')) { try { $kvArmId = [string](Get-SIUpdaterVaultId -VaultName $kvName -SubscriptionId $SubscriptionId -ResourceGroup $ResourceGroup) } catch { $kvArmId = '' } }
+            $args2 = @{ Arm = $Arm; AppId = $appId; ContainerUri = $tcu; PrincipalId = $wpid; VaultId = $kvArmId }
+            if ($r.PSObject.Properties['WebIdentityName'] -and "$($r.WebIdentityName)".Trim()) { $args2['IdentityName'] = "$($r.WebIdentityName)".Trim() }
+            if ($Probe) { $args2['Probe'] = $Probe }
+            $k = & $KeyRingMove $args2
+            foreach ($l in @($k.Lines)) { if ("$l".Trim()) { Write-UpdLog $(if ($k.Ok) { "$l" } else { 'WARNING: ' + "$l" }) } }
+            foreach ($s in @($(if ($k -and $k.PSObject.Properties['Support']) { $k.Support }))) {
+                if ("$s".Trim() -and (Get-Command -Name Add-SIUpdaterCustomerAction -ErrorAction SilentlyContinue)) { Add-SIUpdaterCustomerAction -Step 'post-roll' -Text ('Support-app step: ' + "$s") -Class 'arm-403' }
+            }
+            if ($k -and -not $k.Ok -and (Get-Command -Name Add-SIUpdaterFailureIf -ErrorAction SilentlyContinue)) { Add-SIUpdaterFailureIf 'post-roll' ((@($k.Lines) | Select-Object -Last 1) -join '') }
+            $r | Add-Member -NotePropertyName KeyRing -NotePropertyValue $k -Force
+        }
+        # SECURE-WEB-1 "no leftovers" (Invardia never touches an install's SQL): ONLY after a switch that read back, the
+        # earlier sign-in front's database tables go -- the database setup job drops them (Invoke-SIUpdaterSigninSchemaDrop,
+        # which reads the web app back switched itself first). A refusal is a warning and a support step, never a failure.
+        if ($mode -eq 'apply' -and $r.Ok -and $r.State -in @('applied', 'in-place')) {
+            if (-not $SigninDrop -and (Get-Command -Name Invoke-SIUpdaterSigninSchemaDrop -ErrorAction SilentlyContinue)) { $SigninDrop = { param($a) Invoke-SIUpdaterSigninSchemaDrop @a } }
+            if ($SigninDrop) {
+                $sd = & $SigninDrop @{ SIRoot = $(if ("$SIRoot".Trim()) { "$SIRoot" } else { "$siAutoRoot" }); Store = $Store; Arm = $Arm; SubscriptionId = $SubscriptionId; ResourceGroup = $ResourceGroup; WebAppId = $appId }
+                if ($sd -and "$($sd.Line)".Trim()) { Write-UpdLog $(if ([string]$sd.State -in 'kept', 'refused') { 'WARNING: ' + "$($sd.Line)" } else { "$($sd.Line)" }) }
+                if ($sd -and "$($sd.Support)".Trim() -and (Get-Command -Name Add-SIUpdaterCustomerAction -ErrorAction SilentlyContinue)) { Add-SIUpdaterCustomerAction -Step 'post-roll' -Text ('Support-app step: ' + "$($sd.Support)") -Class 'arm-403' }
+                $r | Add-Member -NotePropertyName SigninDrop -NotePropertyValue $sd -Force
+            }
+        }
+        # then (SI-BuiltInAuthStandard.ps1): the MCP app behind Microsoft's authentication -- apply only after the web app reads
+        # back switched -- the sign-in front's leftovers, and the standard's summary. A leftover is a warning, never a failure.
+        if (-not $Standard -and (Get-Command -Name Invoke-SIBuiltInAuthStandardStep -ErrorAction SilentlyContinue)) { $Standard = { param($a) Invoke-SIBuiltInAuthStandardStep @a } }
+        if ($Standard -and $mode -in 'plan', 'apply') {
+            try {
+                $mcpName = Get-SIUpdaterInstallName -Role mcp -Env $Env
+                $sa = @{ Arm = $Arm; Graph = $Graph; Mode = $mode; WebAppId = $appId; WebResult = $r
+                         McpAppId = (Get-SIUpdaterRgPath -SubscriptionId $SubscriptionId -ResourceGroup $ResourceGroup -Provider ('Microsoft.App/containerApps/' + $mcpName))
+                         RoleScope = ('/subscriptions/{0}/resourceGroups/{1}' -f $SubscriptionId, $ResourceGroup) }
+                if ($Probe) { $sa['Probe'] = $Probe }
+                if (-not $ListImages -and (Get-Command -Name Get-SIBuiltInAuthFrontImageTags -ErrorAction SilentlyContinue)) { $ListImages = { param([string]$LoginServer, [string]$Repo) Get-SIBuiltInAuthFrontImageTags -Rest (Get-SIUpdaterRest) -LoginServer $LoginServer -Repo $Repo } }
+                if ($ListImages) { $sa['ListImages'] = $ListImages }
+                $s = & $Standard $sa
+                if ($s) {
+                    foreach ($l in @($s.Lines)) { if ("$l".Trim()) { Write-UpdLog "$l" } }
+                    foreach ($l in @($s.Warnings)) { if ("$l".Trim()) { Write-UpdLog ('WARNING: ' + "$l") } }
+                    if ($mode -eq 'apply' -and (-not $s.Ok) -and ([string]$s.McpState -in @('failed', 'rolled-back')) -and (Get-Command -Name Add-SIUpdaterFailureIf -ErrorAction SilentlyContinue)) {
+                        Add-SIUpdaterFailureIf 'post-roll' ((@($s.Warnings) | Where-Object { "$_" -notmatch '^(leftover: |built-in sign-in standard: )' } | Select-Object -Last 1) -join '')
+                    }
+                }
+            } catch { try { Write-UpdLog ('WARNING: built-in sign-in: the MCP app and the leftovers could not be checked ({0}) -- the update goes on' -f $_.Exception.Message) } catch { } }
+        }
         $r
     } catch { try { Write-UpdLog ('WARNING: built-in sign-in: could not be checked ({0}) -- the update goes on' -f $_.Exception.Message) } catch { }; $null }
 }

@@ -402,9 +402,12 @@ function Test-SIUpdaterGraphRights {
         carries (the roles claim -- read with no directory right) checked against the G5 list (the release's
         Test-SIDbInitUpdaterGraphRoles). The updater cannot grant itself: what is missing is ONE warning naming what and who
         grants it (setup). Never a hold, never throws. -GraphRoles { } -> Get-SIDbInitTokenRoles' answer (a test seam).
-        Returns @{ Ok ($null = not known); Missing; Lines }.
+        G5a (SI #1253): a retired PIM-for-Groups permission the token still carries is taken off with -Graph and read back
+        (Remove-SIDbInitRetiredGraphRoles, the token's oid = the updater's own service principal); the updater may not
+        delete an app-role assignment at most installs -- then it is a support step line. Never a hold.
+        Returns @{ Ok ($null = not known); Missing; Retired; Lines }.
     #>
-    param([scriptblock]$GraphRoles)
+    param([scriptblock]$GraphRoles, [scriptblock]$Graph, [scriptblock]$Sleep)
     try {
         if (-not (Get-Command -Name Test-SIDbInitUpdaterGraphRoles -ErrorAction SilentlyContinue)) { return [pscustomobject]@{ Ok = $null; Missing = @(); Lines = @() } }
         if (-not $GraphRoles) {
@@ -417,8 +420,20 @@ function Test-SIUpdaterGraphRights {
             return [pscustomobject]@{ Ok = $null; Missing = @(); Lines = @($l) }
         }
         $c = Test-SIDbInitUpdaterGraphRoles -Held @($t.Roles)
-        foreach ($l in $c.Lines) { Write-UpdLog $l }
-        [pscustomobject]@{ Ok = [bool]$c.Ok; Missing = @($c.Missing); Lines = @($c.Lines) }
+        $lines = New-Object System.Collections.Generic.List[string]
+        foreach ($l in $c.Lines) { Write-UpdLog $l; $lines.Add($l) }
+        $ret = $null
+        $oid = if ($t.PSObject.Properties['ObjectId']) { [string]$t.ObjectId } else { '' }
+        if ($c.PSObject.Properties['Retired'] -and @($c.Retired | Where-Object { $_ }).Count) {
+            if ($Graph -and $oid -and (Get-Command -Name Remove-SIDbInitRetiredGraphRoles -ErrorAction SilentlyContinue)) {
+                $ret = Remove-SIDbInitRetiredGraphRoles -Graph $Graph -PrincipalId $oid -Sleep $Sleep
+                foreach ($l in $ret.Lines) { Write-UpdLog $l; $lines.Add($l) }
+            } else {
+                $l = 'support step: the updater identity still holds {0}, which it no longer needs -- the support partner removes it through the Support app' -f (@($c.Retired) -join ', ')
+                Write-UpdLog $l; $lines.Add($l)
+            }
+        }
+        [pscustomobject]@{ Ok = [bool]$c.Ok; Missing = @($c.Missing); Retired = $ret; Lines = $lines.ToArray() }
     } catch {
         $l = 'WARNING: the updater identity''s Microsoft Graph permissions could not be checked ({0}) -- checked again at the next update' -f $_.Exception.Message
         Write-UpdLog $l
@@ -428,19 +443,20 @@ function Test-SIUpdaterGraphRights {
 
 function Invoke-SIUpdaterDbJobMembership {
     <#
-        Framework §4.5 SQL-ADMIN-GROUP G2-G4, the updater's side: the database setup job identity's membership of the SQL
-        server's admin group, CONVERGED and RENEWED on every update through the release's Sync-SIDbInitMembership (the same
-        path setup uses). The group = the SQL server's Entra administrator (ARM: the server in the install's resource group).
-        With the G5 rights the updater reads the active PIM-for-Groups assignment and makes / extends it; a direct add
-        (members/$ref) is tried first and is refused for a role-assignable group without directory rights, as decided.
-        Returns @{ Member ($true | $false | $null = not known); JustAdded; State; Renewal; End; Detail }. Never throws.
+        Framework §4.5 SQL-ADMIN-GROUP G5a (SI #1253, least privilege), the updater's side: the database setup job identity's
+        membership of the SQL server's admin group is only READ on every update (the release's Read-SIDbInitMembership: the
+        identity's memberOf). The group = the SQL server's Entra administrator (ARM: the server in the install's resource
+        group). The updater NEVER writes the membership: no group-member add, no PIM-for-Groups assignment, no renewal. The guided
+        install makes it a direct, permanent member with the installing person's sign-in; a missing one is a support step.
+        Returns @{ Member ($true | $false | $null = not known); JustAdded (always $false); State (already | missing |
+        unknown); Renewal ($null); End ($null); Detail }. Never throws.
     #>
     param([Parameter(Mandatory)][scriptblock]$Arm, [Parameter(Mandatory)][scriptblock]$Graph, [Parameter(Mandatory)][string]$SubscriptionId,
           [Parameter(Mandatory)][string]$ResourceGroup, [Parameter(Mandatory)][string]$Server, [Parameter(Mandatory)][string]$PrincipalId,
           [scriptblock]$Sleep, [datetime]$NowUtc = [datetime]::UtcNow)
     $unknown = { param($d) [pscustomobject]@{ Member = $null; JustAdded = $false; State = 'unknown'; Renewal = $null; End = $null; Detail = [string]$d } }
     try {
-        if (-not (Get-Command -Name Sync-SIDbInitMembership -ErrorAction SilentlyContinue)) { return (& $unknown 'this release does not keep the membership') }
+        if (-not (Get-Command -Name Read-SIDbInitMembership -ErrorAction SilentlyContinue)) { return (& $unknown 'this release does not read the membership') }
         $n = Get-SIDbInitNames
         $name = (($Server -split '\.')[0]).Trim()
         if ($name -notmatch '^[a-z0-9][a-z0-9-]{0,62}$') { return (& $unknown ('the database server ''{0}'' is not a server name' -f $Server)) }
@@ -450,9 +466,91 @@ function Invoke-SIUpdaterDbJobMembership {
         if (-not $srv) { return (& $unknown ('the database server {0} is not in the install''s resource group' -f $name)) }
         $gid = Get-SIDbInitAdminGroupId -Server $srv
         if (-not $gid) { return (& $unknown ('the database server {0}''s administrator is not a group' -f $name)) }
-        $s = Sync-SIDbInitMembership -Graph $Graph -PrincipalId $PrincipalId -GroupId $gid -Sleep $Sleep -NowUtc $NowUtc -Print { param($t) Write-UpdLog ([string]$t).Trim() }
-        [pscustomobject]@{ Member = $s.Member; JustAdded = [bool]$s.JustAdded; State = [string]$s.State; Renewal = $s.Renewal; End = $s.End; Detail = [string]$s.Detail }
+        $s = Read-SIDbInitMembership -Graph $Graph -PrincipalId $PrincipalId -GroupId $gid
+        if ($null -eq $s.Member) { return (& $unknown $s.Detail) }
+        [pscustomobject]@{ Member = [bool]$s.Member; JustAdded = $false; State = $(if ($s.Member) { 'already' } else { 'missing' }); Renewal = $null; End = $null; Detail = [string]$s.Detail }
     } catch { & $unknown ('the membership could not be checked: {0}' -f $_.Exception.Message) }
+}
+
+function Test-SIUpdaterWebSwitched {
+    <#
+        READ ONLY. Does the web app read back SWITCHED to Microsoft's built-in sign-in -- its authConfig platform enabled AND
+        the app as read runs the switch (SI_Web_BuiltInAuth=1, no signin-front container: the release's
+        Test-SIBuiltInAuthSwitched)? Only then is the earlier sign-in front's database store unused. Returns @{ Switched
+        ($true | $false | $null = could not be read); Why }. Never throws.
+    #>
+    param([Parameter(Mandatory)][scriptblock]$Arm, [Parameter(Mandatory)][string]$WebAppId)
+    if (-not (Get-Command -Name Test-SIBuiltInAuthSwitched -ErrorAction SilentlyContinue)) { return [pscustomobject]@{ Switched = $null; Why = 'this updater cannot read the built-in sign-in' } }
+    $appApi = if ($script:SIBuiltInAuthAppApi) { $script:SIBuiltInAuthAppApi } else { '2025-07-01' }
+    $authApi = if ($script:SIBuiltInAuthApi) { $script:SIBuiltInAuthApi } else { '2024-10-02-preview' }
+    try {
+        $app = & $Arm 'GET' ('{0}?api-version={1}' -f $WebAppId.TrimEnd('/'), $appApi) $null
+        if (-not $app) { return [pscustomobject]@{ Switched = $false; Why = 'the web app is not there' } }
+        $sw = Test-SIBuiltInAuthSwitched -App $app
+        if (-not $sw.Ok) { return [pscustomobject]@{ Switched = $false; Why = [string]$sw.Why } }
+        $auth = & $Arm 'GET' ('{0}/authConfigs/current?api-version={1}' -f $WebAppId.TrimEnd('/'), $authApi) $null
+        $on = $false
+        if ($auth -and $auth.PSObject.Properties['properties'] -and $auth.properties -and $auth.properties.PSObject.Properties['platform'] -and $auth.properties.platform) {
+            $on = "$($auth.properties.platform.enabled)" -match '^(?i)true$'
+        }
+        if (-not $on) { return [pscustomobject]@{ Switched = $false; Why = 'Microsoft''s built-in sign-in is not on for the web app' } }
+        [pscustomobject]@{ Switched = $true; Why = '' }
+    } catch { [pscustomobject]@{ Switched = $null; Why = ('the web app could not be read ({0})' -f ([string]$_.Exception.Message -replace '\s+', ' ')) } }
+}
+
+function Invoke-SIUpdaterSigninSchemaDrop {
+    <#
+        Framework SECURE-WEB-1 "no leftovers" (Invardia never touches an install's SQL): the earlier sign-in front's database
+        store (the schema signin and its tables) removed -- ONLY where the web app reads back SWITCHED to Microsoft's built-in
+        sign-in (Test-SIUpdaterWebSwitched; an install not yet switched still uses it and is never touched). The drop is done
+        by the database setup job caj-si-dbinit (the identity that holds the SQL rights), started with SI_DBINIT_SIGNIN_DROP=1
+        and read back from its own row (DbJobSigninDrop, this run's id). Called from the updater's built-in sign-in step right
+        after the switch reads back. When THIS update's database setup run already did it (the web app was switched before
+        the update), its result is said and no second run is started. One plain line: "the earlier sign-in's database tables
+        are removed" / "... none left". NEVER a failure of the update: a refusal is a warning and a support step.
+        -Arm / -Sleep are test seams. Returns @{ State (not-switched | removed | none | kept | refused | not-run | unknown);
+        Line; Support ('' or the support step) }. Never throws.
+    #>
+    param([Parameter(Mandatory)][string]$SIRoot, $Store, [Parameter(Mandatory)][scriptblock]$Arm, [Parameter(Mandatory)][string]$SubscriptionId,
+          [Parameter(Mandatory)][string]$ResourceGroup, [Parameter(Mandatory)][string]$WebAppId, $Switched = $null,
+          [scriptblock]$Sleep = { param($s) Start-Sleep -Seconds $s }, [int]$TimeoutSeconds = 1500)
+    $res = { param($st, $line, $sup) [pscustomobject]@{ State = $st; Line = [string]$line; Support = [string]$sup } }
+    try {
+        $sw = if ($null -ne $Switched) { $Switched } else { Test-SIUpdaterWebSwitched -Arm $Arm -WebAppId $WebAppId }
+        if ($sw.Switched -ne $true) {
+            return (& $res 'not-switched' ('the earlier sign-in''s database tables are kept: the web app does not read back on Microsoft''s built-in sign-in{0}' -f $(if ($sw.Why) { ' (' + $sw.Why + ')' } else { '' })) '')
+        }
+        if (-not $Store -or -not $Store.Invoke) { return (& $res 'unknown' 'the earlier sign-in''s database tables: not checked -- no Pro database on this install' '') }
+        $file = [IO.Path]::Combine($SIRoot, 'setup', '_shared', 'SI-DbInitJob.ps1')
+        if (-not (Test-Path -LiteralPath $file)) { return (& $res 'unknown' 'the earlier sign-in''s database tables: not checked -- this release carries no database setup job' '') }
+        . $file
+        $n = Get-SIDbInitNames
+        if (-not $n.Contains('SigninDropRecord')) { return (& $res 'unknown' 'the earlier sign-in''s database tables: not checked -- this release''s database setup job does not remove them' '') }
+        $judge = {
+            param($st, $why)
+            $line = Get-SIDbInitSigninDropLine -State $st -Why $why
+            $sup = if ($st -in 'kept', 'refused') { 'the support partner removes the earlier sign-in''s database tables (the schema signin) through the Support app' } else { '' }
+            & $res $st $line $sup
+        }
+        # this update's database setup run (before the roll) already did it: no second run
+        $pre = $global:SI_UpdaterSigninDrop
+        if ($pre -and [string]$pre.State -in 'removed', 'none') { return (& $judge ([string]$pre.State) '') }
+        $jobId = '/subscriptions/{0}/resourceGroups/{1}/providers/Microsoft.App/jobs/{2}' -f $SubscriptionId, $ResourceGroup, $n.Job
+        $job = & $Arm 'GET' ('{0}?api-version={1}' -f $jobId, $n.AppApi) $null
+        if (-not $job) { return (& $res 'not-run' 'the earlier sign-in''s database tables: the database setup job is not there yet -- the next update makes it and removes them' '') }
+        $r = Start-SIDbInitRun -Arm $Arm -JobId $jobId -Job $job -By 'updater' -TimeoutSeconds $TimeoutSeconds -Sleep $Sleep -Extra @{ SI_DBINIT_SIGNIN_DROP = '1' }
+        $row = $null
+        try { $x = @(& $Store.Invoke (Get-SIDbInitRecordReadSql -Name $n.SigninDropRecord) @{} 'reader' | ForEach-Object { $_ } | Where-Object { $null -ne $_ }) | Select-Object -First 1; $row = ConvertFrom-SIDbInitRecordValue -Value ([string](Get-SIDbInitProp $x @('Value'))) } catch { $row = $null }
+        if (-not ($row -and $row.PSObject.Properties['run'] -and [string]$row.run -eq $r.Run)) {
+            if (-not $r.Ok) { return (& $judge 'refused' ('the database setup job did not complete (execution {0}: {1})' -f $(if ($r.Execution) { $r.Execution } else { 'not started' }), $r.Status)) }
+            return (& $res 'not-run' 'the earlier sign-in''s database tables: this release''s database setup job did not report them -- the next update removes them' '')
+        }
+        & $judge ([string]$row.state) $(if ($row.PSObject.Properties['why']) { [string]$row.why } else { '' })
+    } catch {
+        $m = [string]$_.Exception.Message -replace '\s+', ' '
+        $line = if (Get-Command -Name Get-SIDbInitSigninDropLine -ErrorAction SilentlyContinue) { Get-SIDbInitSigninDropLine -State 'refused' -Why $m } else { 'the earlier sign-in''s database tables could not be removed ({0}) -- the update goes on' -f $m }
+        & $res 'refused' $line 'the support partner removes the earlier sign-in''s database tables (the schema signin) through the Support app'
+    }
 }
 
 function Save-SIUpdaterDbJobMembership {
@@ -483,11 +581,11 @@ function Invoke-SIUpdaterDbJob {
              identity made when it is not there, the job PUT with the engine jobs' image, environment and pull identity and
              today's list of product identities (existing installs reach the new-install state through the update);
           1b. G5: the updater's own Microsoft Graph permissions CHECKED (its token's roles) -- a missing one is a warning naming
-             who grants it; never a hold;
-          1c. G2-G4: the job identity's membership of the SQL admin group CONVERGED (direct, else an active PIM-for-Groups
-             assignment, read back) and RENEWED when it ends within 30 days. A renewal that fails while the assignment is
-             still valid is a WARNING (and the membership's own row, which the heartbeat's db-job step says); the membership
-             is written as its own row cfg.InstallState 'DbJobMembership';
+             who grants it; never a hold. G5a (#1253): the retired PIM-for-Groups permissions it still holds are taken off
+             with read-back, else a support step;
+          1c. G5a: the job identity's membership of the SQL admin group READ ONLY (memberOf) -- never added, never renewed;
+             missing = a support step (the support partner adds it again through the Support app). The membership is written
+             as its own row cfg.InstallState 'DbJobMembership';
           2. is the membership proven? A row the JOB wrote (state ok / failed), or the membership read in 1c. Neither: a
              'waiting' row is written, the heartbeat's setup step db-job asks for the one membership, and the update goes on
              on today's path (point 10). A membership that a run of the job PROVED, now GONE and not restorable, HOLDS the
@@ -511,8 +609,7 @@ function Invoke-SIUpdaterDbJob {
         $file = [IO.Path]::Combine($SIRoot, 'setup', '_shared', 'SI-DbInitJob.ps1')
         if (-not (Test-Path -LiteralPath $file)) { return (& $res $true 'skipped' 'this release carries no database setup job') }
         . $file
-        # framework §4.5 G2: the one add-and-wait policy the membership's direct add uses (Add-SIDbInitMember)
-        $gm = [IO.Path]::Combine($SIRoot, 'setup', '_shared', 'SI-GroupMemberAdd.ps1'); if (Test-Path -LiteralPath $gm) { . $gm }
+        # G5a (#1253): the updater never adds a group member -- the add-and-wait policy (SI-GroupMemberAdd.ps1) is not loaded here
         # the release's two install switches (SI_Setup_SignedGrantProcedure, SI_Setup_EngineLeastPrivilege) -- pure files
         foreach ($f in 'SI-GrantProcedure.ps1', 'SI-EngineGrants.ps1') { $p = [IO.Path]::Combine($SIRoot, 'engine', 'pro-settings', $f); if (Test-Path -LiteralPath $p) { . $p } }
         $n = Get-SIDbInitNames
@@ -548,35 +645,29 @@ function Invoke-SIUpdaterDbJob {
                     -IdentityId $mi.Id -IdentityClientId $mi.ClientId -Server $server -Database $db -LedgerDatabase $n.LedgerDatabase -Principals $principals -SignedGrants $signed -EngineRoleOnly $roleOnly
         $job = Set-SIDbInitJob -Arm $Arm -SubscriptionId $SubscriptionId -ResourceGroup $ResourceGroup -Body $body -Sleep $Sleep
         if (-not $job.Ok) { $why = 'WARNING: the database setup job: {0} -- checked again at the next update' -f $job.Problem; Write-UpdLog $why; return (& $res $true 'not-ready' $why) }
-        # ---- 1b. G5: the updater's own Graph permissions, checked (never granted here; never a hold) ----
-        $null = Test-SIUpdaterGraphRights -GraphRoles $GraphRoles
-        # ---- 1c. G2-G4: the job identity's membership of the SQL admin group, converged and renewed ----
+        # ---- 1b. G5: the updater's own Graph permissions, checked (never granted here; never a hold); G5a: the retired
+        #      PIM-for-Groups permissions taken off with read-back, else a support step ----
         $nowUtc = & $Now
         if (-not $Graph) { $Graph = { param([string]$Method, [string]$Uri, $Body) Invoke-SIRestJson -Rest (Get-SIUpdaterRest) -Method $Method -Uri $Uri -Body $Body -Resource 'https://graph.microsoft.com/' } }
+        $null = Test-SIUpdaterGraphRights -GraphRoles $GraphRoles -Graph $Graph -Sleep $Sleep
+        # ---- 1c. G5a: the job identity's membership of the SQL admin group, READ ONLY (never added, never renewed) ----
         $mem = Invoke-SIUpdaterDbJobMembership -Arm $Arm -Graph $Graph -SubscriptionId $SubscriptionId -ResourceGroup $ResourceGroup -Server $server -PrincipalId $mi.PrincipalId -Sleep $Sleep -NowUtc $nowUtc
-        $ren = $mem.Renewal
         if ($mem.Member -eq $true) {
             Write-UpdLog ('the database setup job {0}: {1}' -f $n.Job, $mem.Detail)
-            if ($ren -and [string]$ren.State -eq 'failed') {
-                Write-UpdLog ('WARNING: the database setup job {0}: its membership of the SQL admin group could not be renewed ({1}) -- it is still valid, so the update goes on; tried again at the next update' -f $n.Job, $ren.Detail)
-                Save-SIUpdaterDbJobMembership -Store $Store -State 'renewal-failed' -End $ren.End -Via $mem.State -Why $ren.Detail -NowUtc $nowUtc
-            } else {
-                if ($ren -and [string]$ren.State -in 'renewed', 'current') { Write-UpdLog ('the database setup job {0}: {1}' -f $n.Job, $ren.Detail) }
-                Save-SIUpdaterDbJobMembership -Store $Store -State 'ok' -End $(if ($ren) { $ren.End } else { $null }) -Via $mem.State -NowUtc $nowUtc
-            }
+            Save-SIUpdaterDbJobMembership -Store $Store -State 'ok' -Via $mem.State -NowUtc $nowUtc
         } elseif ($mem.State -eq 'unknown') {
             Write-UpdLog ('the database setup job {0}: its membership of the SQL admin group was not checked ({1}) -- the job''s own last result decides' -f $n.Job, $mem.Detail)
         } else {
-            Write-UpdLog ('the database setup job {0}: its identity {1} is not a member of the SQL admin group and could not be made one ({2})' -f $n.Job, $n.Identity, $mem.Detail)
+            Write-UpdLog ('WARNING: the database setup job {0}: {1}' -f $n.Job, (Get-SIDbInitMembershipSupportStep))
         }
         # ---- 2. is the membership proven (a row the JOB wrote, or read above)? ----
         $row = @(& $Store.Invoke (Get-SIDbInitRecordReadSql) @{} 'reader' | ForEach-Object { $_ } | Where-Object { $null -ne $_ }) | Select-Object -First 1
         $rec = ConvertFrom-SIDbInitRecordValue -Value ([string](Get-SIDbInitProp $row @('Value')))
         $proven = [bool]($rec -and [string]$rec.state -in 'ok', 'failed')
         if ($proven -and $mem.Member -eq $false) {
-            # a membership a run of the job PROVED is gone, and it could not be made again: the job cannot sign in -- held
+            # a membership a run of the job PROVED is gone (G5a: the updater never adds it): the job cannot sign in -- held
             Save-SIUpdaterDbJobMembership -Store $Store -State 'gone' -Why $mem.Detail -NowUtc $nowUtc
-            $why = 'the database setup job {0}: its identity {1} is no longer a member of the SQL admin group and could not be made one again ({2}) -- the update is held, the installed version keeps running; Invardia is told, and the next update run tries to make it again and runs the job by itself' -f $n.Job, $n.Identity, $mem.Detail
+            $why = 'the database setup job {0}: its identity {1} is no longer a member of the SQL admin group ({2}) -- the update is held, the installed version keeps running; Invardia is told, the support partner adds it again through the Support app, and the next update run then starts the job by itself' -f $n.Job, $n.Identity, $mem.Detail
             Write-UpdLog ('WARNING: ' + $why)
             return (& $res $false 'failed' $why)
         }
@@ -585,17 +676,28 @@ function Invoke-SIUpdaterDbJob {
             if (-not $rec) {
                 try { & $Store.Invoke (Get-SIDbInitRecordSql) @{ Value = (New-SIDbInitRecordValue -State 'waiting' -By 'updater' -Why 'not run yet: the identity of the job must be added once to the SQL admin group'); Version = $null; By = 'caj-si-updater' } 'nonquery' } catch { }
             }
-            $why = 'the database setup job {0} is ready, but has not run yet: its identity {1} must be added once to the SQL admin group (Invardia support, or the customer); until then this update keeps today''s path' -f $n.Job, $n.Identity
+            $why = 'the database setup job {0} is ready, but has not run yet: its identity {1} must be added once to the SQL admin group (the guided install, or the support partner through the Support app); until then this update keeps today''s path' -f $n.Job, $n.Identity
             Write-UpdLog $why
             return (& $res $true 'waiting' $why)
         }
         # ---- 3. the run (a failure holds the update; a run after a NEW membership is given time to reach the token) ----
-        Write-UpdLog ('the database setup job {0}: started ({1})' -f $n.Job, $(if ($mem.JustAdded) { 'its identity became a member of the SQL admin group in this run' } elseif ($mem.Member -eq $true) { 'its identity is a member of the SQL admin group, read back' } else { 'its identity is a member of the SQL admin group since its run of ' + [string]$rec.at }))
+        # G5a: the updater never makes the membership -- a NEW one (made by the guided install or the support partner, not yet
+        # proven by a run of the job) is given time to reach the identity's token, as before
+        $fresh = [bool]($mem.JustAdded -or (-not $proven -and $mem.Member -eq $true))
+        Write-UpdLog ('the database setup job {0}: started ({1})' -f $n.Job, $(if ($fresh) { 'its identity is a member of the SQL admin group, read back; no run of the job has proven it yet' } elseif ($mem.Member -eq $true) { 'its identity is a member of the SQL admin group, read back' } else { 'its identity is a member of the SQL admin group since its run of ' + [string]$rec.at }))
         # #1151 (1) SEC-01: the recorded Support app named to the run, so the job takes its STANDING db_owner off where the
         # just-in-time path reads back (setup\_shared\SI-SupportStandingUpdate.ps1); never after a deliberate rollback
         $so = Get-SIUpdaterSupportStandingInput -SIRoot $SIRoot -Store $Store
         $extra = @{}; if ($so.ClientId) { $extra['SI_DBINIT_SUPPORT_STANDING_OFF'] = $so.ClientId }
         if ($so.Why) { Write-UpdLog $so.Why }
+        # SECURE-WEB-1 "no leftovers": a web app that reads back SWITCHED to Microsoft's built-in sign-in no longer uses the
+        # earlier sign-in front's database store -- the job no longer makes it and drops it (read back from its own row)
+        $global:SI_UpdaterSigninDrop = $null
+        $webSw = $null
+        if ($n.Contains('SigninDropRecord')) {
+            $webSw = Test-SIUpdaterWebSwitched -Arm $Arm -WebAppId ('/subscriptions/{0}/resourceGroups/{1}/providers/Microsoft.App/containerApps/{2}' -f $SubscriptionId, $ResourceGroup, (& $nm 'web' 'ca-si-management'))
+            if ($webSw.Switched -eq $true) { $extra['SI_DBINIT_SIGNIN_DROP'] = '1' }
+        }
         $settle = @($SettleWaits | Where-Object { $_ -gt 0 })
         $try = 0
         while ($true) {
@@ -613,17 +715,25 @@ function Invoke-SIUpdaterDbJob {
             $mine = [bool]($after -and $after.PSObject.Properties['run'] -and [string]$after.run -eq $r.Run)
             if ($r.Ok -and $mine -and [string]$after.state -eq 'ok') {
                 Write-UpdLog ('the database setup job {0}: every identity read back ({1}; execution {2})' -f $n.Job, [string]$after.n, $r.Execution)
+                if ($extra.Contains('SI_DBINIT_SIGNIN_DROP')) {
+                    $sdRow = & $readRow $n.SigninDropRecord
+                    if ($sdRow -and $sdRow.PSObject.Properties['run'] -and [string]$sdRow.run -eq $r.Run) {
+                        $global:SI_UpdaterSigninDrop = [pscustomobject]@{ Run = $r.Run; State = [string]$sdRow.state }
+                        $sdLine = Get-SIDbInitSigninDropLine -State ([string]$sdRow.state) -Why $(if ($sdRow.PSObject.Properties['why']) { [string]$sdRow.why } else { '' })
+                        Write-UpdLog $(if ([string]$sdRow.state -in 'removed', 'none') { $sdLine } else { 'WARNING: ' + $sdLine })
+                    }
+                }
                 if ($so.ClientId) { $null = Invoke-SIUpdaterSupportStanding -Store $Store -Graph $Graph -Arm $Arm -SubscriptionId $SubscriptionId -ResourceGroup $ResourceGroup -Server $server -ClientId $so.ClientId -Run $r.Run -NowUtc (& $Now) -SIRoot $SIRoot }
                 return (& $res $true 'ok' ('every identity read back (execution {0})' -f $r.Execution))
             }
-            if (-not ($mem.JustAdded -and (Test-SIUpdaterDbJobSignInFailure -Mine $mine -Record $after))) { break }
+            if (-not ($fresh -and (Test-SIUpdaterDbJobSignInFailure -Mine $mine -Record $after))) { break }
             if ($try -ge $settle.Count) {
-                $why = 'the database setup job {0}: its identity became a member of the SQL admin group in this run, but after {1} runs the membership has still not reached its sign-in (last execution {2}) -- this update keeps today''s path; the next update runs it again' -f $n.Job, ($try + 1), $(if ($r.Execution) { $r.Execution } else { 'not started' })
+                $why = 'the database setup job {0}: its membership of the SQL admin group is new, but after {1} runs the membership has still not reached its sign-in (last execution {2}) -- this update keeps today''s path; the next update runs it again' -f $n.Job, ($try + 1), $(if ($r.Execution) { $r.Execution } else { 'not started' })
                 Write-UpdLog ('WARNING: ' + $why)
                 return (& $res $true 'waiting' $why)
             }
             $w = [int]$settle[$try]; $try++
-            Write-UpdLog ('the database setup job {0}: run {1} could not sign in yet -- its identity became a member of the SQL admin group only in this run and the membership has not reached its token; started again in {2} s (try {3} of {4})' -f $n.Job, $(if ($r.Execution) { $r.Execution } else { '(not started)' }), $w, ($try + 1), ($settle.Count + 1))
+            Write-UpdLog ('the database setup job {0}: run {1} could not sign in yet -- its membership of the SQL admin group is new (no run of the job has proven it) and has not reached its token; started again in {2} s (try {3} of {4})' -f $n.Job, $(if ($r.Execution) { $r.Execution } else { '(not started)' }), $w, ($try + 1), ($settle.Count + 1))
             & $Sleep $w
         }
         $why = 'the database setup job {0} did not complete (execution {1}: {2}{3}) -- the update is held, the installed version keeps running; Invardia is told, and the next update run starts the job again by itself; {4}' -f $n.Job, $(if ($r.Execution) { $r.Execution } else { 'not started' }), $r.Status,

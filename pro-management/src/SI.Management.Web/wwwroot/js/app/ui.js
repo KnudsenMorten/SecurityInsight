@@ -15,6 +15,27 @@ export function toast(text, kind) {
   window.setTimeout(function () { t.remove(); }, 6000);
 }
 
+// A refused request (HTTP 403) says WHO refused it. SecurityInsight's own refusal carries its reason -- JSON
+// { ok: false, message } or its "Not allowed" page ([data-access-refused]); a 403 without it came from the sign-in layer in
+// front of the app (its session ended or it refused the request), never from SecurityInsight's access rules.
+export var SIGNIN_LAYER_REFUSED = "the sign-in layer refused the request -- reload the page and sign in again";
+
+export function refusalOf(response) {
+  var layer = { si: false, message: SIGNIN_LAYER_REFUSED };
+  return response.text().then(function (body) {
+    try {
+      var o = JSON.parse(body);
+      if (o && typeof o === "object" && typeof o.message === "string" && o.message.trim()) { return { si: true, message: o.message.trim() }; }
+    } catch (e) { /* not JSON */ }
+    if (body && body.indexOf("data-access-refused") >= 0) {
+      var el = new DOMParser().parseFromString(body, "text/html").querySelector("[data-access-refused]");
+      var text = el ? (el.textContent || "").trim() : "";
+      if (text) { return { si: true, message: text }; }
+    }
+    return layer;
+  }).catch(function () { return layer; });
+}
+
 export function initToasts() {
   document.querySelectorAll("[data-toasts] .toast").forEach(function (t) {
     window.setTimeout(function () { t.remove(); }, 8000);

@@ -1,0 +1,18 @@
+{
+  "version": "3.1.23.1",
+  "date": "2026-11-15",
+  "type": "security",
+  "summary": "New MCP clients find Microsoft's sign-in by themselves, and stop and update never stops a run it could not read.",
+  "new": [
+    {
+      "title": "New MCP clients find Microsoft's sign-in themselves",
+      "text": "The MCP server tells an MCP client where to sign in with Microsoft and what to ask for, so a new client connects without extra setup. You sign in as yourself and see only what your SecurityInsight role allows."
+    }
+  ],
+  "fixes": [
+    {
+      "title": "A run is never stopped blind",
+      "text": "When the run's record cannot be read, nothing is stopped or started, and it says how to go on."
+    }
+  ]
+}

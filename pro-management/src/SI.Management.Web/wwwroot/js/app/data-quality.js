@@ -2,7 +2,7 @@
 // viewport stays where it is; the answer (queued, already waiting, or why not) is a toast. The form asks first through
 // the shared confirm dialog (ui.js); once confirmed, the same form fields (the step and the antiforgery token) are
 // posted here. Without this file the form posts normally and the page comes back with the same words.
-import { toast } from "./ui.js";
+import { toast, refusalOf } from "./ui.js";
 
 export function initDataQuality(root) {
   (root || document).querySelectorAll("form[data-dq-rerun]").forEach(function (form) {
@@ -16,7 +16,8 @@ export function initDataQuality(root) {
       if (button) { button.disabled = true; }
       fetch(form.getAttribute("action"), { method: "POST", body: new FormData(form), headers: { "Accept": "application/json" }, credentials: "same-origin" })
         .then(function (r) {
-          if (r.status === 403) { throw new Error("re-running the pipeline needs the Admin role"); }
+          // a 403 says who refused: SecurityInsight's own reason, else the sign-in layer in front of the app
+          if (r.status === 403) { return refusalOf(r).then(function (x) { throw new Error(x.message); }); }
           if (!r.ok) { throw new Error("the server answered " + r.status); }
           return r.json();
         })

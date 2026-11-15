@@ -11,8 +11,8 @@ namespace SI.Management.Web.Audit;
 ///   session  the ID token kept with the sign-in session, when the sign-in keeps it;
 ///   platform-id / platform-access  with Microsoft's built-in authentication (SI_Web_BuiltInAuth on, and ONLY then): the
 ///            ID token its token store hands over (X-MS-TOKEN-AAD-ID-TOKEN), else its access token
-///            (X-MS-TOKEN-AAD-ACCESS-TOKEN) -- recorded as received, never read for the identity (that is
-///            X-MS-CLIENT-PRINCIPAL's, Auth/BuiltInAuth.cs);
+///            (X-MS-TOKEN-AAD-ACCESS-TOKEN) -- recorded as received (the identity is the same token, verified by
+///            Auth/BuiltInTokenVerifier.cs);
 ///   none     neither -- recorded too, so the runner can say how many changes it would refuse today.
 /// A failed write never changes the response (logged).
 public interface ISignedRequestWriter

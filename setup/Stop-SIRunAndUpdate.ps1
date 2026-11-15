@@ -20,7 +20,10 @@
       4. WAIT    for it to end, then READ BACK the installed version: "updated a -> b", or the updater's own outcome.
       5. ONE summary line.
     It never starts a pipeline run or a step and never touches a run that is not running; when none is running, steps 1-2
-    are skipped and it says so. -SkipUpdate stops after step 2. The cancel and the update start are written to the
+    are skipped and it says so. It never stops a run it could not read: when the run record cannot be read (in an Invardia
+    Support session also not through the support grant, opened just for that read), nothing is cancelled and nothing is
+    started, and it says so -- start the updater plainly (it waits for a running run by itself) or run this again once the
+    record can be read. -SkipUpdate stops after step 2. The cancel and the update start are written to the
     install's audit trail when its database can be reached from where this runs (a private install's database is never
     opened for it; the cancel execution writes its own audit row from inside the install). In an Invardia Support session
     at an install where support holds no standing database admin, each of those two rows opens the support grant first

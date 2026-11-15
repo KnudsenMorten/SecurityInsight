@@ -933,14 +933,14 @@ function Invoke-SIInstallDbJob {
         # 2. the membership, read back from the identity's side
         $gid = Get-SIInstallDbJobAdminGroup -Ctx $Ctx
         if (-not $gid) { return (& $warn ('the SQL admin group of {0} was not found, so its identity {1} could not be made a member' -f $n.SqlServer, $nn.Identity) 'Make the admin group the database server''s administrator (setup\Set-SISqlAdminGroup.ps1), then run the install command again.') }
-        # framework §4.5 SQL-ADMIN-GROUP G2-G4: converged (direct, else an active PIM-for-Groups assignment) and renewed when it
-        # ends within 30 days -- the same path the updater runs on every update
+        # framework §4.5 SQL-ADMIN-GROUP G2 + G5a: a DIRECT, PERMANENT member, made with the installing person's sign-in and
+        # read back -- never a PIM-for-Groups assignment (nobody renews one; it would end and stop the job later). Refused =
+        # a warning and a Support-app step. The updater only READS it on every update.
         $m = Sync-SIDbInitMembership -Graph $graph -PrincipalId $mi.PrincipalId -GroupId $gid -Sleep $sleep -Print { param($t) Write-SIInstallConsole -Ctx $__siDbCtx -Text $t -Color 'DarkGray' }
         if ($m.State -notin 'already', 'added') {
             return (& $warn ('its identity {0} is not a member of the SQL admin group ({1}), so the job was not started -- the product starts it once the membership is there' -f $nn.Identity, $m.Detail) `
-                ('An Entra administrator (Privileged Role Administrator for a role-assignable group) adds the managed identity {0} to the SQL admin group; then run the install command again.' -f $nn.Identity))
+                ('Support-app step: the support partner adds the managed identity {0} to the SQL admin group as a direct member through the Support app; the next update then runs the job.' -f $nn.Identity))
         }
-        if ($m.Renewal -and [string]$m.Renewal.State -in 'renewed', 'failed') { Write-SIInstallConsole -Ctx $__siDbCtx -Text ('   {0}' -f $m.Renewal.Detail) -Color $(if ($m.Renewal.State -eq 'failed') { 'Yellow' } else { 'DarkGray' }) }
         # 3. the job, one run, its result
         $principals = New-Object System.Collections.Generic.List[object]
         $addP = { param($c, $name, $cid) if ($name -and "$cid" -match '^[0-9a-fA-F-]{36}$' -and -not @($principals | Where-Object { $_.clientId -ieq $cid -or $_.component -eq $c }).Count) { $principals.Add([ordered]@{ component = $c; name = [string]$name; clientId = [string]$cid }) } }
@@ -954,7 +954,7 @@ function Invoke-SIInstallDbJob {
                 if ($k.C -eq 'updater') { $updPid = [string](Get-SIInstallProp $r.Value 'PrincipalId') }
             }
         }
-        # framework §4.5 G5: the updater identity's Microsoft Graph permissions -- the three PIM-for-Groups rights + GroupMember.Read.All + Application.Read.All (read only), granted
+        # framework §4.5 G5: the updater identity's Microsoft Graph permissions -- read only (G5a: no PIM-for-Groups assignment right; the earlier ones taken off), granted
         # here with the person's sign-in (the updater cannot grant itself) and read back
         $g5 = $null
         if ($updPid) {
@@ -982,7 +982,7 @@ function Invoke-SIInstallDbJob {
                 'Fix the cause the job''s lines name, then run the install command again; the next update also runs it.')
         }
         if ($g5 -and -not $g5.Ok) {
-            return (& $warn ('it ran (execution {0}), but {1} -- without them the updater cannot keep the job identity''s membership of the SQL admin group current' -f $run.Execution, $g5.Detail) `
+            return (& $warn ('it ran (execution {0}), but {1} -- without them the updater cannot read the job identity''s membership of the SQL admin group' -f $run.Execution, $g5.Detail) `
                 'An Entra administrator grants the updater identity those Microsoft Graph application permissions (or run the install command again with that right).')
         }
         New-SIInstallResult -Message ('The database setup job {0} ran as its own identity {1} (a member of the SQL admin group, read back): every database user of the install was made and read back (execution {2}). Updates run it again; nobody needs database admin rights for it.' -f $nn.Job, $nn.Identity, $run.Execution)

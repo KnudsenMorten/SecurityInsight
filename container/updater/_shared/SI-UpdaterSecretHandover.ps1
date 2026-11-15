@@ -443,7 +443,12 @@ function Invoke-SIUpdaterWebKeyRing {
     $app = $null; try { $app = Get-SIUpdaterContainerApp -App $WebApp -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId } catch { $app = $null }
     if (-not $app) { return [pscustomobject]@{ Ok = $false; KeyId = ''; Lines = @(); Report = @() } }   # no web app here: nothing to protect
     $first = @($app.properties.template.containers | Where-Object { $_ })[0]
-    $cur = ''; foreach ($e in @($first.env | Where-Object { $_ })) { if ([string]$e.name -eq 'DataProtection__KeyVaultKeyId') { $cur = [string]$e.value } }
+    $cur = ''; $blobRing = ''
+    foreach ($e in @($first.env | Where-Object { $_ })) {
+        if ([string]$e.name -eq 'DataProtection__KeyVaultKeyId') { $cur = [string]$e.value }
+        # SECURE-WEB-1: the web app keeps its keys in its own blob (after the built-in sign-in): no Key Vault grant is checked
+        if ([string]$e.name -eq 'DataProtection__BlobUri') { $blobRing = [string]$e.value }
+    }
     $setEnv = {
         param($name, $value)
         $a = Get-SIUpdaterContainerApp -App $WebApp -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId
@@ -465,7 +470,7 @@ function Invoke-SIUpdaterWebKeyRing {
         -GrantCommand ('the web app setup with its usual values and -SigninStoreKeyVaultName {0} -Apply (pro-management\deploy\Deploy-SIManagement.ps1, as an Owner of the web app''s resource group)' -f $VaultName) `
         -VaultId (Get-SIUpdaterVaultId -VaultName $VaultName -SubscriptionId $SubscriptionId -ResourceGroup $ResourceGroup) `
         -PrincipalIds @(Get-SIUpdaterWebPrincipalIds -WebApp $WebApp -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId) `
-        -SubscriptionId $SubscriptionId -CurrentEnv $cur
+        -SubscriptionId $SubscriptionId -CurrentEnv $cur -BlobRingEnv $blobRing
 }
 
 function Get-SIHandoverSetupCommand {

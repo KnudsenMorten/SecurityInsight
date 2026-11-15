@@ -19,7 +19,7 @@
 // Everything is progressive: without this file the Columns panel still chooses, orders and saves the columns, the Layout
 // box still switches layouts and "Clear" still clears. No inline style attribute is written (the content security policy):
 // widths are set through the style object.
-import { toast } from "./ui.js";
+import { toast, refusalOf } from "./ui.js";
 
 var CHANGE_KEY = "si-view-change";
 var MIN_WIDTH = 40, MAX_WIDTH = 2000, KEY_STEP = 16, LIVE_ROWS = 200;
@@ -45,7 +45,9 @@ function post(tools, handler, fields) {
     body: body.toString()
   }).then(function (r) {
     if (r.ok) { return r.json(); }
-    return { ok: false, message: r.status === 403 ? "Not saved: your account may not change this." : "Not saved: the server did not accept it. Reload the page and try again." };
+    // a 403 says who refused: SecurityInsight's own reason, else the sign-in layer in front of the app
+    if (r.status === 403) { return refusalOf(r).then(function (x) { return { ok: false, message: x.si ? x.message : "Not saved: " + x.message + "." }; }); }
+    return { ok: false, message: "Not saved: the server did not accept it. Reload the page and try again." };
   }).catch(function () { return { ok: false, message: "Not saved: the server could not be reached." }; });
 }
 

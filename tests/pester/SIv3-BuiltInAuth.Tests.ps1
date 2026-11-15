@@ -647,3 +647,179 @@ Describe 'the updater calls it -- OFF by default' {
         Read-SIBuiltInAuthMagicLinks -Invoke { param($s, $p, $m) throw 'down' } | Should -BeFalse
     }
 }
+
+Describe 'after the switch: the sign-in keys leave Key Vault, then the web identity''s Key Vault rights go' {
+    BeforeAll {
+        $script:VaultId = $script:Rg + '/providers/Microsoft.KeyVault/vaults/kv-si'
+        $script:BlobUri = 'https://stsitest.blob.core.windows.net/si-auth-tokens/dataprotection/keys.xml'
+        $script:Crypto = '/subscriptions/x/providers/Microsoft.Authorization/roleDefinitions/e147488a-f6f5-4113-8e2d-b22465e65bf6'
+        function script:New-RoleAssign([string]$Name, [string]$Principal, [string]$Scope, [string]$Role = $script:Crypto) {
+            [pscustomobject]@{ id = "$Scope/providers/Microsoft.Authorization/roleAssignments/$Name"; properties = [pscustomobject]@{ principalId = $Principal; roleDefinitionId = $Role; scope = $Scope } }
+        }
+        function script:New-MoveFake {
+            param([switch]$NotHealthy, [switch]$DeleteRefused, [switch]$ListRefused, [switch]$WithBlob)
+            $app = New-FakeApp -Switched
+            $app.properties | Add-Member -NotePropertyName latestRevisionName -NotePropertyValue 'ca-si-management--r1' -Force
+            $app.properties | Add-Member -NotePropertyName latestReadyRevisionName -NotePropertyValue 'ca-si-management--r1' -Force
+            if ($WithBlob) { $app.properties.template.containers[0].env = @(@($app.properties.template.containers[0].env) + [pscustomobject]@{ name = 'DataProtection__BlobUri'; value = $script:BlobUri }) }
+            $roles = New-Object System.Collections.Generic.List[object]
+            $roles.Add((New-RoleAssign 'w1' $script:MiPrin "$($script:VaultId)/keys/signin-front-dp"))
+            $roles.Add((New-RoleAssign 'w2' $script:MiPrin "$($script:VaultId)/keys/SI-Web-KeyRing"))
+            $roles.Add((New-RoleAssign 'o1' 'ffffffff-1111-2222-3333-444444444444' "$($script:VaultId)/keys/SI-Web-KeyRing"))   # another identity
+            $roles.Add((New-RoleAssign 'v1' $script:MiPrin $script:VaultId))                                                     # above the key
+            $roles.Add((New-RoleAssign 'b1' $script:MiPrin $script:CScope '/subscriptions/x/providers/Microsoft.Authorization/roleDefinitions/ba92f5b4-2d11-453d-a403-e96b0029c9fe'))
+            [pscustomobject]@{
+                App = $app; Roles = $roles; NotHealthy = [bool]$NotHealthy; DeleteRefused = [bool]$DeleteRefused; ListRefused = [bool]$ListRefused
+                SecretValues = @{ 'sql-pw' = @{ name = 'sql-pw'; value = 'p@ss' }; 'kv-ref' = @{ name = 'kv-ref'; keyVaultUrl = 'https://kv.vault.azure.net/secrets/a'; identity = $script:MiId }
+                                  'override-use-mi-fic-assertion-client-id' = @{ name = 'override-use-mi-fic-assertion-client-id'; value = $script:MiCid } }
+                Calls = (New-Object System.Collections.Generic.List[object]); Probes = (New-Object System.Collections.Generic.List[string])
+            }
+        }
+        function script:Get-MoveArm($f) {
+            {
+                param([string]$Method, [string]$Path, $Body)
+                $f.Calls.Add([pscustomobject]@{ Method = $Method; Path = $Path; Body = $(if ($null -ne $Body) { $Body | ConvertTo-Json -Depth 30 | ConvertFrom-Json } else { $null }) })
+                if ($Path -like '*/providers/Microsoft.Authorization/roleAssignments[?]*') {
+                    if ($f.ListRefused) { throw 'GET failed: HTTP 403: AuthorizationFailed' }
+                    return [pscustomobject]@{ value = [object[]]$f.Roles.ToArray() }
+                }
+                if ($Path -like '*/providers/Microsoft.Authorization/roleAssignments/*') {
+                    $rid = ($Path -split '\?')[0]
+                    if ($Method -eq 'GET') { return @($f.Roles | Where-Object { $_.id -eq $rid })[0] }
+                    if ($f.DeleteRefused) { throw 'DELETE failed: HTTP 403: AuthorizationFailed: the client may not perform the action (a condition applies)' }
+                    foreach ($x in @($f.Roles | Where-Object { $_.id -eq $rid })) { $null = $f.Roles.Remove($x) }
+                    return $null
+                }
+                if ($Path -like '*/revisions/*') {
+                    return [pscustomobject]@{ name = (($Path -split '\?')[0] -split '/')[-1]; properties = [pscustomobject]@{ healthState = $(if ($f.NotHealthy) { 'Unhealthy' } else { 'Healthy' }); runningState = 'Running'; template = $f.App.properties.template } }
+                }
+                if ($Path -like '*/listSecrets*') { return [pscustomobject]@{ value = @($f.SecretValues.Values | ForEach-Object { [pscustomobject]$_ }) } }
+                if ($Method -eq 'GET') { return ($f.App | ConvertTo-Json -Depth 30 | ConvertFrom-Json) }
+                if ($Method -eq 'PATCH') {
+                    $b = $Body | ConvertTo-Json -Depth 30 | ConvertFrom-Json
+                    $sec = @($b.properties.configuration.secrets)
+                    $f.SecretValues = @{}
+                    foreach ($s in $sec) { $f.SecretValues[[string]$s.name] = @{ name = [string]$s.name }; foreach ($p in $s.PSObject.Properties) { $f.SecretValues[[string]$s.name][$p.Name] = $p.Value } }
+                    if ($b.properties.PSObject.Properties['template']) { $f.App.properties.template = $b.properties.template }
+                    $f.App.properties.latestRevisionName = 'ca-si-management--r2'; $f.App.properties.latestReadyRevisionName = 'ca-si-management--r2'
+                    return $null
+                }
+                throw "unexpected ARM $Method $Path"
+            }.GetNewClosure()
+        }
+        function script:Invoke-Move($f) {
+            $probes = $f.Probes
+            Invoke-SIBuiltInAuthKeyRingMove -Arm (Get-MoveArm $f) -AppId $script:AppId -ContainerUri 'https://stsitest.blob.core.windows.net/si-auth-tokens' -PrincipalId $script:MiPrin `
+                -VaultId $script:VaultId -Probe ({ param($Url) $probes.Add($Url); [pscustomobject]@{ Status = 302; Location = '/.auth/login/aad?post_login_redirect_uri=/healthz' } }.GetNewClosure()) `
+                -Sleep { param($s) } -Tries 2 -RevisionTries 2
+        }
+    }
+
+    It 'writes DataProtection__BlobUri (every secret kept, read back), and only after the web app runs on it removes the two key roles, read back' {
+        $f = New-MoveFake
+        $r = Invoke-Move $f
+        $r.Ok | Should -BeTrue
+        $r.State | Should -Be 'removed'
+        Get-SIBuiltInAuthSetting -App $f.App -Name 'DataProtection__BlobUri' | Should -Be $script:BlobUri
+        foreach ($k in 'sql-pw', 'kv-ref', 'override-use-mi-fic-assertion-client-id') { $f.SecretValues.ContainsKey($k) | Should -BeTrue -Because "the secret $k is kept" }
+        $f.SecretValues['sql-pw'].value | Should -Be 'p@ss'
+        # the order: the setting, then the revision that runs it (and the address), then the removals
+        $calls = New-Object System.Collections.Generic.List[object]; foreach ($c in $f.Calls) { $calls.Add($c) }
+        $patch = -1; $rev = -1; $del = -1
+        for ($i = 0; $i -lt $calls.Count; $i++) {
+            if ($patch -lt 0 -and $calls[$i].Method -eq 'PATCH') { $patch = $i }
+            if ($calls[$i].Path -like '*/revisions/*') { $rev = $i }
+            if ($del -lt 0 -and $calls[$i].Method -eq 'DELETE') { $del = $i }
+        }
+        $patch | Should -BeGreaterOrEqual 0; $rev | Should -BeGreaterThan $patch; $del | Should -BeGreaterThan $rev
+        $f.Probes | Should -Contain "https://$($script:Fqdn)/healthz"
+        # ONLY id-si-web's role at the two keys: another identity's, one above the key and its data right stay
+        @($calls | Where-Object { $_.Method -eq 'DELETE' } | ForEach-Object { (($_.Path -split '\?')[0] -split '/')[-1] } | Sort-Object) | Should -Be @('w1', 'w2')
+        @($f.Roles | ForEach-Object { ($_.id -split '/')[-1] } | Sort-Object) | Should -Be @('b1', 'o1', 'v1')
+        @($r.Lines | Where-Object { $_ -match 'no longer holds "Key Vault Crypto Service Encryption User" on the key (signin-front-dp|SI-Web-KeyRing) \(removed; read back\)' }).Count | Should -Be 2
+        # the next run: nothing written, nothing removed
+        $f.Calls.Clear()
+        (Invoke-Move $f).State | Should -Be 'in-place'
+        @($f.Calls | Where-Object { $_.Method -in 'PATCH', 'DELETE', 'PUT' }).Count | Should -Be 0
+    }
+    It 'the web app does not run on the blob yet: the Key Vault rights STAY (waiting, not a failure)' {
+        $f = New-MoveFake -NotHealthy
+        $r = Invoke-Move $f
+        $r.Ok | Should -BeTrue; $r.State | Should -Be 'waiting'
+        @($f.Calls | Where-Object { $_.Method -eq 'DELETE' }).Count | Should -Be 0
+        $f.Roles.Count | Should -Be 5
+        @($r.Lines | Where-Object { $_ -match 'does not run on its own key store yet .* its Key Vault rights stay' }).Count | Should -Be 1
+    }
+    It 'a refused removal (the conditioned role right) is a SUPPORT STEP, never a failure of the update' {
+        $f = New-MoveFake -WithBlob -DeleteRefused
+        $r = Invoke-Move $f
+        $r.Ok | Should -BeTrue
+        $r.State | Should -Be 'needs-support'
+        @($r.Support).Count | Should -Be 2
+        @($r.Support | Where-Object { $_ -match '^the Support app removes id-si-web''s role "Key Vault Crypto Service Encryption User" on the key (signin-front-dp|SI-Web-KeyRing)' }).Count | Should -Be 2
+        @($r.Lines | Where-Object { $_ -match 'Support-app step: the Support app removes' }).Count | Should -Be 2
+        @($f.Calls | Where-Object { $_.Method -eq 'PATCH' }).Count | Should -Be 0 -Because 'the setting was already there'
+    }
+    It 'a role list it may not read is a support step too' {
+        $r = Invoke-Move (New-MoveFake -WithBlob -ListRefused)
+        $r.Ok | Should -BeTrue; $r.State | Should -Be 'needs-support'; @($r.Support).Count | Should -Be 2
+    }
+    It 'the converge hands the token container and the web identity on (apply)' {
+        $f = New-Fake
+        $r = Invoke-Converge $f 'apply'
+        $r.State | Should -Be 'applied'
+        $r.TokenContainerUri | Should -Be 'https://stsitest.blob.core.windows.net/si-auth-tokens'
+        $r.WebPrincipalId | Should -Be $script:MiPrin
+        Get-SIBuiltInAuthKeyRingBlobUri -ContainerUri $r.TokenContainerUri | Should -Be $script:BlobUri
+    }
+    It 'the updater moves the keys ONLY after a switch that read back (apply: applied / in-place) -- never when off, planned or failed' {
+        $script:moves = New-Object System.Collections.Generic.List[object]
+        $move = { param($a) $script:moves.Add($a); [pscustomobject]@{ Ok = $true; State = 'removed'; Lines = @('x'); Support = @() } }
+        $res = { param([string]$State, [bool]$Ok = $true) [pscustomobject]@{ Ok = $Ok; State = $State; Lines = @(); TokenContainerUri = 'https://stsitest.blob.core.windows.net/si-auth-tokens'; WebPrincipalId = $script:MiPrin; WebIdentityName = 'id-si-web' } }
+        $e = @{ SI_UPDATER_WEB_APP = 'ca-si-management' }
+        foreach ($case in @(@{ Mode = ''; State = 'in-place' }, @{ Mode = 'off'; State = 'in-place' }, @{ Mode = 'plan'; State = 'in-place' }, @{ Mode = 'redirect'; State = 'in-place' },
+                            @{ Mode = 'apply'; State = 'failed'; Ok = $false }, @{ Mode = 'apply'; State = 'rolled-back'; Ok = $false }, @{ Mode = 'apply'; State = 'needs-support'; Ok = $false })) {
+            $st = $case.State; $ok = if ($case.ContainsKey('Ok')) { $case.Ok } else { $true }
+            $conv = { param($a) & $res $st $ok }.GetNewClosure()
+            $null = Invoke-SIUpdaterBuiltInAuthStep -Env ($e + @{ SI_Updater_BuiltInAuth = $case.Mode }) -SubscriptionId 's' -ResourceGroup 'rg' -Converge $conv -Arm { } -Graph { } -KeyRingMove $move -VaultId $script:VaultId
+        }
+        $script:moves.Count | Should -Be 0
+        foreach ($st in 'applied', 'in-place') {
+            $conv = { param($a) & $res $st $true }.GetNewClosure()
+            $r = Invoke-SIUpdaterBuiltInAuthStep -Env ($e + @{ SI_Updater_BuiltInAuth = 'apply' }) -SubscriptionId 's' -ResourceGroup 'rg' -Converge $conv -Arm { } -Graph { } -KeyRingMove $move -VaultId $script:VaultId
+            $r.KeyRing.State | Should -Be 'removed'
+        }
+        $script:moves.Count | Should -Be 2
+        $script:moves[0].ContainerUri | Should -Be 'https://stsitest.blob.core.windows.net/si-auth-tokens'
+        $script:moves[0].PrincipalId | Should -Be $script:MiPrin
+        $script:moves[0].VaultId | Should -Be $script:VaultId
+        $script:moves[0].AppId | Should -BeLike '/subscriptions/s/resourceGroups/rg/providers/Microsoft.App/containerApps/*'
+    }
+}
+
+Describe 'the Key Vault key ring converge stops once the web app keeps its keys in its own blob' {
+    BeforeAll { . (Join-Path $script:SIRoot 'setup\_shared\SI-WebKeyRing.ps1') }
+    It 'with DataProtection__BlobUri set: no Key Vault call, no grant, no check, no setting' {
+        $script:n = 0
+        $count = { $script:n++; [pscustomobject]@{ Status = 200; Json = $null } }
+        $r = Invoke-SIWebKeyRingConverge -Arm $count -KeyVault $count -SetEnv { $script:n++; $true } -VaultName 'kv-si' -VaultId '/v' -PrincipalIds @('p') -SubscriptionId 's' -BlobRingEnv 'https://stsitest.blob.core.windows.net/si-auth-tokens/dataprotection/keys.xml'
+        $r.Ok | Should -BeTrue
+        $script:n | Should -Be 0
+        @($r.Actions).Count | Should -Be 0
+        @($r.Lines | Where-Object { $_ -match 'without Key Vault' }).Count | Should -Be 1
+    }
+    It 'setup and the updater pass the web app''s DataProtection__BlobUri to it (wiring)' {
+        $d = [IO.File]::ReadAllText((Join-Path $script:SIRoot 'pro-management\deploy\Deploy-SIManagement.ps1'))
+        $d | Should -Match '-CurrentEnv \$curKr -IdentityName \$IdentityName -BlobRingEnv \$curBlobRing'
+        $d | Should -Match "\[string\]\`$e\.name -eq 'DataProtection__BlobUri'\) \{ \`$curBlobRing = "
+        $u = [IO.File]::ReadAllText((Join-Path $script:SIRoot 'container\updater\_shared\SI-UpdaterSecretHandover.ps1'))
+        $u | Should -Match '-CurrentEnv \$cur -BlobRingEnv \$blobRing'
+        $u | Should -Match "\[string\]\`$e\.name -eq 'DataProtection__BlobUri'\) \{ \`$blobRing = "
+    }
+    It 'the person-run update prepares no sign-in front store when the built-in sign-in is on (wiring)' {
+        $s = [IO.File]::ReadAllText((Join-Path $script:SIRoot 'setup\Invoke-SIContainerUpdate.ps1'))
+        $i = $s.IndexOf("[string]`$e0.name -eq 'SI_Web_BuiltInAuth'")
+        $i | Should -BeGreaterThan 0
+        $i | Should -BeLessThan $s.IndexOf("Step '9g. SIGN-IN FRONT STORE'")
+    }
+}

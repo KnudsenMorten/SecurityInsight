@@ -6283,7 +6283,7 @@ groups + service principals, endpoint = devices, the CI build (`asset-correlatio
   | Identity | Runs | What it is for |
   |---|---|---|
   | `id-si-engine` | every pipeline job, the pipeline runner, the heartbeat, the mail and data-out jobs; it also pulls the image of the database setup job | Reads your tenant (read-only), writes to SecurityInsight's own workspace, storage and database, starts and follows the jobs |
-  | `id-si-web` | the web app | Reads and writes the application database as far as the web app needs, shows and starts jobs, the sign-in front's federated credential |
+  | `id-si-web` | the web app | Reads and writes the application database as far as the web app needs and shows the jobs (read only); it is the credential of the web app's Entra sign-in (a federated credential, no secret) |
   | `id-si-mcp` | the MCP server | Reads only |
   | `id-si-updater` | the updater job | Applies updates to the install's own resource group |
   | `id-si-tagging` | the asset-tagging job | Reads what its rules query; the only identity that can write tags, and only when you opt in |
@@ -6318,16 +6318,27 @@ What setup and the updater give each identity. A right marked *(option)* exists 
 | Identity | Azure | Microsoft Graph and Defender (application permissions) | Database, Key Vault and mail |
 |---|---|---|---|
 | `id-si-engine` | Reader at the collection scope (a subscription by default, or the management group or tenant root you chose). Monitoring Metrics Publisher on the data collection rules' resource group; With the guided install also Monitoring Contributor there and Log Analytics Contributor on the workspace, so the first run can create its tables and rules. Log Analytics Reader on SecurityInsight's workspace and on the Defender workspace when that is another one. Storage Blob, Queue and Table Data Contributor on SecurityInsight's storage account. AcrPull on the registry. Container Apps Jobs Contributor on the install's resource group, to start and follow the jobs. | Graph, read only: `User.Read.All`, `Group.Read.All`, `Directory.Read.All`, `Device.Read.All`, `Application.Read.All`, `AuditLog.Read.All`, `Policy.Read.All`, `RoleManagement.Read.All`, `RoleManagement.Read.Directory`, `RoleManagementPolicy.Read.Directory`, `RoleEligibilitySchedule.Read.Directory`, `RoleAssignmentSchedule.Read.Directory`, `PrivilegedAccess.Read.AzureADGroup`, `IdentityRiskyUser.Read.All`, `IdentityRiskEvent.Read.All`, `IdentityRiskyServicePrincipal.Read.All`, `ThreatHunting.Read.All`, `UserAuthenticationMethod.Read.All`, `DeviceManagementManagedDevices.Read.All`, `DeviceManagementConfiguration.Read.All`, `AccessReview.Read.All`, `SecurityAlert.Read.All`, `SecurityEvents.Read.All`. Defender, read only: `Machine.Read.All`, `Vulnerability.Read.All`, `SecurityRecommendation.Read.All`, `Score.Read.All`; Microsoft Threat Protection `AdvancedHunting.Read.All`. | Pro database: role `si_engine` (object-level grants and denies), plus read and write on the identity ledger. May run the support grant procedures. Key Vault Secrets User on the vaults that hold its secrets. *(option)* `Application Mail.Send` limited to the sender mailbox, with shared-mailbox mail. |
-| `id-si-web` | AcrPull. Log Analytics Reader on the workspace. Container Apps Jobs Reader on the resource group and Operator on each job; Contributor on the jobs' resource group only in the direct change mode of the Jobs page. *(option)* Cognitive Services OpenAI User on your Azure OpenAI resource. | `User.ReadBasic.All`, `GroupMember.Read.All`, `Application.Read.All`. A federated credential on the web app's sign-in registration. | Pro database: read, the listed writes the web app needs, the audit trail, and the sign-in front's own schema. Key Vault Crypto Service Encryption User on two keys only (`SI-Web-KeyRing`, `signin-front-dp`). *(option)* Key Vault Secrets User for magic-link sign-in. `Application Mail.Send` limited to the sender mailbox where setup registered it. |
+| `id-si-web` | AcrPull. Log Analytics Reader on the workspace. Container Apps Jobs Reader on the resource group. With Microsoft's built-in sign-in: Storage Blob Data Contributor on the one blob container of the sign-in token store. *(option)* Cognitive Services OpenAI User on your Azure OpenAI resource (the chat's questions to the model). | `User.ReadBasic.All`, `GroupMember.Read.All`, `Application.Read.All`. A federated credential on the web app's sign-in registration. | Pro database: read, the listed writes the web app needs, the audit trail, and the sign-in front's own schema. Key Vault Crypto Service Encryption User on two keys only (`SI-Web-KeyRing`, `signin-front-dp`). *(option)* Key Vault Secrets User for magic-link sign-in. No mail right. |
 | `id-si-mcp` | AcrPull. Log Analytics Reader on the workspace. | None. | Pro database: read only, the sign-in key table refused. |
-| `id-si-updater` | Contributor on the install's resource group and the registry. AcrPull. | `Directory.Read.All`, `GroupMember.Read.All`, `Application.Read.All`, `RoleManagementPolicy.Read.AzureADGroup`, `PrivilegedAssignmentSchedule.Read.AzureADGroup`, and `PrivilegedAssignmentSchedule.ReadWrite.AzureADGroup`, which it uses only to keep the database setup job's membership of the SQL admin group. | Key Vault Secrets Officer and Crypto Officer on the install's vault. Pro database: read, write, `db_ddladmin` and the signed grant procedure, or `db_securityadmin` where signed grants are not on. *(option)* `Application Mail.Send` limited to the sender mailbox, for the licence notice. |
+| `id-si-updater` | Contributor on the install's resource group and the registry. AcrPull. | `Directory.Read.All`, `GroupMember.Read.All` and `Application.Read.All` -- read only; the last two let it check that the database setup job is still a member of the SQL admin group. It holds no PIM-for-Groups permission: an update takes off any it still has. | Key Vault Secrets Officer and Crypto Officer on the install's vault. Pro database: read, write, `db_ddladmin` and the signed grant procedure, or `db_securityadmin` where signed grants are not on. *(option)* `Application Mail.Send` limited to the sender mailbox, for the licence notice. |
 | `id-si-tagging` | AcrPull. Reader at the collection scope. Log Analytics Reader on the workspace. Monitoring Metrics Publisher and Storage Blob Data Contributor for its own activity rows and log. *(option)* Tag Contributor at the tagging scope. | `ThreatHunting.Read.All`, `User.Read.All`, `Application.Read.All`. *(option)* `Machine.ReadWrite.All`, `CustomSecAttributeAssignment.ReadWrite.All`. | Key Vault Secrets User for the licence. Pro database: read, and insert into the audit trail. |
-| `id-si-dbinit` | None of its own; the engine identity pulls its image. | None. | Member of the SQL admin group, directly or by an active PIM-for-Groups assignment the updater renews. |
+| `id-si-dbinit` | None of its own; the engine identity pulls its image. | None. | A direct, permanent member of the SQL admin group, made at install. Nothing renews it, because nothing has to. |
 | `id-si-sql` | None. | None. | *(option)* Member of the SQL admin group, on a private install. |
 | `id-si-keys` | None. | None. | *(option)* Key Vault Crypto Service Encryption User on the customer-managed key only. |
 
 The writes asset tagging can make are its own three options above; every other identity holds no write permission on
 your Defender, Entra or Azure estate outside SecurityInsight's own resources.
+
+**The parts reachable from the internet hold the least.** The web app and the MCP server are the only parts with a
+public address, so their identities (`id-si-web`, `id-si-mcp`) hold no right to start, stop or change a job, no Owner
+or Contributor role, no right to give rights (User Access Administrator, Role Based Access Control Administrator), no
+right to push images, no right to manage Key Vault or its secrets, no right on another managed identity, and no right
+to send mail. Every update checks the rights these two identities hold on the install's resource group and its parts,
+removes any of those roles and reads the result back (`setup\_shared\SI-WebJobRights.ps1`, from the updater's
+`Invoke-SIUpdaterWebJobRightsStep`). A role granted above the resource group, which the updater may not change, is
+named as a support step; an identity that a job shares with the web app or the MCP server is named as a security
+support step. The web pages' Run now, stop, schedule and template-release actions therefore show a message instead of
+acting until they come back in a way that needs no such right.
 
 ### A3. Network -- what is private and what is public
 
@@ -6336,6 +6347,12 @@ your Defender, Entra or Azure estate outside SecurityInsight's own resources.
   internet, behind Entra sign-in (add Conditional Access)"*) -- or **from your network only** (`internal`).
   `Deploy-SIManagement.ps1` run on its own defaults to `Internal`. Either way every page except a health probe
   requires an Entra sign-in and an app role, and Conditional Access applies to the sign-in.
+- **The design rule for anything public: Microsoft's sign-in first, least rights behind it.** Every address of an
+  install that the internet can reach -- the web app, its API (the same app) and the MCP server -- is to sit behind the
+  built-in authentication of Azure Container Apps, signed in with Entra and secretless (see A4), and the identities behind
+  those addresses hold only what they need (A2b). No address answers data anonymously. A private install exposes nothing
+  to the internet at all. The web app and its API are behind Microsoft's sign-in from the switch described in A4; the MCP
+  server follows in the next version and until then checks the Entra token itself on every request.
 - **No virtual network by default; private networking is an option setup builds.** By default the Container Apps
   environment is created without a virtual network, and the Pro database's firewall admits Azure services; access to
   the database is by Entra identity only. With the install option *Private network* setup puts SecurityInsight into
@@ -6346,7 +6363,10 @@ your Defender, Entra or Azure estate outside SecurityInsight's own resources.
   Invardia's update and licence endpoints. The web app talks only to Entra sign-in, Azure Resource Manager, Microsoft
   Graph, your SQL database, your Key Vault, Log Analytics and your Azure OpenAI resource.
 - **Browser hardening.** A strict Content Security Policy (scripts, styles and connections from the app itself only;
-  framing refused), HSTS, `nosniff`, no referrer, and anti-forgery tokens on every change.
+  framing refused), HSTS, `nosniff`, and anti-forgery tokens on every change. The referrer is never sent to another
+  site: behind Microsoft's built-in sign-in the browser sends it to the app's own pages only (`same-origin`), because
+  the platform's own protection against forged requests refuses a change that carries none; without it, no referrer
+  at all.
 
 ### A3b. Private networking -- an option setup builds
 
@@ -6457,8 +6477,35 @@ protection stays on).
 
 1. **Entra sign-in.** Every user signs in with Entra ID (single sign-on, your MFA and Conditional Access). Who may then
    work in the app is decided inside the app, by its roles (see *Access and roles* in section 6a).
-   **Session: at most 8 hours, fixed.** The web app signs users in through the sign-in front SecurityInsight and PIM
-   Manager share: the authorization-code flow with PKCE, the code redeemed with the web app's managed identity as a
+   **Microsoft's built-in sign-in (the standard).** The web app sits behind the built-in authentication of Azure
+   Container Apps (the app's `authConfigs/current`): the platform signs every visitor in with Entra before a request
+   reaches SecurityInsight, and an unauthenticated request never reaches the app -- a browser is sent to the Entra
+   sign-in (`RedirectToLoginPage`), and an app that only serves an API (the MCP server, from the next version) answers 401 (`Return401`). **No secret:** the
+   app registration's credential is the web app's own managed identity, as a federated identity credential (audience
+   `api://AzureADTokenExchange`); the platform is told which identity to use through the container-app secret
+   `override-use-mi-fic-assertion-client-id`, which holds that identity's client id -- an identifier, not a
+   credential. The sign-in asks for `openid profile email offline_access` and the app's own `user_impersonation` scope
+   and always adds `prompt=select_account`, so the account picker is shown every time. **Token store:** the platform
+   keeps the signed-in session's tokens in one blob container of the install's storage account (`si-auth-tokens`),
+   reached with the web identity (Storage Blob Data Contributor on that container only -- never a SAS URL, a
+   connection string or a storage key). **Session: at most 8 hours, fixed** (cookie `FixedTime`, 8 hours), HTTPS only.
+   **Identity in the app:** the platform hands the app the signed-in person in `X-MS-CLIENT-PRINCIPAL`; the app takes
+   the person's object id, tenant and name from it, reads the person's groups itself over Microsoft Graph
+   (`GroupMember.Read.All`) and decides the role (item 2) -- so access given to a group works the same, and a role is
+   never taken from the browser. The no-access pages offer *Sign in with another account*
+   (`/.auth/logout?post_logout_redirect_uri=/.auth/login/aad`). The platform's protection against forged requests needs
+   the browser's referrer on a change, which is why the app sets `Referrer-Policy: same-origin` in this mode (A3).
+   **How an install is switched** (`setup\_shared\SI-BuiltInAuth.ps1`, from the updater's
+   `Invoke-SIUpdaterBuiltInAuthStep`, per installation by the support partner): *plan* reads and names every change;
+   *redirect* adds only the platform's redirect address to the app registration; *apply* writes the secret, the
+   authConfig with its token store and the token store's right, then switches the web app in one change -- the sign-in
+   front container removed, the ingress on the web container's own port 8080, `SI_Web_BuiltInAuth=1` -- after waiting
+   until no other change to the web app is in progress (and trying again while Azure answers that one is). Every step
+   is read back. When anything does not read back, the web app is put back exactly as it ran before (the front
+   container, the ingress and the setting, read back) and the built-in sign-in is switched off again; a write the
+   updater may not make (for example on the app registration) becomes a support step and changes nothing.
+   **Installs not yet switched** sign in through the sign-in front described next. Its session is also at most 8
+   hours, fixed. The web app signs users in through the sign-in front SecurityInsight and PIM Manager share: the authorization-code flow with PKCE, the code redeemed with the web app's managed identity as a
    federated credential (no secret, no certificate), a session that ends 8 hours after the sign-in whatever the activity,
    and the ID token renewed with Entra about every hour -- so your Conditional Access sign-in frequency, and a disabled
    account, take effect on top of the 8 hours. An install from before the front is moved behind it by its product update
@@ -9707,7 +9754,7 @@ The database work that needs the SQL server's admin group is done by the install
 - **The job.** ONE Container Apps job per install, `caj-si-dbinit`: manual trigger, one replica, no retry, 30 minutes. It runs
   the install's own engine image (`si-orchestrator` -- every update rolls it with the engine jobs; no new image to sign) with
   its own entry point, as its OWN user-assigned identity `id-si-dbinit` -- a member of the install's SQL admin group
-  (the group that is the server's Entra administrator), directly or by an active PIM-for-Groups assignment. The server's
+  (the group that is the server's Entra administrator) as a direct, permanent member. The server's
   administrator is never switched for it. The job also carries the engine jobs' pull identity, for the image only. No secret.
 - **What it does**, as `id-si-dbinit`, with the SQL the person-run scripts already send (their builders, never a second copy):
   the engine identity's user, the role `si_engine`, its grants (`Get-SIEngineDatabaseAccessSql`; the broad roles only while
@@ -9715,7 +9762,8 @@ The database work that needs the SQL server's admin group is done by the install
   (`Get-SIUpdaterDatabaseAccessSql`); the certificate-signed grant procedure (`Get-SIGrantProcedureAdminSql`) when
   `SI_Setup_SignedGrantProcedure` is on or the procedure is already installed; the web app's and the MCP server's users and
   grants (`Get-SIManagementUserSql`); the sign-in front's store -- the web identity's schema `signin` and `CREATE TABLE`
-  (`Get-SISigninStoreSql`); asset tagging's user (`Get-SITaggingDatabaseAccessSql`). Only in a run that names the Invardia
+  (`Get-SISigninStoreSql`) -- once the web app runs Microsoft's own sign-in, the job no longer makes this store and removes
+  it instead (its tables, then the schema, only that schema, read back; a refusal is a warning and a Support-app step); asset tagging's user (`Get-SITaggingDatabaseAccessSql`). Only in a run that names the Invardia
   Support app (the install's Support setting, or a support repair): that app's own database user (`Get-SISupportAppDatabaseAccessSql`)
   and the support grant's tables and signed procedures (`Get-SISupportGrantAdminSteps`) -- an update never touches it. Each
   identity's user is found by its client id (SID) first, so a user an earlier install made under another name is kept.
@@ -9725,19 +9773,21 @@ The database work that needs the SQL server's admin group is done by the install
   and exits 0 only when everything read back (1 = a step or the read-back failed, 2 = refused inputs). A refused sign-in is
   waited out (16 tries, 20 s apart) -- a membership that is new may still be replicating.
 - **The install** (step `db-job`, after the Support step): makes `id-si-dbinit`, adds it to the SQL admin group with the
-  installing person's sign-in (an Entra step -- the one rights step a person does, never SQL) and reads the membership back
+  installing person's sign-in as a direct, permanent member (an Entra step -- the one rights step a person does, never SQL)
+  and reads the membership back
   from the identity's own `memberOf` (a group's member list hides service principals from many callers) BEFORE the job is
   made and started: a managed identity's token is cached for hours, so a run before the membership exists would keep a token
   without the group. It starts the job once, waits, and takes the execution's status as the verdict. A problem is a warning
   with what to do, never a failed install.
 - **Every update** (`Invoke-SIUpdaterDbJob`, before the database step): keeps the identity and the job present (the engine
   jobs' image, environment and pull identity; today's identities) -- existing installs reach the new-install state through
-  the update. It checks its own Graph permissions, brings the identity's membership of the SQL admin group into place
-  (direct, else an active PIM-for-Groups assignment, read back) and renews an assignment that ends within 30 days. While the
-  membership is not proven it writes a `waiting` row, the heartbeat's setup step `db-job` asks for the one membership, and the
+  the update. It checks its own Graph permissions and only READS whether the identity is still a member of the SQL admin
+  group -- it never adds it, never changes it and never makes a PIM-for-Groups assignment. When it is not a member, the
+  update says so as a support step: the support partner adds it again through the Support app. While the membership is not
+  proven it writes a `waiting` row, the heartbeat's setup step `db-job` asks for the one membership, and the
   update keeps going without the job. With the membership proven it starts the job and counts the run only when the execution
-  Succeeded AND the row carries THIS run's id with state ok. A membership made in the same run may not have reached the
-  identity's token yet, so a run that could not sign in is started again after a growing wait. **Any other failed run holds
+  Succeeded AND the row carries THIS run's id with state ok. A membership that is new (no run of the job has proven it yet)
+  may not have reached the identity's token, so a run that could not sign in is started again after a growing wait. **Any other failed run holds
   the update**: nothing is rolled, the installed version keeps running, the failure is reported, and the next updater run
   starts the job again. What the updater may not do itself (an ARM refusal, no engine job to take the image from) is one
   warning, never a hold.
@@ -9745,11 +9795,11 @@ The database work that needs the SQL server's admin group is done by the install
   On every run the updater MIRRORS the Pro database's consent into those databases as its own identity (`Invoke-SISupportConsentMirror`, next to the portal's level), read back: the portal's row (Source `customer`, ConsentedBy `Invardia portal` -- the one row the consent trigger lets `si_updater` write) or no row. A consent the customer's admin gave is copied by the job. Never written by the Support app; never a failed update.
 - **A repair / an existing install's first run**: `setup/Start-SIDbInitJob.ps1`, through the Invardia Support session -- the
   same identity, membership (read back first), job and one run; PLAN by default.
-- **How the membership is made -- always by this setup code, never by hand.** A direct add to the group first. When that is
-  refused (the caller may not change the group's members), an ACTIVE PIM-for-Groups member assignment instead: permanent
-  first, 180 days only when the group's PIM policy refuses a permanent one (said, so the renewal is known). Either way it is
-  read back from the identity's `memberOf` before the job starts. When both are refused, both answers are named and the job
-  is not started -- the caller needs the right to manage that group's members or its PIM assignments.
+- **How the membership is made -- always by this setup code, never by hand.** A direct, permanent member of the group, read
+  back from the identity's `memberOf` before the job starts. Setup never makes a time-bound PIM-for-Groups assignment instead:
+  nothing renews one, so it would end without a word and stop the job later. When the direct add is refused, that step ends
+  with a warning and a Support-app step -- the support partner adds the identity through the Support app -- and the job is not
+  started until the membership is there.
 - **Background statistics in every product database.** Each run of the job also sets every product database to update a
   stale statistic in the background (`AUTO_UPDATE_STATISTICS_ASYNC ON`, only when it is off). Only the server's admin group
   may change that setting, and the update runs the job every time, so an existing install reaches what a new install has. A
@@ -10037,10 +10087,10 @@ The Support app holds no right on any container job. A support request reaches t
   created with it (unchanged), and `Initialize-SIInfra.ps1` now runs the same converge for a vault it recovered or found
   without it.
 - **(7) SEC-09 -- texts.** The security pack (md + json) and both copies of "Identities and permissions" list the updater's
-  Microsoft Graph application permissions -- `PrivilegedAssignmentSchedule.ReadWrite.AzureADGroup`,
-  `PrivilegedAssignmentSchedule.Read.AzureADGroup`, `RoleManagementPolicy.Read.AzureADGroup`, `GroupMember.Read.All`,
-  `Application.Read.All` (the list `Get-SIDbInitUpdaterGraphRoleNames` holds) -- and say "never
-  RoleManagement.ReadWrite.Directory"; the updater's Contributor row names the purge-protection change. Grant-SISupportAccess's
+  Microsoft Graph application permissions -- `GroupMember.Read.All` and `Application.Read.All`, read only, for the check
+  that the database setup job is still a member of the SQL admin group (the list `Get-SIDbInitUpdaterGraphRoleNames` holds) --
+  and say "never RoleManagement.ReadWrite.Directory" and that the PIM-for-Groups permissions and the group's PIM policy read
+  are no longer held (an update takes them off); the updater's Contributor row names the purge-protection change. Grant-SISupportAccess's
   runAs already names Privileged Role Administrator for the role-assignable group (since SEC-01); the suite pins that no
   text names "Groups Administrator" or "owner of the group".
 

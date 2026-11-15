@@ -239,7 +239,9 @@ Describe '(b) (c) the flow job''s execution guard' {
         # live 2026-11-09/10: one beat for every wake-up -- the clean-up's row during a run, the wake-up's own row otherwise
         $c | Should -Match "\`$wkLock = if \(\`$housekeepingOnly\) \{ 'housekeeping' \} else \{ 'wakeup' \}"
         $c | Should -Match "& \`$wkBeatFn -Store \`$wkState\.Store -Lock \`$wkLock -Holder \`$wkHolder -What \`$wkWhat"
-        $c | Should -Match "(?s)if \(\`$housekeepingOnly\) \{\s+\`$null = Invoke-SIPipelineUpkeep -Beat \`$wkBeat -Cleanup \`$upkeepCleanup -Log \`$say\s+& \`$wkRelease"
+        # (the image-only security wake, SEC-LANE-1, runs first in a wake-up during a run -- SIv3-ImageOnlyWake asserts that;
+        # here only the clean-up and the release of its own lock count)
+        $c | Should -Match "(?s)if \(\`$housekeepingOnly\) \{\s+(?:& \`$imageOnlyWake ''\s+)?\`$null = Invoke-SIPipelineUpkeep -Beat \`$wkBeat -Cleanup \`$upkeepCleanup -Log \`$say\s+& \`$wkRelease"
         $c | Should -Match "Exit-SIExecutionLock -Store \`$wkState\.Store -Lock \`$wkLock -Holder \`$wkHolder"
     }
 }

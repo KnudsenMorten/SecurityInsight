@@ -21,17 +21,21 @@
         characters) and exits non-zero on any failure.
 
     WHO STARTS IT
-      * the guided install (step db-job): makes the identity, adds it to the admin group and READS THE MEMBERSHIP BACK from
+      * the guided install (step db-job): makes the identity, adds it to the admin group as a DIRECT, PERMANENT member (G5a:
+        never a PIM-for-Groups assignment -- refused = a warning and a Support-app step) and READS THE MEMBERSHIP BACK from
         the identity's side (memberOf -- a group's /members list hides service principals from many callers, EPS 2.0.59),
         only THEN makes and starts the job (a managed identity's token is cached for hours: a run before the membership exists
         keeps a token without the group), waits, and reads the execution's result;
       * the updater, on every update, BEFORE the database step: keeps the identity and the job present; framework §4.5
-        SQL-ADMIN-GROUP G2-G5: it CONVERGES and RENEWS the identity's membership (Sync-SIDbInitMembership, the same path as
-        setup) with its own G5 Graph permissions (three PIM-for-Groups + GroupMember.Read.All + Application.Read.All), which setup grants (Grant-SIDbInitUpdaterGraphRoles) and
-        the updater only checks (Test-SIDbInitUpdaterGraphRoles); it starts the job once the membership reads back or a run
-        of it proved it (a 'DbJob' row the job itself wrote) -- until then the update keeps today's path and the heartbeat's
-        setup step db-job asks for the one membership; a failed run holds the update (nothing is rolled, the old version
-        keeps running), and so does a proven membership that is gone and cannot be made again;
+        SQL-ADMIN-GROUP G5a (least privilege, SI #1253): it only READS the identity's membership (Read-SIDbInitMembership:
+        the identity's memberOf, with GroupMember.Read.All + Application.Read.All) -- it never adds it and never makes or
+        renews a PIM-for-Groups assignment; a missing membership is a support step (the support partner adds it again
+        through the Support app). Its G5 Graph permissions are granted by setup (Grant-SIDbInitUpdaterGraphRoles) and only
+        checked by the updater (Test-SIDbInitUpdaterGraphRoles); the retired permissions (the PIM-for-Groups ones and the
+        group's PIM policy read) are taken off with read-back (Remove-SIDbInitRetiredGraphRoles), else a support step. It starts the job once the
+        membership reads back or a run of it proved it (a 'DbJob' row the job itself wrote) -- until then the update keeps
+        today's path and the heartbeat's setup step db-job asks for the one membership; a failed run holds the update
+        (nothing is rolled, the old version keeps running), and so does a proven membership that is gone;
       * Invardia support for a repair (setup\Start-SIDbInitJob.ps1).
 
     Seams (callers hand them in, tests pass fakes):
@@ -57,15 +61,16 @@ function Get-SIDbInitNames {
         AppApi         = '2025-07-01'
         MiApi          = '2023-01-31'
         RecordMax      = 400
-        # framework §4.5 SQL-ADMIN-GROUP G2-G4: the membership's own row (the updater's last check of it) and the renewal window
+        # framework §4.5 SQL-ADMIN-GROUP: the membership's own row (the updater's last check of it; G5a: nothing is renewed)
         MembershipRecord = 'DbJobMembership'
-        RenewWindowDays  = 30
         SqlApi           = '2021-11-01'
         # #1146: a statement chosen as a DEADLOCK victim (SQL 1205) is sent again after these waits (seconds), said each time
         DeadlockWaits    = @(2, 5, 10)
         # #1146: an updater execution counts as running for at most this long when its job names no run limit (seconds)
         UpdaterLimitSeconds = 21600
         UpdaterLockStaleMinutes = 15
+        # the job's row of the earlier sign-in front's store, dropped after the switch to Microsoft's built-in sign-in
+        SigninDropRecord = 'DbJobSigninDrop'
     }
 }
 
@@ -143,6 +148,9 @@ function Read-SIDbInitInput {
                          reads back in the same batch, Get-SISupportStandingOffSql; never the group, never a user)
                          SI_DBINIT_STEPS (all | grants: users, role memberships and grants only -- no procedure, schema or
                          database setting is created or changed, so it may run beside a pipeline run; anything else = all)
+                         SI_DBINIT_SIGNIN_DROP ('1': the updater READ BACK the web app SWITCHED to Microsoft's built-in
+                         sign-in -- the earlier sign-in front's store, the schema signin and its tables, is no longer made
+                         and is dropped where it is there, Invoke-SIDbInitSigninDrop; never in a grants-only run)
     #>
     param([hashtable]$Env = @{})
     $e = { param($k) if ($Env.ContainsKey($k)) { [string]$Env[$k] } else { [string][Environment]::GetEnvironmentVariable($k) } }
@@ -199,7 +207,7 @@ function Read-SIDbInitInput {
     if (-not $dr.Ok) { return (& $no $dr.Reason) }
     [pscustomobject]@{ Ok = $true; Reason = ''; Server = $server; Database = $db; LedgerDatabase = $ledger; MiClientId = $mi; Principals = $p.ToArray()
                        Support = $sup; SignedGrants = (& $on 'SI_DBINIT_SIGNED_GRANTS'); EngineRoleOnly = (& $on 'SI_DBINIT_ENGINE_ROLE_ONLY'); Run = $run; By = $by; Steps = $steps
-                       Moves = @($mv.Items); Drops = @($dr.Items); StandingOff = $off }
+                       Moves = @($mv.Items); Drops = @($dr.Items); StandingOff = $off; SigninDrop = [bool](& $on 'SI_DBINIT_SIGNIN_DROP') }
 }
 
 function Read-SIDbInitMoveList {
@@ -546,7 +554,9 @@ function Get-SIDbInitPlan {
         } else { $skipped.Add(('{0} (this package has no web app grant list)' -f $w.C)) }
     }
     $web = & $of 'web'
-    if ($web -and (& $has 'Get-SISigninStoreSql')) {
+    # the web app reads back SWITCHED to Microsoft's built-in sign-in (SI_DBINIT_SIGNIN_DROP): the sign-in front's store is
+    # no longer made -- the job drops it after the batches (Invoke-SIDbInitSigninDrop)
+    if ($web -and (& $has 'Get-SISigninStoreSql') -and -not [bool](Get-SIDbInitProp $DbInput @('SigninDrop'))) {
         foreach ($a in 'sql-user', 'sql-schema', 'sql-grant') {
             & $add ('signin-' + $a.Substring(4)) $pro ('the sign-in front''s store: ' + $(switch ($a) { 'sql-user' { 'the web identity''s user' } 'sql-schema' { 'the schema signin owned by the web identity' } default { 'CREATE TABLE for the web identity' } })) `
                 (Get-SISigninStoreSql -Action $a) @{ ClientId = $web.ClientId; UserName = (& $nameIn $Users $web) } $true
@@ -810,6 +820,98 @@ function New-SIDbInitStandingOffRecordValue {
     $v
 }
 
+# ---------------------------------------------------------------------------------------------------------------------
+#  THE EARLIER SIGN-IN FRONT'S STORE, DROPPED (framework SECURE-WEB-1 "no leftovers"; Invardia never touches an install's
+#  SQL, so SecurityInsight drops it in its own code). The sign-in front kept its sessions in the schema [signin] of the Pro
+#  database (pro-management\deploy\SI-SigninFrontStore.ps1). Once the web app reads back SWITCHED to Microsoft's built-in
+#  sign-in (its authConfig platform on, SI_Web_BuiltInAuth=1, no signin-front container) nothing uses it: the updater names
+#  that fact to the job (SI_DBINIT_SIGNIN_DROP=1) and the job -- the identity that holds the SQL rights -- drops the
+#  schema's tables, then the schema. GUARDED BY THE EXACT NAME: the statement names only [signin]; no parameter, no other
+#  schema, no other object. A table OUTSIDE the schema that refers to one of its tables stops it (nothing is dropped); an
+#  object that is not a table keeps the schema (said). Idempotent: no schema = nothing to do.
+# ---------------------------------------------------------------------------------------------------------------------
+
+function Get-SIDbInitSigninDropSql {
+    <# PURE. The ONE statement: the tables of the schema [signin] (their own foreign keys first), then the schema -- only
+       when it exists. Returns one row: Existed, TablesDropped, SchemaLeft, TablesLeft, Why (the read-back). #>
+    @'
+SET NOCOUNT ON;
+DECLARE @sch int = SCHEMA_ID(N'signin');
+DECLARE @existed bit = CASE WHEN @sch IS NULL THEN 0 ELSE 1 END, @dropped int = 0, @s nvarchar(max), @why nvarchar(400) = N'';
+IF @sch IS NOT NULL
+BEGIN
+    IF EXISTS (SELECT 1 FROM sys.foreign_keys fk JOIN sys.tables t ON t.object_id = fk.referenced_object_id
+               WHERE t.schema_id = @sch AND fk.schema_id <> @sch)
+        SET @why = N'a table outside the schema signin refers to one of its tables -- nothing was dropped';
+    ELSE
+    BEGIN
+        WHILE EXISTS (SELECT 1 FROM sys.foreign_keys WHERE schema_id = @sch)
+        BEGIN
+            SELECT TOP (1) @s = N'ALTER TABLE [signin].' + QUOTENAME(OBJECT_NAME(parent_object_id)) + N' DROP CONSTRAINT ' + QUOTENAME(name) + N';'
+            FROM sys.foreign_keys WHERE schema_id = @sch;
+            EXEC sys.sp_executesql @s;
+        END
+        WHILE EXISTS (SELECT 1 FROM sys.tables WHERE schema_id = @sch)
+        BEGIN
+            SELECT TOP (1) @s = N'DROP TABLE [signin].' + QUOTENAME(name) + N';' FROM sys.tables WHERE schema_id = @sch;
+            EXEC sys.sp_executesql @s;
+            SET @dropped += 1;
+        END
+        IF EXISTS (SELECT 1 FROM sys.objects WHERE schema_id = @sch) OR EXISTS (SELECT 1 FROM sys.types WHERE schema_id = @sch)
+            SET @why = N'the schema signin still holds objects that are not tables -- the schema was kept';
+        ELSE EXEC (N'DROP SCHEMA [signin];');
+    END
+END
+SELECT @existed AS Existed, @dropped AS TablesDropped,
+       CASE WHEN SCHEMA_ID(N'signin') IS NULL THEN 0 ELSE 1 END AS SchemaLeft,
+       (SELECT COUNT(*) FROM sys.tables WHERE schema_id = SCHEMA_ID(N'signin')) AS TablesLeft,
+       @why AS Why;
+'@
+}
+
+function Get-SIDbInitSigninDropLine {
+    <# PURE. The one plain line for a state: removed | none | kept | refused | skipped. #>
+    param([Parameter(Mandatory)][string]$State, [string]$Why = '')
+    switch ($State) {
+        'removed' { 'the earlier sign-in''s database tables are removed' }
+        'none'    { 'the earlier sign-in''s database tables: none left' }
+        'skipped' { 'the earlier sign-in''s database tables: not checked in this run -- the next full run does it' }
+        default   { 'the earlier sign-in''s database tables could not be removed{0} -- the update goes on; support step: the support partner removes them through the Support app' -f $(if ($Why) { ' (' + $Why + ')' } else { '' }) }
+    }
+}
+
+function Invoke-SIDbInitSigninDrop {
+    <# THE JOB'S SIDE: Get-SIDbInitSigninDropSql in -Database, its read-back row judged. Returns @{ State (removed | none |
+       kept | refused); Tables (dropped); Why; Line }. Never throws: a refusal is 'refused', never a failure of the run. #>
+    param([Parameter(Mandatory)][scriptblock]$Sql, [Parameter(Mandatory)][string]$Database)
+    $o = { param($st, $n, $w) [pscustomobject]@{ State = $st; Tables = [int]$n; Why = [string]$w; Line = (Get-SIDbInitSigninDropLine -State $st -Why $w) } }
+    try {
+        $row = @(& $Sql $Database (Get-SIDbInitSigninDropSql) @{} 'rows' | ForEach-Object { $_ } | Where-Object { $null -ne $_ }) | Select-Object -First 1
+        if (-not $row) { return (& $o 'refused' 0 'the database gave no answer to read back') }
+        $existed = [int](0 + (Get-SIDbInitProp $row @('Existed'))); $dropped = [int](0 + (Get-SIDbInitProp $row @('TablesDropped')))
+        $left = [int](0 + (Get-SIDbInitProp $row @('SchemaLeft'))); $tLeft = [int](0 + (Get-SIDbInitProp $row @('TablesLeft')))
+        $why = ([string](Get-SIDbInitProp $row @('Why'))).Trim()
+        if (-not $existed) { return (& $o 'none' 0 '') }
+        if (-not $left -and -not $tLeft) { return (& $o 'removed' $dropped '') }
+        & $o 'kept' $dropped $(if ($why) { $why } else { 'the schema signin is still there after the drop ({0} tables left)' -f $tLeft })
+    } catch { & $o 'refused' 0 ([string]$_.Exception.Message -replace '\s+', ' ') }
+}
+
+function New-SIDbInitSigninDropRecordValue {
+    <# PURE. The row DbJobSigninDrop: compact JSON { state, at, run, n (tables dropped), why }, at most 400 characters. #>
+    param([Parameter(Mandatory)][ValidateSet('removed', 'none', 'kept', 'refused', 'skipped')][string]$State, [string]$Run = '', [int]$Tables = 0,
+          [string]$Why = '', [datetime]$NowUtc = [datetime]::UtcNow)
+    $o = [ordered]@{ state = $State; at = $NowUtc.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ', [Globalization.CultureInfo]::InvariantCulture) }
+    if ($Run) { $o.run = $Run }
+    $o.n = $Tables
+    $w = [regex]::Replace([regex]::Replace("$Why", '[\x00-\x1F]', ' '), '\s+', ' ').Trim()
+    if ($w.Length -gt 250) { $w = $w.Substring(0, 247).TrimEnd() + '...' }
+    if ($w) { $o.why = $w }
+    $v = ConvertTo-Json -InputObject $o -Compress
+    while ($v.Length -gt (Get-SIDbInitNames).RecordMax -and $o.Contains('why') -and ([string]$o.why).Length -gt 16) { $o.why = ([string]$o.why).Substring(0, ([string]$o.why).Length - 13) + '...'; $v = ConvertTo-Json -InputObject $o -Compress }
+    $v
+}
+
 function Invoke-SIDbInit {
     <#
         THE JOB'S RUN. -DbInput: Read-SIDbInitInput. -Sql: the seam (see the file's help) -- each call gets a fresh token from
@@ -935,6 +1037,17 @@ function Invoke-SIDbInit {
             $soVal = New-SIDbInitStandingOffRecordValue -Run $in.Run -State $so.State -Databases $so.Databases -Why $so.Why -NowUtc (& $Now)
             try { $null = & $Sql $pro (Get-SIDbInitRecordSql -Name (Get-SIDbInitStandingOffNames).Record) @{ Value = $soVal; Version = $null; By = (Get-SIDbInitNames).Job } 'nonquery'; & $say ('support standing access recorded: {0}' -f $soVal) }
             catch { & $say ('WARNING: the support standing access result could not be recorded: {0}' -f $_.Exception.Message) }
+        }
+        # 3d. the earlier sign-in front's store (the schema signin and its tables) dropped -- only when the updater read the web
+        # app back SWITCHED to Microsoft's built-in sign-in; idempotent, read back, never part of the verdict (a refusal is a
+        # warning and a support step); never in a grants-only run (it drops a schema)
+        if ([bool](Get-SIDbInitProp $in @('SigninDrop'))) {
+            $sd = if ([string](Get-SIDbInitProp $in @('Steps')) -eq 'grants') { [pscustomobject]@{ State = 'skipped'; Tables = 0; Why = 'grants only: no schema is dropped in this run'; Line = (Get-SIDbInitSigninDropLine -State 'skipped') } }
+                  else { Invoke-SIDbInitSigninDrop -Sql $Sql -Database $pro }
+            & $say $(if ($sd.State -in 'removed', 'none', 'skipped') { $sd.Line } else { 'WARNING: ' + $sd.Line })
+            $sdVal = New-SIDbInitSigninDropRecordValue -State $sd.State -Run $in.Run -Tables $sd.Tables -Why $sd.Why -NowUtc (& $Now)
+            try { $null = & $Sql $pro (Get-SIDbInitRecordSql -Name (Get-SIDbInitNames).SigninDropRecord) @{ Value = $sdVal; Version = $null; By = (Get-SIDbInitNames).Job } 'nonquery'; & $say ('the earlier sign-in''s tables recorded: {0}' -f $sdVal) }
+            catch { & $say ('WARNING: the earlier sign-in''s tables result could not be recorded: {0}' -f $_.Exception.Message) }
         }
         # 4. THE READ-BACK (read only)
         $after = @{}; $after[$pro] = & $usersOf $pro
@@ -1210,9 +1323,12 @@ function Test-SIDbInitMember {
 }
 
 function Add-SIDbInitMember {
-    <# The job's identity into the SQL admin group, READ BACK from the identity's side before anything starts the job (spec
-       point 7). Idempotent. Returns @{ State = already | added | refused | unchecked | notfound; Detail }. Needs
-       setup\_shared\SI-GroupMemberAdd.ps1 (the one add-and-wait policy). #>
+    <# The job's identity into the SQL admin group as a DIRECT, PERMANENT member (members/$ref), READ BACK from the identity's
+       side before anything starts the job (spec point 7). Idempotent. Framework §4.5 G5a (SI #1253): NO PIM-for-Groups
+       assignment is ever written -- nobody renews one, so a time-bound one would end silently and stop the job later. A
+       refused direct add is 'refused' with the plain support step (Get-SIDbInitMembershipSupportStep). Returns @{ State =
+       already | added | refused | unchecked | notfound; Detail }. Needs setup\_shared\SI-GroupMemberAdd.ps1 (the one
+       add-and-wait policy). #>
     param([Parameter(Mandatory)][scriptblock]$Graph, [Parameter(Mandatory)][string]$PrincipalId, [Parameter(Mandatory)][string]$GroupId,
           [scriptblock]$Sleep, [scriptblock]$Print, [int]$LimitSeconds = 300, [datetime]$NowUtc = [datetime]::UtcNow)
     try { if (Test-SIDbInitMember -Graph $Graph -PrincipalId $PrincipalId -GroupId $GroupId) { return [pscustomobject]@{ State = 'already'; Detail = ('{0} is a member of the SQL admin group (read from its memberOf)' -f (Get-SIDbInitNames).Identity) } } } catch { }
@@ -1221,36 +1337,7 @@ function Add-SIDbInitMember {
             -Add { $null = & $siDbGraph 'POST' ('https://graph.microsoft.com/v1.0/groups/{0}/members/$ref' -f $siDbGid) @{ '@odata.id' = ('https://graph.microsoft.com/v1.0/directoryObjects/{0}' -f $siDbPid) } } `
             -Test { Test-SIDbInitMember -Graph $siDbGraph -PrincipalId $siDbPid -GroupId $siDbGid }
     if ([string]$r.State -ne 'refused') { return [pscustomobject]@{ State = [string]$r.State; Detail = [string]$r.Detail } }
-    # 2026-11-05 (owner: "why is this not in setup"): a direct add refused (the caller may not change the group's members) --
-    # an ACTIVE PIM-for-Groups member assignment instead, the route the framework already accepts as membership. Permanent
-    # when the group's PIM policy allows it, else the longest the policy gives (180 days; said, so the renewal is known).
-    $pim = Add-SIDbInitPimMember -Graph $Graph -PrincipalId $PrincipalId -GroupId $GroupId -Sleep $Sleep -Print $Print -LimitSeconds $LimitSeconds -NowUtc $NowUtc
-    if ($pim.State -eq 'added') { return $pim }
-    [pscustomobject]@{ State = 'refused'; Detail = ('{0}; the PIM-for-Groups assignment was refused too: {1}' -f [string]$r.Detail, [string]$pim.Detail) }
-}
-
-function Get-SIDbInitPimMemberBody {
-    <# PURE. The ACTIVE PIM-for-Groups member assignment of -PrincipalId to -GroupId. -Days 0 = permanent (noExpiration).
-       -Action: adminAssign (a new one), adminExtend (an active one that ends soon), adminUpdate (its schedule changed),
-       adminRenew (one that has ended) -- Microsoft Graph's privilegedAccessGroupAssignmentScheduleRequest actions. #>
-    param([Parameter(Mandatory)][string]$PrincipalId, [Parameter(Mandatory)][string]$GroupId, [int]$Days = 0, [datetime]$Now = [datetime]::UtcNow,
-          [ValidateSet('adminAssign', 'adminExtend', 'adminUpdate', 'adminRenew')][string]$Action = 'adminAssign')
-    $exp = if ($Days -gt 0) { [ordered]@{ type = 'afterDuration'; duration = ('P{0}D' -f $Days) } } else { [ordered]@{ type = 'noExpiration' } }
-    [ordered]@{
-        accessId      = 'member'
-        principalId   = $PrincipalId
-        groupId       = $GroupId
-        action        = $Action
-        justification = 'SecurityInsight database setup job: member of the SQL server''s admin group (no person needs database admin rights)'
-        scheduleInfo  = [ordered]@{ startDateTime = $Now.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ', [Globalization.CultureInfo]::InvariantCulture); expiration = $exp }
-    }
-}
-
-function ConvertFrom-SIDbInitIsoDays {
-    <# PURE. An ISO 8601 duration (P180D, P1Y, PT8H) as whole days; 0 when it is not one. #>
-    param($Value)
-    if (-not "$Value".Trim()) { return 0 }
-    try { [int][Math]::Floor(([System.Xml.XmlConvert]::ToTimeSpan("$Value".Trim())).TotalDays) } catch { 0 }
+    [pscustomobject]@{ State = 'refused'; Detail = ('the direct membership was refused ({0}); {1}' -f [string]$r.Detail, (Get-SIDbInitMembershipSupportStep)) }
 }
 
 function ConvertTo-SIDbInitUtc {
@@ -1261,35 +1348,14 @@ function ConvertTo-SIDbInitUtc {
     try { [datetime]::Parse("$Value", [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::AdjustToUniversal -bor [Globalization.DateTimeStyles]::AssumeUniversal) } catch { $null }
 }
 
-function Get-SIDbInitPimPolicyLimit {
-    <#
-        Framework §4.5 SQL-ADMIN-GROUP G3: what the group's PIM policy allows for an ACTIVE member assignment made by an admin
-        (its rule Expiration_Admin_Assignment): @{ Known; Permanent; Days; Detail }. Read with RoleManagementPolicy.Read.AzureADGroup
-        (the updater's) or a person's sign-in. Never throws: a policy that cannot be read is Known = $false (then permanent is
-        tried first and 180 days after it, as before).
-    #>
-    param([Parameter(Mandatory)][scriptblock]$Graph, [Parameter(Mandatory)][string]$GroupId)
-    $no = [pscustomobject]@{ Known = $false; Permanent = $false; Days = 0; Detail = 'the group''s PIM policy could not be read' }
-    try {
-        $uri = ("https://graph.microsoft.com/v1.0/policies/roleManagementPolicyAssignments?`$filter=scopeId eq '{0}' and scopeType eq 'Group' and roleDefinitionId eq 'member'&`$expand=policy(`$expand=rules)" -f $GroupId)
-        $r = & $Graph 'GET' $uri $null
-        $a = @(Get-SIDbInitProp $r @('value') | Where-Object { $_ })[0]
-        $rule = @(Get-SIDbInitProp $a @('policy', 'rules') | Where-Object { $_ -and [string](Get-SIDbInitProp $_ @('id')) -eq 'Expiration_Admin_Assignment' })[0]
-        if (-not $rule) { return $no }
-        $req = [bool](Get-SIDbInitProp $rule @('isExpirationRequired'))
-        $days = ConvertFrom-SIDbInitIsoDays (Get-SIDbInitProp $rule @('maximumDuration'))
-        if ($req -and $days -le 0) { return $no }
-        [pscustomobject]@{ Known = $true; Permanent = (-not $req); Days = $days
-                           Detail = $(if (-not $req) { 'the group''s PIM policy allows a permanent active assignment' } else { 'the group''s PIM policy allows an active assignment of at most {0} days' -f $days }) }
-    } catch { $no }
-}
-
 function Get-SIDbInitPimAssignment {
     <#
-        Framework §4.5 SQL-ADMIN-GROUP G4: the identity's ACTIVE PIM-for-Groups member assignment to the group, read from
-        /identityGovernance/privilegedAccess/group/assignmentScheduleInstances (PrivilegedAssignmentSchedule.Read.AzureADGroup).
-        Returns @{ Found; Permanent; End (UTC, $null = permanent); Start; MemberType; AssignmentType } -- the one that lasts
-        longest when there are several. THROWS when the directory cannot be asked.
+        READ ONLY (setup\Set-SISqlAdminGroup.ps1 says since when a moved identity is a member): the identity's ACTIVE
+        PIM-for-Groups member assignment to the group, read from
+        /identityGovernance/privilegedAccess/group/assignmentScheduleInstances (the caller's own sign-in). SecurityInsight
+        no longer WRITES any such assignment (framework §4.5 G5a). Returns @{ Found; Permanent; End (UTC, $null =
+        permanent); Start; MemberType; AssignmentType } -- the one that lasts longest when there are several. THROWS when
+        the directory cannot be asked.
     #>
     param([Parameter(Mandatory)][scriptblock]$Graph, [Parameter(Mandatory)][string]$PrincipalId, [Parameter(Mandatory)][string]$GroupId)
     $uri = ("https://graph.microsoft.com/v1.0/identityGovernance/privilegedAccess/group/assignmentScheduleInstances?`$filter=groupId eq '{0}' and principalId eq '{1}'" -f $GroupId, $PrincipalId)
@@ -1307,167 +1373,58 @@ function Get-SIDbInitPimAssignment {
     [pscustomobject]@{ Found = $false; Permanent = $false; End = $null; Start = $null; MemberType = ''; AssignmentType = '' }
 }
 
-function Test-SIDbInitMembership {
-    <#
-        Is the job's identity a member of the SQL admin group? Asked two ways, so that an identity without directory read
-        rights (the updater: framework §4.5 G5 gives it only the PIM-for-Groups rights) still gets an answer:
-          * the identity's own memberOf (Test-SIDbInitMember), and
-          * its ACTIVE PIM-for-Groups assignment (Get-SIDbInitPimAssignment) -- an active assignment is a membership.
-        Returns @{ Member = $true | $false | $null (neither could be asked, or memberOf could not and there is no PIM
-        assignment: a direct membership is then not known); Via = memberOf | pim | ''; Pim (the assignment or $null);
-        MemberOfError; PimError }. Never throws.
-    #>
-    param([Parameter(Mandatory)][scriptblock]$Graph, [Parameter(Mandatory)][string]$PrincipalId, [Parameter(Mandatory)][string]$GroupId, [datetime]$NowUtc = [datetime]::UtcNow)
-    $mo = $null; $moErr = ''
-    try { $mo = [bool](Test-SIDbInitMember -Graph $Graph -PrincipalId $PrincipalId -GroupId $GroupId) } catch { $moErr = [string]$_.Exception.Message }
-    $pa = $null; $paErr = ''
-    try { $pa = Get-SIDbInitPimAssignment -Graph $Graph -PrincipalId $PrincipalId -GroupId $GroupId } catch { $paErr = [string]$_.Exception.Message }
-    $active = [bool]($pa -and $pa.Found -and ($pa.Permanent -or ($pa.End -and $pa.End -gt $NowUtc.ToUniversalTime())))
-    $member = if ($mo -eq $true -or $active) { $true } elseif ($mo -eq $false) { $false } else { $null }
-    [pscustomobject]@{ Member = $member; Via = $(if ($mo -eq $true) { 'memberOf' } elseif ($active) { 'pim' } else { '' }); Pim = $pa; MemberOfError = $moErr; PimError = $paErr }
-}
-
-function Add-SIDbInitPimMember {
-    <# The active PIM-for-Groups assignment, then READ BACK (the identity's memberOf, or its active PIM assignment: an active
-       assignment is a membership). Framework §4.5 G3: permanent first -- when the group's PIM policy says it is not allowed,
-       the policy's own limit at once (unknown policy: permanent, then 180 days); the end date is SAID. An assignment
-       already there counts as made. Returns @{ State = added | refused; Detail; End }. Never throws. #>
-    param([Parameter(Mandatory)][scriptblock]$Graph, [Parameter(Mandatory)][string]$PrincipalId, [Parameter(Mandatory)][string]$GroupId,
-          [scriptblock]$Sleep, [scriptblock]$Print, [int]$LimitSeconds = 300, [datetime]$NowUtc = [datetime]::UtcNow)
-    $uri = 'https://graph.microsoft.com/v1.0/identityGovernance/privilegedAccess/group/assignmentScheduleRequests'
-    $lim = Get-SIDbInitPimPolicyLimit -Graph $Graph -GroupId $GroupId
-    $limDays = if ($lim.Known -and $lim.Days -gt 0) { $lim.Days } else { 180 }
-    $tries = if ($lim.Known -and -not $lim.Permanent) { @($limDays) } else { @(0, $limDays) }
-    $made = ''; $err = ''; $end = $null
-    foreach ($days in $tries) {
-        try {
-            $null = & $Graph 'POST' $uri (Get-SIDbInitPimMemberBody -PrincipalId $PrincipalId -GroupId $GroupId -Days $days -Now $NowUtc)
-            if ($days) { $end = $NowUtc.ToUniversalTime().AddDays($days); $made = ('for {0} days, until {1:yyyy-MM-dd} -- {2}' -f $days, $end, $(if ($lim.Known) { $lim.Detail } else { 'a permanent one was refused' })) } else { $made = 'permanent' }
-            break
-        }
-        catch {
-            $m = [string]$_.Exception.Message
-            if ($m -match 'RoleAssignmentExists|already exists') { $made = 'already assigned'; break }
-            $err = $m
-            if ($m -notmatch 'Expiration|PolicyValidation|ExpirationRule|noExpiration|permanent') { break }   # not a policy limit: no second try
-        }
-    }
-    if (-not $made) { return [pscustomobject]@{ State = 'refused'; Detail = $err; End = $null } }
-    if ($Print) { & $Print ('   PIM-for-Groups: {0} assigned to the SQL admin group as an active member ({1}); waiting until it reads back' -f (Get-SIDbInitNames).Identity, $made) }
-    $waited = 0
-    while ($true) {
-        $mm = Test-SIDbInitMembership -Graph $Graph -PrincipalId $PrincipalId -GroupId $GroupId -NowUtc $NowUtc
-        if ($mm.Member -eq $true) {
-            if ($mm.Pim -and $mm.Pim.Found -and -not $mm.Pim.Permanent) { $end = $mm.Pim.End }
-            return [pscustomobject]@{ State = 'added'; End = $end; Detail = ('{0} is an active PIM-for-Groups member of the SQL admin group ({1}), read back from its {2}' -f (Get-SIDbInitNames).Identity, $made, $(if ($mm.Via -eq 'pim') { 'PIM assignment' } else { 'memberOf' })) }
-        }
-        if ($waited -ge $LimitSeconds) { return [pscustomobject]@{ State = 'refused'; End = $null; Detail = ('the PIM-for-Groups assignment was made ({0}) but the membership did not show within {1} s -- run again later' -f $made, $LimitSeconds) } }
-        if ($Sleep) { & $Sleep 15 }; $waited += 15
-    }
-}
-
-function Get-SIDbInitPimRenewPlan {
-    <# PURE. Framework §4.5 G4: does the membership need a renewal? -Assignment: Get-SIDbInitPimAssignment. Action = none (no
-       PIM assignment -- a direct member -- or a permanent one) | current (it ends after the window) | renew (it is still
-       valid and ends within -WindowDays) | expired (it has ended). Returns @{ Action; End; DaysLeft; Detail }. #>
-    param($Assignment, [datetime]$NowUtc = [datetime]::UtcNow, [int]$WindowDays = 30)
-    $now = $NowUtc.ToUniversalTime()
-    if (-not $Assignment -or -not $Assignment.Found) { return [pscustomobject]@{ Action = 'none'; End = $null; DaysLeft = $null; Detail = 'no PIM-for-Groups assignment (a direct member)' } }
-    if ($Assignment.Permanent -or -not $Assignment.End) { return [pscustomobject]@{ Action = 'none'; End = $null; DaysLeft = $null; Detail = 'a permanent PIM-for-Groups assignment' } }
-    $left = [Math]::Round(($Assignment.End - $now).TotalDays, 1)
-    $endText = $Assignment.End.ToString('yyyy-MM-dd', [Globalization.CultureInfo]::InvariantCulture)
-    if ($left -le 0) { return [pscustomobject]@{ Action = 'expired'; End = $Assignment.End; DaysLeft = $left; Detail = ('the PIM-for-Groups assignment ended {0}' -f $endText) } }
-    if ($left -le $WindowDays) { return [pscustomobject]@{ Action = 'renew'; End = $Assignment.End; DaysLeft = $left; Detail = ('the PIM-for-Groups assignment ends {0} (in {1} days)' -f $endText, $left) } }
-    [pscustomobject]@{ Action = 'current'; End = $Assignment.End; DaysLeft = $left; Detail = ('the PIM-for-Groups assignment ends {0} (in {1} days)' -f $endText, $left) }
-}
-
-function Invoke-SIDbInitPimRenew {
-    <#
-        Framework §4.5 G4: the active PIM-for-Groups assignment RENEWED -- adminExtend (Graph's action for an assignment that
-        is about to end), else adminUpdate (its schedule set again); for one that has ended adminRenew, else a new
-        adminAssign. The new end follows the group's policy (permanent when allowed, else its limit; 180 days when the
-        policy cannot be read). READ BACK: the assignment must end later than before (or be permanent). Returns @{ Ok; Action;
-        End; Detail }. Never throws.
-    #>
-    param([Parameter(Mandatory)][scriptblock]$Graph, [Parameter(Mandatory)][string]$PrincipalId, [Parameter(Mandatory)][string]$GroupId,
-          $Assignment, [datetime]$NowUtc = [datetime]::UtcNow, [switch]$Expired, [scriptblock]$Sleep, [int[]]$ReadBackWaits = @(5, 15, 30))
-    $uri = 'https://graph.microsoft.com/v1.0/identityGovernance/privilegedAccess/group/assignmentScheduleRequests'
-    $lim = Get-SIDbInitPimPolicyLimit -Graph $Graph -GroupId $GroupId
-    $days = if ($lim.Known -and $lim.Permanent) { 0 } elseif ($lim.Known -and $lim.Days -gt 0) { $lim.Days } else { 180 }
-    $actions = if ($Expired) { @('adminRenew', 'adminAssign') } else { @('adminExtend', 'adminUpdate') }
-    $errs = New-Object System.Collections.Generic.List[string]
-    $done = ''
-    foreach ($a in $actions) {
-        try { $null = & $Graph 'POST' $uri (Get-SIDbInitPimMemberBody -PrincipalId $PrincipalId -GroupId $GroupId -Days $days -Now $NowUtc -Action $a); $done = $a; break }
-        catch { $errs.Add(('{0}: {1}' -f $a, [string]$_.Exception.Message)) }
-    }
-    if (-not $done) { return [pscustomobject]@{ Ok = $false; Action = ''; End = $(if ($Assignment) { $Assignment.End } else { $null }); Detail = ('the renewal was refused ({0})' -f ($errs -join '; ')) } }
-    $before = if ($Assignment -and $Assignment.End) { $Assignment.End } else { [datetime]::MinValue }
-    $last = ''
-    foreach ($w in @(0) + @($ReadBackWaits)) {
-        if ($w -gt 0 -and $Sleep) { & $Sleep $w }
-        try {
-            $after = Get-SIDbInitPimAssignment -Graph $Graph -PrincipalId $PrincipalId -GroupId $GroupId
-            if ($after.Found -and ($after.Permanent -or ($after.End -and $after.End -gt $before))) {
-                return [pscustomobject]@{ Ok = $true; Action = $done; End = $after.End
-                                          Detail = ('renewed ({0}): the PIM-for-Groups assignment now {1}, read back' -f $done, $(if ($after.Permanent) { 'is permanent' } else { 'ends ' + $after.End.ToString('yyyy-MM-dd', [Globalization.CultureInfo]::InvariantCulture) })) }
-            }
-        } catch { $last = [string]$_.Exception.Message }
-    }
-    [pscustomobject]@{ Ok = $false; Action = $done; End = $(if ($Assignment) { $Assignment.End } else { $null }); Detail = ('the renewal ({0}) was accepted, but the assignment does not read back with a later end{1}' -f $done, $(if ($last) { ' (' + $last + ')' } else { '' })) }
-}
-
 function Sync-SIDbInitMembership {
     <#
-        Framework §4.5 SQL-ADMIN-GROUP G2-G4 -- THE ONE PATH setup (the guided install, setup\Start-SIDbInitJob.ps1) and the
-        updater use for the job identity's membership of the SQL admin group:
-          1. READ it (Test-SIDbInitMembership: memberOf, or an active PIM-for-Groups assignment);
-          2. not a member -> CONVERGED (Add-SIDbInitMember: direct members/$ref, else an active PIM-for-Groups assignment,
-             permanent first, else the policy's limit with the end date said), read back;
-          3. a member through a PIM assignment that ends within -WindowDays (30) -> RENEWED (Invoke-SIDbInitPimRenew), read
-             back. A renewal that fails while the assignment is still valid is Renewal.State 'failed' -- the CALLER says it as a
-             warning; it never stops anything on its own.
-        Returns @{ State = already | added | refused; Member ($true | $false | $null); JustAdded; Via; End; Renewal @{ State =
-        none | current | renewed | failed | unknown; End; Detail }; Detail }. Never throws.
+        Framework §4.5 SQL-ADMIN-GROUP G2 + G5a -- THE ONE PATH setup (the guided install and setup\Start-SIDbInitJob.ps1,
+        with a person's or the Support app's sign-in) uses for the job identity's membership of the SQL admin group:
+          1. READ it (the identity's memberOf);
+          2. not a member -> a DIRECT, PERMANENT member (Add-SIDbInitMember: members/$ref), read back. Refused = 'refused',
+             the detail ends with the plain support step. NO PIM-for-Groups assignment is ever written or renewed.
+        The UPDATER never calls it -- it only reads the membership (Read-SIDbInitMembership).
+        Returns @{ State = already | added | refused; Member ($true | $false | $null); JustAdded; Via; End ($null);
+        Renewal @{ State = none; End; Detail } (kept for callers: no membership ends); Detail }. Never throws.
     #>
     param([Parameter(Mandatory)][scriptblock]$Graph, [Parameter(Mandatory)][string]$PrincipalId, [Parameter(Mandatory)][string]$GroupId,
-          [scriptblock]$Sleep, [scriptblock]$Print, [int]$LimitSeconds = 300, [int]$WindowDays = -1, [datetime]$NowUtc = [datetime]::UtcNow)
-    if ($WindowDays -lt 0) { $WindowDays = (Get-SIDbInitNames).RenewWindowDays }
-    $id = (Get-SIDbInitNames).Identity
-    $ren = { param($st, $end, $d) [pscustomobject]@{ State = $st; End = $end; Detail = [string]$d } }
+          [scriptblock]$Sleep, [scriptblock]$Print, [int]$LimitSeconds = 300, [datetime]$NowUtc = [datetime]::UtcNow)
+    $none = [pscustomobject]@{ State = 'none'; End = $null; Detail = 'a direct, permanent membership (nothing to renew)' }
     try {
-        $m = Test-SIDbInitMembership -Graph $Graph -PrincipalId $PrincipalId -GroupId $GroupId -NowUtc $NowUtc
-        $state = 'already'; $just = $false; $detail = ''
-        if ($m.Member -ne $true) {
-            $a = Add-SIDbInitMember -Graph $Graph -PrincipalId $PrincipalId -GroupId $GroupId -Sleep $Sleep -Print $Print -LimitSeconds $LimitSeconds -NowUtc $NowUtc
-            if ([string]$a.State -notin 'already', 'added') {
-                return [pscustomobject]@{ State = 'refused'; Member = $m.Member; JustAdded = $false; Via = ''; End = $null; Renewal = (& $ren 'unknown' $null 'not a member'); Detail = [string]$a.Detail }
-            }
-            $state = [string]$a.State; $just = ($state -eq 'added'); $detail = [string]$a.Detail
-            $m2 = Test-SIDbInitMembership -Graph $Graph -PrincipalId $PrincipalId -GroupId $GroupId -NowUtc $NowUtc
-            if ($m2.Member -eq $true) { $m = $m2 } else { $m = [pscustomobject]@{ Member = $true; Via = 'added'; Pim = $m2.Pim; MemberOfError = $m2.MemberOfError; PimError = $m2.PimError } }
-        } else {
-            $detail = '{0} is a member of the SQL admin group (read from its {1})' -f $id, $(if ($m.Via -eq 'pim') { 'active PIM-for-Groups assignment' } else { 'memberOf' })
+        $m = Read-SIDbInitMembership -Graph $Graph -PrincipalId $PrincipalId -GroupId $GroupId
+        if ($m.Member -eq $true) { return [pscustomobject]@{ State = 'already'; Member = $true; JustAdded = $false; Via = 'memberOf'; End = $null; Renewal = $none; Detail = [string]$m.Detail } }
+        $a = Add-SIDbInitMember -Graph $Graph -PrincipalId $PrincipalId -GroupId $GroupId -Sleep $Sleep -Print $Print -LimitSeconds $LimitSeconds -NowUtc $NowUtc
+        if ([string]$a.State -notin 'already', 'added') {
+            $d = [string]$a.Detail; if ($d -notmatch 'support step:') { $d = '{0}; {1}' -f $d, (Get-SIDbInitMembershipSupportStep) }
+            return [pscustomobject]@{ State = 'refused'; Member = $m.Member; JustAdded = $false; Via = ''; End = $null; Renewal = $none; Detail = $d }
         }
-        # 3. the renewal (only a PIM assignment ends; a direct or permanent membership needs none)
-        $plan = Get-SIDbInitPimRenewPlan -Assignment $m.Pim -NowUtc $NowUtc -WindowDays $WindowDays
-        $r = switch ($plan.Action) {
-            'renew' {
-                $x = Invoke-SIDbInitPimRenew -Graph $Graph -PrincipalId $PrincipalId -GroupId $GroupId -Assignment $m.Pim -NowUtc $NowUtc -Sleep $Sleep
-                & $ren $(if ($x.Ok) { 'renewed' } else { 'failed' }) $x.End ('{0}; {1}' -f $plan.Detail, $x.Detail)
-            }
-            'expired' {
-                # memberOf still shows it (replication) but the assignment has ended: renewed as one that has ended
-                $x = Invoke-SIDbInitPimRenew -Graph $Graph -PrincipalId $PrincipalId -GroupId $GroupId -Assignment $m.Pim -NowUtc $NowUtc -Sleep $Sleep -Expired
-                & $ren $(if ($x.Ok) { 'renewed' } else { 'failed' }) $x.End ('{0}; {1}' -f $plan.Detail, $x.Detail)
-            }
-            'current' { & $ren 'current' $plan.End $plan.Detail }
-            default   { & $ren $(if ($m.PimError -and -not $m.Pim) { 'unknown' } else { 'none' }) $null $(if ($m.PimError -and -not $m.Pim) { 'its PIM-for-Groups assignment could not be read: ' + $m.PimError } else { $plan.Detail }) }
-        }
-        [pscustomobject]@{ State = $state; Member = $true; JustAdded = $just; Via = [string]$m.Via; End = $r.End; Renewal = $r; Detail = $detail }
+        [pscustomobject]@{ State = [string]$a.State; Member = $true; JustAdded = ([string]$a.State -eq 'added'); Via = 'memberOf'; End = $null; Renewal = $none; Detail = [string]$a.Detail }
     } catch {
-        [pscustomobject]@{ State = 'refused'; Member = $null; JustAdded = $false; Via = ''; End = $null; Renewal = (& $ren 'unknown' $null ''); Detail = ('the membership could not be checked: {0}' -f $_.Exception.Message) }
+        [pscustomobject]@{ State = 'refused'; Member = $null; JustAdded = $false; Via = ''; End = $null; Renewal = $none; Detail = ('the membership could not be checked: {0}' -f $_.Exception.Message) }
     }
+}
+
+function Read-SIDbInitMembership {
+    <#
+        Framework §4.5 SQL-ADMIN-GROUP G5a (SI #1253, least privilege): THE UPDATER'S membership check -- READ ONLY. Is the
+        job's identity (-PrincipalId) a member of the SQL admin group (-GroupId)? Read from the identity's side
+        (GET servicePrincipals/{id}/memberOf -- Application.Read.All + GroupMember.Read.All, both read only; Directory.Read.All
+        covers it too). A direct permanent member shows there, and so does an active PIM-for-Groups member. NOTHING is
+        written: no members/$ref, no PIM-for-Groups request. Returns @{ Member ($true | $false | $null = could not be read);
+        Detail }. Never throws.
+    #>
+    param([Parameter(Mandatory)][scriptblock]$Graph, [Parameter(Mandatory)][string]$PrincipalId, [Parameter(Mandatory)][string]$GroupId)
+    $id = (Get-SIDbInitNames).Identity
+    try {
+        if (Test-SIDbInitMember -Graph $Graph -PrincipalId $PrincipalId -GroupId $GroupId) {
+            return [pscustomobject]@{ Member = $true; Detail = ('{0} is a member of the SQL admin group (read from its memberOf)' -f $id) }
+        }
+        [pscustomobject]@{ Member = $false; Detail = ('{0} is not a member of the SQL admin group (read from its memberOf)' -f $id) }
+    } catch {
+        [pscustomobject]@{ Member = $null; Detail = ('the membership of {0} could not be read ({1})' -f $id, ([string]$_.Exception.Message -replace '\s+', ' ')) }
+    }
+}
+
+function Get-SIDbInitMembershipSupportStep {
+    <# PURE. G5a: the plain support step when the job's identity is not a member -- the updater never adds it. #>
+    ('support step: the database setup identity {0} is not a member of the SQL admin group -- the support partner adds it again through the Support app (a direct, permanent membership); the update never adds it itself' -f (Get-SIDbInitNames).Identity)
 }
 
 function New-SIDbInitMembershipRecordValue {
@@ -1487,21 +1444,31 @@ function New-SIDbInitMembershipRecordValue {
 }
 
 # ---------------------------------------------------------------------------------------------------------------------
-#  Framework §4.5 SQL-ADMIN-GROUP G5: the UPDATER identity's Microsoft Graph application permissions -- exactly the three
-#  PIM-for-Groups rights, granted by SETUP (the person or app running it holds the right to grant application permissions)
-#  and only CHECKED by the updater (it cannot grant itself). The directory-wide role-management write right is refused by
-#  name (least privilege, decided): it is never asked for, never granted here.
+#  Framework §4.5 SQL-ADMIN-GROUP G5: the UPDATER identity's Microsoft Graph application permissions, granted by SETUP (the
+#  person or app running it holds the right to grant application permissions) and only CHECKED by the updater (it cannot
+#  grant itself). The directory-wide role-management write right is refused by name (least privilege, decided): it is
+#  never asked for, never granted here.
+#  G5a (SI #1253, Invardia decision 2026-11-14, least privilege): the updater no longer holds the PIM-for-Groups
+#  assignment permissions (PrivilegedAssignmentSchedule.ReadWrite / .Read .AzureADGroup -- tenant-wide, they could make
+#  anyone an active member of ANY PIM-managed group), nor the group's PIM policy read (RoleManagementPolicy.Read.AzureADGroup,
+#  used only for those assignments). It only READS the membership (Read-SIDbInitMembership). Where an install still holds
+#  them they are taken off with read-back (Remove-SIDbInitRetiredGraphRoles), else a support step.
 # ---------------------------------------------------------------------------------------------------------------------
 
 function Get-SIDbInitGraphAppId { <# PURE. Microsoft Graph's application id (the same in every tenant). #> '00000003-0000-0000-c000-000000000000' }
 
+function Get-SIDbInitRetiredGraphRoleNames {
+    <# PURE. G5a: the updater identity's Microsoft Graph application permissions it held before and holds NO LONGER -- never
+       granted again, taken off where an install still holds them. #>
+    # (the group's PIM policy read went with them: it served only the PIM-for-Groups assignment, which nothing makes now)
+    @('PrivilegedAssignmentSchedule.ReadWrite.AzureADGroup', 'PrivilegedAssignmentSchedule.Read.AzureADGroup', 'RoleManagementPolicy.Read.AzureADGroup')
+}
+
 function Get-SIDbInitUpdaterGraphRoleNames {
     <# PURE. G5: the updater identity's Microsoft Graph application permissions, by VALUE (their ids are read from Graph's own
-       service principal at run time -- never written here). Required = $false: taken only when Graph has it. #>
+       service principal at run time -- never written here). Required = $false: taken only when Graph has it.
+       G5a: READ ONLY, for the membership check -- no PIM-for-Groups permission (Get-SIDbInitRetiredGraphRoleNames). #>
     @(
-        [pscustomobject]@{ Value = 'PrivilegedAssignmentSchedule.ReadWrite.AzureADGroup'; Required = $true;  Why = 'make and renew the database setup job identity''s active PIM-for-Groups membership' }
-        [pscustomobject]@{ Value = 'PrivilegedAssignmentSchedule.Read.AzureADGroup';      Required = $false; Why = 'read that membership and its end date' }
-        [pscustomobject]@{ Value = 'RoleManagementPolicy.Read.AzureADGroup';              Required = $true;  Why = 'read the group''s PIM policy (permanent, or its longest duration)' }
         # framework §4.5 G5 (added 2026-11-05): read only -- without it the read-back of the membership (the identity's
         # memberOf) is refused and reads "unknown"
         [pscustomobject]@{ Value = 'GroupMember.Read.All';                                Required = $true;  Why = 'read the membership back (the identity''s memberOf)' }
@@ -1524,7 +1491,8 @@ function Resolve-SIDbInitUpdaterGraphRoles {
     $all = @(Get-SIDbInitUpdaterGraphRoleNames)
     $want = if (@($Roles | Where-Object { $_ }).Count) {
         foreach ($r in $Roles) {
-            if ((Get-SIDbInitRefusedGraphRoleNames) -contains $r) { throw ("'{0}' is never given to the updater identity (least privilege: only the PIM-for-Groups permissions)" -f $r) }
+            if ((Get-SIDbInitRefusedGraphRoleNames) -contains $r) { throw ("'{0}' is never given to the updater identity (least privilege)" -f $r) }
+            if ((Get-SIDbInitRetiredGraphRoleNames) -contains $r) { throw ("'{0}' is no longer given to the updater identity (least privilege: it only reads the membership)" -f $r) }
             if (-not @($all | Where-Object { $_.Value -eq $r }).Count) { throw ("'{0}' is not one of the updater identity's Microsoft Graph permissions" -f $r) }
         }
         @($all | Where-Object { $Roles -contains $_.Value })
@@ -1549,6 +1517,77 @@ function Get-SIDbInitHeldAppRoleIds {
         $next = [string](Get-SIDbInitProp $page @('@odata.nextLink'))
     }
     $out.ToArray()   # enumerated: wrap the call in @( )
+}
+
+function Get-SIDbInitAppRoleAssignmentRows {
+    <# The app-role assignments -PrincipalId holds on -ResourceId: @{ Id (the assignment's id); AppRoleId } (every page).
+       THROWS when they cannot be read. #>
+    param([Parameter(Mandatory)][scriptblock]$Graph, [Parameter(Mandatory)][string]$PrincipalId, [Parameter(Mandatory)][string]$ResourceId)
+    $out = New-Object System.Collections.Generic.List[object]
+    $next = 'https://graph.microsoft.com/v1.0/servicePrincipals/{0}/appRoleAssignments' -f $PrincipalId
+    for ($i = 0; $next -and $i -lt 20; $i++) {
+        $page = & $Graph 'GET' $next $null
+        foreach ($a in @(Get-SIDbInitProp $page @('value') | Where-Object { $_ })) {
+            if ([string](Get-SIDbInitProp $a @('resourceId')) -eq $ResourceId) {
+                $out.Add([pscustomobject]@{ Id = [string](Get-SIDbInitProp $a @('id')); AppRoleId = ([string](Get-SIDbInitProp $a @('appRoleId'))).ToLowerInvariant() })
+            }
+        }
+        $next = [string](Get-SIDbInitProp $page @('@odata.nextLink'))
+    }
+    $out.ToArray()   # enumerated: wrap the call in @( )
+}
+
+function Remove-SIDbInitRetiredGraphRoles {
+    <#
+        G5a (SI #1253): the updater identity (-PrincipalId, its service principal's object id) keeps NONE of the retired
+        PIM-for-Groups permissions or the group's PIM policy read (Get-SIDbInitRetiredGraphRoleNames). Each one it still holds is DELETED
+        (servicePrincipals/{id}/appRoleAssignments/{assignment id}) and READ BACK. Run by setup (the person's sign-in) and by
+        the updater on every update (with its own token; deleting an app-role assignment needs a right the updater normally
+        does not hold -- then it is a support step: the support partner removes it through the Support app). Nothing else is
+        ever removed. Returns @{ Ok; State (clean | removed | partial | not-checked); Removed; Failed; Lines }. Never throws;
+        a read that fails is "not checked", never "clean".
+    #>
+    param([Parameter(Mandatory)][scriptblock]$Graph, [Parameter(Mandatory)][string]$PrincipalId, [scriptblock]$Sleep, [int]$ReadBackTries = 4)
+    $lines = New-Object System.Collections.Generic.List[string]
+    $removed = New-Object System.Collections.Generic.List[string]; $failed = New-Object System.Collections.Generic.List[string]
+    $out = { param($ok, $st) [pscustomobject]@{ Ok = [bool]$ok; State = $st; Removed = $removed.ToArray(); Failed = $failed.ToArray(); Lines = $lines.ToArray() } }
+    $retired = @(Get-SIDbInitRetiredGraphRoleNames)
+    try {
+        $sp = @(Get-SIDbInitProp (& $Graph 'GET' ("https://graph.microsoft.com/v1.0/servicePrincipals?`$filter=appId eq '{0}'&`$select=id,appId,appRoles" -f (Get-SIDbInitGraphAppId)) $null) @('value') | Where-Object { $_ })[0]
+        $spId = [string](Get-SIDbInitProp $sp @('id'))
+        if (-not $spId) { $lines.Add('the updater identity''s earlier permissions it no longer needs: NOT CHECKED (Microsoft Graph''s service principal was not found) -- the next update tries again'); return (& $out $false 'not-checked') }
+        $byId = @{}
+        foreach ($r in @(Get-SIDbInitProp $sp @('appRoles') | Where-Object { $_ })) {
+            $v = [string](Get-SIDbInitProp $r @('value'))
+            if ($retired -ccontains $v) { $byId[([string](Get-SIDbInitProp $r @('id'))).ToLowerInvariant()] = $v }
+        }
+        $held = @(Get-SIDbInitAppRoleAssignmentRows -Graph $Graph -PrincipalId $PrincipalId -ResourceId $spId | Where-Object { $byId.ContainsKey($_.AppRoleId) })
+    } catch {
+        $lines.Add(('the updater identity''s earlier permissions it no longer needs: NOT CHECKED ({0}) -- the next update tries again' -f ([string]$_.Exception.Message -replace '\s+', ' ')))
+        return (& $out $false 'not-checked')
+    }
+    if (-not $held.Count) { $lines.Add('the updater identity holds none of the permissions it no longer needs -- none left'); return (& $out $true 'clean') }
+    foreach ($h in $held) {
+        $name = [string]$byId[$h.AppRoleId]; $gone = $false; $why = ''
+        try {
+            if (-not $h.Id) { throw 'the assignment has no id' }
+            $null = & $Graph 'DELETE' ('https://graph.microsoft.com/v1.0/servicePrincipals/{0}/appRoleAssignments/{1}' -f $PrincipalId, $h.Id) $null
+            for ($i = 0; $i -lt [Math]::Max(1, $ReadBackTries); $i++) {
+                $now = @(Get-SIDbInitAppRoleAssignmentRows -Graph $Graph -PrincipalId $PrincipalId -ResourceId $spId | Where-Object { $_.Id -eq $h.Id -or $_.AppRoleId -eq $h.AppRoleId })
+                if (-not $now.Count) { $gone = $true; break }
+                if ($Sleep) { & $Sleep 5 }
+            }
+            if (-not $gone) { $why = 'still there after the removal' }
+        } catch { $why = ([string]$_.Exception.Message -replace '\s+', ' ') }
+        if ($gone) { $removed.Add($name); $lines.Add(('the updater identity''s Microsoft Graph permission {0} is removed (read back) -- it is no longer needed' -f $name)) }
+        else {
+            $failed.Add($name)
+            $refused = $why -match '(?i)\b403\b|Authorization_RequestDenied|Insufficient privileges|Forbidden'
+            if ($refused) { $lines.Add(('support step: the updater identity still holds the Microsoft Graph permission {0}, which it no longer needs -- it may not remove it itself; the support partner removes it through the Support app' -f $name)) }
+            else { $lines.Add(('the updater identity''s Microsoft Graph permission {0} was NOT removed ({1}) -- the next update tries again; if it stays, the support partner removes it through the Support app' -f $name, $why)) }
+        }
+    }
+    & $out ($failed.Count -eq 0) $(if ($failed.Count) { 'partial' } else { 'removed' })
 }
 
 function Grant-SIDbInitUpdaterGraphRoles {
@@ -1603,7 +1642,15 @@ function Grant-SIDbInitUpdaterGraphRoles {
         $ok = ($missing.Count -eq 0)
         $d = if ($ok) { 'the updater identity holds the Microsoft Graph application permissions {0} (read back{1})' -f ((@($want | ForEach-Object Value)) -join ', '), $(if ($granted.Count) { '; granted now: ' + ($granted -join ', ') } else { '' }) }
              else { 'the updater identity does not hold {0} -- an Entra administrator grants them (Privileged Role Administrator, or the right to grant application permissions); then run setup again' -f ($missing -join ', ') }
-        & $out $ok $d
+        # G5a: the retired PIM-for-Groups permissions taken off with the person's sign-in, read back (a leftover is said, it
+        # never fails the grant)
+        $ret = Remove-SIDbInitRetiredGraphRoles -Graph $Graph -PrincipalId $PrincipalId -Sleep $Sleep
+        foreach ($l in $ret.Lines) { $lines.Add($l) }
+        if ($ret.Removed.Count) { $d += ('; removed (no longer needed): {0}' -f ($ret.Removed -join ', ')) }
+        if ($ret.Failed.Count) { $d += ('; still held, no longer needed: {0} -- the support partner removes it through the Support app' -f ($ret.Failed -join ', ')) }
+        $o = & $out $ok $d
+        $o | Add-Member -NotePropertyName Retired -NotePropertyValue $ret -Force
+        $o
     } catch {
         $missing.Add('(not read)')
         & $out $false ('the updater identity''s Microsoft Graph permissions could not be read or granted: {0}' -f $_.Exception.Message)
@@ -1631,10 +1678,13 @@ function Test-SIDbInitUpdaterGraphRoles {
     $h = @($Held | Where-Object { $_ })
     $missing = @(Get-SIDbInitUpdaterGraphRoleNames | Where-Object { $_.Required -and $h -notcontains $_.Value } | ForEach-Object Value)
     $extra = @(Get-SIDbInitRefusedGraphRoleNames | Where-Object { $h -contains $_ })
+    # G5a: the retired PIM-for-Groups permissions it still holds (the caller takes them off, Remove-SIDbInitRetiredGraphRoles)
+    $retired = @(Get-SIDbInitRetiredGraphRoleNames | Where-Object { $h -contains $_ })
     $lines = New-Object System.Collections.Generic.List[string]
-    if ($missing.Count) { $lines.Add(('WARNING: the updater identity does not hold the Microsoft Graph application permission(s) {0}, so it cannot keep the database setup job''s membership of the SQL admin group current -- setup grants them (the guided install, or setup\Start-SIDbInitJob.ps1 through the Support app); the update goes on' -f ($missing -join ', '))) }
-    if ($extra.Count) { $lines.Add(('WARNING: the updater identity holds {0}, more than it needs -- an Entra administrator removes it (it needs only the PIM-for-Groups permissions)' -f ($extra -join ', '))) }
-    [pscustomobject]@{ Ok = ($missing.Count -eq 0); Missing = $missing; Extra = $extra; Lines = $lines.ToArray() }
+    if ($missing.Count) { $lines.Add(('WARNING: the updater identity does not hold the Microsoft Graph application permission(s) {0}, so it cannot read the database setup job''s membership of the SQL admin group -- setup grants them (the guided install, or setup\Start-SIDbInitJob.ps1 through the Support app); the update goes on' -f ($missing -join ', '))) }
+    if ($extra.Count) { $lines.Add(('WARNING: the updater identity holds {0}, more than it needs -- an Entra administrator removes it' -f ($extra -join ', '))) }
+    if ($retired.Count) { $lines.Add(('the updater identity still holds {0}, which it no longer needs (it only reads the membership) -- taken off now' -f ($retired -join ', '))) }
+    [pscustomobject]@{ Ok = ($missing.Count -eq 0); Missing = $missing; Extra = $extra; Retired = $retired; Lines = $lines.ToArray() }
 }
 
 function Get-SIDbInitAdminGroupId {
@@ -1811,7 +1861,7 @@ function Start-SIDbInitRun {
     $run = New-SIDbInitRunId
     $env = [ordered]@{ SI_DBINIT_RUN = $run; SI_DBINIT_BY = $By; SI_DBINIT_STEPS = $Steps }
     if ($Support) { $env.SI_DBINIT_SUPPORT = $Support }
-    foreach ($k in @($Extra.Keys)) { if ([string]$k -match '^SI_DBINIT_(MOVES|DROPS|PRINCIPALS|SUPPORT_STANDING_OFF)$') { $env[[string]$k] = [string]$Extra[$k] } }
+    foreach ($k in @($Extra.Keys)) { if ([string]$k -match '^SI_DBINIT_(MOVES|DROPS|PRINCIPALS|SUPPORT_STANDING_OFF|SIGNIN_DROP)$') { $env[[string]$k] = [string]$Extra[$k] } }
     $start = & $Arm 'POST' ('{0}/start?api-version={1}' -f $JobId, (Get-SIDbInitNames).AppApi) (Get-SIDbInitStartBody -Job $Job -Env $env)
     $exec = [string](Get-SIDbInitProp $start @('name')); if (-not $exec) { $exec = (([string](Get-SIDbInitProp $start @('id'))) -split '/')[-1] }
     if (-not $exec) { return [pscustomobject]@{ Ok = $false; Status = 'NotStarted'; Execution = ''; Run = $run; Seconds = 0; Why = '' } }

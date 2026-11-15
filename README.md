@@ -153,6 +153,11 @@ Tier-0 exposure. A wall board refreshes itself for the SOC screen. Every setting
 and what its default really does. Pages are fast by default: every view reads stored, indexed columns, and the
 database's statistics are brought up to date after every run, so a page never waits for them.
 
+Every visitor of the web app signs in with Microsoft Entra, under your Conditional Access, before any page answers. With
+Microsoft's own sign-in in front of it (the built-in authentication of Azure Container Apps, switched on per
+installation by your support partner) no password or client secret is stored anywhere. Who may do what is decided inside SecurityInsight, by its roles and your groups. The parts reachable from the
+internet hold only the rights they need to show your data.
+
 <p align="center">
   <img src="docs/images/screenshots/top-risks.png" alt="Top risks: the assets carrying the most weighted risk, with tier, findings and domains" width="820">
 </p>

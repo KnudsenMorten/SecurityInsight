@@ -13,6 +13,42 @@ SecurityInsight Pro and the Pro trial install from invardia.com, never from GitH
 [invardia.com/trial](https://invardia.com/trial/), and your installation page there gives your two lines.
 <!-- /install lines -->
 
+## v3.1.22 — saving works with Microsoft's sign-in
+
+### Fixes
+- **Saving a form works with Microsoft's sign-in.** With Microsoft's built-in sign-in switched on, a form save was
+  refused. The web app now lets the browser send its own address to SecurityInsight only (never to another site), which
+  Microsoft's protection against forged requests needs, so every save works again.
+
+## v3.1.21 — Microsoft's sign-in switches on reliably
+
+### Fixes
+- **Switching on Microsoft's sign-in waits until the web app is ready.** When an update has just rolled out a new web
+  app version, the switch now waits for it to finish (and tries again while Azure says another change is in progress)
+  instead of stopping. Nothing was left half-done before; the switch simply did not happen.
+- **The account picker is always shown**, also when an installation sets its own sign-in parameters.
+
+## v3.1.20 — choose the account at every sign-in
+
+### Security fixes
+- **Microsoft's sign-in always asks which account to use.** With Microsoft's built-in sign-in, the account picker is
+  always shown, so an admin can sign in with a separate admin account instead of the account the browser is already
+  signed in with. The no-access pages offer "Sign in with another account".
+
+## v3.1.19 — Microsoft's built-in sign-in can protect the web app
+
+### Security features
+- **Microsoft's own sign-in in front of the web app.** The web app can sit behind the built-in authentication of Azure
+  Container Apps: every visitor signs in with Microsoft Entra before reaching SecurityInsight, the organisation's
+  Conditional Access applies, and no password or secret is stored -- the web app's managed identity proves itself to
+  Entra. Sessions last a fixed eight hours. It is switched on per installation by the support partner; until then the
+  current sign-in stays as it is. When it is switched on, every step is read back and anything that does not check out
+  is put back as it was.
+
+### Fixes
+- **Group access keeps working with the new sign-in.** SecurityInsight reads each person's groups itself, so access
+  given to a group works the same with Microsoft's sign-in.
+
 ## v3.1.18 — security update: the parts reachable from the internet hold only the rights they need
 
 ### Security fixes

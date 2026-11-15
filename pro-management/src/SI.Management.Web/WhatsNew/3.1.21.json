@@ -1,0 +1,13 @@
+{
+  "version": "3.1.21",
+  "date": "2026-11-15",
+  "type": "security",
+  "summary": "Switching on Microsoft's sign-in now waits until the web app is ready.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "Microsoft's sign-in switches on reliably",
+      "text": "When an update has just rolled out a new web app version, switching on Microsoft's sign-in now waits until the web app is ready instead of stopping. The account picker is always shown."
+    }
+  ]
+}

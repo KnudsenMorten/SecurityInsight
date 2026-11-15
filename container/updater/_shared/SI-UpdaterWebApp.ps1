@@ -1145,7 +1145,15 @@ function Invoke-SIUpdaterWebAppMove {
             if ((@($uris | Sort-Object) -join '|') -eq (@($want | Sort-Object) -join '|') -and $wantLogout -eq $logout) { return $false }
             $w = [ordered]@{ redirectUris = @($want) }
             if ("$wantLogout".Trim()) { $w['logoutUrl'] = $wantLogout }
-            if ($web -and $web.PSObject.Properties['implicitGrantSettings'] -and $web.implicitGrantSettings) { $w['implicitGrantSettings'] = $web.implicitGrantSettings }
+            # implicitGrantSettings ALWAYS goes back, ID-token issuance ON (Microsoft's built-in sign-in asks for an ID
+            # token -- AADSTS700054 when it is off); the rest of it as read, never dropped, never turned off
+            $ig = [ordered]@{ enableIdTokenIssuance = $true; enableAccessTokenIssuance = $false }
+            if ($web -and $web.PSObject.Properties['implicitGrantSettings'] -and $web.implicitGrantSettings) {
+                $igr = $web.implicitGrantSettings
+                if ($igr -is [System.Collections.IDictionary]) { foreach ($k in @($igr.Keys)) { $ig[[string]$k] = $igr[$k] } } else { foreach ($p in @($igr.PSObject.Properties)) { $ig[$p.Name] = $p.Value } }
+            }
+            $ig['enableIdTokenIssuance'] = $true
+            $w['implicitGrantSettings'] = $ig
             if ($web -and $web.PSObject.Properties['homePageUrl'] -and "$($web.homePageUrl)".Trim()) { $w['homePageUrl'] = [string]$web.homePageUrl }
             $null = & $Graph 'PATCH' ("$g/applications/{0}" -f $objId) @{ web = $w }
             $b = & $Graph 'GET' ("$g/applications/{0}?`$select=id,web" -f $objId) $null

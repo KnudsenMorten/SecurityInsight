@@ -45,6 +45,9 @@
          also Jobs__UpdaterJob, the install's own updater job (CR5, #655 step 2; the web app's default is today's name);
       4c. with -MagicLinkKeyVaultId: "Key Vault Secrets User" on that vault for the web identity (the magic-link
          signing key; magic links stay OFF until SIWeb_MagicLinksEnabled is set on the Settings page);
+      4f. with -AuthTokenStorageAccountName: Microsoft's built-in sign-in keeps its tokens in the blob container
+         si-auth-tokens of the install's own storage account (created here, no public access) -- the web identity gets
+         "Storage Blob Data Contributor" on THAT container only (the updater cannot grant it later);
       5. with -SqlAllowAzureServices: the SQL server's "Allow Azure services" rule. An environment without a virtual
          network has no fixed egress address (its outbound list is the region's shared pool), so per-IP rules cannot
          work; the better fix is a VNet-integrated environment + a private endpoint;
@@ -132,6 +135,9 @@ param(
     [switch]$JobsStartOnly,
     # ARM id of the Key Vault holding the magic-link key: grants the web identity "Key Vault Secrets User"
     [string]$MagicLinkKeyVaultId = '',
+    # step 4f: the install's own storage account (in -ResourceGroup) whose blob container holds the built-in sign-in's tokens
+    [string]$AuthTokenStorageAccountName = '',
+    [string]$AuthTokenContainer = 'si-auth-tokens',
     # adds the SQL server's "Allow Azure services" rule (see step 5 for why per-IP rules do not work without a VNet)
     [switch]$SqlAllowAzureServices,
     [switch]$GrantSql,
@@ -550,6 +556,24 @@ if ($JobsResourceGroup) {
 Write-Step '4c. The magic-link key (Key Vault Secrets User)'
 if ($MagicLinkKeyVaultId) { Grant-Role -PrincipalId $webId.PrincipalId -Role 'Key Vault Secrets User' -Scope $MagicLinkKeyVaultId }
 else { Write-Host '  -MagicLinkKeyVaultId not given: magic links cannot be enabled (they are off by default).' }
+
+Write-Step '4f. The built-in sign-in''s token store (Storage Blob Data Contributor on its own blob container only)'
+if ($AuthTokenStorageAccountName) {
+    $tokAcct = '{0}/providers/Microsoft.Storage/storageAccounts/{1}' -f $rgPath, $AuthTokenStorageAccountName
+    $tokScope = '{0}/blobServices/default/containers/{1}' -f $tokAcct, $AuthTokenContainer
+    Write-Call 'PUT' ('{0}  (no public access; kept when it is there)' -f $tokScope)
+    $tokReady = -not $Apply
+    if ($Apply) {
+        if (-not (Invoke-SIArm -Path $tokAcct -ApiVersion '2023-05-01' -AllowNotFound)) {
+            Write-Host ('  the storage account {0} is not there yet: the token store''s data right is a Support-app step later (the updater says so).' -f $AuthTokenStorageAccountName) -ForegroundColor Yellow
+        } else {
+            $tokHave = Invoke-SIArm -Path $tokScope -ApiVersion '2023-05-01' -AllowNotFound
+            if (-not $tokHave) { $null = Invoke-SIArm -Method PUT -Path $tokScope -ApiVersion '2023-05-01' -Body @{ properties = @{ publicAccess = 'None' } } }
+            $tokReady = $true
+        }
+    }
+    if ($tokReady) { Grant-Role -PrincipalId $webId.PrincipalId -Role 'Storage Blob Data Contributor' -Scope $tokScope }
+} else { Write-Host '  -AuthTokenStorageAccountName not given: the built-in sign-in''s token store needs a Support-app step later (its data right).' -ForegroundColor Yellow }
 
 Write-Step '5. SQL server firewall for the apps'' outbound addresses'
 $sqlName = ($SqlServer -split '\.')[0]

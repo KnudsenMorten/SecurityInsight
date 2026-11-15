@@ -46,10 +46,12 @@ public static class LinkArea
     /// A link session's start: the page the link opens, inside the area.
     public static string Url(string appPath) => Prefix + (appPath.StartsWith('/') ? appPath : "/" + appPath);
 
-    public static void AddLinkSessionAuthentication(AuthenticationBuilder auth)
+    /// <paramref name="outside"/>: the authentication everywhere outside the area -- the front's bearer, or the platform's
+    /// built-in authentication (BuiltInAuth).
+    public static void AddLinkSessionAuthentication(AuthenticationBuilder auth, string outside = JwtBearerDefaults.AuthenticationScheme)
     {
         auth.AddPolicyScheme(SelectorScheme, "SI sign-in front", o =>
-            o.ForwardDefaultSelector = ctx => IsLinkArea(ctx) ? Scheme : JwtBearerDefaults.AuthenticationScheme);
+            o.ForwardDefaultSelector = ctx => IsLinkArea(ctx) ? Scheme : outside);
         auth.AddCookie(Scheme, o =>
         {
             o.Cookie.Name = CookieName;

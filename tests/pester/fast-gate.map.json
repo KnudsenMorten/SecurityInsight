@@ -65,6 +65,7 @@
     { "pattern": "^(setup/_shared/SI-SnowStagingStatus\\.ps1|engine/asset-cmdb/_shared/SI-Snow(ImportSet|Verify|TestPack)\\.ps1|engine/data-out/SI-DataOut\\.ps1|pro-management/src/SI\\.Management\\.Web/Cmdb/ServiceNowTestPack/.+)$", "suites": ["SIv3-SnowStagingStatus.Tests.ps1", "SIv3-SnowTestPack.Tests.ps1", "SIv3-SnowVerify.Tests.ps1"], "dotnet": ["SI.Management.Web.Tests"], "exclusive": false },
     { "pattern": "^ops/support-worker/", "suites": ["SIv3-SupportWorker.Tests.ps1", "SIv3-ReleaseArchivePayload.Tests.ps1"], "dotnet": [], "exclusive": true },
     { "pattern": "^ops/identity-move/", "suites": ["SIv3-IdentityMove.Tests.ps1", "SIv3-ReleaseArchivePayload.Tests.ps1"], "dotnet": [], "exclusive": true },
+    { "pattern": "^setup/_shared/SI-BuiltInAuth\\.ps1$", "suites": ["SIv3-BuiltInAuth.Tests.ps1"], "dotnet": [], "exclusive": false },
     { "pattern": "^setup/_shared/SI-Identity(Move|MoveSql|NamesStep)\\.ps1$", "suites": ["SIv3-IdentityMove.Tests.ps1", "SIv3-UpdaterIdentityNames.Tests.ps1", "SIv3-DbInitJob.Tests.ps1"], "dotnet": [], "exclusive": false },
     { "pattern": "^VERSION$", "suites": ["SIv3-SolutionVersionStamp.Tests.ps1", "SIv3-BuildInfo.Tests.ps1"], "dotnet": [], "exclusive": true, "kind": "bump" },
     { "pattern": "^RELEASENOTES\\.md$", "suites": ["SI-ReleaseNotesCurated.Tests.ps1", "SI-PublishPayloadSanitization.Tests.ps1", "SIv3-WhatsNew.Tests.ps1"], "dotnet": [], "exclusive": true, "kind": "bump" },

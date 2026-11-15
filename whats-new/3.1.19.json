@@ -1,0 +1,18 @@
+{
+  "version": "3.1.19",
+  "date": "2026-11-14",
+  "type": "security",
+  "summary": "Microsoft's own sign-in can now protect the web app, so every visitor signs in with Microsoft Entra before reaching SecurityInsight.",
+  "new": [
+    {
+      "title": "Microsoft's built-in sign-in for the web app",
+      "text": "The web app can sit behind Microsoft's own sign-in. Visitors sign in with Microsoft Entra before anything else, your Conditional Access applies, and no password or secret is stored. Your support partner turns it on per installation."
+    }
+  ],
+  "fixes": [
+    {
+      "title": "Group access works with the new sign-in",
+      "text": "With Microsoft's sign-in, SecurityInsight reads each person's groups itself, so access given to a group keeps working."
+    }
+  ]
+}

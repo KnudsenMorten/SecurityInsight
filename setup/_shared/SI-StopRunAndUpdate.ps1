@@ -65,7 +65,9 @@ $script:SIStopRun = [ordered]@{
     # jobs that are never a step of a pipeline run: the updater, the heartbeat, support's one-time jobs, the probes, and
     # (#1111) the index build job -- it gives way to the update by itself (it pauses its build and frees the lock), so the
     # stop never waits for it and never mistakes it for the updater
-    NotStepRx    = '(?i)(-updater$|heartbeat|support|insidecheck|sizing-probe|index-build)'
+    # live 2026-11-14 (an install: four tries never started the updater): the per-user sign-in methods read runs every 15 min
+    # on its own schedule and is never a step of a run either
+    NotStepRx    = '(?i)(-updater$|heartbeat|support|insidecheck|sizing-probe|index-build|signin-methods)'
     RunningState = @('Running', 'Processing')
     RunLive      = @('Starting', 'Running')
 }
@@ -464,6 +466,9 @@ function Invoke-SIStopRunAndUpdate {
         [string]$RunId = '',
         [switch]$SkipUpdate,
         [switch]$Apply,
+        # the version the stop is for: an install that already runs it is left alone -- nothing is cancelled, nothing started
+        # (live 2026-11-14: a rollout pass cancelled the fresh run an install had just started on the new version)
+        [string]$TargetVersion = '',
         [ValidateRange(1, 720)][int]$TimeoutMinutes = 30,
         [ValidateRange(1, 600)][int]$PollSeconds = 30,
         [string]$By = 'support',
@@ -550,6 +555,11 @@ function Invoke-SIStopRunAndUpdate {
         & $emit ('REFUSED: ' + $refuse) 'Red'
         return (& $result 'refused' 'refused' ('nothing was started: ' + $refuse) 1 $plan)
     }
+    if ("$TargetVersion".Trim() -and "$($ver0.Installed)".Trim() -eq "$TargetVersion".Trim()) {
+        $sum = 'already on {0} -- nothing was cancelled and the updater was not started{1}' -f "$TargetVersion".Trim(), $(if ($running) { ' (the run that is going runs on it and is left alone)' } else { '' })
+        & $emit ('5. SUMMARY: ' + $sum) 'Green'
+        return (& $result $(if ($Apply) { 'applied' } else { 'plan' }) 'already-current' $sum 0 $plan)
+    }
     if (-not $Apply) {
         & $emit 'PLAN ONLY -- nothing was started. Run again with -Apply to do it.' 'Yellow'
         return (& $result 'plan' 'plan' 'plan only: nothing was started' 0 $plan)
@@ -633,17 +643,27 @@ function Invoke-SIStopRunAndUpdate {
         # ---- 3a. #1150: the run state READ AGAIN right before the start -- the plan may be minutes old, and a scheduled run
         # may have started since (an update now does not wait for a run that is only starting). A run that started since:
         # NOT started (the update lands after that run by itself). A wake-up of the runner: waited for, up to -WakeWaitMinutes.
-        $wDeadline = (& $nowU).AddMinutes($WakeWaitMinutes)
+        $wDeadline = (& $nowU).AddMinutes($WakeWaitMinutes); $firstWakes = $null
         while ($true) {
             $tn = & $nowU
             $rr = Read-SIStopRunRun -Sql $Sql -SqlWhy $SqlWhy
             $actR = Get-SIStopRunActivity -Executions (Read-SIStopRunExecutions -Arm $Arm -Base $inst.Base -JobNames $watch) -FlowJob $c.FlowJob -NowUtc $tn -Ignore @($(if ($cancelExec) { $cancelExec }))
             $chk = Get-SIStopRunStartCheck -Run $rr.View -Activity $actR -CancelledRunId $(if ($running) { $targetId } else { '' })
             if ($chk.Verdict -eq 'go') { & $emit ('3. READ AGAIN: {0}' -f $chk.Why) 'Gray'; break }
+            if ($chk.Verdict -eq 'wait' -and $null -eq $firstWakes) { $firstWakes = @(@($actR.Wakes) | ForEach-Object { ("$_" -split ' ')[1] } | Where-Object { $_ }) }
             if ($chk.Verdict -eq 'wait' -and $tn -lt $wDeadline) {
                 & $emit ('   waiting before the start: {0}' -f $chk.Why) 'DarkGray'
                 & $Sleep $PollSeconds
                 continue
+            }
+            # live 2026-11-14: the runner wakes every 5 minutes, so after the wait a young wake-up is (almost) always there
+            # again. Past the wait: a wake-up that has run THROUGH the whole wait may be starting a run (refused, as before);
+            # only NEWER wake-ups -- the normal cadence, none started a step or a run record -- are NOT a run: the updater is
+            # started (it holds for a running pipeline run by itself).
+            if ($chk.Verdict -eq 'wait') {
+                $wakeNames = @(@($actR.Wakes) | ForEach-Object { ("$_" -split ' ')[1] } | Where-Object { $_ })
+                $through = @($wakeNames | Where-Object { $firstWakes -contains $_ })
+                if (-not $through.Count) { & $emit ('3. READ AGAIN: only new wake-ups of the pipeline runner executed for {0} min and none started a step -- not a run' -f $WakeWaitMinutes) 'Gray'; break }
             }
             $why2 = if ($chk.Verdict -eq 'wait') { '{0}, still after {1} min' -f $chk.Why, $WakeWaitMinutes } else { $chk.Why }
             $sum = '{0}; the updater was NOT started: {1} -- the update is installed after that run by itself (the run gate), or run this again to stop that run first; nothing else was started' -f $stopLine, $why2
@@ -687,6 +707,29 @@ function Invoke-SIStopRunAndUpdate {
     $ver1 = Get-SIStopRunVersions -Updater $updAfter -UpdateStateJson $st1.Json -UpdateStateWhy $st1.Why
     $oc = Get-SIStopRunUpdateOutcome -Before $ver0 -After $ver1 -Status $endStatus -WaitsTag ([string](Get-SIStopRunProp (Get-SIStopRunProp $updAfter @('tags')) @('si-update-waits'))) -StartedUtc $tStart -Execution $updExec
     & $emit ('4. WAIT: {0} {1} ended {2}; {3}' -f $updName, $updExec, $endStatus, $oc.Line) $(if ($oc.Updated) { 'Green' } else { 'Yellow' })
+    # live 2026-11-14 (an install: a scheduled updater execution started 28 s before this one, held the update lock, and this
+    # one ended without installing): another updater execution that runs NOW is the one updating -- its end is waited for
+    # (same limit) and the version read back again, instead of saying "not updated"
+    if (-not $oc.Updated) {
+        $other = @(@((Read-SIStopRunExecutions -Arm $Arm -Base $inst.Base -JobNames @($updName)).Map[$updName]) | Where-Object { $_ -and $_.Running -and $_.Name -ne $updExec })[0]
+        if ($other) {
+            & $emit ('4. WAIT: another updater execution runs ({0} {1}) -- it holds the update; its end is waited for' -f $updName, $other.Name) 'Yellow'
+            $oStatus = ''
+            while ($true) {
+                $o2 = @(@((Read-SIStopRunExecutions -Arm $Arm -Base $inst.Base -JobNames @($updName)).Map[$updName]) | Where-Object { $_ -and $_.Name -eq $other.Name })[0]
+                if ($o2 -and -not $o2.Running -and $o2.Status) { $oStatus = $o2.Status; break }
+                if ((& $nowU) -ge $uDeadline) { break }
+                & $Sleep $PollSeconds
+            }
+            if ($oStatus) {
+                $updAfter = & $Arm 'GET' ('{0}/{1}?api-version={2}' -f $inst.Base, $updName, $c.ArmApi) $null
+                $st1 = & $readState
+                $ver1 = Get-SIStopRunVersions -Updater $updAfter -UpdateStateJson $st1.Json -UpdateStateWhy $st1.Why
+                $oc = Get-SIStopRunUpdateOutcome -Before $ver0 -After $ver1 -Status $oStatus -WaitsTag ([string](Get-SIStopRunProp (Get-SIStopRunProp $updAfter @('tags')) @('si-update-waits'))) -StartedUtc $tStart -Execution $other.Name
+                & $emit ('4. WAIT: {0} {1} ended {2}; {3}' -f $updName, $other.Name, $oStatus, $oc.Line) $(if ($oc.Updated) { 'Green' } else { 'Yellow' })
+            }
+        }
+    }
     $sum = '{0}; {1}; nothing else was started' -f $stopLine, $oc.Line
     & $emit ('5. SUMMARY: ' + $sum) $(if ($oc.Updated) { 'Green' } else { 'Yellow' })
     & $result 'applied' $(if ($oc.Updated) { 'updated' } else { 'not-updated' }) $sum $(if ($oc.Updated) { 0 } else { 1 }) $plan

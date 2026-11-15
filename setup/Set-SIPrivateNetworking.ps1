@@ -217,7 +217,8 @@ if ($Rollback.Trim()) {
                         foreach ($l in $x.Lines) { $lines.Add($l) }; if (-not $x.Ok) { $okAll = $false }
                     }
                     if ($b.signIn -and [string]$b.signIn.objectId) {
-                        $web = [ordered]@{ redirectUris = @($b.signIn.redirectUris); logoutUrl = [string]$b.signIn.logoutUrl }
+                        # (ID-token issuance stays ON: Microsoft's built-in sign-in asks for an ID token)
+                        $web = [ordered]@{ redirectUris = @($b.signIn.redirectUris); logoutUrl = [string]$b.signIn.logoutUrl; implicitGrantSettings = [ordered]@{ enableIdTokenIssuance = $true; enableAccessTokenIssuance = $false } }
                         try { $null = & $seams.Graph 'PATCH' ('https://graph.microsoft.com/v1.0/applications/{0}' -f [string]$b.signIn.objectId) ([ordered]@{ web = $web }); $lines.Add('the sign-in registration''s addresses are back as they were') }
                         catch { $okAll = $false; $lines.Add(('the sign-in registration''s addresses could not be put back: {0}' -f $_.Exception.Message)) }
                     }

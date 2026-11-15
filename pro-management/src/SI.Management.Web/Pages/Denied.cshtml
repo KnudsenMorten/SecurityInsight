@@ -1,9 +1,14 @@
 @page
 @model SI.Management.Web.Pages.DeniedModel
+@inject Microsoft.Extensions.Configuration.IConfiguration Config
 @{
     ViewData["Title"] = "No access";
 }
 <h1>No access</h1>
+@if (SI.Management.Web.Auth.BuiltInAuth.IsEnabled(Config))
+{
+    <p data-switch-account><a href="@SI.Management.Web.Auth.BuiltInAuth.SwitchAccountUrl">Sign in with another account</a></p>
+}
 @if (Model.IsAdmin)
 {
     <div class="notice warn" role="alert" data-denied-role="Admin">

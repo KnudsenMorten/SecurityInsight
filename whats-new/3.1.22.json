@@ -1,0 +1,13 @@
+{
+  "version": "3.1.22",
+  "date": "2026-11-15",
+  "type": "security",
+  "summary": "Saving works again with Microsoft's sign-in.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "Saving works with Microsoft's sign-in",
+      "text": "With Microsoft's sign-in switched on, saving a form was refused. The web app now tells the browser to send its own address to SecurityInsight only, which Microsoft's protection needs, so every save works again."
+    }
+  ]
+}

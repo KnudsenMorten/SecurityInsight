@@ -82,6 +82,20 @@ BeforeAll {
         }
         # #1150: a young wake-up of the runner (W.Wake) ends after W.WakePolls polls
         if ($w.Wake) { $w.WakeAge++; if ($w.WakeAge -ge $w.WakePolls -and $w.Wake.properties.status -eq 'Running') { Stop-TestExec $w.Wake 'Succeeded' } }
+        # live 2026-11-14: the runner's normal cadence -- every poll the wake-up ends and a NEW one starts
+        if ($w.WakeRenew -and $w.Wake) {
+            if ($w.Wake.properties.status -eq 'Running') { Stop-TestExec $w.Wake 'Succeeded' }
+            $w.WakeN++; $w.Wake = New-TestExec ('caj-si-flow-wake{0}' -f $w.WakeN) 'Running' $w.Clock; $w.Ex['caj-si-flow'].Add($w.Wake)
+        }
+        # live 2026-11-14: ANOTHER updater execution holds the update and installs it after W.OtherPolls polls
+        if ($w.OtherExec) {
+            $w.OtherAge++
+            if ($w.OtherAge -eq $w.OtherPolls) {
+                Stop-TestExec $w.OtherExec 'Succeeded'
+                $u = @($w.Jobs | Where-Object { $_.name -eq 'caj-si-updater' })[0]
+                $u.tags.'si-installed' = $w.UpdTo; $w.StateAction = 'applied'; $w.StateCheckUtc = $w.Clock
+            }
+        }
         if ($w.UpdExec) {
             $w.UpdAge++
             if ($w.UpdAge -eq $w.UpdPolls) {
@@ -108,6 +122,10 @@ BeforeAll {
             $job = $Matches[1]
             $name = '{0}-z{1}' -f $job, ($w.Calls.Count)
             $e = New-TestExec $name 'Running' $w.Clock
+            if ($job -eq 'caj-si-updater' -and $w.OtherUpd -and -not $w.OtherExec) {
+                # the scheduled updater started a moment before this one
+                $w.OtherExec = New-TestExec 'caj-si-updater-scheduled' 'Running' $w.Clock.AddSeconds(-28); $w.Ex['caj-si-updater'].Add($w.OtherExec)
+            }
             if ($job -eq 'caj-si-updater') {
                 # what runs at the moment the updater is started (the run's jobs and the runner; the heartbeat is not one)
                 $w.AtUpdaterStart = @(foreach ($k in @($w.Ex.Keys)) { if ($k -notin 'caj-si-heartbeat', 'caj-si-updater') { foreach ($x in @($w.Ex[$k] | Where-Object { $_.properties.status -eq 'Running' })) { '{0} {1}' -f $k, $x.name } } })
@@ -346,6 +364,43 @@ Describe '#1150: -Apply reads the run state AGAIN right before it starts the upd
         $r.Outcome | Should -Be 'run-started'
         $r.Summary | Should -Match 'still after 2 min'
         @(Get-StartCalls | Where-Object { $_.Path -match 'caj-si-updater' }).Count | Should -Be 0
+    }
+    It 'live 2026-11-14: the runner''s normal cadence (a NEW wake-up every poll, none starts a step) never holds the start: the updater starts' {
+        New-TestWorld -Running $false
+        $script:W.WakeN = 0; $script:W.WakeRenew = $true
+        $script:W.Wake = New-TestExec 'caj-si-flow-wake0' 'Running' $script:T0.AddSeconds(-20); $script:W.WakePolls = 999; $script:W.WakeAge = 0
+        $script:W.Ex['caj-si-flow'].Add($script:W.Wake)
+        $a = @{ Arm = $script:Arm; SubscriptionId = $script:Sub; ResourceGroup = $script:Rg; Reason = 'security release'; Apply = $true; PollSeconds = 30; By = 'support (test)'
+                ReadUpdateState = $script:ReadState; Sleep = $script:Sleep; Now = $script:Now; Say = { param($l, $c) }; SqlWhy = 'not here (test)'; WakeWaitMinutes = 2 }
+        $r = Invoke-SIStopRunAndUpdate @a
+        @(Get-StartCalls | Where-Object { $_.Path -match 'caj-si-updater' }).Count | Should -Be 1 -Because "outcome '$($r.Outcome)': $($r.Summary)"
+        $r.Outcome | Should -Be 'updated'
+    }
+    It 'live 2026-11-14: the sign-in methods read (its own 15-minute schedule) is never a step of a run: it holds nothing' {
+        New-TestWorld -Running $false
+        $sm = New-TestJob 'caj-si-signin-methods'; $script:W.Jobs = @($script:W.Jobs) + $sm
+        $script:W.Ex['caj-si-signin-methods'] = New-Object System.Collections.Generic.List[object]
+        $script:W.Ex['caj-si-signin-methods'].Add((New-TestExec 'caj-si-signin-methods-1' 'Running' $script:T0.AddSeconds(-14)))
+        $r = Invoke-TestRun -Apply
+        $r.Outcome | Should -Be 'updated' -Because $r.Summary
+        @(Get-StartCalls | Where-Object { $_.Path -match 'caj-si-flow' }).Count | Should -Be 0 -Because 'nothing was cancelled'
+    }
+    It 'live 2026-11-14: -TargetVersion an install already runs = nothing cancelled, the updater not started (a fresh run on it is left alone)' {
+        New-TestWorld -Running $true
+        @($script:W.Jobs | Where-Object { $_.name -eq 'caj-si-updater' })[0].tags.'si-installed' = '3.0.41'
+        $a = @{ Arm = $script:Arm; SubscriptionId = $script:Sub; ResourceGroup = $script:Rg; Reason = 'security release'; Apply = $true; PollSeconds = 30; By = 'support (test)'
+                ReadUpdateState = $script:ReadState; Sleep = $script:Sleep; Now = $script:Now; Say = { param($l, $c) }; Sql = $script:Sql; TargetVersion = '3.0.41' }
+        $r = Invoke-SIStopRunAndUpdate @a
+        $r.Outcome | Should -Be 'already-current' -Because $r.Summary
+        @(Get-StartCalls).Count | Should -Be 0 -Because 'neither a cancel nor the updater'
+        $r.Summary | Should -Match 'already on 3\.0\.41'
+    }
+    It 'live 2026-11-14: another updater execution holds the update -- its end is waited for and the version read back ("updated", never "not updated")' {
+        New-TestWorld -Running $false -UpdPolls 1 -UpdSkips
+        $script:W.OtherUpd = $true; $script:W.OtherPolls = 4; $script:W.OtherAge = 0
+        $r = Invoke-TestRun -Apply
+        $r.Outcome | Should -Be 'updated' -Because "$($r.Summary) || said: $($script:Said -join ' || ')"
+        ($script:Said -join "`n") | Should -Match 'another updater execution runs \(caj-si-updater caj-si-updater-scheduled\)'
     }
     It 'the decision: <Why> -> <Want>' -ForEach @(
         @{ Why = 'a run this script did not cancel';  Run = @{ Running = $true; Id = 'run-9' }; Cancelled = '';      Act = @{};                                  Want = 'refuse' }

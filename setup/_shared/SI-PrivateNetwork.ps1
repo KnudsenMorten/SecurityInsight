@@ -2008,7 +2008,12 @@ function Add-SIWebSignInAddress {
     $want = "https://$h/signin-oidc"
     if ($uris -contains $want) { return @{ Ok = $true; Before = $before; Line = ('the sign-in registration already knows https://{0}/' -f $h) } }
     $web = [ordered]@{ redirectUris = @($uris + @($want) | Select-Object -Unique); logoutUrl = "https://$h/signout-callback-oidc" }
-    $ig = Get-SIPnProp $app @('web', 'implicitGrantSettings'); if ($ig) { $web['implicitGrantSettings'] = ConvertTo-SIPnHashtable $ig }
+    # implicitGrantSettings ALWAYS goes back, ID-token issuance ON (Microsoft's built-in sign-in asks for an ID token --
+    # AADSTS700054 when it is off); the rest of it as read, never dropped, never turned off
+    $ig = Get-SIPnProp $app @('web', 'implicitGrantSettings')
+    $igh = if ($ig) { ConvertTo-SIPnHashtable $ig } else { [ordered]@{ enableAccessTokenIssuance = $false } }
+    $igh['enableIdTokenIssuance'] = $true
+    $web['implicitGrantSettings'] = $igh
     $null = & $Graph 'PATCH' ('https://graph.microsoft.com/v1.0/applications/{0}' -f $oid) ([ordered]@{ web = $web })
     $back = & $Graph 'GET' ('https://graph.microsoft.com/v1.0/applications/{0}?$select=id,web' -f $oid) $null
     $ok = @(Get-SIPnProp $back @('web', 'redirectUris')) -contains $want

@@ -1,5 +1,53 @@
 # What's new in SecurityInsight
 
+## 3.1.22 · 2026-11-15 · Security
+
+Saving works again with Microsoft's sign-in.
+
+### New features
+
+None in this version.
+
+### Fixes
+
+- **Saving works with Microsoft's sign-in** - With Microsoft's sign-in switched on, saving a form was refused. The web app now tells the browser to send its own address to SecurityInsight only, which Microsoft's protection needs, so every save works again.
+
+## 3.1.21 · 2026-11-15 · Security
+
+Switching on Microsoft's sign-in now waits until the web app is ready.
+
+### New features
+
+None in this version.
+
+### Fixes
+
+- **Microsoft's sign-in switches on reliably** - When an update has just rolled out a new web app version, switching on Microsoft's sign-in now waits until the web app is ready instead of stopping. The account picker is always shown.
+
+## 3.1.20 · 2026-11-14 · Security
+
+With Microsoft's sign-in, you always choose which account to sign in with.
+
+### New features
+
+None in this version.
+
+### Fixes
+
+- **Choose the account at every sign-in** - Microsoft's sign-in always asks which account to use, so an admin account can be chosen instead of the account the browser is signed in with. The no-access pages offer to sign in with another account.
+
+## 3.1.19 · 2026-11-14 · Security
+
+Microsoft's own sign-in can now protect the web app, so every visitor signs in with Microsoft Entra before reaching SecurityInsight.
+
+### New features
+
+- **Microsoft's built-in sign-in for the web app** - The web app can sit behind Microsoft's own sign-in. Visitors sign in with Microsoft Entra before anything else, your Conditional Access applies, and no password or secret is stored. Your support partner turns it on per installation.
+
+### Fixes
+
+- **Group access works with the new sign-in** - With Microsoft's sign-in, SecurityInsight reads each person's groups itself, so access given to a group keeps working.
+
 ## 3.1.18 · 2026-11-14 · Security
 
 The parts of SecurityInsight that are reachable from the internet now hold only the rights they need, and a short network fault no longer stops a scheduled wake-up.

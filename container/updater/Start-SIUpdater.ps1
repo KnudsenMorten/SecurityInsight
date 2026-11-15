@@ -95,7 +95,8 @@ $siAutoRoot = Find-SIUpdaterLicenceRoot
 # SI-NightlySchedule.ps1 (owner 2026-10-21): the update runs at 18:30 in its Azure region's zone -- the job's UTC ticks, the other one ends here
 # #911 (e): SI-UpdateWatch.ps1 -- a step with no log line for 20 minutes says "still working: <step>" (never mistaken for a hang)
 # SI-WebKeyRing.ps1: the web app's sign-in keys encrypted with its own Key Vault key (the key, its grant, the web app's setting)
-foreach ($siUpdLib in 'SI-UpdateRest.ps1', 'SI-AcrBuild.ps1', 'SI-NightlySchedule.ps1', 'SI-UpdateWatch.ps1', 'SI-WebKeyRing.ps1') {
+# SI-BuiltInAuth.ps1: Microsoft's built-in sign-in in front of the web app -- OFF unless the job says SI_Updater_BuiltInAuth
+foreach ($siUpdLib in 'SI-UpdateRest.ps1', 'SI-AcrBuild.ps1', 'SI-NightlySchedule.ps1', 'SI-UpdateWatch.ps1', 'SI-WebKeyRing.ps1', 'SI-BuiltInAuth.ps1') {
     if ($siAutoRoot -and (Test-Path -LiteralPath ([IO.Path]::Combine($siAutoRoot, 'setup', '_shared', $siUpdLib)))) { . ([IO.Path]::Combine($siAutoRoot, 'setup', '_shared', $siUpdLib)) }
 }
 if ($siAutoRoot -and (Test-Path -LiteralPath ([IO.Path]::Combine($siAutoRoot, 'engine', '_shared', 'SI-ProAutomation.ps1')))) {
@@ -1446,6 +1447,50 @@ function Invoke-SIUpdaterWebAppStepsAfter {
         $global:SI_UpdaterStep = 'post-roll'
         $null = Invoke-SIUpdaterWebAppSteps -Env $Env -Store $Store -SubscriptionId $SubscriptionId -ResourceGroup $ResourceGroup
     } catch { try { Write-UpdLog ('web app: its sign-in app owner and name could not be checked ({0}) -- the update goes on' -f $_.Exception.Message) } catch { } }
+    # Microsoft's built-in sign-in (after the web app steps: the web app then runs this release under its standard name)
+    $null = Invoke-SIUpdaterBuiltInAuthStep -Rc $Rc -Env $Env -Store $Store -SubscriptionId $SubscriptionId -ResourceGroup $ResourceGroup
+}
+
+function Invoke-SIUpdaterBuiltInAuthStep {
+    <#
+        MICROSOFT'S BUILT-IN SIGN-IN IN FRONT OF THE WEB APP (framework SECURE-WEB-1 points 5-7; setup/_shared/SI-BuiltInAuth.ps1,
+        Invoke-SIBuiltInAuthConverge). On every update that did not fail, with the mode the updater job's SI_Updater_BuiltInAuth
+        names: off (unset -- the DEFAULT: nothing is read, nothing is called) | plan (say what would change) | redirect (the
+        sign-in app registration gets the platform's callback -- the release before the switch) | apply (switch it on, read
+        back, an anonymous request must be refused; anything else puts back what ran before). Magic links (the Settings page's
+        SIWeb_MagicLinksEnabled) decide whether /MagicLink and /MagicLinkRequest open without a sign-in.
+        One line per outcome; a failure is said, never fails the update. -Converge / -Arm / -Graph / -Probe: test seams.
+        Returns the converge's result, or $null when it was not called.
+    #>
+    param($Rc = 0, [hashtable]$Env = @{}, $Store, [string]$SubscriptionId, [string]$ResourceGroup,
+          [scriptblock]$Converge, [scriptblock]$Arm, [scriptblock]$Graph, [scriptblock]$Probe)
+    try {
+        $v = if ($Env.ContainsKey('SI_Updater_BuiltInAuth')) { "$($Env['SI_Updater_BuiltInAuth'])" } else { "$([Environment]::GetEnvironmentVariable('SI_Updater_BuiltInAuth'))" }
+        if (-not "$v".Trim() -or "$v".Trim() -match '^(?i)off$') { return $null }
+        if (-not (Get-Command -Name Get-SIBuiltInAuthMode -ErrorAction SilentlyContinue)) { return $null }
+        $mode = Get-SIBuiltInAuthMode -Value $v
+        if ($mode -eq 'off') { Write-UpdLog ("built-in sign-in: SI_Updater_BuiltInAuth='{0}' is not off / plan / redirect / apply -- left off" -f "$v".Trim()); return $null }
+        $last = @($Rc)[-1]
+        if ($null -ne $last -and "$last".Trim() -ne '0') { Write-UpdLog 'built-in sign-in: not checked -- this update did not complete; the next update checks it'; return $null }
+        $global:SI_UpdaterStep = 'post-roll'
+        $webName = Get-SIUpdaterInstallName -Role web -Env $Env
+        $appId = Get-SIUpdaterRgPath -SubscriptionId $SubscriptionId -ResourceGroup $ResourceGroup -Provider ('Microsoft.App/containerApps/' + $webName)
+        if (-not $Arm) { $Arm = { param([string]$Method, [string]$Path, $Body) if ($Method -eq 'GET') { Invoke-SIUpdaterArm -Method GET -Path $Path -AllowNotFound } else { Invoke-SIUpdaterArm -Method $Method -Path $Path -Body $Body } } }
+        if (-not $Graph) {
+            $Graph = { param([string]$Method, [string]$Uri, $Body)
+                $b = if ($null -ne $Body -and -not ($Body -is [string])) { ConvertTo-Json -InputObject $Body -Depth 30 -Compress } else { $Body }
+                Invoke-SIRestJson -Rest (Get-SIUpdaterRest) -Method $Method -Uri $Uri -Body $b -Resource 'https://graph.microsoft.com/' -Headers @{ 'Content-Type' = 'application/json' } }
+        }
+        if (-not $Probe -and (Get-Command -Name Invoke-SIUpdaterAnonymousProbe -ErrorAction SilentlyContinue)) { $Probe = { param([string]$Url) Invoke-SIUpdaterAnonymousProbe -Url $Url } }
+        if (-not $Converge) { $Converge = { param($a) Invoke-SIBuiltInAuthConverge @a } }
+        $magic = Read-SIBuiltInAuthMagicLinks -Store $Store
+        $args1 = @{ Arm = $Arm; Graph = $Graph; Mode = $mode; AppId = $appId; MagicLinksOn = [bool]$magic }
+        if ($Probe) { $args1['Probe'] = $Probe }
+        $r = & $Converge $args1
+        foreach ($l in @($r.Lines)) { if ("$l".Trim()) { Write-UpdLog $(if ($r.Ok) { "$l" } else { 'WARNING: ' + "$l" }) } }
+        if ((-not $r.Ok) -and ($r.State -in @('failed', 'rolled-back')) -and (Get-Command -Name Add-SIUpdaterFailureIf -ErrorAction SilentlyContinue)) { Add-SIUpdaterFailureIf 'post-roll' ((@($r.Lines) | Select-Object -Last 1) -join '') }
+        $r
+    } catch { try { Write-UpdLog ('WARNING: built-in sign-in: could not be checked ({0}) -- the update goes on' -f $_.Exception.Message) } catch { }; $null }
 }
 
 function Invoke-SIUpdaterFailureReport {

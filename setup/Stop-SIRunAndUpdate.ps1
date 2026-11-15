@@ -35,6 +35,9 @@
 .PARAMETER RunId
     Only this run (its id, as Operations > Jobs shows it). Default: the run that is running now. A run that is not running is
     never touched; when another run is running, nothing is done.
+.PARAMETER TargetVersion
+    The version this stop is for (e.g. a security release). An install that already runs it is left alone: nothing is
+    cancelled and the updater is not started, so a run that already runs on that version is never stopped.
 .PARAMETER SkipUpdate
     Only stop the run (steps 0-2).
 .PARAMETER TimeoutMinutes
@@ -58,6 +61,8 @@ param(
     [string]$SubscriptionId = $(if ($global:SI_Bootstrap_SubscriptionId) { [string]$global:SI_Bootstrap_SubscriptionId } else { [string]$global:SI_AzSubscriptionId }),
     [string]$RunId = '',
     [switch]$SkipUpdate,
+    # the version this stop is for: an install already on it is left alone (nothing cancelled, nothing started)
+    [string]$TargetVersion = '',
     [ValidateRange(1, 720)][int]$TimeoutMinutes = 30,
     [ValidateRange(5, 600)][int]$PollSeconds = 30,
     [switch]$Apply,
@@ -142,7 +147,7 @@ if (-not $Arm) {
 if (-not $SubscriptionId) { throw 'Give -SubscriptionId: the subscription of the install. Nothing was started.' }
 if (-not $By) { $By = [Environment]::UserName }
 
-$a = @{ Arm = $Arm; SubscriptionId = $SubscriptionId; ResourceGroup = $ResourceGroupName; Reason = $Reason; RunId = $RunId; SkipUpdate = $SkipUpdate
+$a = @{ Arm = $Arm; SubscriptionId = $SubscriptionId; ResourceGroup = $ResourceGroupName; Reason = $Reason; RunId = $RunId; SkipUpdate = $SkipUpdate; TargetVersion = $TargetVersion
         Apply = $Apply; TimeoutMinutes = $TimeoutMinutes; PollSeconds = $PollSeconds; By = $By; SqlWhy = $sqlWhy }
 if ($Sql) { $a.Sql = $Sql }
 if ($ReadUpdateState) { $a.ReadUpdateState = $ReadUpdateState }

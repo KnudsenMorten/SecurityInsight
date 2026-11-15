@@ -9,6 +9,10 @@ namespace SI.Management.Web.Audit;
 /// Nothing is refused yet, and the sign-in itself is not changed here:
 ///   bearer   the token the shared sign-in front forwards (Authorization: Bearer, framework 12.11g);
 ///   session  the ID token kept with the sign-in session, when the sign-in keeps it;
+///   platform-id / platform-access  with Microsoft's built-in authentication (SI_Web_BuiltInAuth on, and ONLY then): the
+///            ID token its token store hands over (X-MS-TOKEN-AAD-ID-TOKEN), else its access token
+///            (X-MS-TOKEN-AAD-ACCESS-TOKEN) -- recorded as received, never read for the identity (that is
+///            X-MS-CLIENT-PRINCIPAL's, Auth/BuiltInAuth.cs);
 ///   none     neither -- recorded too, so the runner can say how many changes it would refuse today.
 /// A failed write never changes the response (logged).
 public interface ISignedRequestWriter
@@ -25,11 +29,25 @@ INSERT INTO cfg.SignedRequest (CorrelationId, Action, Actor, TokenSource, Token,
     private readonly SI.Management.Web.Data.ISqlExecutor _sql;
     private readonly ILogger<SqlSignedRequestWriter> _log;
     private readonly string _audience;
+    private readonly IConfiguration _config;
+    public const string PlatformIdTokenHeader = "X-MS-TOKEN-AAD-ID-TOKEN";
+    public const string PlatformAccessTokenHeader = "X-MS-TOKEN-AAD-ACCESS-TOKEN";
 
     public SqlSignedRequestWriter(SI.Management.Web.Data.ISqlExecutor sql, ILogger<SqlSignedRequestWriter> log, IConfiguration config)
     {
-        _sql = sql; _log = log; _audience = config["AzureAd:ClientId"] ?? "";
+        _sql = sql; _log = log; _config = config; _audience = config["AzureAd:ClientId"] ?? "";
     }
+
+    /// PURE. A token header's value exactly as received when it is one JWT-shaped value (three parts, no spaces), else null.
+    public static string? TokenOf(Microsoft.Extensions.Primitives.StringValues values) =>
+        values.Count == 1 && values[0] is { Length: > 0 } t && t.Count(c => c == '.') == 2 && !t.Any(char.IsWhiteSpace) ? t : null;
+
+    /// PURE. With the built-in authentication: the token store's ID token (the one tied to the person's sign-in), else its
+    /// access token, else none.
+    public static (string Source, string? Token) PlatformTokenOf(IHeaderDictionary headers) =>
+        TokenOf(headers[PlatformIdTokenHeader]) is { } id ? ("platform-id", id)
+        : TokenOf(headers[PlatformAccessTokenHeader]) is { } at ? ("platform-access", at)
+        : ("none", null);
 
     /// PURE. The bearer token of an Authorization header, or null.
     public static string? BearerOf(string? header) =>
@@ -40,7 +58,9 @@ INSERT INTO cfg.SignedRequest (CorrelationId, Action, Actor, TokenSource, Token,
         try
         {
             var (source, token) = ("none", (string?)null);
-            if (BearerOf(http.Request.Headers.Authorization.ToString()) is { } b) (source, token) = ("bearer", b);
+            // the platform's token headers are read ONLY with the built-in authentication on (never otherwise)
+            if (SI.Management.Web.Auth.BuiltInAuth.IsEnabled(_config)) (source, token) = SqlSignedRequestWriter.PlatformTokenOf(http.Request.Headers);
+            else if (BearerOf(http.Request.Headers.Authorization.ToString()) is { } b) (source, token) = ("bearer", b);
             else
             {
                 string? saved = null;

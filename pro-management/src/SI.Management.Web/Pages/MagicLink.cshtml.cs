@@ -29,11 +29,11 @@ public sealed class MagicLinkModel : PageModel
     private readonly ILogger<MagicLinkModel> _log;
     private readonly bool _front;
     public MagicLinkModel(MagicLinkService magic, ILogger<MagicLinkModel> log, IConfiguration configuration, DepartmentSignInService? department = null)
-    { _magic = magic; _log = log; _department = department; _front = SigninFront.IsEnabled(configuration); }
+    { _magic = magic; _log = log; _department = department; _front = BuiltInAuth.LinkAreaOn(configuration); }
 
     public string? Why { get; private set; }
-    /// Behind the sign-in front (CR7 Option A) the redeemed link becomes a link session under /MagicLink/s/ with its own
-    /// cookie; without the front, the app's sign-in cookie as before.
+    /// Behind the sign-in front (CR7 Option A) or the platform's built-in authentication the redeemed link becomes a link
+    /// session under /MagicLink/s/ with its own cookie; with the in-app sign-in, the app's sign-in cookie as before.
     private string Scheme => _front ? LinkArea.Scheme : CookieAuthenticationDefaults.AuthenticationScheme;
     private string Into(string target) => _front ? LinkArea.Url(target) : target;
 

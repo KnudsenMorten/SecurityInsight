@@ -26,8 +26,20 @@ var azureAd = builder.Configuration.GetSection("AzureAd");
 // CR7 (framework 12.11g): behind the ONE shared sign-in front (FRAMEWORK/signin-front) the front signs the user in and this
 // app verifies the front's token on every request, listening on 127.0.0.1 only (Auth/SigninFront.cs). OFF (the default):
 // the in-app sign-in below, exactly as before.
-var signinFront = SigninFront.IsEnabled(builder.Configuration);
-if (signinFront)
+// SECURE-WEB-1: Microsoft's built-in Container Apps authentication in front of this app -- the platform signs the user in
+// and this app reads the user from X-MS-CLIENT-PRINCIPAL, ONLY while SI_Web_BuiltInAuth is on (Auth/BuiltInAuth.cs). It
+// wins over the sign-in front when both switches are on (a warning once at start). The app listens as usual.
+var signInMode = BuiltInAuth.Resolve(builder.Configuration);
+var builtInAuth = signInMode == BuiltInAuth.Mode.BuiltIn;
+var signinFront = signInMode == BuiltInAuth.Mode.SigninFront;
+// the link area of the magic links (/MagicLink/s/, its own cookie): whenever a platform or the front signs people in
+var linkArea = builtInAuth || signinFront;
+if (builtInAuth)
+{
+    BuiltInAuth.AddBuiltInAuthentication(builder.Services, builder.Configuration);
+    // like behind the front: no in-app sign-in, so the guided mail setup hands over setup\Set-SIMail.ps1
+}
+else if (signinFront)
 {
     builder.WebHost.UseUrls(SigninFront.ListenUrl(builder.Configuration));
     SigninFront.AddSigninFrontAuthentication(builder.Services, builder.Configuration);
@@ -661,13 +673,15 @@ SI.Management.Web.Notify.WebFeatureServices.AddWebFeatures(builder.Services, bui
 var app = builder.Build();
 // #997: a page never shows a database's or a service's error text -- it says what failed with a reference, logged here
 SI.Management.Web.ViewerError.Log = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("SI.ViewerError");
+if (BuiltInAuth.BothOn(app.Configuration))
+    app.Logger.LogWarning("{BuiltIn} and {Front} are both on: the built-in authentication is used and the sign-in front setting is ignored", BuiltInAuth.Setting, SigninFront.Setting);
 
 app.UseForwardedHeaders();
 // the old web app, once the install record names the new one: every page request goes there (path + query kept; never /healthz)
 var oldWebApp = app.Services.GetRequiredService<SI.Management.Web.Updating.OldWebAppRedirect>();
 app.Use(async (ctx, next) => { if (await oldWebApp.TryRedirectAsync(ctx)) return; await next(); });
 // CR7 Option A: behind the front a redeemed link browses under /MagicLink/s/ with its own session (Auth/LinkArea.cs)
-if (signinFront) LinkArea.UseLinkArea(app);
+if (linkArea) LinkArea.UseLinkArea(app);
 if (!app.Environment.IsDevelopment())
 {
     app.UseExceptionHandler("/Error");
@@ -681,7 +695,7 @@ app.Use(async (ctx, next) =>
         var h = ctx.Response.Headers;
         h["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; font-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self' https://login.microsoftonline.com";
         h["X-Content-Type-Options"] = "nosniff";
-        h["Referrer-Policy"] = "no-referrer";
+        h["Referrer-Policy"] = SI.Management.Web.Auth.BuiltInAuth.ReferrerPolicy(builtInAuth);
         h["X-Frame-Options"] = "DENY";
     }
     // the request's source notes, for code without services at hand (the Excel export adds them to its info sheet)
@@ -699,14 +713,14 @@ SI.Management.Web.Links.ScriptDocLinkExtensions.UseScriptDocLinks(app);
 app.UseRequestLocalization(SI.Management.Web.Pages.DisplayCulture.Options());
 app.UseRouting();
 // CR7 Option A: inside the link area only the endpoints a link session may reach at all (Auth/LinkArea.cs)
-if (signinFront) LinkArea.UseLinkAreaEndpointGate(app);
+if (linkArea) LinkArea.UseLinkAreaEndpointGate(app);
 // The page timing log: a request slower than PageTiming:SlowMs writes one line (route, status, time, database calls and
 // the slowest statement's shape) -- after routing, so the route is known; static files and the health probe are not timed.
 app.UsePageTiming();
 app.UseAuthentication();
 // #993: without the sign-in front a link session (one-page magic link, department sign-in link) shares the app's cookie --
 // it reaches only what it reaches behind the front (Auth/LinkArea.cs), never a route left on the fallback policy
-if (!signinFront) LinkArea.UseLinkPrincipalEndpointGate(app);
+if (!linkArea) LinkArea.UseLinkPrincipalEndpointGate(app);
 app.UseAuthorization();
 // the first request of this process that passed sign-in is recorded for the updater (once, in the background, never failing)
 var webAppSignedIn = app.Services.GetRequiredService<SI.Management.Web.Updating.WebAppSignedInRecorder>();
@@ -743,8 +757,17 @@ app.MapGet("/about", (HttpContext ctx) =>
         build = b.Line,
     });
 });
-// behind the sign-in front, /signout is the front's (it never reaches this app)
-if (!signinFront)
+// behind the sign-in front, /signout is the front's (it never reaches this app). With the built-in authentication the
+// platform keeps the session: the sign-out is recorded and the browser goes to the platform's own sign-out.
+if (builtInAuth)
+app.MapGet("/signout", async ctx =>
+{
+    var audit = new SI.Management.Web.Audit.AuditScope("signin.session.end", SI.Management.Web.Audit.AuditScope.ActorOf(ctx.User), SI.Management.Web.Audit.AuditScope.SourceOf(ctx.User)) { Target = "/signout" };
+    await ctx.RequestServices.GetRequiredService<SI.Management.Web.Audit.IAuditWriter>().WriteAsync(audit.ToRecord(SI.Management.Web.Audit.AuditOutcomes.Ok, null), CancellationToken.None);
+    ctx.Response.Headers.CacheControl = "no-store";
+    ctx.Response.Redirect(BuiltInAuth.LogoutUrl);
+});
+else if (!signinFront)
 app.MapGet("/signout", async ctx =>
 {
     // a sign-out ends access: on the audit trail (#260) -- the write never blocks the sign-out

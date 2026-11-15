@@ -1382,6 +1382,9 @@ function Get-SIInstallDataStepTable {
             # #852: the shared sign-in front's store (its key in the install's vault, its schema in the Pro database), made
             # here with the installer's rights -- the front 1.3.0 then finds everything when the update moves the web app
             SigninStoreKeyVaultName = [string]$n.KeyVault
+            # Microsoft's built-in sign-in keeps its tokens in the install's own storage account (step 4f: its blob
+            # container + the web identity's data right on that container only -- the updater cannot grant it later)
+            AuthTokenStorageAccountName = [string]$n.StorageAccount
         }
         # the MCP server (AI tools over the data) is Pro by its LICENCE GATE, not by the install (owner 2026-10-27, SI #750 (3)):
         # every install deploys it, and it answers /mcp only while the licence the updater verified (cfg.InstallState 'Licence')

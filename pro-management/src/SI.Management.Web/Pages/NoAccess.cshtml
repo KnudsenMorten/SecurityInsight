@@ -1,5 +1,6 @@
 @page
 @model SI.Management.Web.Pages.NoAccessModel
+@inject Microsoft.Extensions.Configuration.IConfiguration Config
 @{
     Layout = null;
     var who = User.ChangeName();
@@ -38,6 +39,10 @@
             <p>Ask the person who installed SecurityInsight in your organisation to add you on the Access page.</p>
         }
         @if (Model.Guest) { <p data-guest-note>@SI.Management.Web.Departments.MailOnlyMatch.GuestNote</p> }
+        @if (SI.Management.Web.Auth.BuiltInAuth.IsEnabled(Config))
+        {
+            <p data-switch-account>Signed in with the wrong account? <a href="@SI.Management.Web.Auth.BuiltInAuth.SwitchAccountUrl">Sign in with another account</a></p>
+        }
         <p>Once you are added, open this page again (it can take a few seconds).</p>
     </div>
 </main>

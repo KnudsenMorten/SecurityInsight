@@ -1,0 +1,13 @@
+{
+  "version": "3.1.20",
+  "date": "2026-11-14",
+  "type": "security",
+  "summary": "With Microsoft's sign-in, you always choose which account to sign in with.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "Choose the account at every sign-in",
+      "text": "Microsoft's sign-in always asks which account to use, so an admin account can be chosen instead of the account the browser is signed in with. The no-access pages offer to sign in with another account."
+    }
+  ]
+}

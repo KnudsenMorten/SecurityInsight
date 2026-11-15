@@ -1,5 +1,17 @@
 # What's new in SecurityInsight
 
+## 3.1.26.1 · 2026-11-15 · Security
+
+Tighter Key Vault rights for the web app.
+
+### New features
+
+None in this version.
+
+### Fixes
+
+- **No earlier Key Vault right** - The update removes the web app's earlier right to write secrets, read back.
+
 ## 3.1.26 · 2026-11-15 · Fix-only
 
 AI works with the newest models, and the earlier sign-in leaves nothing behind.

@@ -47,9 +47,18 @@ Describe 'every Pro component is excluded from the public payload' {
         'engine/asset-cmdb/Invoke-SICmdb.ps1', 'engine/asset-cmdb/Invoke-SIVulnLoop.ps1',
         'engine/asset-cmdb/Invoke-SICmdbSql.ps1', 'engine/asset-cmdb/Invoke-SICmdbImport.ps1', 'engine/asset-cmdb/_shared/SI-ServiceNowClient.ps1',
         'engine/pro-data/Invoke-SIDepartmentReport.ps1', 'engine/pro-data/Invoke-SIGovernanceMail.ps1', 'engine/pro-data/Invoke-SITaskDigest.ps1',
-        'setup/Set-SIServiceNowCredential.ps1', 'setup/_shared/SI-GuidedInstallPro.ps1'
+        'setup/Set-SIServiceNowCredential.ps1', 'setup/_shared/SI-GuidedInstallPro.ps1',
+        # the vendor's rights source (role ids, file:line references, review notes) and its review sheet are internal
+        'setup/_shared/si-identity-rights.json', 'docs/RIGHTS-REVIEW-DRAFT.md'
     ) {
         $script:Exclude | Should -Contain $_
+    }
+    It 'no data file under setup/_shared ships with review notes about a check that does not work (public mirror)' {
+        $shipped = @(Get-ChildItem -LiteralPath (Join-Path $script:SIRoot 'setup\_shared') -File -Filter '*.json' | Where-Object {
+            $rel = 'setup/_shared/' + $_.Name; -not @($script:Exclude | Where-Object { $rel -eq $_ -or $rel.StartsWith($_ + '/') }).Count })
+        foreach ($f in $shipped) {
+            [IO.File]::ReadAllText($f.FullName) | Should -Not -Match '(?i)never match|not fixed|ineffective|does not work|bypass' -Because "$($f.Name) ships in the public payload"
+        }
     }
 
     It 'the ONE update client ships in the Community edition (framework PRO-COMMUNITY-SAME, #1207): <_>' -ForEach @(

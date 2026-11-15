@@ -317,7 +317,7 @@ function Select-SIWebSecretGrant {
     $vid = $VaultId.TrimEnd('/')
     # The role id lives here, not in a $script: variable: setup\Install-SIUpdaterJob.ps1 calls this function from ITS script,
     # where $script: is the installer's scope -- a function loaded earlier would see no role id there and match nothing.
-    $officer = 'b86a8fe4-c7d1-4c71-91f0-9e0ab7c7da1b'   # Key Vault Secrets Officer (built-in, the same id in every tenant)
+    $officer = 'b86a8fe4-44ce-4948-aee5-eccb2c155cd7'   # Key Vault Secrets Officer (built-in, the same id in every tenant)
     @(@($Assignments) | Where-Object {
         $_ -and $_.properties -and
         ((([string]$_.properties.roleDefinitionId).TrimEnd('/') -split '/')[-1]) -ieq $officer -and

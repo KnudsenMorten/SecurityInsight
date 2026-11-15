@@ -1,0 +1,13 @@
+{
+  "version": "3.1.26.1",
+  "date": "2026-11-15",
+  "type": "security",
+  "summary": "Tighter Key Vault rights for the web app.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "No earlier Key Vault right",
+      "text": "The update removes the web app's earlier right to write secrets, read back."
+    }
+  ]
+}

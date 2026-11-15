@@ -13,6 +13,11 @@ SecurityInsight Pro and the Pro trial install from invardia.com, never from GitH
 [invardia.com/trial](https://invardia.com/trial/), and your installation page there gives your two lines.
 <!-- /install lines -->
 
+## v3.1.26.1 — tighter Key Vault rights for the web app
+
+### Security
+- **The web app keeps no earlier Key Vault right.** The update removes the right to write secrets that the web app held
+  before it handed secrets to the updater, read back.
 ## v3.1.26 — AI works with the newest models, and the switch leaves nothing behind
 
 ### Fixes

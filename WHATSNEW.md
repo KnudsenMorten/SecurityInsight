@@ -1,5 +1,18 @@
 # What's new in SecurityInsight
 
+## 3.1.24.1 · 2026-11-15 · Security
+
+The switch to Microsoft's sign-in finishes on large installations.
+
+### New features
+
+None in this version.
+
+### Fixes
+
+- **Sign-in keys move even when busy** - Right after the switch, the move of the sign-in keys off the Key Vault waits for the web app and tries again.
+- **No wrong advice about the sign-in** - An installation on Microsoft's sign-in is never told to turn it off.
+
 ## 3.1.24 · 2026-11-15 · Security
 
 AI works without a key: SecurityInsight signs in to your Azure OpenAI resource with its own identities.

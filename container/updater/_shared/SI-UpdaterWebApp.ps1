@@ -190,6 +190,14 @@ function Invoke-SIUpdaterSigninFrontAdopt {
     $choice = Get-SISigninFrontChoice -App $app -ContainerName ([string]$pin.containerName)
     if ($choice -eq 'front') { return $none }
     if ($choice -eq 'own') { return [pscustomobject]@{ Code = 0; Text = ('{0}: keeps its own sign-in (chosen for this install)' -f $WebApp); Action = '' } }
+    # MICROSOFT'S BUILT-IN SIGN-IN (framework SECURE-WEB-1, 3.1.19+): the platform signs users in -- that is the standard, and
+    # the shared sign-in front is retired. An app with it on is never moved behind the front, and never told to turn it
+    # off (live 2026-11-15: 3.1.23.1 at two switched installs advised removing the platform's sign-in and running
+    # Set-SISigninFront.ps1, the opposite of the standard; a test guards that no such text returns). Read FIRST, before any Graph read: nothing to say, nothing to do.
+    $path = Get-SIUpdaterRgPath -SubscriptionId $SubscriptionId -ResourceGroup $ResourceGroup -Provider ('Microsoft.App/containerApps/' + $WebApp)
+    $auth = $null
+    try { $auth = Invoke-SIUpdaterArm -Path ($path + '/authConfigs/current') -AllowNotFound } catch { $auth = $null }
+    if ($auth -and [bool](Get-SISigninFrontProp $auth @('properties', 'platform', 'enabled'))) { return $none }
     $src = Resolve-SISigninFrontSource -SIRoot $SIRoot -Pin $pin
     if (-not $src.Ok) { Write-UpdLog ("{0}: this release carries no usable sign-in front ({1}) -- the web app keeps its own sign-in" -f $WebApp, $src.Why); return $none }
     $say = { param([string]$Need)
@@ -224,11 +232,7 @@ function Invoke-SIUpdaterSigninFrontAdopt {
         $why = if ($cn.State -eq 'planned') { 'missing: ' + (@($cn.Missing) -join ' ') } else { 'it could not be checked: ' + $(if ($cn.State -eq 'no-rights') { 'this update may not read consents' } else { [string]$cn.Error }) }
         return (& $say ("the sign-in permissions openid profile offline_access User.Read must be consented for the organisation ({0})" -f $why))
     }
-    # Easy Auth (SecurityInsight never used it; an app that has it is left to the setup script, which turns it off)
-    $path = Get-SIUpdaterRgPath -SubscriptionId $SubscriptionId -ResourceGroup $ResourceGroup -Provider ('Microsoft.App/containerApps/' + $WebApp)
-    $auth = $null
-    try { $auth = Invoke-SIUpdaterArm -Path ($path + '/authConfigs/current') -AllowNotFound } catch { $auth = $null }
-    if ($auth -and [bool](Get-SISigninFrontProp $auth @('properties', 'platform', 'enabled'))) { return (& $say 'Easy Auth must be off (the front signs users in)') }
+    # (Microsoft's built-in sign-in on = returned above, before any read)
     # the front's image, from the release's source, in the install's own registry
     $fast = [IO.Path]::Combine($SIRoot, 'setup', '_shared', 'SI-FastRoll.ps1')
     if ((Test-Path -LiteralPath $fast) -and -not (Get-Command -Name Get-SISourceHash -ErrorAction SilentlyContinue)) { . $fast }

@@ -13,6 +13,14 @@ SecurityInsight Pro and the Pro trial install from invardia.com, never from GitH
 [invardia.com/trial](https://invardia.com/trial/), and your installation page there gives your two lines.
 <!-- /install lines -->
 
+## v3.1.24.1 — the switch to Microsoft's sign-in finishes on large installations
+
+### Fixes
+- **The sign-in keys move off the Key Vault even when the web app is busy.** Right after the switch, the web app can
+  still be applying its previous change; the move now waits for it and tries again, instead of leaving the keys in
+  the Key Vault until a later update.
+- **No wrong advice about the sign-in.** An installation on Microsoft's sign-in is never told to turn it off for the
+  earlier sign-in front.
 ## v3.1.24 — AI without a key
 
 ### Security

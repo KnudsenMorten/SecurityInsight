@@ -1,0 +1,17 @@
+{
+  "version": "3.1.24.1",
+  "date": "2026-11-15",
+  "type": "security",
+  "summary": "The switch to Microsoft's sign-in finishes on large installations.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "Sign-in keys move even when busy",
+      "text": "Right after the switch, the move of the sign-in keys off the Key Vault waits for the web app and tries again."
+    },
+    {
+      "title": "No wrong advice about the sign-in",
+      "text": "An installation on Microsoft's sign-in is never told to turn it off."
+    }
+  ]
+}

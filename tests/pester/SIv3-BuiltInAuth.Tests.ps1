@@ -672,7 +672,7 @@ Describe 'after the switch: the sign-in keys leave Key Vault, then the web ident
                 App = $app; Roles = $roles; NotHealthy = [bool]$NotHealthy; DeleteRefused = [bool]$DeleteRefused; ListRefused = [bool]$ListRefused
                 SecretValues = @{ 'sql-pw' = @{ name = 'sql-pw'; value = 'p@ss' }; 'kv-ref' = @{ name = 'kv-ref'; keyVaultUrl = 'https://kv.vault.azure.net/secrets/a'; identity = $script:MiId }
                                   'override-use-mi-fic-assertion-client-id' = @{ name = 'override-use-mi-fic-assertion-client-id'; value = $script:MiCid } }
-                Calls = (New-Object System.Collections.Generic.List[object]); Probes = (New-Object System.Collections.Generic.List[string])
+                Calls = (New-Object System.Collections.Generic.List[object]); Probes = (New-Object System.Collections.Generic.List[string]); Patch409 = 0
             }
         }
         function script:Get-MoveArm($f) {
@@ -696,6 +696,7 @@ Describe 'after the switch: the sign-in keys leave Key Vault, then the web ident
                 if ($Path -like '*/listSecrets*') { return [pscustomobject]@{ value = @($f.SecretValues.Values | ForEach-Object { [pscustomobject]$_ }) } }
                 if ($Method -eq 'GET') { return ($f.App | ConvertTo-Json -Depth 30 | ConvertFrom-Json) }
                 if ($Method -eq 'PATCH') {
+                    if ($f.Patch409 -gt 0) { $f.Patch409--; throw 'PATCH failed: HTTP 409: ContainerAppOperationInProgress: Cannot modify a container app because there is an operation in progress' }
                     $b = $Body | ConvertTo-Json -Depth 30 | ConvertFrom-Json
                     $sec = @($b.properties.configuration.secrets)
                     $f.SecretValues = @{}
@@ -741,6 +742,13 @@ Describe 'after the switch: the sign-in keys leave Key Vault, then the web ident
         $f.Calls.Clear()
         (Invoke-Move $f).State | Should -Be 'in-place'
         @($f.Calls | Where-Object { $_.Method -in 'PATCH', 'DELETE', 'PUT' }).Count | Should -Be 0
+    }
+    It 'a 409 ContainerAppOperationInProgress on the key-ring PATCH (live 2026-11-15) is waited out and the SAME body sent again' {
+        $f = New-MoveFake; $f.Patch409 = 1
+        $r = Invoke-Move $f
+        $r.Ok | Should -BeTrue
+        Get-SIBuiltInAuthSetting -App $f.App -Name 'DataProtection__BlobUri' | Should -Be $script:BlobUri
+        @($f.Calls | Where-Object { $_.Method -eq 'PATCH' }).Count | Should -Be 2 -Because 'the refused PATCH, then the same one again'
     }
     It 'the web app does not run on the blob yet: the Key Vault rights STAY (waiting, not a failure)' {
         $f = New-MoveFake -NotHealthy

@@ -1003,7 +1003,21 @@ function Invoke-SIBuiltInAuthKeyRingMove {
             $sv = ConvertTo-SIBuiltInAuthSecretValues (& $Arm 'POST' $listPath $null)
             $sp = Get-SIBuiltInAuthSecretPatch -App $app -IdentityClientId $id.ClientId -SecretValues $sv -Setting keep -WebEnv @{ $name = $blob }
             if ($sp.MissingSecrets.Count) { $lines.Add(('{0}: its sign-in keys were NOT moved -- the web app''s secret(s) {1} could not be read, and a write would blank them; nothing was changed' -f $web, ($sp.MissingSecrets -join ', '))); return (& $res $false 'failed') }
-            $null = & $Arm 'PATCH' $appPath $sp.Body
+            # live 2026-11-15 (a large installation, two updates in a row): the PATCH right after the switch's / another step's change of
+            # the same app answered 409 ContainerAppOperationInProgress. Wait until the app has settled (provisioning
+            # Succeeded), and on a 409 wait and send the SAME body again -- never a different change
+            for ($i = 1; $i -le $RevisionTries; $i++) {
+                $ps = ''; try { $ps = [string](Get-SIBuiltInAuthProp (& $Arm 'GET' $appPath $null) @('properties', 'provisioningState')) } catch { }
+                if (-not $ps -or $ps -in 'Succeeded', 'Failed', 'Canceled') { break }
+                & $Sleep $PauseSeconds
+            }
+            for ($i = 1; $i -le $RevisionTries; $i++) {
+                try { $null = & $Arm 'PATCH' $appPath $sp.Body; break }
+                catch {
+                    if ($i -lt $RevisionTries -and "$($_.Exception.Message)" -match '(?i)\b409\b|OperationInProgress') { & $Sleep $PauseSeconds; continue }
+                    throw
+                }
+            }
             $ok = $false
             for ($i = 1; $i -le $Tries; $i++) {
                 try {

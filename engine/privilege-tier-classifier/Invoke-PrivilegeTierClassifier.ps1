@@ -860,7 +860,7 @@ function Invoke-AISingleChunk {
     $itemsJson = $Chunk | ConvertTo-Json -Depth 5 -Compress
 
     # Defensive: guard against missing/invalid globals so a typo in the
-    # defaults module cannot silently produce max_tokens=null or an
+    # defaults module cannot silently produce max_completion_tokens=null or an
     # infinite/never-running retry loop.
     # Silent defaults are seeded at script top (line ~135). These globals are now
     # always populated; the per-chunk re-validation has been removed.
@@ -882,7 +882,9 @@ $itemsJson
             @{ role = "system"; content = $SystemPrompt },
             @{ role = "user";   content = $userPrompt }
         )
-        max_tokens  = $maxTokens
+        # #1269: the output cap as max_completion_tokens (max_tokens is refused by the newest models); a deployment that
+        # refuses a parameter (or the temperature) gets it adapted once by Invoke-SIOpenAIChat (SI-OpenAIAuth.ps1)
+        max_completion_tokens = $maxTokens
         temperature = 0.1
     } | ConvertTo-Json -Depth 6 -Compress
 

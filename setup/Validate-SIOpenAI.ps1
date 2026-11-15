@@ -803,7 +803,9 @@ $global:OpenAI_MaxTokensPerRequest = 16384
 function Invoke-SIOpenAIAccessCheck {
     Set-StrictMode -Off
     $uri = '{0}/openai/deployments/{1}/chat/completions?api-version={2}' -f $AI_endpoint, $DeploymentName, $InferenceApiVersion
-    $body = @{ messages = @(@{ role = 'user'; content = 'ping' }); max_tokens = 1 } | ConvertTo-Json -Depth 5 -Compress
+    # #1269: the output cap as max_completion_tokens (the newest models refuse max_tokens with HTTP 400, which read here as a
+    # failed sign-in); 16, not 1, so a reasoning model can still answer
+    $body = @{ messages = @(@{ role = 'user'; content = 'ping' }); max_completion_tokens = 16 } | ConvertTo-Json -Depth 5 -Compress
     # the probe through the shared Azure OpenAI seam (engine\_shared\SI-OpenAIAuth.ps1: the host is checked first)
     $send = {
         param($Headers)

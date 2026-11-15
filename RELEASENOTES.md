@@ -13,6 +13,19 @@ SecurityInsight Pro and the Pro trial install from invardia.com, never from GitH
 [invardia.com/trial](https://invardia.com/trial/), and your installation page there gives your two lines.
 <!-- /install lines -->
 
+## v3.1.26 — AI works with the newest models, and the switch leaves nothing behind
+
+### Fixes
+- **AI works with the newest Azure OpenAI models.** SecurityInsight now asks for answers the way current models expect
+  (and adjusts once by itself when a model refuses a setting), so the AI summary and the web chat work with the
+  newest models too.
+- **The earlier sign-in leaves nothing behind.** Once an installation runs Microsoft's sign-in and keeps its sign-in
+  keys in its own storage, the update removes the earlier sign-in's images and keys -- each step read back.
+- **Scripts are published unsigned, always.** A dormant signing path is removed, and a check keeps it out for good.
+
+### Under the hood
+- Every release hands its approved list of rights to the support partner, so its checks always compare against the
+  current list.
 ## v3.1.25 — signed in all day, and updates that finish in one go
 
 ### Security

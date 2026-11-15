@@ -1,0 +1,21 @@
+{
+  "version": "3.1.26",
+  "date": "2026-11-15",
+  "type": "fix-only",
+  "summary": "AI works with the newest models, and the earlier sign-in leaves nothing behind.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "AI works with the newest models",
+      "text": "The AI summary and the web chat ask the way current Azure OpenAI models expect, and adjust once by themselves."
+    },
+    {
+      "title": "The earlier sign-in leaves nothing behind",
+      "text": "After the switch, the update removes the earlier sign-in's images and keys, each step read back."
+    },
+    {
+      "title": "Scripts are always published unsigned",
+      "text": "A dormant signing path is removed, and a check keeps it out."
+    }
+  ]
+}

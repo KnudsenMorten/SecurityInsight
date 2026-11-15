@@ -1,5 +1,19 @@
 # What's new in SecurityInsight
 
+## 3.1.26 · 2026-11-15 · Fix-only
+
+AI works with the newest models, and the earlier sign-in leaves nothing behind.
+
+### New features
+
+None in this version.
+
+### Fixes
+
+- **AI works with the newest models** - The AI summary and the web chat ask the way current Azure OpenAI models expect, and adjust once by themselves.
+- **The earlier sign-in leaves nothing behind** - After the switch, the update removes the earlier sign-in's images and keys, each step read back.
+- **Scripts are always published unsigned** - A dormant signing path is removed, and a check keeps it out.
+
 ## 3.1.25 · 2026-11-15 · Security
 
 Signed in all day, and updates that finish in one go.

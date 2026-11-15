@@ -26,8 +26,10 @@
            REPORTED only (a line 'leftover: ...'): any other secret whose name looks like the sign-in era; redirect URIs of
              the sign-in app registration other than the platform's callback of the app's own hosts; client secrets and
              certificates on that registration (writing it is the owner of the app's right, and a URI or a credential can
-             serve a customer's other use); signin-front images stored in the install's registry (deleting images is the
-             image clean-up's / Invardia's).
+             serve a customer's other use); signin-front images still stored in the install's registry.
+      2b. THE DATA-PLANE LEFTOVERS (Invoke-SIBuiltInAuthFrontDataClean; Invardia works on control planes only, so these are
+         SecurityInsight's own job): the signin-front images in the install's registry and the Key Vault keys
+         signin-front-dp and SI-Web-KeyRing -- deleted ONLY while the web app reads back without the front (see the function).
       3. THE STANDARD as one read-only check (Read-SIBuiltInAuthStandardFacts + Test-SIBuiltInAuthStandard): the updater's
          summary line and Invardia's daily second check (setup/Test-SIBuiltInAuthStandard.ps1) use the same rules.
 
@@ -635,7 +637,7 @@ function Get-SIBuiltInAuthLeftoverFindings {
         foreach ($t in @(Get-SIBuiltInAuthRegistrationLeftovers -Registration $Facts.Registration -Fqdn $fqdn -CustomDomains $hosts)) { $out.Add($t) }
     }
     if ($Facts.Images -and $Facts.Images.Found -and @($Facts.Images.Tags).Count) {
-        $out.Add(('{0} signin-front image(s) still stored in {1} (tags {2}) -- removed by the image clean-up, not here' -f @($Facts.Images.Tags).Count, $Facts.Images.LoginServer, (@($Facts.Images.Tags) -join ',')))
+        $out.Add(('{0} signin-front image(s) still stored in {1} (tags {2}) -- the update removes them once the web app reads back without the sign-in front' -f @($Facts.Images.Tags).Count, $Facts.Images.LoginServer, (@($Facts.Images.Tags) -join ',')))
     }
     $out.ToArray()
 }
@@ -849,4 +851,232 @@ function Invoke-SIBuiltInAuthStandardStep {
         if ($std.Ok) { $lines.Add($std.Summary) } else { $warn.Add($std.Summary) }
     } catch { $warn.Add(('the built-in sign-in standard could not be checked ({0}) -- the update goes on' -f $_.Exception.Message)); $trace = "$($_.ScriptStackTrace)" }
     [pscustomobject]@{ Ok = $mcpOk; McpState = $mcpState; McpScopeState = $mcpScopeState; Lines = $lines.ToArray(); Warnings = $warn.ToArray(); Standard = $std; Trace = $trace }
+}
+
+# ============================================================================================================== 5. THE FRONT'S DATA-PLANE LEFTOVERS
+
+$script:SIBuiltInAuthKvApi = '7.4'   # the Key Vault data plane
+
+function Test-SIBuiltInAuthFrontImage {
+    <# PURE. Does the image reference -Image name the sign-in front's repository (<registry>/signin-front:<tag> or @<digest>)? #>
+    param([AllowNull()][AllowEmptyString()][string]$Image, [string]$Repo = $script:SIBuiltInAuthFrontRepo)
+    "$Image".Trim() -match ('(?i)(^|/){0}([:@]|$)' -f [regex]::Escape($Repo))
+}
+
+function Get-SIBuiltInAuthFrontUse {
+    <# PURE. Does a template (an app's or a revision's) still run the sign-in front: a container named signin-front, or any
+       container / init container whose image is in the signin-front repository? $true / $false. #>
+    param($Template)
+    foreach ($c in @(@(Get-SIBuiltInAuthProp $Template @('containers')) + @(Get-SIBuiltInAuthProp $Template @('initContainers')))) {
+        if (-not $c) { continue }
+        if ([string](Get-SIBuiltInAuthProp $c @('name')) -eq $script:SIBuiltInAuthFrontName) { return $true }
+        if (Test-SIBuiltInAuthFrontImage -Image ([string](Get-SIBuiltInAuthProp $c @('image')))) { return $true }
+    }
+    $false
+}
+
+function Test-SIBuiltInAuthFrontGone {
+    <#
+        PURE. May the sign-in front's stored data go? ALL of these, as read:
+          1. the web app reads back switched (Test-SIBuiltInAuthSwitched: SI_Web_BuiltInAuth=1, no signin-front container in
+             its template, the ingress on the web container's port);
+          2. Microsoft's built-in sign-in is ON (its authConfig: platform.enabled true);
+          3. its latest revision is its latest READY revision, that revision is listed (-Revisions), Healthy and running;
+          4. NO active revision of the web app runs the front (a signin-front container or a signin-front image);
+          5. NO container app of the install (-Apps, the resource group's list) names a signin-front image in its template.
+        @{ Ok; Why }.
+    #>
+    param($App, $Auth, [object[]]$Revisions = @(), [object[]]$Apps = @())
+    $sw = Test-SIBuiltInAuthSwitched -App $App
+    if (-not $sw.Ok) { return [pscustomobject]@{ Ok = $false; Why = ('the web app does not read back on Microsoft''s built-in sign-in ({0})' -f $sw.Why) } }
+    if ("$(Get-SIBuiltInAuthProp $Auth @('properties', 'platform', 'enabled'))" -notmatch '^(?i)true$') { return [pscustomobject]@{ Ok = $false; Why = 'Microsoft''s built-in sign-in is not on (its authentication reads back off)' } }
+    $latest = [string](Get-SIBuiltInAuthProp $App @('properties', 'latestRevisionName'))
+    $ready = [string](Get-SIBuiltInAuthProp $App @('properties', 'latestReadyRevisionName'))
+    if (-not $latest) { return [pscustomobject]@{ Ok = $false; Why = 'the web app names no revision' } }
+    if ($latest -ne $ready) { return [pscustomobject]@{ Ok = $false; Why = ('its latest revision {0} is not the ready one ({1})' -f $latest, $(if ($ready) { $ready } else { 'none' })) } }
+    $rev = @(@($Revisions) | Where-Object { $_ -and [string](Get-SIBuiltInAuthProp $_ @('name')) -eq $latest }) | Select-Object -First 1
+    if (-not $rev) { return [pscustomobject]@{ Ok = $false; Why = ('its revision {0} could not be read' -f $latest) } }
+    $h = [string](Get-SIBuiltInAuthProp $rev @('properties', 'healthState'))
+    if ($h -ne 'Healthy') { return [pscustomobject]@{ Ok = $false; Why = ('its revision {0} is {1}, not Healthy' -f $latest, $(if ($h) { $h } else { 'of no known health' })) } }
+    $rs = [string](Get-SIBuiltInAuthProp $rev @('properties', 'runningState'))
+    if ($rs -and $rs -notmatch '^(?i)(Running|RunningAtMaxScale)$') { return [pscustomobject]@{ Ok = $false; Why = ('its revision {0} is {1}' -f $latest, $rs) } }
+    foreach ($rv in @(@($Revisions) | Where-Object { $_ })) {
+        $active = "$(Get-SIBuiltInAuthProp $rv @('properties', 'active'))" -match '^(?i)true$'
+        if (($active -or [string](Get-SIBuiltInAuthProp $rv @('name')) -eq $latest) -and (Get-SIBuiltInAuthFrontUse -Template (Get-SIBuiltInAuthProp $rv @('properties', 'template')))) {
+            return [pscustomobject]@{ Ok = $false; Why = ('its revision {0} still runs the sign-in front' -f [string](Get-SIBuiltInAuthProp $rv @('name'))) }
+        }
+    }
+    foreach ($a in @(@($Apps) | Where-Object { $_ })) {
+        if (Get-SIBuiltInAuthFrontUse -Template (Get-SIBuiltInAuthProp $a @('properties', 'template'))) {
+            return [pscustomobject]@{ Ok = $false; Why = ('the container app {0} still names a sign-in front image' -f [string](Get-SIBuiltInAuthProp $a @('name'))) }
+        }
+    }
+    [pscustomobject]@{ Ok = $true; Why = '' }
+}
+
+function Test-SIBuiltInAuthKeyRingOnBlob {
+    <# PURE. Does the web app keep its sign-in keys in its own blob, read back: DataProtection__BlobUri set (https) on its web
+       container AND its latest (ready, Healthy, running) revision runs with that same value (Test-SIBuiltInAuthRevisionRuns)?
+       The web app then reads no Key Vault key (pro-management/src/SI.Management.Web/Auth/WebKeyRingSetup.cs). @{ Ok; Why }. #>
+    param($App, [object[]]$Revisions = @())
+    $blob = Get-SIBuiltInAuthSetting -App $App -Name $script:SIBuiltInAuthKeyRingSetting
+    if ($blob -notmatch '^(?i)https://') { return [pscustomobject]@{ Ok = $false; Why = ('the web app does not keep its sign-in keys in its own key store yet ({0} is not set)' -f $script:SIBuiltInAuthKeyRingSetting) } }
+    $latest = [string](Get-SIBuiltInAuthProp $App @('properties', 'latestRevisionName'))
+    $rev = @(@($Revisions) | Where-Object { $_ -and [string](Get-SIBuiltInAuthProp $_ @('name')) -eq $latest }) | Select-Object -First 1
+    $r = Test-SIBuiltInAuthRevisionRuns -App $App -Revision $rev -Name $script:SIBuiltInAuthKeyRingSetting -Value $blob
+    if (-not $r.Ok) { return [pscustomobject]@{ Ok = $false; Why = ('the web app does not run on its own key store yet ({0})' -f $r.Why) } }
+    [pscustomobject]@{ Ok = $true; Why = '' }
+}
+
+function Invoke-SIBuiltInAuthFrontDataClean {
+    <#
+        THE EARLIER SIGN-IN FRONT'S DATA-PLANE LEFTOVERS, DELETED BY SECURITYINSIGHT'S OWN CODE (Invardia works on control
+        planes only: deleting a Key Vault key or a registry image at an install is data plane). -Mode plan says what would go
+        and deletes nothing. ONLY when Test-SIBuiltInAuthFrontGone holds -- the web app reads back switched, the built-in
+        sign-in is on, its latest revision is the ready, Healthy, running one, and nothing (no active revision, no container
+        app) runs the front:
+          1. THE IMAGES: every image of the repository signin-front in the install's registry (-Registry: the updater's
+             registry seam, New-SIUpdaterRegistrySeam -- List / Delete by digest), then read back: none listed. An image locked
+             against deletion is kept and said.
+          2. THE KEYS signin-front-dp and SI-Web-KeyRing in the install's Key Vault (-KeyVault { param($Method, $Uri, $Body) }
+             -> @{ Status; Json }, the data plane; DELETE = soft delete, recoverable for the vault's retention period), read
+             back gone -- EACH only when ALSO the web app keeps its sign-in keys in its own blob, read back
+             (Test-SIBuiltInAuthKeyRingOnBlob: then the web app reads neither key), AND id-si-web holds no role on that key any
+             more (read at the key's scope through -Arm with -VaultId; a role still there or an unreadable list = kept).
+        One plain line per part ("removed" / "none left" / "kept: why"). A refusal (401 / 403: the updater lacks the data
+        right) is a warning plus a support step that gives the right back -- never a failure. NEVER THROWS.
+        Returns @{ Lines; Warnings; Support; Removed; Images (state); Keys (name -> state) }; states: removed | none |
+        planned | kept | refused | failed | not-checked.
+    #>
+    param([Parameter(Mandatory)][scriptblock]$Arm, [ValidateSet('plan', 'apply')][string]$Mode = 'plan', [Parameter(Mandatory)][string]$WebAppId,
+          [hashtable]$Registry, [string]$LoginServer = '', [string]$RegistryNote = '',
+          [scriptblock]$KeyVault, [string]$VaultName = '', [string]$VaultId = '',
+          [scriptblock]$Sleep = { param($s) Start-Sleep -Seconds $s }, [int]$Tries = 4, [int]$PauseSeconds = 10,
+          [string]$AuthApiVersion = $script:SIBuiltInAuthApi, [string]$AppApiVersion = $script:SIBuiltInAuthAppApi,
+          [string]$RoleApiVersion = $script:SIBuiltInAuthRoleApi, [string]$KvApiVersion = $script:SIBuiltInAuthKvApi)
+    $lines = New-Object System.Collections.Generic.List[string]
+    $warn = New-Object System.Collections.Generic.List[string]
+    $support = New-Object System.Collections.Generic.List[string]
+    $removed = New-Object System.Collections.Generic.List[string]
+    $keys = [ordered]@{}
+    $st = @{ Images = 'not-checked' }
+    $res = { [pscustomobject]@{ Lines = $lines.ToArray(); Warnings = $warn.ToArray(); Support = $support.ToArray(); Removed = $removed.ToArray(); Images = $st.Images; Keys = $keys } }
+    $refused = { param($t) "$t" -match '(?i)\b(401|403)\b|Unauthorized|Forbidden|AuthorizationFailed|DENIED' }
+    $repo = $script:SIBuiltInAuthFrontRepo
+    $web = ($WebAppId.TrimEnd('/') -split '/')[-1]
+    try {
+        $app = & $Arm 'GET' ('{0}?api-version={1}' -f $WebAppId.TrimEnd('/'), $AppApiVersion) $null
+        if (-not $app) { $lines.Add(('{0}: not found -- the earlier sign-in''s stored images and keys are left' -f $web)); return (& $res) }
+        $auth = & $Arm 'GET' ('{0}/authConfigs/current?api-version={1}' -f $WebAppId.TrimEnd('/'), $AuthApiVersion) $null
+        $revs = @(Get-SIBuiltInAuthProp (& $Arm 'GET' ('{0}/revisions?api-version={1}' -f $WebAppId.TrimEnd('/'), $AppApiVersion) $null) @('value'))
+        $rgId = [string](($WebAppId -split '(?i)/providers/')[0])
+        $apps = @(Get-SIBuiltInAuthProp (& $Arm 'GET' ('{0}/providers/Microsoft.App/containerApps?api-version={1}' -f $rgId.TrimEnd('/'), $AppApiVersion) $null) @('value'))
+    } catch {
+        $warn.Add(('{0}: the earlier sign-in''s stored images and keys were not checked -- the web app could not be read ({1}); nothing was deleted, the next update checks again' -f $web, $_.Exception.Message))
+        return (& $res)
+    }
+    $gone = Test-SIBuiltInAuthFrontGone -App $app -Auth $auth -Revisions $revs -Apps $apps
+    if (-not $gone.Ok) {
+        $lines.Add(('{0}: the earlier sign-in''s stored images and keys are kept -- {1}' -f $web, $gone.Why))
+        $st.Images = 'kept'; foreach ($k in $script:SIBuiltInAuthWebKeyNames) { $keys[$k] = 'kept' }
+        return (& $res)
+    }
+
+    # ---- 1. the signin-front images ----
+    if (-not $Registry) {
+        $lines.Add(('the earlier sign-in''s images ({0}): not checked -- {1}' -f $repo, $(if ("$RegistryNote".Trim()) { $RegistryNote } else { 'the install''s registry is not known here' })))
+    } else {
+        $where = if ("$LoginServer".Trim()) { $LoginServer.Trim() } elseif ($Registry.ContainsKey('LoginServer')) { [string]$Registry.LoginServer } else { 'the install''s registry' }
+        $step = 'the support partner gives the updater back its delete right on the install''s registry {0} (it is Contributor there), so the update removes the earlier sign-in''s images ({1}) itself' -f $where, $repo
+        try {
+            $ls = & $Registry.List $repo
+            $mans = @(if ($ls -and $ls.Found) { @($ls.Manifests) | Where-Object { $_ } })
+            if (-not $mans.Count) { $st.Images = 'none'; $lines.Add(('the earlier sign-in''s images ({0} in {1}): none left' -f $repo, $where)) }
+            else {
+                $tags = @($mans | ForEach-Object { @($_.Tags) } | Where-Object { $_ })
+                $tagText = if ($tags.Count) { ' (tags {0})' -f ($tags -join ',') } else { '' }
+                if ($Mode -eq 'plan') {
+                    $st.Images = 'planned'
+                    $lines.Add(('the earlier sign-in''s images ({0} in {1}): would delete {2} image(s){3} -- nothing was deleted' -f $repo, $where, $mans.Count, $tagText))
+                } else {
+                    $locked = 0; $failed = 0; $denied = $false; $why = ''
+                    foreach ($m in $mans) {
+                        if (-not $m.DeleteEnabled) { $locked++; continue }
+                        $d = & $Registry.Delete $repo ([string]$m.Digest)
+                        if ($d -and $d.Ok) { continue }
+                        $failed++
+                        $t = if ($d) { '{0} {1}' -f [int]$d.Status, [string]$d.Why } else { 'no answer' }
+                        if (& $refused $t) { $denied = $true }
+                        if (-not $why) { $why = if ($d -and "$($d.Why)".Trim()) { [string]$d.Why } else { $t } }
+                    }
+                    # the read-back: the registry completes a delete after it answers it -- read again a few times
+                    $left = -1
+                    for ($i = 1; $i -le $Tries; $i++) {
+                        try { $a = & $Registry.List $repo; $left = @(if ($a -and $a.Found) { @($a.Manifests) | Where-Object { $_ } }).Count } catch { $left = -1 }
+                        if ($left -eq 0 -or ($left -ge 0 -and $left -le ($locked + $failed))) { break }
+                        if ($i -lt $Tries) { & $Sleep $PauseSeconds }
+                    }
+                    if ($denied) {
+                        $st.Images = 'refused'
+                        $warn.Add(('the earlier sign-in''s images ({0} in {1}): NOT removed -- the registry refused the delete ({2}); the update goes on' -f $repo, $where, $why))
+                        $support.Add($step)
+                    } elseif ($left -eq 0) {
+                        $st.Images = 'removed'; $removed.Add(('{0} ({1} image(s))' -f $repo, $mans.Count))
+                        $lines.Add(('the earlier sign-in''s images ({0} in {1}): removed -- {2} image(s){3}; read back, none left' -f $repo, $where, $mans.Count, $tagText))
+                    } else {
+                        $st.Images = if ($failed) { 'failed' } else { 'kept' }
+                        $parts = @()
+                        if ($locked) { $parts += ('{0} locked against deletion -- kept' -f $locked) }
+                        if ($failed) { $parts += ('{0} could not be deleted ({1})' -f $failed, $why) }
+                        if ($left -lt 0) { $parts += 'what is left could not be read back' } elseif ($left -gt ($locked + $failed)) { $parts += ('{0} still listed right after the deletes (the registry completes them shortly)' -f $left) }
+                        $warn.Add(('the earlier sign-in''s images ({0} in {1}): not all removed -- {2}; the next update checks again' -f $repo, $where, ($parts -join '; ')))
+                    }
+                }
+            }
+        } catch {
+            $m = $_.Exception.Message
+            if (& $refused $m) { $st.Images = 'refused'; $warn.Add(('the earlier sign-in''s images ({0} in {1}): not checked -- the registry refused the updater ({2}); the update goes on' -f $repo, $where, $m)); $support.Add($step) }
+            else { $st.Images = 'failed'; $warn.Add(('the earlier sign-in''s images ({0} in {1}): not checked -- {2}; nothing was deleted, the next update checks again' -f $repo, $where, $m)) }
+        }
+    }
+
+    # ---- 2. the Key Vault keys ----
+    $ring = Test-SIBuiltInAuthKeyRingOnBlob -App $app -Revisions $revs
+    $id = Get-SIBuiltInAuthWebIdentity -App $app -Name 'id-si-web'
+    $vault = "$VaultName".Trim().ToLowerInvariant()
+    foreach ($k in $script:SIBuiltInAuthWebKeyNames) {
+        $keys[$k] = 'kept'
+        try {
+            if (-not $ring.Ok) { $lines.Add(('the earlier sign-in''s key {0}: kept -- {1}' -f $k, $ring.Why)); continue }
+            if (-not $KeyVault -or -not $vault) { $keys[$k] = 'not-checked'; $lines.Add(('the earlier sign-in''s key {0}: not checked -- the install''s Key Vault is not known here' -f $k)); continue }
+            $uri = 'https://{0}.vault.azure.net/keys/{1}?api-version={2}' -f $vault, $k, $KvApiVersion
+            $step = 'the support partner gives the updater back its Key Vault key right (Key Vault Crypto Officer on the vault {0}), so the update removes the key {1} itself' -f $vault, $k
+            $g = & $KeyVault 'GET' $uri $null
+            $gs = [int](0 + (Get-SIBuiltInAuthProp $g @('Status')))
+            if ($gs -eq 404) { $keys[$k] = 'none'; $lines.Add(('the earlier sign-in''s key {0} in {1}: none left' -f $k, $vault)); continue }
+            if ($gs -eq 401 -or $gs -eq 403) { $keys[$k] = 'refused'; $warn.Add(('the earlier sign-in''s key {0} in {1}: not checked -- the Key Vault refused the updater (HTTP {2}); the update goes on' -f $k, $vault, $gs)); $support.Add($step); continue }
+            if ($gs -lt 200 -or $gs -ge 300) { $keys[$k] = 'failed'; $warn.Add(('the earlier sign-in''s key {0} in {1}: not checked -- the Key Vault answered HTTP {2}; nothing was deleted, the next update checks again' -f $k, $vault, $gs)); continue }
+            # the web identity must hold no role on the key any more (the key-ring step removes it first)
+            if (-not "$VaultId".Trim() -or -not $id) { $lines.Add(('the earlier sign-in''s key {0}: kept -- id-si-web''s rights on it could not be read here' -f $k)); continue }
+            $scope = '{0}/keys/{1}' -f $VaultId.Trim().TrimEnd('/'), $k
+            $held = $null
+            try { $held = @(Select-SIBuiltInAuthWebKeyAssignments -Assignments @(Get-SIBuiltInAuthProp (& $Arm 'GET' ("{0}/providers/Microsoft.Authorization/roleAssignments?api-version={1}&`$filter=principalId eq '{2}'" -f $scope, $RoleApiVersion, $id.PrincipalId) $null) @('value')) -PrincipalId $id.PrincipalId -KeyScope $scope) }
+            catch { $lines.Add(('the earlier sign-in''s key {0}: kept -- id-si-web''s rights on it could not be read ({1})' -f $k, $_.Exception.Message)); continue }
+            if (@($held).Count) { $lines.Add(('the earlier sign-in''s key {0}: kept -- id-si-web still holds a role on it (the key-ring step takes that away first)' -f $k)); continue }
+            if ($Mode -eq 'plan') { $keys[$k] = 'planned'; $lines.Add(('the earlier sign-in''s key {0} in {1}: would delete it (soft delete) -- nothing was deleted' -f $k, $vault)); continue }
+            $d = & $KeyVault 'DELETE' $uri $null
+            $ds = [int](0 + (Get-SIBuiltInAuthProp $d @('Status')))
+            if ($ds -eq 401 -or $ds -eq 403) { $keys[$k] = 'refused'; $warn.Add(('the earlier sign-in''s key {0} in {1}: NOT removed -- the Key Vault refused the delete (HTTP {2}); the update goes on' -f $k, $vault, $ds)); $support.Add($step); continue }
+            if (($ds -lt 200 -or $ds -ge 300) -and $ds -ne 404) { $keys[$k] = 'failed'; $warn.Add(('the earlier sign-in''s key {0} in {1}: NOT removed -- the Key Vault answered HTTP {2}; the next update tries again' -f $k, $vault, $ds)); continue }
+            $ok = $false
+            for ($i = 1; $i -le $Tries; $i++) {
+                $rb = & $KeyVault 'GET' $uri $null
+                if ([int](0 + (Get-SIBuiltInAuthProp $rb @('Status'))) -eq 404) { $ok = $true; break }
+                if ($i -lt $Tries) { & $Sleep $PauseSeconds }
+            }
+            if ($ok) { $keys[$k] = 'removed'; $removed.Add($k); $lines.Add(('the earlier sign-in''s key {0} in {1}: removed (soft delete -- recoverable for the vault''s retention period; read back gone)' -f $k, $vault)) }
+            else { $keys[$k] = 'failed'; $warn.Add(('the earlier sign-in''s key {0} in {1}: the delete was answered but the key still reads back -- the next update checks again' -f $k, $vault)) }
+        } catch { $keys[$k] = 'failed'; $warn.Add(('the earlier sign-in''s key {0}: not checked ({1}) -- nothing was deleted, the next update checks again' -f $k, $_.Exception.Message)) }
+    }
+    & $res
 }

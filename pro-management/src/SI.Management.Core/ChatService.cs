@@ -25,16 +25,54 @@ public interface IChatModel
 }
 
 /// The customer's Azure OpenAI deployment, function calling, Entra token auth (no API key).
+///
+/// #1269 the newest models: no output cap is set (MaxOutputTokenCount stays unset, so neither max_tokens -- what this SDK
+/// sends for it unless SetNewMaxCompletionTokensPropertyEnabled is called -- nor max_completion_tokens is in the request;
+/// the model's own limit applies). The low temperature is sent, but a deployment that refuses it (reasoning models accept
+/// only their default) gets the question sent ONCE more without it, and this model object (a singleton) remembers that
+/// for every later question. A second refusal is the service's error, as before.
 public sealed class AzureOpenAIChatModel : IChatModel
 {
-    private readonly ChatClient _client;
+    internal const float Temperature = 0.1f;
+
+    private readonly Func<List<ChatMessage>, ChatCompletionOptions, CancellationToken, Task<ChatCompletion>> _send;
+    private int _sendTemperature = 1;   // 0 = the deployment refused the temperature; it is no longer sent
 
     public AzureOpenAIChatModel(TokenCredential credential, IOptions<ChatOptions> options)
     {
         var o = options.Value;
         if (string.IsNullOrWhiteSpace(o.Endpoint) || string.IsNullOrWhiteSpace(o.Deployment))
             throw new InvalidOperationException("Chat:Endpoint and Chat:Deployment are not configured.");
-        _client = new AzureOpenAIClient(new Uri(o.Endpoint), credential).GetChatClient(o.Deployment);
+        var client = new AzureOpenAIClient(new Uri(o.Endpoint), credential).GetChatClient(o.Deployment);
+        _send = async (m, opts, ct) => (ChatCompletion)await client.CompleteChatAsync(m, opts, ct).ConfigureAwait(false);
+    }
+
+    /// The test seam: the SDK call replaced.
+    internal AzureOpenAIChatModel(Func<List<ChatMessage>, ChatCompletionOptions, CancellationToken, Task<ChatCompletion>> send) => _send = send;
+
+    /// $true while the temperature is still sent.
+    internal bool SendsTemperature => Volatile.Read(ref _sendTemperature) == 1;
+
+    /// The options of one request: the tools, the temperature when it is still sent, and no output cap.
+    internal static ChatCompletionOptions BuildOptions(IReadOnlyList<ToolSpec> tools, bool withTemperature)
+    {
+        var opts = new ChatCompletionOptions();
+        if (withTemperature) opts.Temperature = Temperature;
+        foreach (var t in tools)
+            opts.Tools.Add(ChatTool.CreateFunctionTool(t.Name, t.Description, BinaryData.FromString(t.ParametersJsonSchema)));
+        return opts;
+    }
+
+    /// $true when an answer is Azure OpenAI's 400 refusing the temperature ("Unsupported value: 'temperature' does not
+    /// support 0.1 with this model", "Unsupported parameter: 'temperature' ...").
+    internal static bool RejectsTemperature(int status, string? message)
+    {
+        if (string.IsNullOrEmpty(message)) return false;
+        var is400 = status == 400 || (status == 0 && (message.Contains("HTTP 400", StringComparison.OrdinalIgnoreCase) || message.Contains("Status: 400", StringComparison.OrdinalIgnoreCase)));
+        if (!is400 || !message.Contains("temperature", StringComparison.OrdinalIgnoreCase)) return false;
+        return message.Contains("unsupported", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("not supported", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("does not support", StringComparison.OrdinalIgnoreCase);
     }
 
     public async Task<ModelReply> CompleteAsync(IReadOnlyList<ModelMessage> messages, IReadOnlyList<ToolSpec> tools, CancellationToken ct)
@@ -53,11 +91,18 @@ public sealed class AzureOpenAIChatModel : IChatModel
                 _ => throw new ArgumentException("Unknown message type."),
             });
         }
-        var opts = new ChatCompletionOptions { Temperature = 0.1f };
-        foreach (var t in tools)
-            opts.Tools.Add(ChatTool.CreateFunctionTool(t.Name, t.Description, BinaryData.FromString(t.ParametersJsonSchema)));
-
-        ChatCompletion c = await _client.CompleteChatAsync(msgs, opts, ct).ConfigureAwait(false);
+        ChatCompletion c;
+        var withTemperature = SendsTemperature;
+        try
+        {
+            c = await _send(msgs, BuildOptions(tools, withTemperature), ct).ConfigureAwait(false);
+        }
+        catch (System.ClientModel.ClientResultException ex) when (withTemperature && RejectsTemperature(ex.Status, ex.Message))
+        {
+            // once: the temperature is left at the model's default from now on, and the question is sent again
+            Interlocked.Exchange(ref _sendTemperature, 0);
+            c = await _send(msgs, BuildOptions(tools, withTemperature: false), ct).ConfigureAwait(false);
+        }
         var calls = c.ToolCalls.Select(x => new ModelToolCall(x.Id, x.FunctionName, x.FunctionArguments.ToString())).ToList();
         var text = string.Concat(c.Content.Where(p => p.Kind == ChatMessageContentPartKind.Text).Select(p => p.Text));
         return new ModelReply(text, calls);

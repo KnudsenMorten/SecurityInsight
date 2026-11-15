@@ -2203,7 +2203,7 @@ if (-not (Get-Variable -Name DebugQueryHash -Scope Global -ErrorAction SilentlyC
   $Global:DebugQueryHash = $false
 }
 
-Write-Info ("AI max_tokens (OpenAI_MaxTokensPerRequest): {0}" -f $Global:OpenAI_MaxTokensPerRequest)
+Write-Info ("AI output cap, sent as max_completion_tokens (OpenAI_MaxTokensPerRequest): {0}" -f $Global:OpenAI_MaxTokensPerRequest)
 Write-Info ("DebugQueryHash: {0}" -f [bool]$Global:DebugQueryHash)
 Write-Info ("DebugQueryHash: {0}" -f [bool]$Global:DebugQueryHash)
 
@@ -8711,9 +8711,12 @@ Rules:
                 # shared Top-50 ($global:OutputDir/RiskAnalysis_Top50_Shared.json
                 # written by Summary, read by Detailed), Summary and Detailed
                 # email/xlsx top-N sections now agree.
+                # #1269: the newest models (reasoning models) accept only the default temperature -- a refusal drops it
+                # (SI-OpenAIAuth.ps1 ConvertTo-SIOpenAIAdaptedBody); top_p is not sent (1.0 is its default).
                 temperature = 0
-                top_p = 1.0
-                max_tokens = [int]$global:AI_MaxTokensPerRequest
+                # #1269: the output cap as max_completion_tokens (the current parameter; max_tokens is refused by the
+                # newest models). The setting stays OpenAI_MaxTokensPerRequest.
+                max_completion_tokens = [int]$global:AI_MaxTokensPerRequest
                 messages = @(
                     @{
                         role = "system"
@@ -8741,6 +8744,11 @@ Rules:
             $__aiAuth = Get-SIOpenAIAuthHeader
             if ($__aiAuth.Mode -eq 'None') { throw $__aiAuth.Reason }
             Write-Host ("[AI] sign-in = {0}" -f $(if ($__aiAuth.Mode -eq 'ManagedIdentity') { "the engine's identity" } else { 'a key (fallback)' }))
+            # #1269: what this run already learned about the deployment's parameters, applied before the first send; a 400
+            # refusing a parameter adapts it ONCE (not counted as an attempt) -- a second 400 skips the summary as before
+            $__aiBodyBuilt = $body
+            $body = ConvertTo-SIOpenAIAdaptedBody -Body $__aiBodyBuilt
+            $__aiAdapted = $false
             for ($__aiAtt = 1; $__aiAtt -le $__aiMax; $__aiAtt++) {
                 $request = [System.Net.Http.HttpRequestMessage]::new(
                     [System.Net.Http.HttpMethod]::Post,
@@ -8776,7 +8784,21 @@ Rules:
                     $__aiAtt--
                     continue
                 }
-                if ($response) { $__aiErr = "HTTP ${__aiCode}: " + $response.Content.ReadAsStringAsync().GetAwaiter().GetResult() }
+                $__aiErrBody = ''
+                if ($response) { $__aiErrBody = [string]$response.Content.ReadAsStringAsync().GetAwaiter().GetResult(); $__aiErr = "HTTP ${__aiCode}: " + $__aiErrBody }
+                if ($__aiCode -eq 400 -and -not $__aiAdapted) {
+                    $__aiRefused = Get-SIOpenAIUnsupportedParameter -ErrorText $__aiErrBody
+                    if ($__aiRefused -and (Add-SIOpenAIParamAdaptation -Parameter $__aiRefused)) {
+                        $__aiAdapted = $true
+                        $__aiNext = ConvertTo-SIOpenAIAdaptedBody -Body $__aiBodyBuilt
+                        if ([string]$__aiNext -cne [string]$body) {
+                            try { $response.Dispose() } catch { }
+                            $body = $__aiNext
+                            $__aiAtt--
+                            continue
+                        }
+                    }
+                }
                 $__aiTransient = ($__aiCode -eq 0 -or $__aiCode -eq 408 -or $__aiCode -eq 429 -or $__aiCode -ge 500)
                 if (-not $__aiTransient -or $__aiAtt -ge $__aiMax) { throw "Azure OpenAI returned $__aiErr" }
                 $__aiWait = [Math]::Min(60, 10 * [Math]::Pow(2, $__aiAtt - 1))

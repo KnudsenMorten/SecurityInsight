@@ -1586,9 +1586,11 @@ function Invoke-SIUpdaterBuiltInAuthStep {
         SIWeb_MagicLinksEnabled) decide whether /MagicLink and /MagicLinkRequest open without a sign-in.
         Then, in plan and apply (setup/_shared/SI-BuiltInAuthStandard.ps1, Invoke-SIBuiltInAuthStandardStep): the MCP app
         behind Microsoft's authentication (bearer tokens only, Return401; apply only after the web app reads back switched),
-        the sign-in front's leftovers (removed or reported, never a failure) and the standard's summary line.
+        the sign-in front's leftovers (removed or reported, never a failure) and the standard's summary line. Before that
+        (#1260, Invoke-SIBuiltInAuthFrontDataClean): the front's stored images and its Key Vault keys deleted once the web
+        app reads back without the front (plan: said only).
         One line per outcome; a failure is said, never fails the update. -Converge / -Arm / -Graph / -Probe / -Standard /
-        -ListImages: test seams.
+        -ListImages / -FrontDataClean / -FrontRegistry / -FrontKeyVault / -FrontVaultName: test seams.
         Returns the converge's result, or $null when it was not called.
     #>
     param($Rc = 0, [hashtable]$Env = @{}, $Store, [string]$SubscriptionId, [string]$ResourceGroup,
@@ -1596,7 +1598,10 @@ function Invoke-SIUpdaterBuiltInAuthStep {
           # test seams of the step after the switch (the key ring off Key Vault): the move itself, the install vault's ARM id
           [scriptblock]$KeyRingMove, [string]$VaultId,
           # test seams of the earlier sign-in's database tables (dropped after the switch): the drop, the release root
-          [scriptblock]$SigninDrop, [string]$SIRoot)
+          [scriptblock]$SigninDrop, [string]$SIRoot,
+          # test seams of the earlier sign-in's data-plane leftovers (#1260): the clean itself, the registry seam, the Key
+          # Vault data-plane seam and the vault's name
+          [scriptblock]$FrontDataClean, [hashtable]$FrontRegistry, [scriptblock]$FrontKeyVault, [string]$FrontVaultName)
     try {
         $v = if ($Env.ContainsKey('SI_Updater_BuiltInAuth')) { "$($Env['SI_Updater_BuiltInAuth'])" } else { "$([Environment]::GetEnvironmentVariable('SI_Updater_BuiltInAuth'))" }
         if (-not "$v".Trim() -or "$v".Trim() -match '^(?i)off$') { return $null }
@@ -1658,6 +1663,53 @@ function Invoke-SIUpdaterBuiltInAuthStep {
                 if ($sd -and "$($sd.Line)".Trim()) { Write-UpdLog $(if ([string]$sd.State -in 'kept', 'refused') { 'WARNING: ' + "$($sd.Line)" } else { "$($sd.Line)" }) }
                 if ($sd -and "$($sd.Support)".Trim() -and (Get-Command -Name Add-SIUpdaterCustomerAction -ErrorAction SilentlyContinue)) { Add-SIUpdaterCustomerAction -Step 'post-roll' -Text ('Support-app step: ' + "$($sd.Support)") -Class 'arm-403' }
                 $r | Add-Member -NotePropertyName SigninDrop -NotePropertyValue $sd -Force
+            }
+        }
+        # #1260 (Invardia works on control planes only): the earlier sign-in front's DATA-PLANE leftovers -- the signin-front
+        # images in the install's own registry and the Key Vault keys signin-front-dp / SI-Web-KeyRing -- deleted by
+        # SecurityInsight's own code (setup/_shared/SI-BuiltInAuthStandard.ps1 Invoke-SIBuiltInAuthFrontDataClean), which
+        # reads the web app back itself first: switched, the built-in sign-in on, the latest ready revision running, nothing
+        # running the front; the keys only once the web app runs on its own key store and id-si-web holds no role on them.
+        # plan = says what would go. Before the standard's check, so its leftover lines say what is left after this.
+        # A refusal is a warning and a support step, never a failure.
+        $fdGo = ($mode -eq 'plan') -or ($mode -eq 'apply' -and $r.Ok -and $r.State -in @('applied', 'in-place'))
+        if ($fdGo) {
+            if (-not $FrontDataClean -and (Get-Command -Name Invoke-SIBuiltInAuthFrontDataClean -ErrorAction SilentlyContinue)) { $FrontDataClean = { param($a) Invoke-SIBuiltInAuthFrontDataClean @a } }
+            if ($FrontDataClean) {
+                try {
+                    $envGet = { param($n) if ($Env.ContainsKey($n)) { "$($Env[$n])".Trim() } else { "$([Environment]::GetEnvironmentVariable($n))".Trim() } }
+                    $fa = @{ Arm = $Arm; Mode = $mode; WebAppId = $appId }
+                    # the registry: ONLY the install's own (SI_UPDATER_ACR) while it is in the install's resource group -- the
+                    # updater's registry seam (SI-UpdaterImagePrune.ps1 New-SIUpdaterRegistrySeam), as the image clean-up
+                    if ($PSBoundParameters.ContainsKey('FrontRegistry')) { if ($FrontRegistry) { $fa['Registry'] = $FrontRegistry } }
+                    else {
+                        $acrN = & $envGet 'SI_UPDATER_ACR'
+                        if (-not $acrN) { $fa['RegistryNote'] = 'the install''s registry (SI_UPDATER_ACR) is not set on the updater job' }
+                        else {
+                            try {
+                                $acrO = Get-SIUpdaterRegistry -AcrName $acrN -SubscriptionId $SubscriptionId -ResourceGroup $ResourceGroup
+                                if ("$($acrO.resourceGroup)".Trim() -ine "$ResourceGroup".Trim()) { $fa['RegistryNote'] = ('the registry {0} is not in this install''s own resource group, so it may hold images of others -- nothing is deleted there' -f $acrN) }
+                                else { $fa['Registry'] = New-SIUpdaterRegistrySeam -LoginServer ([string]$acrO.loginServer) -Rest (Get-SIUpdaterRest); $fa['LoginServer'] = [string]$acrO.loginServer }
+                            } catch { $fa['RegistryNote'] = ('the registry {0} could not be read ({1})' -f $acrN, $_.Exception.Message) }
+                        }
+                    }
+                    # the Key Vault: the install's own (SI_UPDATER_KEY_VAULT), its data plane through the run's REST seam
+                    $fkv = if ($PSBoundParameters.ContainsKey('FrontVaultName')) { "$FrontVaultName".Trim() } else { & $envGet 'SI_UPDATER_KEY_VAULT' }
+                    if ($fkv) {
+                        $fa['VaultName'] = $fkv
+                        $fa['KeyVault'] = if ($FrontKeyVault) { $FrontKeyVault } else { { param($m, $u, $b) Invoke-SIHandoverKv -Rest (Get-SIUpdaterRest) -Method $m -Uri $u -Body $b } }
+                        $fa['VaultId'] = if ($PSBoundParameters.ContainsKey('VaultId')) { "$VaultId" } else { try { [string](Get-SIUpdaterVaultId -VaultName $fkv -SubscriptionId $SubscriptionId -ResourceGroup $ResourceGroup) } catch { '' } }
+                    }
+                    $fd = & $FrontDataClean $fa
+                    if ($fd) {
+                        foreach ($l in @($fd.Lines)) { if ("$l".Trim()) { Write-UpdLog "$l" } }
+                        foreach ($l in @($fd.Warnings)) { if ("$l".Trim()) { Write-UpdLog ('WARNING: ' + "$l") } }
+                        foreach ($s in @($fd.Support)) {
+                            if ("$s".Trim() -and (Get-Command -Name Add-SIUpdaterCustomerAction -ErrorAction SilentlyContinue)) { Add-SIUpdaterCustomerAction -Step 'post-roll' -Text ('Support-app step: ' + "$s") -Class 'arm-403' }
+                        }
+                        if ($r) { $r | Add-Member -NotePropertyName FrontData -NotePropertyValue $fd -Force }
+                    }
+                } catch { try { Write-UpdLog ('WARNING: built-in sign-in: the earlier sign-in''s stored images and keys could not be checked ({0}) -- nothing was deleted, the update goes on' -f $_.Exception.Message) } catch { } }
             }
         }
         # then (SI-BuiltInAuthStandard.ps1): the MCP app behind Microsoft's authentication -- apply only after the web app reads

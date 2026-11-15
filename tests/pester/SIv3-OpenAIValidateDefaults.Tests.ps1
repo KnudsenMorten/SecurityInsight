@@ -104,7 +104,7 @@ Describe 'Validate-SIOpenAI: the PUBLISHED script after an app sign-in' {
     BeforeAll {
         $script:Out = Join-Path ([IO.Path]::GetTempPath()) ('si-oaivalidate-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
         $builder = [IO.Path]::Combine($script:SIRoot, 'release', 'Build-SISupportScripts.ps1')
-        $null = @(& $builder -OutDir $script:Out -Name 'Validate-SIOpenAI' -Version '9.9.9.1' -Commit 'abcdef0123456789abcdef0123456789abcdef01' -SkipExternalParse -AllowUnsigned -PassThru 6>$null 3>$null)
+        $null = @(& $builder -OutDir $script:Out -Name 'Validate-SIOpenAI' -Version '9.9.9.1' -Commit 'abcdef0123456789abcdef0123456789abcdef01' -SkipExternalParse -PassThru 6>$null 3>$null)
         $script:Published = Join-Path $script:Out 'Validate-SIOpenAI.ps1'
         # the caller: an app's sign-in recorded in this process (as after an SPN sign-in), NO launcher global, and every Azure
         # token refused with a marker -- the script must get past its defaults and stop at its first Azure call

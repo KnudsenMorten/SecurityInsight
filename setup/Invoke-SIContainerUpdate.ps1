@@ -1854,18 +1854,26 @@ if (Test-SIAcrTag @bArgs -Repo 'si-orchestrator' -Tag $tag -LoginServer $acr.Log
                 $baseCtx = Join-Path $work 'base-ctx'; New-Item -ItemType Directory -Force -Path $baseCtx | Out-Null
                 $baseFile = Join-Path $work 'Dockerfile.base'; [IO.File]::WriteAllText($baseFile, $layer.BaseDockerfile)
                 Push-Location -LiteralPath $baseCtx
-                try { $b = Start-SIAcrBuild @bArgs -Image $layer.BaseImage -File $baseFile } finally { Pop-Location }
+                try { $b = Start-SIAcrBuild @bArgs -Image $layer.BaseImage -File $baseFile }
+                catch { throw ("The base image build could not be queued ({0}). No job was changed." -f $_.Exception.Message) }
+                finally { Pop-Location }
                 $b = @(Wait-SIAcrBuilds @bArgs -Builds @($b) -TimeoutMinutes $BuildTimeoutMinutes -Log { param($m) Info $m })[0]
-                if ($b.Status -ne 'Succeeded') { throw "The base image build did not succeed ($($b.Status)). No job was changed." }
+                # #1266: the log line that says a registry did not answer in time rides in the failure (the updater reports it as
+                # transient: nothing was changed, the next update builds again)
+                $why = if (Get-Command -Name Get-SIAcrBuildFailureLine -ErrorAction SilentlyContinue) { Get-SIAcrBuildFailureLine -Build $b } else { '' }
+                if ($b.Status -ne 'Succeeded') { throw ("The base image build did not succeed ({0}{1}). No job was changed." -f $b.Status, $(if ($why) { ': ' + $why } else { '' })) }
             }
         } else { Info $layer.Reason }
         # queued, then followed: one build run, polled until it ends
         $script:EngineBuild = $null
-        Invoke-SIInBuildContext -Path $solRoot -Log { param($m) Info $m } -Action {
-            $script:EngineBuild = Start-SIAcrBuild @bArgs -Image "si-orchestrator:$tag" -File $file
-        }
+        try {
+            Invoke-SIInBuildContext -Path $solRoot -Log { param($m) Info $m } -Action {
+                $script:EngineBuild = Start-SIAcrBuild @bArgs -Image "si-orchestrator:$tag" -File $file
+            }
+        } catch { throw ("The image build could not be queued ({0}). No job was changed." -f $_.Exception.Message) }
         $eb = @(Wait-SIAcrBuilds @bArgs -Builds @($script:EngineBuild) -TimeoutMinutes $BuildTimeoutMinutes -Log { param($m) Info $m })[0]
-        if ($eb.Status -ne 'Succeeded') { throw "The image build did not succeed ($($eb.Status)). No job was changed." }
+        $why = if (Get-Command -Name Get-SIAcrBuildFailureLine -ErrorAction SilentlyContinue) { Get-SIAcrBuildFailureLine -Build $eb } else { '' }
+        if ($eb.Status -ne 'Succeeded') { throw ("The image build did not succeed ({0}{1}). No job was changed." -f $eb.Status, $(if ($why) { ': ' + $why } else { '' })) }
     } finally { Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue }
 }
 } finally {

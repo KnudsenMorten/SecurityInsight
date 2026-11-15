@@ -29,7 +29,8 @@
       2. creates (or reuses) two user-assigned managed identities -- the web app's and the MCP server's -- and grants
          each AcrPull on the registry (the registry's admin user is never used);
       3. with -WorkspaceResourceId: "Log Analytics Reader" on the workspace for both identities;
-         with -ChatResourceId: "Cognitive Services OpenAI User" on the Azure OpenAI resource for the web app's identity;
+         the web chat's "Cognitive Services OpenAI User" on the Azure OpenAI resource is NEVER granted here (#1265 (c):
+         SecurityInsight never grants itself the AI role) -- with -ChatEndpoint a support step says who gives it;
       4. creates or updates both Container Apps (Microsoft.App api 2025-07-01) in an EXISTING Container Apps environment:
          -Ingress (Internal | External) on port 8080, session affinity on the web app (its pending changes and sign-in
          cookie stay on one replica), the identity attached (registry pull + data), and the app settings. No secret is
@@ -67,7 +68,7 @@
     .\Deploy-SIManagement.ps1 -SubscriptionId <sub> -ResourceGroup <rg> -RegistryName <acr> -EnvironmentName <cae> `
         -TenantId <tenant> -SignInClientId <app-reg-client-id> -SqlServer <server>.database.windows.net -SqlDatabase <db> `
         -WorkspaceId <workspace customerId> -WorkspaceResourceId <workspace ARM id> `
-        -ChatEndpoint https://<aoai>.openai.azure.com/ -ChatDeployment <deployment> -ChatResourceId <aoai ARM id> `
+        -ChatEndpoint https://<aoai>.openai.azure.com/ -ChatDeployment <deployment> `
         -SqlAllowAzureServices -GrantSql
     Plan only. Add -Apply to make the changes.
 #>
@@ -95,8 +96,9 @@ param(
     # the customer's Azure OpenAI for the chat (token auth only); empty = the chat says "not configured"
     [string]$ChatEndpoint = '',
     [string]$ChatDeployment = '',
-    # its ARM resource id: grants "Cognitive Services OpenAI User" to the web app's identity
-    [string]$ChatResourceId = '',
+    # #1265 (c): GRANTS NOTHING any more -- SecurityInsight never grants itself "Cognitive Services OpenAI User"; when given it
+    # only names the resource in the support step (the customer or Invardia gives the role). Kept so an older runbook still runs.
+    [Parameter(DontShow)][string]$ChatResourceId = '',
     [string]$AppName = 'ca-si-management',
     [string]$IdentityName = 'uami-si-management',
     [string]$ImageName = 'si-management',
@@ -436,11 +438,15 @@ $identities = @($webId) + @($(if ($mcpId) { $mcpId }))
 foreach ($i in $identities) { Grant-Role -PrincipalId $i.PrincipalId -Role 'AcrPull' -Scope $registryId }
 
 # ---------------------------------------------------------------------------------------------------------------
-Write-Step '3. Data access roles (Log Analytics Reader; Cognitive Services OpenAI User)'
+Write-Step '3. Data access roles (Log Analytics Reader; the AI role is a support step)'
 if ($WorkspaceResourceId) { foreach ($i in $identities) { Grant-Role -PrincipalId $i.PrincipalId -Role 'Log Analytics Reader' -Scope $WorkspaceResourceId } }
 else { Write-Host '  -WorkspaceResourceId not given: grant "Log Analytics Reader" on the workspace to both identities yourself.' -ForegroundColor Yellow }
-if ($ChatResourceId) { Grant-Role -PrincipalId $webId.PrincipalId -Role 'Cognitive Services OpenAI User' -Scope $ChatResourceId }
-elseif ($ChatEndpoint) { Write-Host '  -ChatResourceId not given: grant "Cognitive Services OpenAI User" on the Azure OpenAI resource to the web identity yourself.' -ForegroundColor Yellow }
+# #1265 (c): SecurityInsight NEVER grants itself the AI role (framework SECURE-WEB-1 named exception: the customer or Invardia
+# gives it on the control plane; the guided install and every update only CHECK it -- setup\_shared\SI-OpenAIRights.ps1)
+if ($ChatEndpoint -or $ChatResourceId) {
+    $aiAt = if ($ChatResourceId) { $ChatResourceId } else { 'of {0}' -f $ChatEndpoint }
+    Write-Host ('  support step: give the web app''s identity {0} the role "Cognitive Services OpenAI User" on the Azure OpenAI resource {1} -- the customer or Invardia gives it; SecurityInsight never grants itself the AI role (the web chat is refused until it is there)' -f $IdentityName, $aiAt) -ForegroundColor Yellow
+}
 if ($Apply -and $script:newGrant) {
     # a fresh AcrPull is not seen by the registry at once; the first image pull would fail without the wait
     Write-Host '  new role assignments: waiting 60 s for them to propagate'

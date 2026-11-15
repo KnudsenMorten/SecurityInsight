@@ -13,6 +13,25 @@ SecurityInsight Pro and the Pro trial install from invardia.com, never from GitH
 [invardia.com/trial](https://invardia.com/trial/), and your installation page there gives your two lines.
 <!-- /install lines -->
 
+## v3.1.25 — signed in all day, and updates that finish in one go
+
+### Security
+- **Signed in all day without a new sign-in.** The web app now checks that every sign-in token is still valid, and the
+  page renews the sign-in by itself before it runs out -- so a working day stays signed in, and an expired token is
+  never accepted.
+- **The sign-in check proves itself at start.** Each time the web app starts, it runs Microsoft's own token check on
+  test tokens (one valid, four invalid). If that check does not hold, the new version is not taken into use.
+- **SecurityInsight never gives itself rights on your AI.** A leftover way to grant the web chat its Azure OpenAI role
+  is gone; the role is yours (or your support partner's) to give.
+
+### Fixes
+- **An update finishes in one go.** Steps that come with a new version (for example the sign-in and AI settings) now
+  run in that version during the same update, instead of one scheduled update later.
+- **Microsoft's sign-in switch prepares its own storage**, so the one right it needs can be given at the first ask.
+- **A short network or "busy" hiccup during an update is reported as such**, not as a failure, when nothing changed
+  and SecurityInsight stays healthy on the version before.
+- **The unused AI key setting is removed** once AI runs without a key and no key is kept anywhere.
+- **The documentation's version is reported**, so a support partner sees when it falls behind.
 ## v3.1.24.1 — the switch to Microsoft's sign-in finishes on large installations
 
 ### Fixes

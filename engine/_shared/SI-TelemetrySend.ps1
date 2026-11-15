@@ -334,7 +334,14 @@ function ConvertTo-SITelemetryWire {
           [AllowNull()]$SupportSqlAccess,
           # CR2: the build label (Get-SITelemetryVersion; default: read here) -- the field `build` on a heartbeat / run report when it
           # differs from Version (the release); '' = no field. A test session reads no label of its own (pass -Build)
-          [AllowNull()][AllowEmptyString()][string]$Build)
+          [AllowNull()][AllowEmptyString()][string]$Build,
+          # #1266 / framework TRANSIENT-RETRY-1 (Invardia 1.0.1093): the run record's Retry object -- a failed run report only,
+          # shaped by ConvertTo-SITelemetryRetryWire (the closed keys and values); $null / not transient = left out
+          [AllowNull()]$Retry,
+          # framework RUN-MONITOR-STALE-1 (accepted by Invardia server-first): the run's OWN end as EndedUtc (ISO 8601 UTC, Z) on
+          # every run record -- the moment the run ended, never the send time (a kept record goes again with the time it was
+          # built with). $null / not a time = left out (the end is not known)
+          [AllowNull()]$EndedUtc)
     $a = @{ Kind = [string]$Record.Kind; Mode = $Mode; Product = [string]$Record.Product; Version = [string]$Record.Version; Ring = $Record.Ring
             Edition = [string]$Record.Edition; Hosting = [string]$Record.Hosting; RuntimeIdentity = [string]$Record.RuntimeIdentity
             LicenceState = [string]$Record.LicenceState }
@@ -377,6 +384,19 @@ function ConvertTo-SITelemetryWire {
     # (ids identify nobody) -- Invardia resolves a step's ticket on a later ok report that lists it
     if ($w -and $Record.Kind -eq 'run' -and $Record.PSObject.Properties['StepsOk'] -and @($Record.StepsOk | Where-Object { $_ }).Count) {
         $w | Add-Member -NotePropertyName 'StepsOk' -NotePropertyValue ([string[]]@($Record.StepsOk | Where-Object { $_ } | Select-Object -First 50)) -Force
+    }
+    # #1266 / framework TRANSIENT-RETRY-1: a failed step that changed nothing (the install stays on the version it ran) and that
+    # SI's own code tries again carries Retry -- Invardia then tickets only a real failure or the third attempt. A failed run
+    # report only; identified and anonymous alike (a version and an enum identify nobody). Anything outside the closed shape
+    # is left out, never sent.
+    if ($w -and $Record.Kind -eq 'run' -and "$($w.Outcome)" -ne 'ok' -and $null -ne $Retry) {
+        $rw = ConvertTo-SITelemetryRetryWire $Retry
+        if ($rw) { $w | Add-Member -NotePropertyName 'Retry' -NotePropertyValue $rw -Force }
+    }
+    # RUN-MONITOR-STALE-1: EndedUtc on every run record (ok or not, identified or anonymous -- a time identifies nobody)
+    if ($w -and $Record.Kind -eq 'run') {
+        $eu = ConvertTo-SITelemetryEndedUtc $EndedUtc
+        if ($eu) { $w | Add-Member -NotePropertyName 'EndedUtc' -NotePropertyValue $eu -Force }
     }
     if ($w -and $Mode -eq 'identified' -and $Record.Kind -in @('heartbeat', 'run') -and (Get-Command -Name ConvertTo-SILicenceIdOrEmpty -ErrorAction SilentlyContinue)) {
         $lid = ConvertTo-SILicenceIdOrEmpty $LicenceId
@@ -454,7 +474,63 @@ function Get-SITelemetryOptionalFields { @('wave', 'releaseMode', 'components', 
                                           # framework rule 11g: a private install's image build pool -- behind its own switch, off until Invardia confirms
                                           'BuildPool',
                                           # framework 8.4: the run records kept unsent (the outbox) -- behind its own switch (on: Invardia deployed it 2026-11-05)
-                                          'UplinkBacklog') }
+                                          'UplinkBacklog',
+                                          # #1264 (framework DOCS-FRESH): the docs' live version stamped at build time (Invardia 1.0.1085)
+                                          'docsVersion',
+                                          # #1266 TRANSIENT-RETRY-1 (Invardia 1.0.1093): a validator without it never costs the failure itself
+                                          'Retry') }
+# (EndedUtc -- RUN-MONITOR-STALE-1 -- is NOT on this list: it rides on EVERY run record and Invardia took it server-first, so
+#  a refused record is never sent a second time only to drop it, and a kept record goes again exactly as it was built)
+
+function ConvertTo-SITelemetryEndedUtc {
+    <# PURE. RUN-MONITOR-STALE-1: a run's end as Invardia takes it -- ISO 8601 UTC ending in Z (yyyy-MM-ddTHH:mm:ssZ); '' when
+       -Value is not a time (the end is not known: the field is left out, never filled with the send time). A string already
+       in that shape is kept as it is. #>
+    param([AllowNull()]$Value)
+    if ($null -eq $Value) { return '' }
+    if ($Value -is [string]) {
+        $s = $Value.Trim()
+        if (-not $s) { return '' }
+        if ($s -match '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$') { return $s }
+        $d = [datetime]::MinValue
+        if (-not [datetime]::TryParse($s, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]'AdjustToUniversal, AssumeUniversal', [ref]$d)) { return '' }
+        return $d.ToString('yyyy-MM-ddTHH:mm:ssZ', [Globalization.CultureInfo]::InvariantCulture)
+    }
+    if ($Value -is [datetime]) { return $Value.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ', [Globalization.CultureInfo]::InvariantCulture) }
+    if ($Value -is [datetimeoffset]) { return $Value.UtcDateTime.ToString('yyyy-MM-ddTHH:mm:ssZ', [Globalization.CultureInfo]::InvariantCulture) }
+    ''
+}
+
+# the closed cause list of TRANSIENT-RETRY-1 (a function, not a script variable: the list never depends on the caller's scope)
+function Get-SITelemetryRetryCauses { @('arm-409', 'image-pull-timeout', 'queue-start-timeout', 'request-timeout', 'throttled', 'server-error', 'other') }
+
+function ConvertTo-SITelemetryRetryWire {
+    <#
+        PURE. #1266 / framework TRANSIENT-RETRY-1: the run record's Retry object, EXACTLY Invardia's closed shape (1.0.1093):
+          transient    bool, REQUIRED -- not $true = $null (no Retry: a real failure never carries one)
+          priorVersion the version that stays installed (Invardia's version shape), else left out
+          priorHealthy bool, ONLY when it was read back (latest ready revision = latest, Healthy) -- anything else left out
+          willRetry    bool (SI's own code tries again: the next scheduled update)
+          cause        arm-409 | image-pull-timeout | queue-start-timeout | request-timeout | throttled | server-error | other
+                       (a value outside the list = other)
+          attempt      whole number >= 1, else left out
+        -Value: a hashtable or an object with those keys. Any other key is dropped.
+    #>
+    param([AllowNull()]$Value)
+    if ($null -eq $Value) { return $null }
+    $get = { param($k) if ($Value -is [System.Collections.IDictionary]) { if ($Value.Contains($k)) { $Value[$k] } else { $null } } elseif ($Value.PSObject.Properties[$k]) { $Value.$k } else { $null } }
+    $t = & $get 'transient'
+    if (-not ($t -is [bool]) -or -not $t) { return $null }
+    $o = [ordered]@{ transient = $true }
+    $pv = "$(& $get 'priorVersion')".Trim(); if ($pv -match '^[0-9A-Za-z][0-9A-Za-z.+-]{0,49}$') { $o['priorVersion'] = $pv }
+    $ph = & $get 'priorHealthy'; if ($ph -is [bool]) { $o['priorHealthy'] = $ph }
+    $wr = & $get 'willRetry'; if ($wr -is [bool]) { $o['willRetry'] = $wr }
+    $c = "$(& $get 'cause')".Trim().ToLowerInvariant()
+    $o['cause'] = if ((Get-SITelemetryRetryCauses) -contains $c) { $c } else { 'other' }
+    $at = & $get 'attempt'; $n = 0
+    if ($null -ne $at -and -not ($at -is [bool]) -and [int]::TryParse("$at", [ref]$n) -and $n -ge 1) { $o['attempt'] = $n }
+    [pscustomobject]$o
+}
 
 function ConvertTo-SITelemetrySupportSqlAccessWire {
     <# PURE. The heartbeat's supportSqlAccess, exactly { group, dbUser, checkedUtc, healedUtc }: group / dbUser true, false or
@@ -595,7 +671,7 @@ function Send-SITelemetryRecordWithFallback {
     foreach ($n in $opt) { $Record.PSObject.Properties.Remove($n) }
     $r2 = & $Transport $Record $Context.Endpoint $Context.AccessCode $TimeoutSec
     if ("$($r2.Status)" -ne 'ok') { return [pscustomobject]@{ Result = $r2; Record = $Record; Held = $false } }
-    if (@($opt | Where-Object { $_ -notin @('wave', 'releaseMode', 'components', 'evidence', 'Collections', 'runProgress', 'Pipeline', 'Jobs', 'Sources', 'Database', 'Update', 'Mail', 'Warnings', 'Security', 'Published', 'DataOut', 'supportSqlAccess', 'build', 'setupSteps', 'UplinkBacklog') }).Count) {
+    if (@($opt | Where-Object { $_ -notin @('wave', 'releaseMode', 'components', 'evidence', 'Collections', 'runProgress', 'Pipeline', 'Jobs', 'Sources', 'Database', 'Update', 'Mail', 'Warnings', 'Security', 'Published', 'DataOut', 'supportSqlAccess', 'build', 'setupSteps', 'UplinkBacklog', 'docsVersion', 'Retry') }).Count) {
         if (-not $global:SI_UplinkCausesWarned) { $global:SI_UplinkCausesWarned = $true; Write-SIUplinkDiag ("Invardia did not take the Invardia support link's report with the report causes / capability fields ({0}) -- it was sent without them" -f (ConvertTo-AitUplinkRedacted -Text $first)) }
     }
     if (-not $hadRelease) { return [pscustomobject]@{ Result = $r2; Record = $Record; Held = $false } }
@@ -820,6 +896,26 @@ function Get-SITelemetryReleaseVersion {
         }
     } catch { }
     Get-SITelemetryVersion
+}
+
+function Get-SITelemetryDocsVersion {
+    <# #1264 (framework DOCS-FRESH): the version this install's docs named as live when its package / image was BUILT --
+       BUILD.json 'docsVersion' (stamped from docs\REQUIREMENTS.md section 0's marker, engine\_shared\SI-BuildInfo.ps1). Only
+       a version (3 or 4 parts of digits) is returned; no BUILD.json, no key or anything else = ''. Never git, never throws.
+       -Root: the solution root (default this install's). #>
+    param([string]$Root)
+    try {
+        if (-not "$Root".Trim()) { if ($null -eq (Get-SITelemetrySendState)) { $script:SITelemetrySend = New-SITelemetrySendState }; $Root = (Get-SITelemetrySendState).SIRoot }
+        $bj = [System.IO.Path]::Combine($Root, 'BUILD.json')
+        if (-not [System.IO.File]::Exists($bj)) { return '' }
+        $j = [System.IO.File]::ReadAllText($bj).TrimStart([char]0xFEFF) | ConvertFrom-Json -ErrorAction Stop
+        if (-not $j.PSObject.Properties['docsVersion']) { return '' }
+        $v = $j.docsVersion
+        if ($v -isnot [string]) { return '' }
+        $v = $v.Trim()
+        if ($v -match '^\d{1,6}(\.\d{1,12}){2,3}$') { return $v }
+    } catch { }
+    ''
 }
 
 function Test-SITelemetryReleasedLabel {
@@ -1379,7 +1475,13 @@ function Send-SITelemetryRunEnd {
             $queue.Add((ConvertTo-SITelemetryWire -Record (New-SITelemetryHeartbeat @base) -Mode $Context.Mode -Counts $hbCounts -Now $nowUtc -Endpoints $eps -LicenceId $lid -EnvironmentName $envName -GuardMode $gmWire `
                             -Wave $(if ($relF) { $relF.Wave } else { $null }) -ReleaseMode $(if ($relF) { $relF.ReleaseMode } else { $null }) -Components $(if ($relF) { $relF.Components } else { $null }) -Evidence $(if ($relF) { $relF.Evidence } else { $null }) -Probe $probe -Build $(if ($Context.PSObject.Properties['Build']) { [string]$Context.Build } else { '' })))
         }
-        $runWire = ConvertTo-SITelemetryWire -Record $runRec -Mode $Context.Mode -Counts $counts -Now $nowUtc -Link $runLink -LicenceId $lid -EnvironmentName $envName -Reports $causeItems -Build $(if ($Context.PSObject.Properties['Build']) { [string]$Context.Build } else { '' })
+        # #1266: a failure that changed nothing and is tried again (Send-SITelemetryFailure -Retry) carries its Retry object
+        $retryIn = if ($exit -ne 'success' -and $RunContext.PSObject.Properties['Retry']) { $RunContext.Retry } else { $null }
+        # RUN-MONITOR-STALE-1: the run's own end -- the run context's when it recorded one, else this moment (the run-health END:
+        # the run has ended now). Built into the record BEFORE the send, so a kept record goes again with this time.
+        $endedIn = $nowUtc
+        foreach ($en in 'EndedUtc', 'EndedAt') { if ($RunContext.PSObject.Properties[$en] -and $RunContext.$en) { $endedIn = $RunContext.$en; break } }
+        $runWire = ConvertTo-SITelemetryWire -Record $runRec -Mode $Context.Mode -Counts $counts -Now $nowUtc -Link $runLink -LicenceId $lid -EnvironmentName $envName -Reports $causeItems -Build $(if ($Context.PSObject.Properties['Build']) { [string]$Context.Build } else { '' }) -Retry $retryIn -EndedUtc $endedIn
         $queue.Add($runWire)
         # framework 8.4: the run record as it would be sent, taken BEFORE the send (a refused send may strip fields from it) --
         # kept in the outbox when it is not taken. Only where an outbox applies (identified, the Pro database open).
@@ -1521,11 +1623,16 @@ function Send-SITelemetryFailure {
           # SUP-2026-00198: the failure's error-catalogue code when the caller KNOWS it (si-upd-0803 a refused roll,
           # si-upd-0804 a failed restore, si-upd-0805 a roll that did not verify) -- sent as the record's Reports[] item
           # (ConvertTo-SIUplinkFailureItem), so Invardia files it under that code and never as 'unknown'
-          [AllowEmptyString()][string]$Code)
+          [AllowEmptyString()][string]$Code,
+          # #1266 / framework TRANSIENT-RETRY-1: the failure changed nothing, the install stays on the version it ran and SI's
+          # own code tries again -- { transient; priorVersion; priorHealthy; willRetry; cause; attempt } (ConvertTo-SITelemetryRetryWire
+          # shapes it). Only the caller that KNOWS this passes it; a real failure never does.
+          [AllowNull()]$Retry)
     try {
         $st = ("$Step".Trim().ToLowerInvariant() -replace '[^a-z0-9\-]', '-') -replace '^[^a-z]+', ''
         if (-not $st) { $st = 'unknown' }
         $rc = [pscustomobject]@{ Engine = $Job; ShardIndex = 0; StartedAt = $StartedAt; FailedStep = $st }
+        if ($null -ne $Retry -and -not $CustomerAction) { $rc | Add-Member -NotePropertyName Retry -NotePropertyValue $Retry }
         if ("$Code".Trim()) {
             $rc | Add-Member -NotePropertyName FailureCode -NotePropertyValue "$Code".Trim().ToLowerInvariant()
             # a registry / platform that did not answer Azure is the platform's, not 'unknown' (the 400 of 2026-10-19)

@@ -203,11 +203,15 @@ function Complete-SIUpdaterOutput {
     try { [Console]::Error.Flush() } catch { }
 }
 # #427: records a failure of this run for Invardia's uplink (SI-UpdaterTelemetry.ps1); without that file, nothing
-function Add-SIUpdaterFailureIf([string]$Step, [string]$Text, [string]$Code = '') {
+function Add-SIUpdaterFailureIf([string]$Step, [string]$Text, [string]$Code = '', [string]$Transient = '') {
     $c = Get-Command -Name Add-SIUpdaterFailure -ErrorAction SilentlyContinue
     if (-not $c) { return }
     # SUP-2026-00198: the failure's catalogue code (si-upd-0803 / 0804 / 0805) rides along where the recorder knows it
-    if ("$Code".Trim() -and $c.Parameters.ContainsKey('Code')) { Add-SIUpdaterFailure -Step $Step -Text $Text -Code $Code } else { Add-SIUpdaterFailure -Step $Step -Text $Text }
+    $a = @{ Step = $Step; Text = $Text }
+    if ("$Code".Trim() -and $c.Parameters.ContainsKey('Code')) { $a.Code = $Code }
+    # #1266: the transient cause, where the caller KNOWS nothing was changed (the key ring's PATCH still busy: arm-409)
+    if ("$Transient".Trim() -and $c.Parameters.ContainsKey('Transient')) { $a.Transient = $Transient }
+    Add-SIUpdaterFailure @a
 }
 # framework rule 11g: the run's build-pool session closed (the pool back to 0 agents, read back, when the run scaled it up). A
 # scale-down that fails is said and recorded as its own failure line ('build-pool'); the run's result is never changed by it.
@@ -420,7 +424,9 @@ function Invoke-SIUpdaterAiSettingsStep {
         Seams (tests): -Arm { param($Method, $Path, $ApiVersion, $Body) }, -Lib, -Sleep, -SettingRows + -SettingsKnown.
     #>
     param([Parameter(Mandatory)][string]$SubscriptionId, [Parameter(Mandatory)][string]$ResourceGroup, $Store, [hashtable]$Env = @{},
-          [scriptblock]$Arm, [string]$Lib = '', [scriptblock]$Sleep, [object[]]$SettingRows, [bool]$SettingsKnown = $true)
+          [scriptblock]$Arm, [string]$Lib = '', [scriptblock]$Sleep, [object[]]$SettingRows, [bool]$SettingsKnown = $true,
+          # #1265 (c) (tests): the setting OpenAI_apiKey as read -- empty | set | unknown (default: one flag read from -Store)
+          [string]$KeySetting = '')
     try {
         $file = if ($Lib) { $Lib } elseif ($siAutoRoot) { [IO.Path]::Combine($siAutoRoot, 'setup', '_shared', 'SI-AiSettings.ps1') } else { '' }
         if (-not $file -or -not (Test-Path -LiteralPath $file)) { return $null }
@@ -435,8 +441,10 @@ function Invoke-SIUpdaterAiSettingsStep {
         $jobs = @()
         $want = Get-SIAiSettingsWant -Settings (ConvertFrom-SIAiSettingRows -Rows $SettingRows) -Known $SettingsKnown
         if ($want.State -eq 'on') { $jobs = @((& $Arm 'GET' ($rgId + '/providers/Microsoft.App/jobs') '2025-07-01' $null).value) }
+        # #1265 (c): the setting OpenAI_apiKey (a flag only, never the value) -- decides whether a plain legacy key may go
+        $keySet = if ($want.State -ne 'on') { 'unknown' } elseif ($KeySetting) { $KeySetting } elseif ($Store -and $Store.Invoke -and (Get-Command -Name Read-SIAiKeySetting -ErrorAction SilentlyContinue)) { Read-SIAiKeySetting -Invoke $Store.Invoke } else { 'unknown' }
         $p = @{ Arm = $Arm; SubscriptionId = $SubscriptionId; ResourceGroup = $ResourceGroup; WebAppName = (Get-SIUpdaterInstallName -Role web -Env $Env)
-                Jobs = $jobs; Settings = (ConvertFrom-SIAiSettingRows -Rows $SettingRows); Known = $SettingsKnown; WhatIf = $plan }
+                Jobs = $jobs; Settings = (ConvertFrom-SIAiSettingRows -Rows $SettingRows); Known = $SettingsKnown; WhatIf = $plan; KeySetting = $keySet }
         if ($Sleep) { $p['Sleep'] = $Sleep }
         $r = Invoke-SIAiSettings @p
         foreach ($l in @($r.Lines)) { Write-UpdLog $(if ($l -match 'could not|does not read back|not checked|but ') { 'WARNING: ' + $l } else { $l }) }
@@ -1329,8 +1337,9 @@ function Invoke-SIUpdaterCore {
         catch { $proStoreError = $_.Exception.Message; Write-UpdLog ("WARNING: the Pro settings database could not be opened: {0}" -f $proStoreError) }
     }
     # 2026-10-23: the second update (SI_UPDATER_MODE = second-pass, started by the update that installed the release) waits
-    # for that update to end first -- two updates never change the install at once
-    if ((& $get 'SI_UPDATER_MODE') -ieq 'second-pass') {
+    # for that update to end first -- two updates never change the install at once. #1262: the post-roll run (SI_UPDATER_MODE
+    # = post-roll, started by an update that moved the updater onto the release's image) waits the same way.
+    if ((& $get 'SI_UPDATER_MODE') -in @('second-pass', 'post-roll')) {
         $selfExec = & $get 'CONTAINER_APP_JOB_EXECUTION_NAME'
         $updJobName = Get-SIUpdaterInstallName -Role updater -Env $Env
         Write-UpdLog (Wait-SIUpdaterPreviousEnded -Self $selfExec -Executions { @(Invoke-SIUpdaterArm -Path (Get-SIUpdaterRgPath -SubscriptionId $sub -ResourceGroup $rg -Provider ('Microsoft.App/jobs/{0}/executions' -f $updJobName)) -List) })
@@ -1495,7 +1504,8 @@ function Invoke-SIUpdaterCore {
     $connRoute = (Resolve-SIUpdaterUpdateRoute -HasLicence $false -Edition (Get-SIUpdaterInstallEdition -SubscriptionId $sub -ResourceGroup $rg) -Source (& $connGet 'SI_UPDATER_SOURCE')).Route
     $licenceAsk = Test-SIUpdaterInvardiaConnected -Route $connRoute -Get $connGet
     $global:SI_UpdaterConnected = $licenceAsk
-    if (-not $licenceAsk) { Write-UpdLog ('licence request: ' + (Get-SIInvardiaConnectSkipText -What 'no licence request')); $lr = $null }
+    if ($updMode -eq 'post-roll') { $lr = $null }   # #1262: the post-roll run asks for no licence (see below)
+    elseif (-not $licenceAsk) { Write-UpdLog ('licence request: ' + (Get-SIInvardiaConnectSkipText -What 'no licence request')); $lr = $null }
     else {
     $lr = Invoke-SIUpdaterLicenceRequest -Env $Env -SubscriptionId $sub -Log { param($m) Write-UpdLog $m } -Store $proStore `
                 -Switch $(if ($switches) { $switches['SI_LicenseRequest_Auto'] } else { $null })
@@ -1506,6 +1516,12 @@ function Invoke-SIUpdaterCore {
     $global:SI_UpdaterStep = 'endpoints'
     $null = Invoke-SIUpdaterRecordEndpoints -Store $proStore -SubscriptionId $sub -ResourceGroup $rg `
                 -WebApp (Get-SIUpdaterInstallName -Role web -Env $Env) -McpApp (Get-SIUpdaterInstallName -Role mcp -Env $Env)
+    # #1262 THE POST-ROLL RUN (SI_UPDATER_MODE = post-roll): started ONCE by an update that moved the updater onto the
+    # release's image (Start-SIUpdaterSecondPass), so the release's post-roll steps run in the release's OWN code within its
+    # own update -- not one scheduled update later. Everything above ran in this code already (the AI settings among it);
+    # here only the post-roll steps (the web app steps, the built-in sign-in incl. the MCP standard and the key-ring move),
+    # each with its own read-back. No licence request, no manifest read, no image roll, and it never starts another run.
+    if ($updMode -eq 'post-roll') { return (Invoke-SIUpdaterPostRollRun -Env $Env -Store $proStore -SubscriptionId $sub -ResourceGroup $rg) }
     $global:SI_UpdaterStep = 'updater'
     # #350: both of the customer's switches, stated on every run (PIM: 'licence.autoRequest' / 'updates.invardia')
     if ($switches) { foreach ($k in 'SI_LicenseRequest_Auto', 'SI_InvardiaUpdate_Enabled') { if ($switches[$k]) { Write-UpdLog ("switch {0} = {1}: {2}" -f $k, $(if ($switches[$k].On) { 'ON' } else { 'OFF' }), $switches[$k].Text) } } }
@@ -1518,6 +1534,24 @@ function Invoke-SIUpdaterCore {
                 -Deployed (Get-SIUpdaterDeployed -ResourceGroup $rg -AcrName $acrName -SubscriptionId $sub -Env $Env) -AcceptFingerprint (& $get 'SI_UPDATER_ACCEPT_TEMPLATE_FINGERPRINT'))
     Invoke-SIUpdaterWebAppStepsAfter -Rc $rcInvardia -Env $Env -Store $proStore -SubscriptionId $sub -ResourceGroup $rg
     return $rcInvardia
+}
+
+function Invoke-SIUpdaterPostRollRun {
+    <#
+        #1262: the end of a post-roll run (SI_UPDATER_MODE = post-roll). The update that installed the release ran its
+        post-roll steps in the OLD updater code (the updater moves itself to the release's image during that run, and the
+        running execution finishes on its old image); this run, on the NEW image, runs them once more in the release's own
+        code: Invoke-SIUpdaterWebAppStepsAfter -Rc 0 (that update ended well -- it is what started this run). Idempotent:
+        every step reads first and changes only what differs. Never rolls an image, never reads the manifest, never starts
+        another updater run, never stops or cancels anything. Returns 0 (a step that failed is reported as in any run).
+    #>
+    param([hashtable]$Env = @{}, $Store, [string]$SubscriptionId, [string]$ResourceGroup)
+    $global:SI_UpdaterStep = 'post-roll'
+    $ver = ''; if ($siAutoRoot) { try { $ver = ([IO.File]::ReadAllText([IO.Path]::Combine($siAutoRoot, 'VERSION'))).Trim() } catch { $ver = '' } }
+    Write-UpdLog ('post-roll run: the post-roll steps of {0} in its own code (no image roll, no licence request, no further run)' -f $(if ($ver) { "SecurityInsight $ver" } else { 'this release' }))
+    Invoke-SIUpdaterWebAppStepsAfter -Rc 0 -Env $Env -Store $Store -SubscriptionId $SubscriptionId -ResourceGroup $ResourceGroup
+    Write-UpdLog 'post-roll run: done'
+    0
 }
 
 function Invoke-SIUpdaterWebAppStepsAfter {
@@ -1606,7 +1640,12 @@ function Invoke-SIUpdaterBuiltInAuthStep {
             foreach ($s in @($(if ($k -and $k.PSObject.Properties['Support']) { $k.Support }))) {
                 if ("$s".Trim() -and (Get-Command -Name Add-SIUpdaterCustomerAction -ErrorAction SilentlyContinue)) { Add-SIUpdaterCustomerAction -Step 'post-roll' -Text ('Support-app step: ' + "$s") -Class 'arm-403' }
             }
-            if ($k -and -not $k.Ok -and (Get-Command -Name Add-SIUpdaterFailureIf -ErrorAction SilentlyContinue)) { Add-SIUpdaterFailureIf 'post-roll' ((@($k.Lines) | Select-Object -Last 1) -join '') }
+            # #1266: a PATCH that still answered 409 (the app busy) after the step's own retries changed nothing (the Key Vault
+            # rights stay): reported as transient (arm-409), the next update tries again
+            if ($k -and -not $k.Ok -and (Get-Command -Name Add-SIUpdaterFailureIf -ErrorAction SilentlyContinue)) {
+                $kt = if ($k.PSObject.Properties['Transient']) { "$($k.Transient)".Trim() } else { '' }
+                Add-SIUpdaterFailureIf 'post-roll' ((@($k.Lines) | Select-Object -Last 1) -join '') '' $kt
+            }
             $r | Add-Member -NotePropertyName KeyRing -NotePropertyValue $k -Force
         }
         # SECURE-WEB-1 "no leftovers" (Invardia never touches an install's SQL): ONLY after a switch that read back, the
@@ -1647,6 +1686,28 @@ function Invoke-SIUpdaterBuiltInAuthStep {
     } catch { try { Write-UpdLog ('WARNING: built-in sign-in: could not be checked ({0}) -- the update goes on' -f $_.Exception.Message) } catch { }; $null }
 }
 
+function Read-SIUpdaterPriorHealth {
+    <#
+        #1266 / framework TRANSIENT-RETRY-1: is the web app healthy on what it runs -- READ BACK, never assumed: the app (its
+        latestRevisionName / latestReadyRevisionName) and that revision (its healthState) over ARM, judged by
+        Test-SIUpdaterPriorHealthy. $true / $false when read; $null when anything could not be read (priorHealthy is then left
+        out). -Arm { param($Path) } -> the ARM object or $null: the test seam. NEVER throws.
+    #>
+    param([hashtable]$Env = @{}, [scriptblock]$Arm)
+    try {
+        if (-not (Get-Command -Name Test-SIUpdaterPriorHealthy -ErrorAction SilentlyContinue)) { return $null }
+        $get = { param($k) $v = if ($Env.ContainsKey($k)) { $Env[$k] } else { [Environment]::GetEnvironmentVariable($k) }; if ([string]::IsNullOrWhiteSpace($v)) { '' } else { "$v".Trim() } }
+        $sub = & $get 'SI_UPDATER_SUBSCRIPTION_ID'; $rg = & $get 'SI_UPDATER_RESOURCE_GROUP'
+        if (-not $sub -or -not $rg) { return $null }
+        if (-not $Arm) { $Arm = { param([string]$Path) Invoke-SIUpdaterArm -Method GET -Path $Path -AllowNotFound } }
+        $appPath = Get-SIUpdaterRgPath -SubscriptionId $sub -ResourceGroup $rg -Provider ('Microsoft.App/containerApps/' + (Get-SIUpdaterInstallName -Role web -Env $Env))
+        $app = & $Arm $appPath
+        $rn = if ($app -and $app.PSObject.Properties['properties'] -and $app.properties -and $app.properties.PSObject.Properties['latestRevisionName']) { "$($app.properties.latestRevisionName)".Trim() } else { '' }
+        $rev = if ($rn) { & $Arm ('{0}/revisions/{1}' -f $appPath, $rn) } else { $null }
+        Test-SIUpdaterPriorHealthy -App $app -Revision $rev
+    } catch { $null }
+}
+
 function Invoke-SIUpdaterFailureReport {
     <#
         #427: at the end of the run, every failure it recorded (and a non-zero exit with none recorded) goes to Invardia's
@@ -1655,7 +1716,10 @@ function Invoke-SIUpdaterFailureReport {
         -ReadKey { } -> the install key ('' = none) -- the test seam; default: the Key Vault secret over REST (only when a
         failure is to be reported).
     #>
-    param([int]$ExitCode, $StartedAt, [hashtable]$Env = @{}, [scriptblock]$ReadKey, [scriptblock]$Send)
+    param([int]$ExitCode, $StartedAt, [hashtable]$Env = @{}, [scriptblock]$ReadKey, [scriptblock]$Send,
+          # #1266: { } -> $true / $false / $null, the web app read back for a transient failure's priorHealthy (default:
+          # Read-SIUpdaterPriorHealth over ARM; never in a test session) -- the test seam
+          [scriptblock]$PriorHealth)
     try {
         if (-not (Get-Command -Name Send-SIUpdaterFailureReports -ErrorAction SilentlyContinue)) { return @() }
         if (-not @(Get-SIUpdaterFailures).Count -and $ExitCode -eq 0) { return @() }
@@ -1677,6 +1741,9 @@ function Invoke-SIUpdaterFailureReport {
         }
         $a = @{ ExitCode = $ExitCode; On = $on; InstallKey = $key; InstallId = $iid; TenantId = (& $get 'SI_UPDATER_TENANT_ID'); StartedAt = $StartedAt; Log = { param($m) Write-UpdLog $m } }
         if ($Send) { $a.Send = $Send }
+        # (the job's own variables: this report is made at the end of the run, called without -Env)
+        if (-not $PriorHealth -and -not (Get-Module -Name Pester)) { $PriorHealth = { Read-SIUpdaterPriorHealth } }
+        if ($PriorHealth -and (Get-Command -Name Send-SIUpdaterFailureReports).Parameters.ContainsKey('PriorHealth')) { $a.PriorHealth = $PriorHealth }
         Send-SIUpdaterFailureReports @a
     } catch { @() }
 }

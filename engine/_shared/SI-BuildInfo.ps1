@@ -15,6 +15,9 @@
       commit       the full commit; shortCommit its first 7 characters
       builtUtc     when the build was made (UTC, ISO 8601)
       channel/ring where it is going, when the builder knows it (else null)
+      docsVersion  #1264 (framework DOCS-FRESH): the version docs\REQUIREMENTS.md section 0 names as live -- read at BUILD
+                   time from the marker  <!-- docs-live-version: 3.1.24.1 -->  in the tree being built (Get-SIDocsLiveVersion);
+                   no marker / not a version = no docsVersion key (never empty, never a failure). The heartbeat sends it.
 
     A RELEASE build is HEAD carrying the tag SI-<VERSION> (or SecurityInsight-v<VERSION>, the public twin).
     Anything else is a pre-release and says so.
@@ -43,6 +46,53 @@ function Get-SIReleasedDisplay {
     $r = "$Release".Trim()
     if ($r -match '^\d{1,6}(\.\d{1,12}){2,3}$') { return $r }
     ''
+}
+
+function ConvertTo-SIDocsVersion {
+    <# PURE. #1264: -Value when it is a SecurityInsight version -- digits and dots, 3 or 4 parts (3.1.24, 3.1.24.1) -- else ''.
+       The only shape that is ever stamped or sent as docsVersion (Invardia's heartbeat contract refuses a bad version). #>
+    param([AllowNull()]$Value)
+    if ($null -eq $Value -or $Value -isnot [string]) { return '' }
+    $v = $Value.Trim()
+    if ($v -match '^\d{1,6}(\.\d{1,12}){2,3}$') { return $v }
+    ''
+}
+
+function Get-SIDocsLiveVersion {
+    <#
+        PURE. #1264 (framework DOCS-FRESH): the version the docs name as LIVE, from the ONE machine-readable marker in
+        docs\REQUIREMENTS.md section 0:
+            <!-- docs-live-version: 3.1.24.1 -->
+        an HTML comment (invisible when rendered), on its own, anywhere in the text; spaces inside are free, the name is
+        lower case. No marker, a value that is not a version, or two markers that disagree = '' (the field is left out --
+        never a guess). The same marker twice with the same value is that value.
+    #>
+    param([AllowNull()][AllowEmptyString()][string]$Text)
+    if (-not "$Text") { return '' }
+    $ms = [regex]::Matches($Text, '<!--\s*docs-live-version:\s*([^\s>]*)\s*-->')
+    if (-not $ms.Count) { return '' }
+    $vals = @($ms | ForEach-Object { $_.Groups[1].Value.Trim() } | Select-Object -Unique)
+    if ($vals.Count -ne 1) { return '' }
+    ConvertTo-SIDocsVersion -Value ([string]$vals[0])
+}
+
+function Read-SIDocsLiveVersion {
+    <#
+        BUILD TIME. #1264: the docs' live version of the tree being built -- docs\REQUIREMENTS.md under -SolutionRoot (-Ref
+        HEAD: the working tree) or that file at -Ref (git show; a package of a tag or a commit). '' when the file or the
+        marker is missing. Never throws. Never called at run time: the run reads only BUILD.json.
+    #>
+    param([Parameter(Mandatory)][string]$SolutionRoot, [string]$Ref = 'HEAD', [switch]$NoGit)
+    try {
+        $text = ''
+        if ($Ref -eq 'HEAD' -or $NoGit) {
+            $f = [System.IO.Path]::Combine($SolutionRoot, 'docs', 'REQUIREMENTS.md')
+            if ([System.IO.File]::Exists($f)) { $text = [System.IO.File]::ReadAllText($f) }
+        } else {
+            $text = "$(Invoke-SIBuildGit -Root $SolutionRoot -GitArgs @('show', ('{0}:./docs/REQUIREMENTS.md' -f $Ref)))"
+        }
+        return (Get-SIDocsLiveVersion -Text $text)
+    } catch { return '' }
 }
 
 function Read-SIVersionFile {
@@ -86,6 +136,9 @@ function Read-SIBuildInfo {
                 if ("$($j.display)".Trim()) { $o.display = "$($j.display)".Trim() }
                 # the release stamped by Publish-SIRelease travels on (an image build writes BUILD.json again from this)
                 if ($j.PSObject.Properties['release'] -and "$($j.release)".Trim()) { $o | Add-Member -NotePropertyName 'release' -NotePropertyValue "$($j.release)".Trim() -Force }
+                # #1264: the docs' live version stamped at build time travels on the same way (a value that is not a version: none)
+                $dv = if ($j.PSObject.Properties['docsVersion']) { ConvertTo-SIDocsVersion -Value $j.docsVersion } else { '' }
+                if ($dv) { $o | Add-Member -NotePropertyName 'docsVersion' -NotePropertyValue $dv -Force }
                 # framework installer rule 11b (2026-11-04: a released install showed "3.0.29-rc.9"): a package stamped as a
                 # RELEASE shows its released version -- never a release-candidate label (Get-SIReleasedDisplay)
                 $rel = Get-SIReleasedDisplay -Release $(if ($j.PSObject.Properties['release']) { [string]$j.release } else { '' })
@@ -142,7 +195,11 @@ function Get-SIBuildInfo {
         if (-not [int]::TryParse("$count", [ref]$n)) { $n = 0 }
         $rc = $n
     }
-    New-SIBuildInfoObject -Version $version -Rc $rc -Commit $head -BuiltUtc $built -Channel $Channel -Ring $Ring -Source 'git'
+    $o = New-SIBuildInfoObject -Version $version -Rc $rc -Commit $head -BuiltUtc $built -Channel $Channel -Ring $Ring -Source 'git'
+    # #1264: the docs' live version of the SAME tree (the working tree for HEAD, else the file at -Ref) -- none = no key
+    $dv = Read-SIDocsLiveVersion -SolutionRoot $root -Ref $Ref
+    if ($dv) { $o | Add-Member -NotePropertyName 'docsVersion' -NotePropertyValue $dv -Force }
+    $o
 }
 
 function Initialize-SIBuildInfoFile {
@@ -161,6 +218,11 @@ function Initialize-SIBuildInfoFile {
     $info = Read-SIBuildInfo -SolutionRoot $SolutionRoot
     if ($Channel) { $info.channel = $Channel }
     if ($null -ne $Ring -and "$Ring" -ne '') { $info.ring = [int]$Ring }
+    # #1264: the folder's own docs marker when it carries the requirements (a file read, never git); none = no key
+    if (-not $info.PSObject.Properties['docsVersion']) {
+        $dv = Read-SIDocsLiveVersion -SolutionRoot $SolutionRoot -NoGit
+        if ($dv) { $info | Add-Member -NotePropertyName 'docsVersion' -NotePropertyValue $dv -Force }
+    }
     $null = Write-SIBuildInfo -Info $info -Path $bj
     'written'
 }
@@ -176,6 +238,9 @@ function Write-SIBuildInfo {
     # the release this package IS at Invardia (3.0.0.<build number>) -- stamped by Publish-SIRelease; the run compares the
     # error catalogue's fixedIn with it (#709). Only when known: older readers ignore an extra field.
     if ($Info.PSObject.Properties['release'] -and "$($Info.release)".Trim()) { $o.release = "$($Info.release)".Trim() }
+    # #1264: the docs' live version (docs\REQUIREMENTS.md section 0's marker, read when the build was made) -- only a version
+    $dv = if ($Info.PSObject.Properties['docsVersion']) { ConvertTo-SIDocsVersion -Value $Info.docsVersion } else { '' }
+    if ($dv) { $o.docsVersion = $dv }
     $dir = Split-Path -Parent $Path
     if ($dir -and -not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
     [System.IO.File]::WriteAllText($Path, (ConvertTo-Json -InputObject $o -Depth 3), (New-Object System.Text.UTF8Encoding($false)))

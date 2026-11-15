@@ -24,6 +24,15 @@
                          nothing changes; one line says what is missing.
       NOT KNOWN (the settings could not be read)
                          nothing changes; one line says so.
+      #1265 (c) THE LEGACY KEY VARIABLE (AI ON only): setup gave the engine jobs OPENAI_APIKEY, a reference to the job secret
+                         openai-apikey (a Key Vault reference to setup's OpenAI-ApiKey, or the configured value). AI keyless
+                         (endpoint + deployment set) removes that VARIABLE from an engine job ONLY when no key stands behind it:
+                           a Key Vault reference whose secret the vault does NOT hold (ARM: the secret's metadata answers 404), or
+                           a plain value (a plain secret / a plain variable) while the setting OpenAI_apiKey is read and EMPTY
+                           (no value, no Key Vault secret named).
+                         Anything not proven (the vault not found, a read refused, the setting not read, a reference to a
+                         secret the job does not list) KEEPS it: a key the customer still uses as the fallback is never taken
+                         away. Only the variable goes (read back); the job's configuration (its secrets) is never sent.
     Each resource: GET, the plan, ONE read-modify-write PATCH only when a value differs (so a new web revision only when the
     values change), READ BACK. Never a key, never a secret, never another variable. -WhatIf = the plan only (no PATCH).
     Never throws. ONE seam: -Arm { param([string]$Method, [string]$Path, [string]$ApiVersion, $Body) } -> the parsed answer
@@ -36,6 +45,9 @@ $script:SIAiSettingsDefaultApiVersion = '2024-08-01-preview'
 $script:SIAiSettingsNames = @('SI_EnableAI', 'OpenAI_endpoint', 'OpenAI_deployment', 'OpenAI_apiVersion')
 $script:SIAiWebEnvNames = @('Chat__Endpoint', 'Chat__Deployment')
 $script:SIAiJobEnvNames = @('OPENAI_ENDPOINT', 'OPENAI_DEPLOYMENT', 'OPENAI_APIVERSION')
+# #1265 (c): the legacy key variable setup put on the engine jobs (Bootstrap-ContainerAppJob.ps1, secret alias openai-apikey)
+$script:SIAiLegacyKeyEnvName = 'OPENAI_APIKEY'
+$script:SIAiKeyVaultArmApi = '2023-07-01'
 
 if (-not (Get-Command -Name Test-SIOpenAIEndpoint -ErrorAction SilentlyContinue)) {
     $__siAiGate = [IO.Path]::Combine((Split-Path -Parent (Split-Path -Parent $PSScriptRoot)), 'engine', 'asset-profiling', 'shared', 'Test-SIAIEnabled.ps1')
@@ -164,6 +176,115 @@ function Test-SIAiEnvReadBack {
     $true
 }
 
+function Get-SIAiLegacyKeyOf {
+    <#
+        PURE. #1265 (c): what stands behind an engine job's legacy key variable (OPENAI_APIKEY on its first container).
+        @{ Present; Kind; VaultName; SecretName; Url } -- Kind:
+          none       no such variable
+          plain      a plain variable (its value: Empty says whether it is empty)
+          keyvault   a secretRef to a job secret that is a Key Vault reference (VaultName / SecretName from its keyVaultUrl)
+          secret     a secretRef to a job secret with a value ARM does not return (setup's configured value)
+          unknown    a secretRef to a secret the job does not list, or a Key Vault address that cannot be read
+    #>
+    param($Job)
+    $e = @(Get-SIAiFirstContainerEnv -Resource $Job | Where-Object { [string]$_.name -eq $script:SIAiLegacyKeyEnvName })[0]
+    $o = [ordered]@{ Present = $false; Kind = 'none'; Empty = $false; VaultName = ''; SecretName = ''; Url = '' }
+    if ($null -eq $e) { return [pscustomobject]$o }
+    $o.Present = $true
+    $ref = if ($e.PSObject.Properties['secretRef']) { "$($e.secretRef)".Trim() } else { '' }
+    if (-not $ref) { $o.Kind = 'plain'; $o.Empty = -not "$($e.value)".Trim(); return [pscustomobject]$o }
+    $secrets = @()
+    try { if ($Job.properties.configuration -and $Job.properties.configuration.PSObject.Properties['secrets']) { $secrets = @($Job.properties.configuration.secrets | Where-Object { $_ }) } } catch { $secrets = @() }
+    $s = @($secrets | Where-Object { [string]$_.name -eq $ref })[0]
+    if ($null -eq $s) { $o.Kind = 'unknown'; return [pscustomobject]$o }
+    $url = if ($s.PSObject.Properties['keyVaultUrl']) { "$($s.keyVaultUrl)".Trim() } else { '' }
+    if (-not $url) { $o.Kind = 'secret'; return [pscustomobject]$o }
+    $o.Url = $url
+    $m = [regex]::Match($url, '^https://([A-Za-z0-9-]{3,24})\.vault\.azure\.net(?::443)?/secrets/([A-Za-z0-9-]{1,127})(?:/[0-9a-fA-F]{32})?/?$')
+    if (-not $m.Success) { $o.Kind = 'unknown'; return [pscustomobject]$o }
+    $o.Kind = 'keyvault'; $o.VaultName = $m.Groups[1].Value; $o.SecretName = $m.Groups[2].Value
+    [pscustomobject]$o
+}
+
+function Get-SIAiLegacyKeyDecision {
+    <#
+        PURE. #1265 (c): may the legacy key variable go? Only with AI keyless (the caller asks only then) AND no key behind it:
+          -Key          Get-SIAiLegacyKeyOf
+          -VaultSecret  present | absent | unknown -- the Key Vault secret a 'keyvault' key points to (ARM read)
+          -KeySetting   empty | set | unknown -- the setting OpenAI_apiKey (cfg.Setting: a value or a Key Vault secret named)
+        @{ Remove; Why }. Not proven = kept (Remove $false) -- never a key the customer still uses as the fallback.
+    #>
+    param([Parameter(Mandatory)]$Key, [ValidateSet('present', 'absent', 'unknown')][string]$VaultSecret = 'unknown',
+          [ValidateSet('empty', 'set', 'unknown')][string]$KeySetting = 'unknown')
+    $no = { param($w) [pscustomobject]@{ Remove = $false; Why = $w } }
+    $yes = { param($w) [pscustomobject]@{ Remove = $true; Why = $w } }
+    switch ([string]$Key.Kind) {
+        'none'     { return (& $no 'no key variable') }
+        'keyvault' {
+            if ($VaultSecret -eq 'absent') { return (& $yes ("Key Vault {0} holds no secret {1} -- no key stands behind it" -f $Key.VaultName, $Key.SecretName)) }
+            if ($VaultSecret -eq 'present') { return (& $no ("Key Vault {0} holds {1} -- kept as the fallback" -f $Key.VaultName, $Key.SecretName)) }
+            return (& $no ("Key Vault {0} / {1} could not be checked -- kept" -f $Key.VaultName, $Key.SecretName))
+        }
+        { $_ -in 'plain', 'secret' } {
+            if ($Key.Kind -eq 'plain' -and $Key.Empty) { return (& $yes 'the variable is empty') }
+            if ($KeySetting -eq 'empty') { return (& $yes 'the setting OpenAI_apiKey is empty') }
+            if ($KeySetting -eq 'set') { return (& $no 'the setting OpenAI_apiKey holds a key -- kept as the fallback') }
+            return (& $no 'the setting OpenAI_apiKey could not be read -- kept')
+        }
+        default { return (& $no 'what stands behind it is not known -- kept') }
+    }
+}
+
+function Get-SIAiKeySettingSql {
+    <# #1265 (c): whether the setting OpenAI_apiKey holds a key -- a value or a Key Vault secret named -- read as ONE flag (never
+       the value itself). No row = empty. #>
+    @'
+IF OBJECT_ID('cfg.Setting') IS NOT NULL
+SELECT CAST(CASE WHEN EXISTS (SELECT 1 FROM cfg.Setting WHERE Scope = N'solution' AND Name = N'OpenAI_apiKey'
+        AND (LTRIM(RTRIM(ISNULL(ValueJson, N''))) NOT IN (N'', N'null', N'""') OR LTRIM(RTRIM(ISNULL(KeyVaultSecretName, N''))) <> N''))
+    THEN 1 ELSE 0 END AS int) AS KeySet
+'@
+}
+
+function Read-SIAiKeySetting {
+    <# #1265 (c): empty | set | unknown for the setting OpenAI_apiKey. -Invoke { param($Sql, $Params, $Mode) } (the Pro
+       database). No database, a read that fails or an answer without KeySet = unknown. Never throws. #>
+    param([scriptblock]$Invoke)
+    if (-not $Invoke) { return 'unknown' }
+    try {
+        $row = @(& $Invoke (Get-SIAiKeySettingSql) @{} 'reader' | ForEach-Object { $_ } | Where-Object { $null -ne $_ })[0]
+        if ($null -eq $row) { return 'unknown' }
+        $v = if ($row -is [System.Collections.IDictionary]) { if ($row.Contains('KeySet')) { $row['KeySet'] } else { $null } } elseif ($row.PSObject.Properties['KeySet']) { $row.KeySet } else { $null }
+        if ($null -eq $v -or $v -is [DBNull]) { return 'unknown' }
+        if ([int]$v -eq 1) { return 'set' }
+        if ([int]$v -eq 0) { return 'empty' }
+    } catch { }
+    'unknown'
+}
+
+function Get-SIAiVaultSecretState {
+    <#
+        #1265 (c): present | absent | unknown for secret -SecretName in Key Vault -VaultName -- CONTROL PLANE metadata only
+        (ARM, never the value): the vault found among the subscription's vaults, then GET <vault>/secrets/<name> (404 = absent).
+        A vault that is not found, or any read that fails, = unknown. -Cache (a hashtable) keeps one answer per vault + secret.
+    #>
+    param([Parameter(Mandatory)][scriptblock]$Arm, [Parameter(Mandatory)][string]$SubscriptionId, [Parameter(Mandatory)][string]$VaultName,
+          [Parameter(Mandatory)][string]$SecretName, [hashtable]$Cache = @{})
+    $k = ('{0}/{1}' -f $VaultName, $SecretName).ToLowerInvariant()
+    if ($Cache.ContainsKey($k)) { return $Cache[$k] }
+    $state = 'unknown'
+    try {
+        $list = & $Arm 'GET' ('/subscriptions/{0}/providers/Microsoft.KeyVault/vaults' -f $SubscriptionId) $script:SIAiKeyVaultArmApi $null
+        $v = @(@($(if ($list -and $list.PSObject.Properties['value']) { $list.value } else { @() })) | Where-Object { $_ -and ([string]$_.name) -ieq $VaultName })[0]
+        if ($v -and "$($v.id)".Trim()) {
+            $s = & $Arm 'GET' (("$($v.id)".TrimEnd('/')) + '/secrets/' + $SecretName) $script:SIAiKeyVaultArmApi $null
+            $state = if ($null -eq $s) { 'absent' } else { 'present' }
+        }
+    } catch { $state = 'unknown' }
+    $Cache[$k] = $state
+    $state
+}
+
 function Invoke-SIAiSettingsOne {
     <# One app or job: GET, plan, PATCH when it differs, READ BACK. @{ Name; Kind; Action = set | would-set | in-place | none | failed; Line }. Never throws. #>
     param([Parameter(Mandatory)][scriptblock]$Arm, [Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][string]$Name, [string]$Kind = 'job',
@@ -199,11 +320,13 @@ function Invoke-SIAiSettingsOne {
 function Invoke-SIAiSettings {
     <#
         EVERY UPDATE (see the header). -Settings: the AI settings (ConvertFrom-SIAiSettingRows), -Known: $false when they
-        could not be read. -Jobs: the install's jobs (ARM shape, as listed). Returns @{ State; Results; Lines }. Never throws.
+        could not be read. -Jobs: the install's jobs (ARM shape, as listed). -KeySetting: the setting OpenAI_apiKey as read
+        (empty | set | unknown -- #1265 (c), default unknown = a plain key is kept). Returns @{ State; Results; Lines }. Never throws.
     #>
     param([Parameter(Mandatory)][scriptblock]$Arm, [Parameter(Mandatory)][string]$SubscriptionId, [Parameter(Mandatory)][string]$ResourceGroup,
           [string]$WebAppName = 'ca-si-management', [object[]]$Jobs = @(), [hashtable]$Settings = @{}, [bool]$Known = $true,
-          [switch]$WhatIf, [scriptblock]$Sleep, [int]$ReadBackTries = 6)
+          [switch]$WhatIf, [scriptblock]$Sleep, [int]$ReadBackTries = 6,
+          [ValidateSet('empty', 'set', 'unknown')][string]$KeySetting = 'unknown')
     $lines = New-Object System.Collections.Generic.List[string]
     $results = New-Object System.Collections.Generic.List[object]
     $want = Get-SIAiSettingsWant -Settings $Settings -Known $Known
@@ -220,18 +343,33 @@ function Invoke-SIAiSettings {
             $w = [ordered]@{ 'Chat__Endpoint' = $want.Endpoint; 'Chat__Deployment' = $want.Deployment }
             $r = Invoke-SIAiSettingsOne -Arm $Arm -Path ('{0}/containerApps/{1}' -f $rg, $WebAppName) -Name $WebAppName -Kind web -Want $w -What ('the chat uses {0}' -f $want.Deployment) -WhatIf:$WhatIf -Sleep $Sleep -ReadBackTries $ReadBackTries
             $results.Add($r); $lines.Add($r.Line)
+            $vaultCache = @{}
+            $keptKeys = New-Object System.Collections.Generic.List[string]
             foreach ($j in @($Jobs | Where-Object { $_ -and (Test-SIAiEngineJob -Job $_) })) {
                 $name = [string]$j.name
                 $ver = $want.ApiVersion
                 if (-not $ver) { $ver = [string]@(@(Get-SIAiFirstContainerEnv -Resource $j) | Where-Object { [string]$_.name -eq 'OPENAI_APIVERSION' -and "$($_.value)".Trim() } | ForEach-Object { "$($_.value)".Trim() })[0] }
                 if (-not $ver) { $ver = $script:SIAiSettingsDefaultApiVersion }
                 $jw = [ordered]@{ 'OPENAI_ENDPOINT' = $want.Endpoint; 'OPENAI_DEPLOYMENT' = $want.Deployment; 'OPENAI_APIVERSION' = $ver }
+                # #1265 (c): AI runs keyless -- the legacy key variable goes only when no key stands behind it (never on a guess)
+                $keyWhy = ''
+                try {
+                    $key = Get-SIAiLegacyKeyOf -Job $j
+                    if ($key.Present) {
+                        $vs = if ($key.Kind -eq 'keyvault') { Get-SIAiVaultSecretState -Arm $Arm -SubscriptionId $SubscriptionId -VaultName $key.VaultName -SecretName $key.SecretName -Cache $vaultCache } else { 'unknown' }
+                        $d = Get-SIAiLegacyKeyDecision -Key $key -VaultSecret $vs -KeySetting $KeySetting
+                        if ($d.Remove) { $jw[$script:SIAiLegacyKeyEnvName] = $null; $keyWhy = $d.Why }
+                        else { $keptKeys.Add(('{0} ({1})' -f $name, $d.Why)) }
+                    }
+                } catch { $keptKeys.Add(('{0} (not checked: {1})' -f $name, ("$($_.Exception.Message)" -replace '\s+', ' ').Trim())) }
                 $jr = Invoke-SIAiSettingsOne -Arm $Arm -Path ('{0}/jobs/{1}' -f $rg, $name) -Name $name -Kind job -Want $jw -WhatIf:$WhatIf -Sleep $Sleep -ReadBackTries $ReadBackTries
                 $results.Add($jr)
                 if ($jr.Action -ne 'in-place') { $lines.Add($jr.Line) }
+                if ($keyWhy -and $jr.Action -in 'set', 'would-set') { $lines.Add(('AI settings: {0} runs keyless -- the legacy key variable {1} {2}: {3}' -f $name, $script:SIAiLegacyKeyEnvName, $(if ($jr.Action -eq 'set') { 'is removed (read back)' } else { 'would be removed (plan only)' }), $keyWhy)) }
             }
             $inPlace = @($results | Where-Object { $_.Kind -eq 'job' -and $_.Action -eq 'in-place' }).Count
             if ($inPlace) { $lines.Add(('AI settings: {0} engine job(s) already have them' -f $inPlace)) }
+            if ($keptKeys.Count) { $lines.Add(('AI settings: the legacy key variable {0} stays as the fallback on {1}' -f $script:SIAiLegacyKeyEnvName, ($keptKeys -join '; '))) }
         }
     }
     [pscustomobject]@{ State = $want.State; Results = $results.ToArray(); Lines = $lines.ToArray() }

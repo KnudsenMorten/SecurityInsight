@@ -690,7 +690,9 @@ function Send-SIHeartbeatTick {
           # (Initialize-SITelemetryLastingInstallId); the vault seams { param($Name) } / { param($Name, $Value) } -- tests
           [scriptblock]$InstallIdRead, [scriptblock]$InstallIdWrite, [scriptblock]$InstallIdVersions,
           # #1065 (3.0.30): the cfg.InstallState rows the setup steps are read from (tests; default: one read through -ClaimInvoke)
-          [AllowNull()][object[]]$SetupStepRows)
+          [AllowNull()][object[]]$SetupStepRows,
+          # #1264 (framework DOCS-FRESH): the docs' live version (tests; default Get-SITelemetryDocsVersion -- BUILD.json only)
+          [AllowNull()][AllowEmptyString()][string]$DocsVersion)
     $out = { param($s, $why, $rec, $sent) [pscustomobject]@{ Status = $s; Reason = $why; Record = $rec; Sent = [bool]$sent } }
     # LIVE 2026-10-16 (#718): the hour is recorded SENT only after Invardia answered 2xx; every other end of a claimed tick
     # records it FAILED (with why), so the next execution takes the hour again -- never a claimed hour that sent nothing
@@ -769,6 +771,14 @@ function Send-SIHeartbeatTick {
             if ($steps.Count) { $w | Add-Member -NotePropertyName 'setupSteps' -NotePropertyValue $steps -Force }
         } catch { if ($w.PSObject.Properties['setupSteps']) { $w.PSObject.Properties.Remove('setupSteps') } }
 
+        # #1264 (framework DOCS-FRESH, Invardia's heartbeat contract since 1.0.1085): docsVersion = the version this build's
+        # docs (REQUIREMENTS section 0) named as live, stamped into BUILD.json when the package / image was built -- never git
+        # at run time. Only a version goes out (3 or 4 parts); none or anything else = the key is left out. Never costs the tick.
+        try {
+            $dv = if ($PSBoundParameters.ContainsKey('DocsVersion')) { "$DocsVersion".Trim() } elseif (-not (Get-Module -Name Pester) -and (Get-Command -Name Get-SITelemetryDocsVersion -ErrorAction SilentlyContinue)) { Get-SITelemetryDocsVersion } else { '' }
+            if ("$dv" -match '^\d{1,6}(\.\d{1,12}){2,3}$') { $w | Add-Member -NotePropertyName 'docsVersion' -NotePropertyValue ([string]$dv) -Force }
+        } catch { if ($w.PSObject.Properties['docsVersion']) { $w.PSObject.Properties.Remove('docsVersion') } }
+
         # the two new optional fields -- each only where its switch says so (default: off until Invardia confirms them)
         $sendProgress = if ($null -ne $RunProgress) { [bool]$RunProgress } else { (Resolve-SIUplinkRunProgressSwitch -Ring $ring).On }
         $sendCollections = if ($null -ne $Collections) { [bool]$Collections } else { (Resolve-SIUplinkCollectionsSwitch -Ring $ring).On }
@@ -808,7 +818,7 @@ function Send-SIHeartbeatTick {
             $lim = Limit-SIHeartbeatRecordSize -Record $w
             if (@($lim.Dropped).Count) { $sizeNote = ('over 48 KB: sent without {0}' -f (@($lim.Dropped) -join ', ')) }
         } catch { foreach ($k in (Get-SIHeartbeatFieldsContract).Names) { if ($w.PSObject.Properties[$k]) { $w.PSObject.Properties.Remove($k) } } }
-        $had = @(@('guardMode', 'wave', 'releaseMode', 'components', 'evidence', 'Collections', 'runProgress', 'supportSqlAccess') + @((Get-SIHeartbeatFieldsContract).Names) + @('setupSteps') | Where-Object { $w.PSObject.Properties[$_] })
+        $had = @(@('guardMode', 'wave', 'releaseMode', 'components', 'evidence', 'Collections', 'runProgress', 'supportSqlAccess') + @((Get-SIHeartbeatFieldsContract).Names) + @('setupSteps', 'docsVersion') | Where-Object { $w.PSObject.Properties[$_] })
 
         # the pipeline's progress and estimated end are newer than the rest of Pipeline: a heartbeat Invardia refuses (4xx)
         # WITH them is sent again with Pipeline WITHOUT them first -- never the rest of the record lost to them (the same for

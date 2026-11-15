@@ -659,7 +659,15 @@ builder.Services.AddSingleton<SI.Management.Web.GetStarted.IGetStartedFactsSourc
 builder.Services.AddSingleton<SI.Management.Web.GetStarted.GetStartedService>();
 // MAIL-2 notifications + the daily Get Started reminder, ENV-REPORT-1, CONFIG-IO-1 (Notify/WebFeatureServices.cs)
 SI.Management.Web.Notify.WebFeatureServices.AddWebFeatures(builder.Services, builder.Configuration);
+// WEB-AUTH-SELF-CHECK-1: the startup self-check's result, read by /healthz (Auth/WebAuthSelfCheck.cs)
+builder.Services.TryAddSingleton<WebAuthSelfCheckState>();
 var app = builder.Build();
+// WEB-AUTH-SELF-CHECK-1: before the listener opens, Microsoft's token library is loaded and the app's own validation path
+// runs on synthetic tokens; not OK = /healthz answers 503 (fail closed), OK = one log line (the ring-0 proof)
+var webAuthSelfCheck = app.Services.GetRequiredService<WebAuthSelfCheckState>();
+webAuthSelfCheck.Result ??= WebAuthSelfCheck.Run();
+if (webAuthSelfCheck.Healthy) app.Logger.LogInformation("{Line}", webAuthSelfCheck.Result.Line);
+else app.Logger.LogError("{Line}", webAuthSelfCheck.Result?.Line ?? WebAuthSelfCheck.FailPrefix);
 // #997: a page never shows a database's or a service's error text -- it says what failed with a reference, logged here
 SI.Management.Web.ViewerError.Log = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("SI.ViewerError");
 if (BuiltInAuth.BothOn(app.Configuration))
@@ -723,8 +731,11 @@ app.UseRateLimiter();
 app.Use((ctx, next) => SI.Management.Web.Navigation.RetiredPages.Middleware(ctx, () => next()));
 app.UseStaticFiles();   // after authorization on purpose: the fallback policy covers the assets too
 
-// The only anonymous endpoint. It says the process is up -- nothing about version, configuration or data.
-app.MapGet("/healthz", () => Results.Text("ok", "text/plain")).AllowAnonymous();
+// The only anonymous endpoint. It says the process is up -- nothing about version, configuration or data. 503 while the
+// startup web auth self-check did not pass (WEB-AUTH-SELF-CHECK-1: the revision never becomes the healthy one).
+app.MapGet("/healthz", (WebAuthSelfCheckState selfCheck) => selfCheck.Healthy
+    ? Results.Text("ok", "text/plain")
+    : Results.Text("unhealthy", "text/plain", statusCode: StatusCodes.Status503ServiceUnavailable)).AllowAnonymous();
 // Which build this is, for support: signed-in only (the fallback policy), read from BUILD.json -- no state, no data.
 // Every open page also asks it every 5 minutes (#345, version-check.js) to offer "a new version is available" --
 // so never cached: a cached answer would hide the very deploy it is there to notice.

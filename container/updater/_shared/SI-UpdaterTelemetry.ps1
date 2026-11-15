@@ -23,15 +23,77 @@ if ($null -eq $global:SI_UpdaterFailures) { $global:SI_UpdaterFailures = New-Obj
 
 function Add-SIUpdaterFailure {
     <# Records one failure of this run (-Step, -Text; -Code its error-catalogue code when the caller knows it, e.g.
-       si-upd-0803 -- SUP-2026-00198). The same step and text twice is one failure. Never throws. #>
-    param([Parameter(Mandatory)][string]$Step, [AllowEmptyString()][string]$Text, [AllowEmptyString()][string]$Code = '')
+       si-upd-0803 -- SUP-2026-00198). The same step and text twice is one failure. Never throws.
+       -Transient (#1266, framework TRANSIENT-RETRY-1): the cause, when the CALLER KNOWS the step changed nothing and the next
+       update tries it again (arm-409 / image-pull-timeout / queue-start-timeout / ...) -- the report then carries Retry. #>
+    param([Parameter(Mandatory)][string]$Step, [AllowEmptyString()][string]$Text, [AllowEmptyString()][string]$Code = '', [AllowEmptyString()][string]$Transient = '')
     try {
         if ($null -eq $global:SI_UpdaterFailures) { $global:SI_UpdaterFailures = New-Object System.Collections.Generic.List[object] }
         $t = "$Text".Trim()
         foreach ($f in $global:SI_UpdaterFailures) { if ($f.Step -eq $Step -and $f.Text -eq $t) { return } }
         $c = "$Code".Trim().ToLowerInvariant(); if ($c -notmatch '^si-[a-z]{2,8}-\d{4}$') { $c = '' }
-        $global:SI_UpdaterFailures.Add([pscustomobject]@{ Step = $Step; Text = $t; Code = $c })
+        $tr = "$Transient".Trim().ToLowerInvariant(); if ($tr -notmatch '^[a-z0-9-]{1,40}$') { $tr = '' }
+        $global:SI_UpdaterFailures.Add([pscustomobject]@{ Step = $Step; Text = $t; Code = $c; Transient = $tr })
     } catch { }
+}
+
+# #1266 / framework TRANSIENT-RETRY-1: the network timeouts of a registry pull (the base image's registry answered too late)
+$script:SIUpdaterRegistryTimeout = '(?i)(Client\.Timeout exceeded|TLS handshake timeout|i/o timeout|context deadline exceeded|request canceled while waiting for connection)'
+$script:SIUpdaterRegistryApi     = '(?i)(https://[^\s"'']+/v2/|mcr\.microsoft\.com)'
+
+function Get-SIUpdaterTransientCause {
+    <#
+        PURE. #1266: the transient cause of ONE recorded updater failure (-Step, -Text), or '' (a real failure: no Retry). ONLY
+        where the failure itself says nothing was changed -- the release's build step says "No job was changed" (it stops BEFORE
+        any job is rolled; setup\Invoke-SIContainerUpdate.ps1, 2. BUILD):
+          image-pull-timeout   the image build failed on a network timeout to a registry's API ('Get "https://mcr.microsoft.com/v2/":
+                               ... Client.Timeout exceeded', 'TLS handshake timeout', 'i/o timeout')
+          queue-start-timeout  the image build could not be queued (timed out) -- nothing was built, nothing rolled
+        Anything else (a roll, a restore, a failed build of the code itself) is ''. The key-ring 409 is named by its caller
+        (Add-SIUpdaterFailure -Transient arm-409), never guessed from a text.
+    #>
+    param([AllowEmptyString()][AllowNull()][string]$Step, [AllowEmptyString()][AllowNull()][string]$Text)
+    $s = "$Step".Trim().ToLowerInvariant(); $t = "$Text"
+    if ($s -ne 'build' -or $t -notmatch '(?i)\bNo job was changed\b') { return '' }
+    if ($t -match '(?i)could not be queued' -and $t -match '(?i)(timed out|timeout|deadline exceeded)') { return 'queue-start-timeout' }
+    if ($t -match $script:SIUpdaterRegistryTimeout -and $t -match $script:SIUpdaterRegistryApi) { return 'image-pull-timeout' }
+    ''
+}
+
+function Test-SIUpdaterPriorHealthy {
+    <#
+        PURE. #1266: is the web app healthy on what it runs, AS READ BACK (-App: the container app as ARM gives it, -Revision: its
+        latest revision as ARM gives it)? $true = latestReadyRevisionName equals latestRevisionName and that revision's healthState
+        is Healthy; $false = read, and not so; $null = not readable (no app, no revision name, no revision) -- never assumed.
+    #>
+    param($App, $Revision)
+    try {
+        if (-not $App -or -not $App.PSObject.Properties['properties'] -or -not $App.properties) { return $null }
+        $p = $App.properties
+        $latest = if ($p.PSObject.Properties['latestRevisionName']) { "$($p.latestRevisionName)".Trim() } else { '' }
+        if (-not $latest) { return $null }
+        $ready = if ($p.PSObject.Properties['latestReadyRevisionName']) { "$($p.latestReadyRevisionName)".Trim() } else { '' }
+        if ($ready -ne $latest) { return $false }
+        if (-not $Revision -or -not $Revision.PSObject.Properties['properties'] -or -not $Revision.properties) { return $null }
+        $rn = if ($Revision.PSObject.Properties['name']) { "$($Revision.name)".Trim() } else { '' }
+        if ($rn -and $rn -ne $latest) { return $null }
+        $h = if ($Revision.properties.PSObject.Properties['healthState']) { "$($Revision.properties.healthState)".Trim() } else { '' }
+        if (-not $h) { return $null }
+        return ($h -eq 'Healthy')
+    } catch { return $null }
+}
+
+function New-SIUpdaterRetry {
+    <# PURE. #1266: the Retry object of a transient updater failure: transient, the version that stays (-PriorVersion; '' = left
+       out), priorHealthy ONLY when it was read back (-PriorHealthy $true / $false; $null = left out), willRetry (the next
+       scheduled update tries again), the cause. No attempt: Invardia counts the attempts of a job + step itself. #>
+    param([Parameter(Mandatory)][string]$Cause, [AllowEmptyString()][AllowNull()][string]$PriorVersion, [AllowNull()]$PriorHealthy)
+    $o = [ordered]@{ transient = $true }
+    if ("$PriorVersion".Trim()) { $o['priorVersion'] = "$PriorVersion".Trim() }
+    if ($PriorHealthy -is [bool]) { $o['priorHealthy'] = [bool]$PriorHealthy }
+    $o['willRetry'] = $true
+    $o['cause'] = $Cause
+    [pscustomobject]$o
 }
 
 function Add-SIUpdaterCustomerAction {
@@ -122,13 +184,30 @@ function Send-SIUpdaterFailureReports {
           -On           the telemetry switch (Test-SIUpdaterTelemetryOn)
           -InstallKey / -TenantId   identified mode (the key from the Key Vault); '' = anonymous
           -InstallId     Invardia S16: the install's LASTING id (SI-InstallId) -- InstallId on the identified reports; '' = none
-          -Send          { param($Step, $Text) } -- the test seam (no context, no network)
+          -Send          { param($Step, $Text, $Failure, $Retry) } -- the test seam (no context, no network)
+          -PriorHealth   { } -> $true / $false / $null: the web app read back (Test-SIUpdaterPriorHealthy) -- asked at most once,
+                         and only when a failure is transient (#1266); $null or none = priorHealthy is left out
     #>
     param([int]$ExitCode = 0, [bool]$On = $true, [AllowEmptyString()][string]$InstallKey = '', [AllowEmptyString()][string]$TenantId = '',
-          $StartedAt, [scriptblock]$Send, [scriptblock]$Log, [AllowEmptyString()][string]$InstallId = '')
+          $StartedAt, [scriptblock]$Send, [scriptblock]$Log, [AllowEmptyString()][string]$InstallId = '', [scriptblock]$PriorHealth)
     $out = New-Object System.Collections.Generic.List[object]
     try {
         if (-not $Log) { $Log = { param($m) } }
+        # #1266 / framework TRANSIENT-RETRY-1: the Retry object of a failure that changed nothing (its cause named by the caller,
+        # or the build step's own "No job was changed" with a registry / queue timeout) -- never for a customer action, never
+        # for anything else. priorHealthy only from the read-back, read once for the run.
+        $hs = @{ Read = $false; Value = $null }   # (a hashtable: the scriptblock below writes into it, not into its own scope)
+        $retryOf = {
+            param($f)
+            if ($f.PSObject.Properties['Kind'] -and "$($f.Kind)" -eq 'customer-action') { return $null }
+            $cause = if ($f.PSObject.Properties['Transient'] -and "$($f.Transient)".Trim()) { "$($f.Transient)".Trim() } else { Get-SIUpdaterTransientCause -Step ([string]$f.Step) -Text ([string]$f.Text) }
+            if (-not $cause) { return $null }
+            if (-not $hs.Read) {
+                $hs.Read = $true
+                if ($PriorHealth) { try { $h = & $PriorHealth; $hs.Value = if ($h -is [bool]) { [bool]$h } else { $null } } catch { $hs.Value = $null } }
+            }
+            New-SIUpdaterRetry -Cause $cause -PriorVersion (Get-SIUpdaterReportedVersion) -PriorHealthy $hs.Value
+        }
         $fails = @(Get-SIUpdaterFailures)
         if (-not $fails.Count -and $ExitCode -ne 0) {
             $step = if ("$global:SI_UpdaterStep".Trim()) { "$global:SI_UpdaterStep".Trim() } else { 'updater' }
@@ -167,7 +246,11 @@ function Send-SIUpdaterFailureReports {
                 $fc = if ($f.PSObject.Properties['Code']) { "$($f.Code)".Trim() } else { '' }
                 $codeArgs = @{}
                 if ($fc -and -not $Send) { $sc = Get-Command -Name Send-SITelemetryFailure -ErrorAction SilentlyContinue; if ($sc -and $sc.Parameters.ContainsKey('Code')) { $codeArgs.Code = $fc } }
-                $r = if ($Send) { & $Send $f.Step $f.Text $f }
+                # #1266: the Retry object of a failure that changed nothing -- only to a telemetry client that takes -Retry
+                $retry = & $retryOf $f
+                if ($retry) { & $Log ("{0}: a transient failure ({1}) -- nothing was changed, the next update tries again; reported with Retry" -f $f.Step, $retry.cause) }
+                if ($retry -and -not $Send) { $sc = Get-Command -Name Send-SITelemetryFailure -ErrorAction SilentlyContinue; if ($sc -and $sc.Parameters.ContainsKey('Retry')) { $codeArgs.Retry = $retry } }
+                $r = if ($Send) { & $Send $f.Step $f.Text $f $retry }
                      elseif ($ca) { Send-SITelemetryFailure -Job updater -Step $f.Step -ErrorMessage $f.Text -Context $ctx -StartedAt $StartedAt -ErrorClass ([string]$f.Class) -CustomerAction }
                      else { Send-SITelemetryFailure -Job updater -Step $f.Step -ErrorMessage $f.Text -Context $ctx -StartedAt $StartedAt @codeArgs }
             } catch { $r = [pscustomobject]@{ Status = 'error'; Reason = $_.Exception.Message } }

@@ -559,6 +559,9 @@ function Invoke-SIUpdaterFromInvardia {
                     $global:SI_UpdaterEngineVersion = "$($code.Version)".Trim()
                     & $track 'applied' $code.Version
                     if ("$($ioRes.Result)" -ne 'done') { $state.lastError = ("code: image-only update {0}: {1}" -f $code.Version, $ioRes.Why) }
+                    # #1262: the updater moved itself LAST onto the release's image -- its post-roll steps run in that code in
+                    # the post-roll run, started at the end of this run (as after the full update)
+                    if ($ioRes.PSObject.Properties['SelfAction'] -and [string]$ioRes.SelfAction -eq 'rolled') { $gate.SecondPass = $true }
                 } else {
                     $rc = 1; $state.code.lastReason = [string]$ioRes.Why
                     $state.lastError = ("code: image-only update {0} {1} at the {2}: {3}" -f $code.Version, $ioRes.Result, $ioRes.Component, $ioRes.Why)
@@ -775,9 +778,12 @@ function Invoke-SIUpdaterFromInvardia {
             & $readTag
             if ($gate.Tag) { & $writeTag ''; Write-UpdLog 'the update''s wait mark is taken away: this update run ended before it reached its install step (see above)' }
         }
-        # the second update (this release's own update steps), started once this run is done -- still between two runs
-        if ($gate.SecondPass) {
-            $line = if ($s['SecondPass']) { & $s.SecondPass } elseif ($real -and (Get-Command -Name Start-SIUpdaterSecondPass -ErrorAction SilentlyContinue)) { Start-SIUpdaterSecondPass -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId -JobName $updaterJob } else { '' }
+        # #1262 THE POST-ROLL RUN: after an update that moved the updater onto the release's image (the full path or the
+        # image-only path), the updater job is started ONCE more with SI_UPDATER_MODE = post-roll -- it waits for this run to
+        # end, then runs the post-roll steps in the release's own code (Invoke-SIUpdaterPostRollRun) and starts nothing.
+        # Bounded: a post-roll run ends before the manifest is read, and is never started from one.
+        if ($gate.SecondPass -and (& $get 'SI_UPDATER_MODE') -ine 'post-roll') {
+            $line = if ($s['SecondPass']) { & $s.SecondPass } elseif ($real -and (Get-Command -Name Start-SIUpdaterSecondPass -ErrorAction SilentlyContinue)) { Start-SIUpdaterSecondPass -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId -JobName $updaterJob -Mode 'post-roll' } else { '' }
             if ($line) { Write-UpdLog $line }
         }
     }

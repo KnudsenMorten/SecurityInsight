@@ -274,6 +274,27 @@ function Wait-SIAcrBuilds {
     $Builds
 }
 
+function Get-SIAcrBuildFailureLine {
+    <#
+        PURE. #1266 / framework TRANSIENT-RETRY-1: the line of a failed build's log (-Build: a Wait-SIAcrBuilds result, its
+        LogTail) that says a REGISTRY did not answer in time -- 'Get "https://mcr.microsoft.com/v2/": ... Client.Timeout
+        exceeded', 'TLS handshake timeout', 'i/o timeout' on a registry's /v2/ address -- at most 300 characters; '' when the
+        log says nothing like it. The build's failure line carries it, so the updater can tell a registry that answered too
+        late (nothing changed, the next update builds again) from a build that is broken.
+    #>
+    param($Build)
+    if (-not $Build -or -not $Build.PSObject.Properties['LogTail']) { return '' }
+    foreach ($l in @($Build.LogTail)) {
+        $t = ("$l" -replace '\s+', ' ').Trim()
+        if ($t -match '(?i)(Client\.Timeout exceeded|TLS handshake timeout|i/o timeout|context deadline exceeded|request canceled while waiting for connection)' -and
+            $t -match '(?i)(https://[^\s"'']+/v2/|mcr\.microsoft\.com)') {
+            if ($t.Length -gt 300) { $t = $t.Substring(0, 297) + '...' }
+            return $t
+        }
+    }
+    ''
+}
+
 function Test-SIAcrTag {
     <#
         Is repo:tag in the registry? The registry's own data plane (Test-SIAcrManifest: HEAD of the manifest with a pull

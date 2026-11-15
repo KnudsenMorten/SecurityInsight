@@ -35,7 +35,9 @@ BeforeAll {
                         # framework §8.5 CLOSE-LOOP + §12.6b: both in Invardia's allowed set (packages/core/src/uplink.ts)
                         'FixKind', 'LicenceId',
                         # framework §8.9: the install's own links (identified heartbeat, behind SI_Telemetry_SendEndpoints) and the deep link (identified failed run)
-                        'endpoints', 'Link')
+                        'endpoints', 'Link',
+                        # framework TRANSIENT-RETRY-1 / RUN-MONITOR-STALE-1 (Invardia 1.0.1093+, accepted server-first): the run record's Retry and its own end
+                        'Retry', 'EndedUtc')
     $script:Buckets = @('0', '1-100', '100-1k', '1k-10k', '10k-100k', '100k+')
 
     function script:New-Ctx([string]$Mode = 'anonymous', [string]$Dir) {

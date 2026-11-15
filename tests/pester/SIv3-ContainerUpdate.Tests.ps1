@@ -59,6 +59,9 @@ BeforeAll {
         if ($Method -eq 'PUT' -and $Uri -like 'https://fake-upload.example/*') { return [pscustomobject]@{ Status = 201; Content = '' } }
         if ($Uri -match '/scheduleRun\?') { return (& $j @{ runId = 'unexpectedbuild1' }) }
         if ($Method -eq 'GET' -and $Uri -match '/runs/unexpectedbuild1\?') { return (& $j @{ properties = @{ runId = 'unexpectedbuild1'; status = 'Failed' } }) }
+        # #1266: the failed build's log (only when a test sets $global:FakeAz.BuildLog)
+        if ($global:FakeAz.BuildLog -and $Uri -match '/runs/unexpectedbuild1/listLogSasUrl\?') { return (& $j @{ logLink = 'https://fake-log.example/run.log?sig=x' }) }
+        if ($global:FakeAz.BuildLog -and $Uri -like 'https://fake-log.example/*') { return [pscustomobject]@{ Status = 200; Content = [string]$global:FakeAz.BuildLog } }
         [pscustomobject]@{ Status = 404; Content = '{"error":{"code":"NotFound","message":"not in this fake"}}' }
     }
     function global:Invoke-SIAzRestRequest {
@@ -192,6 +195,25 @@ Describe 'the updater, end to end against a fake az' {
         @($global:AzCalls | Where-Object { $_ -like '*scheduleRun*' }).Count | Should -BeGreaterThan 0
         @($global:AzCalls | Where-Object { $_ -like 'PATCH *' }).Count | Should -Be 0 -Because 'a failed build changes no job'
         $sw.Elapsed.TotalSeconds | Should -BeLessThan 120 -Because 'no 15-second poll for 30 minutes'
+    }
+    It '#1266: a build that failed on a registry timeout says so in its failure -- and no job is changed' {
+        New-FakeState -Jobs @{ 'caj-si-endpoint' = 'reg.example.io/si-orchestrator:old' } -Tags @()
+        $global:FakeAz.BuildLog = "Step 1/9 : FROM mcr.microsoft.com/powershell:7.6-ubuntu-24.04`nGet `"https://mcr.microsoft.com/v2/`": net/http: request canceled while waiting for connection (Client.Timeout exceeded while awaiting headers)`nRun ID: unexpectedbuild1 failed after 31s."
+        $err = $null
+        try { & $script:Updater @script:Common -Apply *> $null } catch { $err = $_ }
+        "$err" | Should -Match 'build did not succeed \(Failed: Get "https://mcr\.microsoft\.com/v2/": .*Client\.Timeout exceeded.*\)\. No job was changed'
+        @($global:AzCalls | Where-Object { $_ -like 'PATCH *' }).Count | Should -Be 0 -Because 'a failed build changes no job'
+        . (Join-Path $script:SIRoot 'container\updater\_shared\SI-UpdaterTelemetry.ps1')
+        Get-SIUpdaterTransientCause -Step 'build' -Text "$err" | Should -Be 'image-pull-timeout'
+    }
+    It '#1266: a build whose log names no registry timeout is a real failure (no transient cause)' {
+        New-FakeState -Jobs @{ 'caj-si-endpoint' = 'reg.example.io/si-orchestrator:old' } -Tags @()
+        $global:FakeAz.BuildLog = "Step 5/9 : RUN pwsh -File /si/build.ps1`nerror: the build script failed with exit code 1"
+        $err = $null
+        try { & $script:Updater @script:Common -Apply *> $null } catch { $err = $_ }
+        "$err" | Should -Match 'build did not succeed \(Failed\)\. No job was changed'
+        . (Join-Path $script:SIRoot 'container\updater\_shared\SI-UpdaterTelemetry.ps1')
+        Get-SIUpdaterTransientCause -Step 'build' -Text "$err" | Should -Be ''
     }
     It 'detect-only (the default) reports and changes nothing' {
         New-FakeState -Jobs @{ 'caj-si-endpoint' = 'reg.example.io/si-orchestrator:old' } -Tags @($script:Tag)

@@ -295,16 +295,22 @@ function Start-SIUpdaterSecondPass {
         started once more (SI_UPDATER_MODE = second-pass), so the release's own update steps run at once -- while the
         pipeline still starts nothing (an updater execution is running) -- instead of at the next nightly update, which on a
         busy install would find a run going. -Arm { param($Method, $Path, $Body) }: the test seam. Returns the line. Never throws.
+        #1262 -Mode: 'post-roll' (what an update of this code starts: only the post-roll steps, in the release's own code --
+        no image roll, no further run; Invoke-SIUpdaterPostRollRun) or 'second-pass' (the whole update once more, what the
+        updater before 3.1.25 started; still honoured). A post-roll run itself never calls this.
     #>
-    param([Parameter(Mandatory)][string]$ResourceGroup, [Parameter(Mandatory)][string]$SubscriptionId, [Parameter(Mandatory)][string]$JobName, [scriptblock]$Arm)
+    param([Parameter(Mandatory)][string]$ResourceGroup, [Parameter(Mandatory)][string]$SubscriptionId, [Parameter(Mandatory)][string]$JobName, [scriptblock]$Arm,
+          [ValidateSet('post-roll', 'second-pass')][string]$Mode = 'post-roll')
+    $what = if ($Mode -eq 'post-roll') { 'post-roll run' } else { 'second update' }
+    $does = if ($Mode -eq 'post-roll') { 'this release''s post-roll steps in its own code' } else { 'this release''s update steps' }
     try {
-        if (-not (Get-Command -Name New-SIUpdateNowStartTemplate -ErrorAction SilentlyContinue)) { return 'second update: not started (this image has no start template) -- the next update runs the release''s update steps' }
+        if (-not (Get-Command -Name New-SIUpdateNowStartTemplate -ErrorAction SilentlyContinue)) { return ('{0}: not started (this image has no start template) -- the next update runs {1}' -f $what, $does) }
         $path = Get-SIUpdaterRgPath -SubscriptionId $SubscriptionId -ResourceGroup $ResourceGroup -Provider ('Microsoft.App/jobs/' + $JobName)
         $job = if ($Arm) { & $Arm 'GET' $path $null } else { Invoke-SIUpdaterArm -Path $path }
-        $body = New-SIUpdateNowStartTemplate -Job $job -Mode 'second-pass'
+        $body = New-SIUpdateNowStartTemplate -Job $job -Mode $Mode
         $r = if ($Arm) { & $Arm 'POST' ($path + '/start') $body } else { Invoke-SIUpdaterArm -Method POST -Path ($path + '/start') -Body $body }
-        ('second update: started ({0}) -- it runs this release''s update steps before the next pipeline run' -f $(if ($r -and $r.PSObject.Properties['name']) { [string]$r.name } else { 'an execution' }))
-    } catch { ('second update: could not be started ({0}) -- the next update runs the release''s update steps' -f $_.Exception.Message) }
+        ('{0}: started ({1}) -- it runs {2} once this run has ended' -f $what, $(if ($r -and $r.PSObject.Properties['name']) { [string]$r.name } else { 'an execution' }), $does)
+    } catch { ('{0}: could not be started ({1}) -- the next update runs {2}' -f $what, $_.Exception.Message, $does) }
 }
 
 function Wait-SIUpdaterPreviousEnded {

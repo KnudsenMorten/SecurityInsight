@@ -17,7 +17,8 @@
         installed side by side). Repeatable: the same inputs give the same number (no clock).
       * every compare is numeric per part, 64-bit, a missing part = 0 -- the rule of every compare SI uses (the updater,
         the run gate, the Invardia manifest, the Community channel, the telemetry's fixedIn): 3.0.1 > 3.0.0.202610272235.
-    PURE except Resolve-SIReleaseVersion (reads the state) and Save-SIReleaseVersionRegistered (writes it). PS 5.1 and 7.
+    PURE except Resolve-SIReleaseVersion (reads the state), Save-SIReleaseVersionRegistered (writes it) and
+    Invoke-SICommunityPublishDispatch (#1265 (a): starts the publish workflow for a 4-part version through gh). PS 5.1 and 7.
 #>
 
 function ConvertTo-SIReleaseVersionParts {
@@ -175,4 +176,53 @@ function Save-SIReleaseVersionRegistered {
     $dir = Split-Path -Parent $StateFile; if ($dir -and -not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
     [IO.File]::WriteAllText($StateFile, (ConvertTo-Json -InputObject $o -Depth 6), (New-Object System.Text.UTF8Encoding($false)))
     $true
+}
+
+function Get-SICommunityPublishDispatch {
+    <#
+        PURE. #1265 (a): the shared publish workflow (.github/workflows/publish.yml, a FRAMEWORK file -- never changed for SI) fires
+        on a pushed tag <solution>-vX.Y.Z only: a 4-part version's tag SecurityInsight-v3.1.24.1 publishes NOTHING by itself
+        (3.1.16.1, 3.1.23.1 and 3.1.24.1 were published by hand from the tag). For a 4-part -Version this returns the exact
+        dispatch -- the workflow run FROM the tag, stable channel, not a dry run (the workflow's default is a dry run):
+            gh workflow run publish.yml -R <Repo> --ref SecurityInsight-v<version> -f solution=SecurityInsight -f version=<version> -f dryRun=false
+        @{ Needed; Tag; Args (the gh arguments); Command; Why }. A 3-part version: Needed $false (the tag push publishes it).
+    #>
+    param([Parameter(Mandatory)][AllowEmptyString()][string]$Version, [string]$Repo = 'KnudsenMorten/AutomateIT', [string]$Solution = 'SecurityInsight')
+    $v = "$Version".Trim()
+    $tag = '{0}-v{1}' -f $Solution, $v
+    if ($v -notmatch '^\d{1,6}(\.\d{1,12}){3}$') {
+        return [pscustomobject]@{ Needed = $false; Tag = $tag; Args = @(); Command = ''; Why = ('{0} is not a 4-part version -- the tag push starts the publish workflow' -f $v) }
+    }
+    $a = @('workflow', 'run', 'publish.yml', '-R', $Repo, '--ref', $tag, '-f', ('solution={0}' -f $Solution), '-f', ('version={0}' -f $v), '-f', 'dryRun=false')
+    [pscustomobject]@{ Needed = $true; Tag = $tag; Args = $a; Command = ('gh ' + ($a -join ' '))
+                       Why = ('{0} is a 4-part version: the publish workflow''s tag trigger (X.Y.Z only) skips {1} -- it is started by hand from the tag' -f $v, $tag) }
+}
+
+function Invoke-SICommunityPublishDispatch {
+    <#
+        #1265 (a): after the tag of a 4-part version is pushed, START the publish workflow from it (gh), or -- no gh / a refusal --
+        say the exact command so it is never forgotten. -Gh { param([string[]]$A) } -> @{ Code; Out } is the seam (tests;
+        default: the gh CLI when it is on PATH). Returns @{ Needed; Dispatched; Command; Line }. Never throws.
+    #>
+    param([Parameter(Mandatory)][string]$Version, [scriptblock]$Gh, [string]$Repo = 'KnudsenMorten/AutomateIT')
+    $d = Get-SICommunityPublishDispatch -Version $Version -Repo $Repo
+    if (-not $d.Needed) { return [pscustomobject]@{ Needed = $false; Dispatched = $false; Command = ''; Line = '' } }
+    if (-not $Gh -and (Get-Command -Name gh -ErrorAction SilentlyContinue)) {
+        $Gh = { param([string[]]$A) $global:LASTEXITCODE = 0; $o = @(& gh @A 2>&1 | ForEach-Object { "$_" }); [pscustomobject]@{ Code = [int]$LASTEXITCODE; Out = $o } }
+    }
+    if (-not $Gh) {
+        return [pscustomobject]@{ Needed = $true; Dispatched = $false; Command = $d.Command
+                                  Line = ('{0}. gh is not on this machine -- RUN IT NOW: {1}' -f $d.Why, $d.Command) }
+    }
+    try {
+        $r = & $Gh $d.Args
+        if ([int]$r.Code -eq 0) {
+            return [pscustomobject]@{ Needed = $true; Dispatched = $true; Command = $d.Command; Line = ('{0} -- started: {1}' -f $d.Why, $d.Command) }
+        }
+        $why = (@($r.Out) -join ' ') -replace '\s+', ' '
+        if ($why.Length -gt 300) { $why = $why.Substring(0, 297) + '...' }
+        return [pscustomobject]@{ Needed = $true; Dispatched = $false; Command = $d.Command; Line = ('{0}. The dispatch was refused ({1}) -- RUN IT NOW: {2}' -f $d.Why, $why.Trim(), $d.Command) }
+    } catch {
+        return [pscustomobject]@{ Needed = $true; Dispatched = $false; Command = $d.Command; Line = ('{0}. The dispatch failed ({1}) -- RUN IT NOW: {2}' -f $d.Why, $_.Exception.Message, $d.Command) }
+    }
 }

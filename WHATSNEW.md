@@ -1,5 +1,20 @@
 # What's new in SecurityInsight
 
+## 3.1.25 · 2026-11-15 · Security
+
+Signed in all day, and updates that finish in one go.
+
+### New features
+
+- **Signed in all day** - The page renews your sign-in by itself before it runs out, and an expired token is never accepted.
+- **The sign-in check proves itself** - Each time the web app starts, it checks Microsoft's token check on test tokens before it is used.
+
+### Fixes
+
+- **Updates finish in one go** - Steps that come with a new version run in that version during the same update.
+- **Short hiccups are not failures** - A short network or busy moment during an update is reported as such when nothing changed.
+- **No self-given AI rights** - SecurityInsight never gives itself a role on your Azure OpenAI; the unused key setting is removed.
+
 ## 3.1.24.1 · 2026-11-15 · Security
 
 The switch to Microsoft's sign-in finishes on large installations.

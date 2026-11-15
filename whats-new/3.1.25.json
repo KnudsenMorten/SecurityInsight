@@ -1,0 +1,30 @@
+{
+  "version": "3.1.25",
+  "date": "2026-11-15",
+  "type": "security",
+  "summary": "Signed in all day, and updates that finish in one go.",
+  "new": [
+    {
+      "title": "Signed in all day",
+      "text": "The page renews your sign-in by itself before it runs out, and an expired token is never accepted."
+    },
+    {
+      "title": "The sign-in check proves itself",
+      "text": "Each time the web app starts, it checks Microsoft's token check on test tokens before it is used."
+    }
+  ],
+  "fixes": [
+    {
+      "title": "Updates finish in one go",
+      "text": "Steps that come with a new version run in that version during the same update."
+    },
+    {
+      "title": "Short hiccups are not failures",
+      "text": "A short network or busy moment during an update is reported as such when nothing changed."
+    },
+    {
+      "title": "No self-given AI rights",
+      "text": "SecurityInsight never gives itself a role on your Azure OpenAI; the unused key setting is removed."
+    }
+  ]
+}

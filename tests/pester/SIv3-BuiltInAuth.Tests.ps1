@@ -436,6 +436,46 @@ Describe 'the converge' {
         $put.Count | Should -Be 1
         $put[0].Body.properties.publicAccess | Should -Be 'None'
     }
+    It '#1262: apply WITHOUT the federated credential still CREATES the token container first -- the data right''s Support-app step names a container that exists' {
+        $f = New-Fake -NoFic -NoContainer -NoRole -Uris @($script:Callback, 'https://si.contoso.com/.auth/login/aad/callback')
+        $r = Invoke-Converge $f 'apply'
+        $r.Ok | Should -BeFalse; $r.State | Should -Be 'needs-support'
+        $put = @($f.Calls | Where-Object { $_.Method -eq 'PUT' -and $_.Path -like '*/blobServices/default/containers/si-auth-tokens*' })
+        $put.Count | Should -Be 1
+        $put[0].Body.properties.publicAccess | Should -Be 'None'
+        $f.ContainerExists | Should -BeTrue
+        # the container PUT comes before the role list is read for the Support-app step; the right itself is not tried (no
+        # federated credential yet), nothing is written to the web app
+        $iPut = $f.Calls.IndexOf($put[0])
+        $iRoleRead = $f.Calls.FindIndex([Predicate[object]] { param($c) $c.Method -eq 'GET' -and $c.Path -like '*roleAssignments*' })
+        $iPut | Should -BeLessThan $iRoleRead
+        @($f.Calls | Where-Object { $_.Method -eq 'PUT' -and $_.Path -like '*roleAssignments/*' }).Count | Should -Be 0
+        @(Get-AppPatches $f).Count | Should -Be 0
+        @($f.Calls | Where-Object { $_.Path -like '*/authConfigs/*' -and $_.Method -ne 'GET' }).Count | Should -Be 0
+        @($r.Support | Where-Object { $_ -match 'id-si-web Storage Blob Data Contributor on the blob container si-auth-tokens' }).Count | Should -Be 1
+        ($r.Lines -join ' ') | Should -Match 'the blob container si-auth-tokens for the sign-in tokens was created'
+    }
+    It '#1262: a refused container create is a Support-app step (create it, then the right) -- never a throw, never a failure' {
+        $f = New-Fake -NoContainer -NoRole
+        $inner = Get-FakeArm $f
+        $arm = { param([string]$Method, [string]$Path, $Body) if ($Method -eq 'PUT' -and $Path -like '*/blobServices/default/containers/*') { throw 'PUT failed: HTTP 403: AuthorizationFailed' }; & $inner $Method $Path $Body }.GetNewClosure()
+        $ts = Invoke-SIBuiltInAuthTokenStoreReady -Arm $arm -StorageAccountId $script:AcctId -PrincipalId $script:MiPrin -CreateContainer -Sleep { param($s) } -Tries 1
+        $ts.Ok | Should -BeFalse
+        $ts.ContainerUri | Should -Be 'https://stsitest.blob.core.windows.net/si-auth-tokens'
+        @($ts.Support | Where-Object { $_ -match '^create the blob container si-auth-tokens .+ Storage Blob Data Contributor' }).Count | Should -Be 1
+        # the converge reads that as a Support-app step (needs-support), not as a failure
+        $f2 = New-Fake -NoFic -NoContainer -NoRole -Uris @($script:Callback, 'https://si.contoso.com/.auth/login/aad/callback')
+        $inner2 = Get-FakeArm $f2
+        $arm2 = { param([string]$Method, [string]$Path, $Body) if ($Method -eq 'PUT' -and $Path -like '*/blobServices/default/containers/*') { throw 'PUT failed: HTTP 403: AuthorizationFailed' }; & $inner2 $Method $Path $Body }.GetNewClosure()
+        $r = Invoke-SIBuiltInAuthConverge -Arm $arm2 -Graph (Get-FakeGraph $f2) -Probe (Get-FakeProbe $f2) -Mode 'apply' -AppId $script:AppId -Sleep { param($s) } -Tries 1 -ProbeTries 1
+        $r.State | Should -Be 'needs-support'
+    }
+    It '#1262: plan still writes nothing (the container is only said)' {
+        $f = New-Fake -NoContainer -NoRole
+        $null = Invoke-Converge $f 'plan'
+        @(Get-Writes $f).Count | Should -Be 0
+        $f.ContainerExists | Should -BeFalse
+    }
     It 'a missing data right on the container: ONE try; refused = a Support-app step and NOTHING switches on' {
         $f = New-Fake -NoRole -RolePutRefused -Uris @($script:Callback, 'https://si.contoso.com/.auth/login/aad/callback')
         $r = Invoke-Converge $f 'apply'
@@ -749,6 +789,44 @@ Describe 'after the switch: the sign-in keys leave Key Vault, then the web ident
         $r.Ok | Should -BeTrue
         Get-SIBuiltInAuthSetting -App $f.App -Name 'DataProtection__BlobUri' | Should -Be $script:BlobUri
         @($f.Calls | Where-Object { $_.Method -eq 'PATCH' }).Count | Should -Be 2 -Because 'the refused PATCH, then the same one again'
+    }
+    It '#1266: a 409 that outlasts every try is a TRANSIENT failure (arm-409): nothing written, the Key Vault rights stay' {
+        $f = New-MoveFake; $f.Patch409 = 1000
+        $r = Invoke-Move $f
+        $r.Ok | Should -BeFalse
+        $r.State | Should -Be 'failed'
+        $r.Transient | Should -Be 'arm-409'
+        Get-SIBuiltInAuthSetting -App $f.App -Name 'DataProtection__BlobUri' | Should -Not -Be $script:BlobUri -Because 'the PATCH was refused: nothing changed'
+        @($f.Calls | Where-Object { $_.Method -eq 'DELETE' }).Count | Should -Be 0
+        $f.Roles.Count | Should -Be 5
+        @($r.Lines | Where-Object { $_ -match '409 ContainerAppOperationInProgress.*nothing was changed, the Key Vault rights stay' }).Count | Should -Be 1
+    }
+    It '#1266: any other PATCH failure is a REAL failure (no Transient)' {
+        $f = New-MoveFake
+        $arm0 = Get-MoveArm $f
+        $arm = { param([string]$Method, [string]$Path, $Body) if ($Method -eq 'PATCH') { throw 'PATCH failed: HTTP 400: InvalidParameterValue' }; & $arm0 $Method $Path $Body }.GetNewClosure()
+        $r = Invoke-SIBuiltInAuthKeyRingMove -Arm $arm -AppId $script:AppId -ContainerUri 'https://stsitest.blob.core.windows.net/si-auth-tokens' -PrincipalId $script:MiPrin -VaultId $script:VaultId -Sleep { param($s) } -Tries 2 -RevisionTries 2
+        $r.State | Should -Be 'failed'
+        $r.PSObject.Properties['Transient'] | Should -BeNullOrEmpty
+    }
+    It '#1266: the updater records the key ring''s 409 as transient arm-409 (its post-roll failure), a real failure without' {
+        $res = [pscustomobject]@{ Ok = $true; State = 'applied'; Lines = @(); TokenContainerUri = 'https://stsitest.blob.core.windows.net/si-auth-tokens'; WebPrincipalId = $script:MiPrin; WebIdentityName = 'id-si-web' }
+        $conv = { param($a) $res }.GetNewClosure()
+        $e = @{ SI_UPDATER_WEB_APP = 'ca-si-management'; SI_Updater_BuiltInAuth = 'apply' }
+        $global:SI_UpdaterFailures = $null
+        $busy = { param($a) $o = [pscustomobject]@{ Ok = $false; State = 'failed'; Lines = @('ca-si-management: its sign-in keys were NOT moved -- the web app stayed busy (409)'); Support = @() }; $o | Add-Member -NotePropertyName Transient -NotePropertyValue 'arm-409'; $o }
+        $null = Invoke-SIUpdaterBuiltInAuthStep -Env $e -SubscriptionId 's' -ResourceGroup 'rg' -Converge $conv -Arm { } -Graph { } -KeyRingMove $busy -VaultId $script:VaultId
+        $f1 = @(Get-SIUpdaterFailures)
+        $f1.Count | Should -Be 1
+        $f1[0].Step | Should -Be 'post-roll'
+        $f1[0].Transient | Should -Be 'arm-409'
+        $global:SI_UpdaterFailures = $null
+        $real = { param($a) [pscustomobject]@{ Ok = $false; State = 'failed'; Lines = @('ca-si-management: its sign-in keys were NOT moved -- the setting does not read back'); Support = @() } }
+        $null = Invoke-SIUpdaterBuiltInAuthStep -Env $e -SubscriptionId 's' -ResourceGroup 'rg' -Converge $conv -Arm { } -Graph { } -KeyRingMove $real -VaultId $script:VaultId
+        $f2 = @(Get-SIUpdaterFailures)
+        $f2.Count | Should -Be 1
+        "$($f2[0].Transient)" | Should -BeNullOrEmpty
+        $global:SI_UpdaterFailures = $null
     }
     It 'the web app does not run on the blob yet: the Key Vault rights STAY (waiting, not a failure)' {
         $f = New-MoveFake -NotHealthy

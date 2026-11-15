@@ -15,25 +15,22 @@ namespace SI.Management.Web.Auth;
 ///   * its issuer is the tenant's (v2 https://login.microsoftonline.com/&lt;tid&gt;/v2.0 or v1 https://sts.windows.net/&lt;tid&gt;/)
 ///     and its tid is the tenant;
 ///   * its audience is this app (&lt;clientId&gt; or api://&lt;clientId&gt;);
-///   * it was issued within the platform's session (<see cref="IssuedWithinSession"/>): the platform keeps a FIXED 8-hour
-///     session and does not refresh the ID token, so a token past its one-hour expiry but issued within the session is
-///     accepted -- never one issued in the future, never one older than the session;
+///   * it is within its lifetime, strictly (framework AUTH-MODERN-1): Microsoft's library checks exp and nbf with a
+///     <see cref="ClockSkew"/> of five minutes -- an expired token is refused, however recently it was issued. The page keeps
+///     the token fresh itself through the platform's /.auth/refresh (wwwroot/js/auth-refresh.js: before exp and once on a 401);
 ///   * it is a person's: an application's own token (idtyp = app, or an access token without a delegated scope that names a
 ///     calling application) is refused.
 /// Never throws: the identity, or null with why.
 /// </summary>
 public sealed class BuiltInTokenVerifier
 {
-    /// The platform's fixed session, and the slack for the clocks of the platform, Entra and this app.
-    public static readonly TimeSpan Session = TimeSpan.FromHours(8);
-    public static readonly TimeSpan Slack = TimeSpan.FromMinutes(15);
-    public static readonly TimeSpan FutureSkew = TimeSpan.FromMinutes(5);
+    /// The slack for the clocks of the platform, Entra and this app, on exp and nbf (Microsoft's default, stated here).
+    public static readonly TimeSpan ClockSkew = TimeSpan.FromMinutes(5);
 
     private readonly string? _tenant;
     private readonly string? _client;
     private readonly IConfigurationManager<OpenIdConnectConfiguration>? _metadata;
     private readonly IReadOnlyList<SecurityKey>? _fixedKeys;
-    private readonly Func<DateTime> _now;
     private readonly JsonWebTokenHandler _handler = new() { MapInboundClaims = false };
 
     /// The app: the keys from the tenant's OpenID configuration (AzureAd:TenantId / AzureAd:ClientId).
@@ -42,30 +39,21 @@ public sealed class BuiltInTokenVerifier
         var ad = configuration.GetSection("AzureAd");
         _tenant = Guid.TryParse(ad["TenantId"], out var t) ? t.ToString() : null;
         _client = Guid.TryParse(ad["ClientId"], out var c) ? c.ToString() : null;
-        _now = () => DateTime.UtcNow;
         if (_tenant is not null)
             _metadata = new ConfigurationManager<OpenIdConnectConfiguration>(
                 $"https://login.microsoftonline.com/{_tenant}/v2.0/.well-known/openid-configuration",
                 new OpenIdConnectConfigurationRetriever(), new HttpDocumentRetriever { RequireHttps = true });
     }
 
-    /// Tests: fixed signing keys and, optionally, a fixed clock.
-    public BuiltInTokenVerifier(string? tenantId, string? clientId, IEnumerable<SecurityKey> keys, Func<DateTime>? now = null)
+    /// Tests and the startup self-check (<see cref="WebAuthSelfCheck"/>): fixed signing keys.
+    public BuiltInTokenVerifier(string? tenantId, string? clientId, IEnumerable<SecurityKey> keys)
     {
         _tenant = Guid.TryParse(tenantId, out var t) ? t.ToString() : null;
         _client = Guid.TryParse(clientId, out var c) ? c.ToString() : null;
         _fixedKeys = keys.ToList();
-        _now = now ?? (() => DateTime.UtcNow);
     }
 
     public string? TenantId => _tenant;
-
-    /// PURE. Issued within the platform's session: not in the future (beyond a small clock skew), and not before the
-    /// session's length (plus slack) ago.
-    public static bool IssuedWithinSession(DateTime issuedAtUtc, DateTime nowUtc) =>
-        issuedAtUtc > DateTime.MinValue
-        && issuedAtUtc <= nowUtc + FutureSkew
-        && issuedAtUtc >= nowUtc - (Session + Slack);
 
     /// <summary>
     /// The verified identity of one token (its own claims, short types), or null with why. <paramref name="accessToken"/>:
@@ -88,7 +76,6 @@ public sealed class BuiltInTokenVerifier
                 if (keys is not null) result = await _handler.ValidateTokenAsync(token, Parameters(keys));
             }
             if (!result.IsValid || result.SecurityToken is not JsonWebToken jwt) return (null, "the token is not valid: " + Reason(result.Exception));
-            if (!IssuedWithinSession(jwt.IssuedAt, _now())) return (null, "the token was not issued within the sign-in session");
             if (!string.Equals(Claim(jwt, "tid"), _tenant, StringComparison.OrdinalIgnoreCase)) return (null, "the token is not of this tenant");
             var claims = jwt.Claims.ToList();
             if (string.Equals(Claim(jwt, "idtyp"), "app", StringComparison.OrdinalIgnoreCase)) return (null, "an application's token is not a signed-in person");
@@ -112,9 +99,10 @@ public sealed class BuiltInTokenVerifier
         ValidateIssuerSigningKey = true,
         IssuerSigningKeys = keys,
         RequireSignedTokens = true,
-        // the session decides instead (IssuedWithinSession): the platform does not refresh the ID token within its 8 h
-        ValidateLifetime = false,
-        RequireExpirationTime = false,
+        // AUTH-MODERN-1: strict lifetime -- exp required and checked, nbf checked, five minutes of clock skew
+        ValidateLifetime = true,
+        RequireExpirationTime = true,
+        ClockSkew = ClockSkew,
         ValidateTokenReplay = false,
         TryAllIssuerSigningKeys = true,
     };
@@ -139,6 +127,9 @@ public sealed class BuiltInTokenVerifier
 
     private static string Reason(Exception? ex) => ex switch
     {
+        SecurityTokenExpiredException => "the token has expired",
+        SecurityTokenNotYetValidException => "the token is not valid yet",
+        SecurityTokenNoExpirationException => "the token has no expiry",
         SecurityTokenInvalidAudienceException => "another app's audience",
         SecurityTokenInvalidIssuerException => "another issuer",
         SecurityTokenSignatureKeyNotFoundException or SecurityTokenInvalidSignatureException => "the signature is not the tenant's",

@@ -520,8 +520,11 @@ function Invoke-SIBuiltInAuthTokenStoreReady {
         The token store's blob container in the install's OWN storage account and the web identity's data right on it.
           * the account: read; shared-key access must be OFF -- when it is on that is SAID (a Support-app step, the install's
             rule already), never changed here;
-          * the container (-Container, default si-auth-tokens, no public access): -Apply creates it when missing (ARM PUT,
-            read back); plan says it would;
+          * the container (-Container, default si-auth-tokens, no public access): -Apply or -CreateContainer creates it when
+            missing (ARM PUT, read back); plan says it would. #1262: the apply converge always passes -CreateContainer, also
+            when it may not try the right itself (no federated credential yet), so the container EXISTS before the Support-app
+            step for its data right is reported -- a role cannot be granted on a container that is not there (live). A
+            refused create is a Support-app step of its own, never a throw;
           * Storage Blob Data Contributor for -PrincipalId at THAT container (or above): read; missing + -Apply = ONE try to
             add it at the container scope (the updater may not hold that right -- a refusal is the Support-app step, never a
             failure). Missing = the built-in sign-in does NOT switch on.
@@ -529,7 +532,7 @@ function Invoke-SIBuiltInAuthTokenStoreReady {
         steps) }. Throws only on an unexpected read failure (the converge catches it).
     #>
     param([Parameter(Mandatory)][scriptblock]$Arm, [Parameter(Mandatory)][string]$StorageAccountId, [Parameter(Mandatory)][string]$PrincipalId,
-          [string]$Container = $script:SIBuiltInAuthTokenContainer, [switch]$Apply, [string]$IdentityName = 'id-si-web',
+          [string]$Container = $script:SIBuiltInAuthTokenContainer, [switch]$Apply, [switch]$CreateContainer, [string]$IdentityName = 'id-si-web',
           [scriptblock]$NewGuid = { [guid]::NewGuid().ToString() }, [scriptblock]$Sleep = { param($s) Start-Sleep -Seconds $s },
           [int]$Tries = 6, [int]$PauseSeconds = 10,
           [string]$StorageApiVersion = $script:SIBuiltInAuthStorageApi, [string]$RoleApiVersion = $script:SIBuiltInAuthRoleApi)
@@ -551,8 +554,14 @@ function Invoke-SIBuiltInAuthTokenStoreReady {
     $cPath = '{0}?api-version={1}' -f $cScope, $StorageApiVersion
     $c = & $Arm 'GET' $cPath $null
     if (-not $c) {
-        if (-not $Apply) { $lines.Add(('would create the blob container {0} in {1} (no public access)' -f $Container, $acctName)); $support.Add(('give {0} Storage Blob Data Contributor on the blob container {1} in {2}' -f $IdentityName, $Container, $acctName)); return (& $out $false $uri) }
-        $null = & $Arm 'PUT' $cPath ([ordered]@{ properties = [ordered]@{ publicAccess = 'None' } })
+        if (-not $Apply -and -not $CreateContainer) { $lines.Add(('would create the blob container {0} in {1} (no public access)' -f $Container, $acctName)); $support.Add(('give {0} Storage Blob Data Contributor on the blob container {1} in {2}' -f $IdentityName, $Container, $acctName)); return (& $out $false $uri) }
+        # (#1262) the container first -- the data right's Support-app step below is only reported once it exists
+        try { $null = & $Arm 'PUT' $cPath ([ordered]@{ properties = [ordered]@{ publicAccess = 'None' } }) }
+        catch {
+            $lines.Add(('the blob container {0} for the sign-in tokens could not be created in {1} ({2})' -f $Container, $acctName, $_.Exception.Message))
+            $support.Add(('create the blob container {0} (no public access) in the storage account {1}, then give {2} Storage Blob Data Contributor on it (that container only)' -f $Container, $acctName, $IdentityName))
+            return (& $out $false $uri)
+        }
         for ($i = 1; $i -le $Tries; $i++) { $c = & $Arm 'GET' $cPath $null; if ($c) { break }; if ($i -lt $Tries) { & $Sleep $PauseSeconds } }
         if (-not $c) { $lines.Add(('the blob container {0} in {1} does not read back after it was created' -f $Container, $acctName)); return (& $out $false $uri) }
         $lines.Add(('the blob container {0} for the sign-in tokens was created in {1} (no public access; read back)' -f $Container, $acctName))
@@ -755,7 +764,9 @@ function Invoke-SIBuiltInAuthConverge {
         if ($TokenStore) {
             if (-not "$StorageAccountId".Trim()) { $StorageAccountId = Resolve-SIBuiltInAuthStorageAccountId -Arm $Arm -App $app -AppId $AppId -StorageApiVersion $StorageApiVersion }
             if (-not "$StorageAccountId".Trim()) { $lines.Add(('{0}: Microsoft''s built-in sign-in was not switched on -- the install''s storage account for the sign-in tokens could not be told (name it with SI_StorageAccount on the web app)' -f $web)); return (& $res $false 'failed') }
-            $ts = Invoke-SIBuiltInAuthTokenStoreReady -Arm $Arm -StorageAccountId $StorageAccountId -PrincipalId $id.PrincipalId -Container $TokenContainer -IdentityName $id.Name -Apply:$ficOk `
+            # #1262: the container is created whether or not the right may be tried now (-Apply needs the federated
+            # credential) -- so the Support-app step for id-si-web's data right names a container that exists
+            $ts = Invoke-SIBuiltInAuthTokenStoreReady -Arm $Arm -StorageAccountId $StorageAccountId -PrincipalId $id.PrincipalId -Container $TokenContainer -IdentityName $id.Name -Apply:$ficOk -CreateContainer `
                       -NewGuid $NewGuid -Sleep $Sleep -Tries $Tries -PauseSeconds $PauseSeconds -StorageApiVersion $StorageApiVersion -RoleApiVersion $RoleApiVersion
             foreach ($l in $ts.Lines) { $lines.Add(('{0}: {1}' -f $web, $l)) }
             foreach ($l in $ts.Support) { $support.Add($l) }
@@ -976,7 +987,8 @@ function Invoke-SIBuiltInAuthKeyRingMove {
              The updater's role right may be conditioned and refuse: a 401 / 403 is a SUPPORT STEP ("the Support app
              removes ..."), never a failure of the update.
         -Arm / -Probe / -Sleep: the converge's seams. -VaultId: the install's Key Vault (its ARM id; '' = the rights are not
-        checked, said). NEVER THROWS. Returns @{ Ok; State; Lines; Support }:
+        checked, said). NEVER THROWS. Returns @{ Ok; State; Lines; Support } (+ Transient 'arm-409' when the PATCH of step 1
+        still answered 409 after every try: nothing was changed -- #1266):
           State  waiting (the web app does not run on the blob yet: the rights stay) | removed | in-place | needs-support |
                  failed
     #>
@@ -1014,7 +1026,17 @@ function Invoke-SIBuiltInAuthKeyRingMove {
             for ($i = 1; $i -le $RevisionTries; $i++) {
                 try { $null = & $Arm 'PATCH' $appPath $sp.Body; break }
                 catch {
-                    if ($i -lt $RevisionTries -and "$($_.Exception.Message)" -match '(?i)\b409\b|OperationInProgress') { & $Sleep $PauseSeconds; continue }
+                    $busy = "$($_.Exception.Message)" -match '(?i)\b409\b|OperationInProgress'
+                    if ($i -lt $RevisionTries -and $busy) { & $Sleep $PauseSeconds; continue }
+                    # #1266 / framework TRANSIENT-RETRY-1: still 409 after every try -- Azure refused the PATCH, so NOTHING was
+                    # changed (the setting is not written, the Key Vault rights stay); a transient failure the next update
+                    # tries again (Transient arm-409), never a fix request on its own
+                    if ($busy) {
+                        $lines.Add(('{0}: its sign-in keys were NOT moved -- the web app stayed busy with another operation (409 ContainerAppOperationInProgress) through {1} tries; nothing was changed, the Key Vault rights stay; the next update tries again' -f $web, $RevisionTries))
+                        $r409 = & $res $false 'failed'
+                        $r409 | Add-Member -NotePropertyName Transient -NotePropertyValue 'arm-409' -Force
+                        return $r409
+                    }
                     throw
                 }
             }

@@ -1,0 +1,8 @@
+@* AUTH-MODERN-1: with Microsoft's built-in sign-in the page keeps the platform's token fresh itself (wwwroot/js/auth-refresh.js:
+   /.auth/refresh before the ID token's expiry and once on a 401). Each layout includes this ONCE in its head, before every
+   other script, so every page and every script's fetch() has it. Without built-in sign-in: nothing. *@
+@if (Context.RequestServices.GetService(typeof(Microsoft.Extensions.Configuration.IConfiguration)) is Microsoft.Extensions.Configuration.IConfiguration authCfg
+     && SI.Management.Web.Auth.BuiltInAuth.IsEnabled(authCfg))
+{
+    <script src="~/js/auth-refresh.js" asp-append-version="true" data-auth-refresh></script>
+}

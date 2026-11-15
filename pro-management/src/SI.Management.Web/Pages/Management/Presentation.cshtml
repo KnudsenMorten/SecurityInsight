@@ -76,7 +76,7 @@
                 @foreach (var c in DisplayCulture.Supported)
                 {
                     var ci = System.Globalization.CultureInfo.GetCultureInfo(c);
-                    <option value="@c" selected="@(string.Equals(c, Model.Format, StringComparison.OrdinalIgnoreCase))">@ci.EnglishName (@(1234567.8.ToString("N1", ci)))</option>
+                    <option value="@c" selected="@(string.Equals(c, Model.Format, StringComparison.OrdinalIgnoreCase))">@ci.EnglishName (@(string.Format(ci, "{0:N1}", 1234567.8)))</option>
                 }
             </select>
             <p class="hint">The slide text is in English.</p>

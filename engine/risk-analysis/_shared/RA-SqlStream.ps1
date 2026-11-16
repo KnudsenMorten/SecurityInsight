@@ -1188,12 +1188,47 @@ function Write-RAStepProgressRow {
     <# #576: the running report's progress -- '<report>', query slice <Done> of <Total> -- through the run's own database seam
        (Write-SIStepProgress, SI-StepPhase.ps1; at a new report and at most every 15 s). Nothing when there is no stream or
        the helper is not loaded. NEVER throws, never changes a row of the result. #>
-    param($Stream, [Parameter(Mandatory)][string]$Phase, [long]$Done = -1, [long]$Total = -1)
+    # -Now: the clock of the 15 s spacing (tests); the record's own time is always the database's
+    param($Stream, [Parameter(Mandatory)][string]$Phase, [long]$Done = -1, [long]$Total = -1, [datetime]$Now = [datetime]::UtcNow)
     try {
         if ($null -eq $Stream -or $null -eq $Stream.Invoke) { return }
         if (-not (Get-Command -Name Write-SIStepProgress -ErrorAction SilentlyContinue)) { return }
         $log = $null; if ($Stream.Log -is [scriptblock]) { $log = $Stream.Log }
-        $null = Write-SIStepProgress -Invoke $Stream.Invoke -Job (Get-RAStepPhaseJob -Stream $Stream) -Phase $Phase -Done $Done -Total $Total -Log $log
+        $null = Write-SIStepProgress -Invoke $Stream.Invoke -Job (Get-RAStepPhaseJob -Stream $Stream) -Phase $Phase -Done $Done -Total $Total -Log $log -Now $Now
+    } catch { }
+}
+
+# =====================================================================================================================
+#  #1274 A SLOW BUT WORKING REPORT KEEPS SHOWING IT IS MOVING (SUP-2026-00610, 2026-11-16). A report's recovery (late
+#  retries, smaller slices, gateway splits) can ask advanced hunting for hours after its last query slice started -- and
+#  until now nothing wrote its progress record in that time, so the run step read as "not moving" while it worked. The
+#  report's beat: every advanced-hunting call of its recovery writes the SAME record the slice loop writes ('report <name>',
+#  the query slice done / total it last wrote -- the producer's sum of the running reports' slices is unchanged), at most
+#  every 15 s (Write-SIStepProgress). Only the record's time moves. Progress only: no query, split, timeout or row changes.
+# =====================================================================================================================
+function New-RAReportProgressBeat {
+    <# #1274: one report's beat. -Stream: the run's stream ($null: the beat writes nothing). -Now: the clock (tests; else
+       $global:SI_StepProgressTickerNow when it is a scriptblock, else UtcNow). NEVER throws. #>
+    param($Stream, [Parameter(Mandatory)][string]$Report, [scriptblock]$Now)
+    if (-not $Now) { if ($global:SI_StepProgressTickerNow -is [scriptblock]) { $Now = $global:SI_StepProgressTickerNow } else { $Now = { [datetime]::UtcNow } } }
+    [pscustomobject]@{ Stream = $Stream; Phase = ('report {0}' -f $Report); Done = -1L; Total = -1L; Now = $Now; Calls = 0L }
+}
+
+function Set-RAReportProgressSlice {
+    <# #1274: the query slice done / total the report's slice loop just wrote (the beat writes exactly these). NEVER throws. #>
+    param($Beat, [long]$Done, [long]$Total)
+    try { if ($null -eq $Beat) { return }; $Beat.Done = $Done; $Beat.Total = $Total } catch { }
+}
+
+function Step-RAReportProgressBeat {
+    <# #1274: one advanced-hunting call of the report's recovery: the report's record written again ('report <name>', the
+       slice done / total last written), at most every 15 s. Nothing before the slice loop wrote a count. NEVER throws. #>
+    param($Beat)
+    try {
+        if ($null -eq $Beat) { return }
+        $Beat.Calls = [long]$Beat.Calls + 1
+        if ([long]$Beat.Total -le 0 -or [long]$Beat.Done -lt 0) { return }
+        Write-RAStepProgressRow -Stream $Beat.Stream -Phase ([string]$Beat.Phase) -Done ([long]$Beat.Done) -Total ([long]$Beat.Total) -Now ([datetime](& $Beat.Now))
     } catch { }
 }
 

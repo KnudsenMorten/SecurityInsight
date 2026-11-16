@@ -4969,6 +4969,9 @@ while (-not $bucketRunSucceeded -and -not $reportCannotFit) {
   Reset-RABucketLoss   # audit #62 -- per-report, so one report's losses never leak into the next
   # #1200: this report's own recovery time budget (late retries + smaller slices); its clock starts at its first retry-class recovery
   $__rb = New-RARecoveryBudget -Minutes (Get-RARecoveryBudgetMinutes -Value $global:SI_RA_RecoveryBudgetMinutes)
+  # #1274: this report's beat -- every advanced-hunting call of its recovery writes its progress record again (the slice count
+  # the slice loop last wrote, at most every 15 s), so a long recovery never reads as a step that does not move
+  $__rpBeat = if (Get-Command -Name New-RAReportProgressBeat -ErrorAction SilentlyContinue) { New-RAReportProgressBeat -Stream $script:RAStream -Report $ReportName } else { $null }
   # the clock starts once; with it the recovery's progress ticker (PROGRESS-TICK-1: at most every 3 minutes, while calls are made)
   $__rbStart = {
       if (Start-RARecoveryBudget -Budget $__rb) {
@@ -4994,6 +4997,7 @@ while (-not $bucketRunSucceeded -and -not $reportCannotFit) {
 
       # #576: the running step's progress on Operations > Jobs -- this report, query slice b of n (best effort, never fails it)
       if (Get-Command -Name Write-RAStepProgressRow -ErrorAction SilentlyContinue) { Write-RAStepProgressRow -Stream $script:RAStream -Phase ('report {0}' -f $ReportName) -Done ($b - $__soFrom) -Total ($__soTo - $__soFrom) }
+      if ($null -ne $__rpBeat) { Set-RAReportProgressSlice -Beat $__rpBeat -Done ($b - $__soFrom) -Total ($__soTo - $__soFrom) }   # #1274: what the beat writes again
 
       # #882: a queue worker whose run is over sends no further query (and writes nothing more)
       if ($script:RAScaleRole -eq 'worker') { Assert-RAScaleOutWorkerLive -Where ('before query slice {0} of {1}' -f ($b + 1), $ReportName) }
@@ -5512,6 +5516,7 @@ while (-not $bucketRunSucceeded -and -not $reportCannotFit) {
               $script:_CurrentBucketCount = $bucketCountToUse
               $script:_CurrentBucketIndex = $db
               Step-RARecoveryBudgetCall -Budget $__rb   # #1200: counted (and the progress ticked) as the call starts
+              if ($null -ne $__rpBeat) { Step-RAReportProgressBeat -Beat $__rpBeat }   # #1274: the report's progress record moves with the call
               # #1216: the slice's 504s so far count -- at its second it is split in halves, not asked again as the same query
               $__gwKey = ('{0}/{1}' -f $db, $bucketCountToUse)
               $script:RAGatewayTimeoutStopAt = Get-RAGatewayTimeoutStopAt -Seen ([int]('0' + [string]$__gwSeen[$__gwKey])) -Off:(-not (& $__gwCanSplit $bucketCountToUse))
@@ -5836,6 +5841,7 @@ while (-not $bucketRunSucceeded -and -not $reportCannotFit) {
                   }
                   $subAttempt++
                   Step-RARecoveryBudgetCall -Budget $__rb   # #1200: counted (and the progress ticked) as the call starts
+                  if ($null -ne $__rpBeat) { Step-RAReportProgressBeat -Beat $__rpBeat }   # #1274: the report's progress record moves with the call
                   # #1216: this smaller slice stops asking the same query at its second 504 (halved again), while a finer slice exists
                   $__gwKey = ('{0}/{1}/{2}/{3}' -f $subN, $newT, $subRI, $subRC)
                   $script:RAGatewayTimeoutStopAt = Get-RAGatewayTimeoutStopAt -Seen ([int]('0' + [string]$__gwSeen[$__gwKey])) -Off:(-not (& $__gwCanSplit $newT))

@@ -1,0 +1,25 @@
+{
+  "version": "3.1.29",
+  "date": "2026-11-16",
+  "type": "fix-only",
+  "summary": "Faster nightly runs at large installations.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "The data sync reads each finding once",
+      "text": "The same results, in far less time at large installations."
+    },
+    {
+      "title": "The vulnerability step is faster",
+      "text": "Findings that never change a record are no longer processed, and the bulk work runs compiled; every decision is the same as before."
+    },
+    {
+      "title": "A long attack-path report shows its progress",
+      "text": "It is no longer flagged as not moving while it works."
+    },
+    {
+      "title": "The MCP server is closed on new installations",
+      "text": "It is not reachable from the internet."
+    }
+  ]
+}

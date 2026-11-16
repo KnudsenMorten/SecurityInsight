@@ -74,7 +74,8 @@ Describe 'every Pro component is excluded from the public payload' {
         # helpers in the free version: the completeness verdict, the release store, the vulnerability target's SQL seam and the close guards they load); a folder entry would have kept a new file out by itself, so this does it now.
         # framework PRO-COMMUNITY-SAME (2026-11-11): the mail job (Invoke-SICloseLoopMail.ps1 + the two mail helpers it loads) ships
         # in both editions -- the free mails go everywhere, its paid kinds ask the licence when it runs
-        $shared = @('engine/asset-cmdb/_shared/SI-VulnDesired.ps1', 'engine/asset-cmdb/_shared/SI-VulnRelease.ps1', 'engine/asset-cmdb/_shared/SI-VulnTarget.ps1', 'engine/asset-cmdb/_shared/SI-ReconcileGuards.ps1',
+        # (2026-11-16 SI-VulnFast.ps1: SI-VulnDesired.ps1's compiled helper -- loaded by it, so it ships with it)
+        $shared = @('engine/asset-cmdb/_shared/SI-VulnDesired.ps1', 'engine/asset-cmdb/_shared/SI-VulnFast.ps1', 'engine/asset-cmdb/_shared/SI-VulnRelease.ps1', 'engine/asset-cmdb/_shared/SI-VulnTarget.ps1', 'engine/asset-cmdb/_shared/SI-ReconcileGuards.ps1',
                     'engine/asset-cmdb/Invoke-SICloseLoopMail.ps1', 'engine/asset-cmdb/_shared/SI-CloseLoopMail.ps1', 'engine/asset-cmdb/_shared/SI-ExemptionMail.ps1')
         $root = Join-Path $script:SIRoot 'engine\asset-cmdb'
         $unlisted = @(Get-ChildItem -LiteralPath $root -Recurse -File | ForEach-Object { 'engine/asset-cmdb/' + $_.FullName.Substring($root.Length + 1).Replace('\', '/') } |

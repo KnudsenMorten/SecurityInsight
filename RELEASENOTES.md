@@ -13,6 +13,23 @@ SecurityInsight Pro and the Pro trial install from invardia.com, never from GitH
 [invardia.com/trial](https://invardia.com/trial/), and your installation page there gives your two lines.
 <!-- /install lines -->
 
+## v3.1.29 — faster nightly runs at large installations
+
+### Performance
+- **The data sync reads each finding once.** Its derived passes work from one read of every finding instead of reading the
+  stored data again in each pass; the results are identical, column for column.
+- **The vulnerability step skips work it never used.** Findings on assets that are frozen, retired or not seen are no
+  longer read into its two passes; their records get exactly the same decisions as before.
+- **The vulnerability step does its per-finding work compiled.** The same rules decide every value; the bulk work around
+  them runs as compiled code.
+
+### Fixes
+- **A long attack-path report shows its progress.** While it splits slow requests, the run keeps reporting progress, so it
+  is no longer flagged as not moving.
+
+### Security
+- **New installations deploy the MCP server closed to the internet.** It answers only inside the installation; running
+  the installation again never reopens it.
 ## v3.1.28 — only the images in use are kept
 
 ### Security

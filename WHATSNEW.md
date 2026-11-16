@@ -1,5 +1,20 @@
 # What's new in SecurityInsight
 
+## 3.1.29 · 2026-11-16 · Fix-only
+
+Faster nightly runs at large installations.
+
+### New features
+
+None in this version.
+
+### Fixes
+
+- **The data sync reads each finding once** - The same results, in far less time at large installations.
+- **The vulnerability step is faster** - Findings that never change a record are no longer processed, and the bulk work runs compiled; every decision is the same as before.
+- **A long attack-path report shows its progress** - It is no longer flagged as not moving while it works.
+- **The MCP server is closed on new installations** - It is not reachable from the internet.
+
 ## 3.1.28 · 2026-11-16 · Security
 
 Only the images in use are kept.

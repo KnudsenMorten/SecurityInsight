@@ -242,9 +242,12 @@ function Get-Identity([string]$Name) {
 
 function Set-ContainerApp {
     <# Creates or updates one Container App with -Ingress (internal or external). Returns the app (null in plan mode). #>
-    param([string]$Name, [string]$FullImage, $Identity, [string[]]$Settings, [switch]$Sticky, [string]$Cpu = $script:Cpu, [string]$Memory = $script:Memory)
+    param([string]$Name, [string]$FullImage, $Identity, [string[]]$Settings, [switch]$Sticky, [string]$Cpu = $script:Cpu, [string]$Memory = $script:Memory,
+          # this app's own ingress (default: -Ingress). The MCP server passes Internal ALWAYS (owner 2026-11-16, framework 12.34:
+          # the MCP is closed to the internet until a person-only MCP replaces it) -- a re-run never reopens it
+          [ValidateSet('', 'Internal', 'External')][string]$AppIngress = '')
     $path = Get-SIManagementContainerAppPath -SubscriptionId $SubscriptionId -ResourceGroup $ResourceGroup -Name $Name
-    $external = ($Ingress -eq 'External')
+    $external = ($(if ($AppIngress) { $AppIngress } else { $Ingress }) -eq 'External')
     Write-Call 'GET' $path
     $existing = $null
     if ($script:lookups) { $existing = Get-SIManagementContainerApp -SubscriptionId $SubscriptionId -ResourceGroup $ResourceGroup -Name $Name }
@@ -456,8 +459,8 @@ if ($Apply -and $script:newGrant) {
 # ---------------------------------------------------------------------------------------------------------------
 Write-Step ('4. Container Apps: {0} ingress, the identity, the app settings' -f $Ingress.ToLowerInvariant())
 if ($Ingress -eq 'External') {
-    Write-Host '  EXTERNAL ingress: the apps are reachable from the internet. Protection = Entra sign-in + app roles on every route' -ForegroundColor Yellow
-    Write-Host '  (web) and an Entra bearer token (MCP). Add the customer''s Conditional Access policy on the enterprise application' -ForegroundColor Yellow
+    Write-Host '  EXTERNAL ingress: the web app is reachable from the internet (the MCP server never is: it stays internal). Protection =' -ForegroundColor Yellow
+    Write-Host '  Entra sign-in + app roles on every route. Add the customer''s Conditional Access policy on the enterprise application' -ForegroundColor Yellow
     Write-Host '  "SecurityInsight" (earlier "SecurityInsight Management") (MFA, compliant device, named locations) before people use it.' -ForegroundColor Yellow
 }
 function New-Settings($Identity, [switch]$Web) {
@@ -486,8 +489,9 @@ $webApp = Set-ContainerApp -Name $AppName -FullImage ('{0}/{1}' -f $loginServer,
 $fqdn = Get-AppFqdn $webApp $AppName
 $mcpApp = $null; $mcpFqdn = $null
 if (-not $NoMcp) {
-    $mcpApp = Set-ContainerApp -Name $McpAppName -FullImage ('{0}/{1}' -f $loginServer, $mcpImage) -Identity $mcpId -Settings (New-Settings $mcpId) -Cpu $McpCpu -Memory $McpMemory
-    $mcpFqdn = Get-AppFqdn $mcpApp $McpAppName
+    $mcpApp = Set-ContainerApp -Name $McpAppName -FullImage ('{0}/{1}' -f $loginServer, $mcpImage) -Identity $mcpId -Settings (New-Settings $mcpId) -Cpu $McpCpu -Memory $McpMemory -AppIngress Internal
+    $mcpFqdn = [string](Get-SIManagementProp $mcpApp @('properties', 'configuration', 'ingress', 'fqdn'))
+    if (-not $mcpFqdn) { $mcpFqdn = '{0}.internal.<environment-domain>' -f $McpAppName }
 }
 
 # #443 (a): the "Set up mail" click flow's sign-in credential -- turned on ONLY when the app registration's federated
@@ -641,7 +645,7 @@ if (-not $NoMcp) { Write-Host ('  MCP clients sign in as a person and ask for ap
 Write-Host ''
 if ($Apply) {
     Write-Host ('Done. Web: https://{0}' -f $fqdn) -ForegroundColor Green
-    if ($mcpFqdn) { Write-Host ('      MCP: https://{0}/mcp' -f $mcpFqdn) -ForegroundColor Green }
+    if ($mcpFqdn) { Write-Host ('      MCP: https://{0}/mcp (internal ingress: not reachable from the internet)' -f $mcpFqdn) -ForegroundColor Green }
     if ($Ingress -eq 'External') { Write-Host '  (external ingress: public, Entra sign-in on every route -- add Conditional Access on the enterprise app)' }
     else { Write-Host '  (internal ingress: reachable only from the environment''s network)' }
 }

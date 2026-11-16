@@ -84,7 +84,9 @@ $registry = Get-SIContainerRegistry -ResourceGroupName $ResourceGroup -Name $Reg
 if (-not ($webApp -and $mcpApp -and $identity -and $registry)) { throw 'Lookups returned nothing (the sign-in has no access, or the apps do not exist).' }
 foreach ($a in @($webApp, $mcpApp)) {
     $ext = [bool](Get-SIManagementProp $a @('properties', 'configuration', 'ingress', 'external'))
-    if ($ext -ne ($Ingress -eq 'External')) { throw ('{0} has {1} ingress, -Ingress {2} was expected.' -f $a.name, $(if ($ext) { 'EXTERNAL' } else { 'internal' }), $Ingress) }
+    # the MCP server is ALWAYS internal (owner 2026-11-16, framework 12.34) -- -Ingress is the web app's
+    $want = if ($a -eq $mcpApp) { 'Internal' } else { $Ingress }
+    if ($ext -ne ($want -eq 'External')) { throw ('{0} has {1} ingress, {2} was expected.' -f $a.name, $(if ($ext) { 'EXTERNAL' } else { 'internal' }), $want) }
     Write-Host ('  {0}: https://{1} (ingress {2}, revision {3})' -f $a.name, (Get-SIManagementProp $a @('properties', 'configuration', 'ingress', 'fqdn')), $(if ($ext) { 'external' } else { 'internal' }), (Get-SIManagementProp $a @('properties', 'latestRevisionName')))
 }
 $webEnv = @{}

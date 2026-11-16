@@ -2039,6 +2039,37 @@ per CI, in this order: rules → manual overrides → the owning CMDB's record �
     a page or a per-report count without the wide rows. A collection derived before the columns existed, and a scope field
     no typed column holds, are read from the JSON as before. The schema change is additive; the index is built online
     after the schema file on a large table.
+  - **The data sync reads each finding's row once (#1273).** Measured at a large install (1,565,118 findings in one
+    collection, S3): "views (derive)" ran 30.9 h at 32 rows/s and "exempted (counted twins)" 9.1 h, the database at 100 %
+    DTU waiting on PAGEIOLATCH reads. Root cause, from the code: per FindingId range the data sync read every finding's
+    DetailJson (the whole Risk Analysis row, `nvarchar(max)`) FOUR times -- the derive statement (about twenty separate
+    `JSON_VALUE` / `JSON_QUERY`, each a parse of the row), the risk score's parts in a pass of their own
+    (`Get-SIDataRiskPartsSql`, a second read and parse), the facet counts (`ISJSON` plus the component from the JSON) and
+    the counted facets (`ISJSON` plus the component AND the recommended update from the JSON -- the counted twin did not
+    even use the stored fix column). The "paused" rows are the SQL pacing's waits while the database was saturated by
+    those same reads; they shrink with the load, the pacing itself is unchanged. **Now** (`Get-SIDataDeriveTypedSql`, used
+    by `Invoke-SIDataDeriveCollection` when the database has the columns below): ONE statement per range parses the row
+    ONCE (`ISJSON` once, `OPENJSON ... WITH` once over every field any column reads) and writes every derive column, the
+    row values (when not filled earlier), the CMDB / fix / category columns and the risk score's parts -- the parts' own
+    pass is gone. A `JSON_VALUE` is read as JSON_VALUE gives it: the parsed scalar, NULL past 4,000 characters, and only
+    for a row that is a JSON object (`JSON_VALUE` of an array row is NULL, `OPENJSON` would read its items); a
+    `JSON_QUERY` is the same field read `AS JSON`. The parse and its checks sit in the OPENJSON's own argument, worked
+    out once per row: an `ISJSON` written in an APPLY that the SET list names thirty times is worked out at every use
+    (measured on the bench: it made the first version of the statement slower than the old passes together). A row whose
+    DetailJson is not JSON is not touched by the derive columns, as before; a second statement of the same range gives it
+    only its risk score's parts (none, both sides worked out -- what the parts' pass wrote) and the two new columns,
+    finding it by what the first statement wrote, never by reading DetailJson. The statement also stores what the facets still took from the JSON: `sidata.Finding.DetailIsJson`
+    (ISJSON) and `ViewComponent` (the facet component, the same expression); `sidata.Collection.TypedAt` is cleared when
+    the derive starts and set after its last range (with the fix columns), and the facets -- base and counted twin -- read
+    the typed columns only for a collection that carries it (`Get-SIDataFacetFactsSql -Typed`), never DetailJson. Any
+    collection without the stamp (derived by an earlier release) and any database without the columns: exactly the
+    statements of before. The vulnerability step's row-value fill (`Invoke-SIDataRowColumnsFill`, one parse) is
+    unchanged, so a collection's row is now parsed twice in all (that fill and the derive) instead of about thirty-five
+    times over five reads. **Proof**: `SIv3-DeriveTyped.Tests.ps1` builds one generated collection twice on a real SQL
+    Server, runs the old statements on one copy and the new derive on the other, and compares every column of every
+    finding row (zero differences) and both facet tables row for row; `SIv3-DeriveTypedScale.Tests.ps1` (Tag `Scale`, on
+    demand) measures both paths on a large synthetic collection. Additive schema (two nullable columns on the findings,
+    one on the collection, no index).
   - **Existing installs** reach the new-install state once (the update's step "report row copy",
     `setup/_shared/SI-ReportCopyDefault.ps1`, marker `cfg.InstallState 'ReportRowCopyDefault'`; a new install writes the
     marker itself): until now every guided install carried the copy on without anyone choosing it (the generated config
@@ -7538,6 +7569,10 @@ A vulnerability is closed as fixed only when it has been missing for several com
 
 **A finding whose asset moved to another CI is held on its own CIs, not across the run.** Sometimes an asset's identifier moves from one CI to another, and the correlation keeps both CIs instead of merging them. A finding stored under the old CI then gets a different CI from the correlation map, so the run cannot tell which record it belongs to. Both CIs are held for that run, the one it was stored under and the one the map gives now: nothing on either is opened, updated or closed, the same rule as for a part of the run that could not be read. Every other CI is planned and closed as normal. When the CI it was stored under cannot be told, the CIs of that one page of the run are held instead. The run warns and names the CIs and the findings concerned. This is a deliberate change of the safety rule: earlier, a single such finding stopped every close in the whole run, every run, until the correlation settled. A wrong close is still impossible, because the held CIs are left as they are.
 
+**Findings on frozen, retired or not-seen CIs are not worked through one by one.** A finding on a CI that is frozen (its account is disabled, or the collection scope leaves it out), retired or not seen is never sent as open: its records are kept as they are, or closed as retired, by the CI's state alone. On a large install these CIs carry a large share of all findings, and each run used to read and convert every one of them twice (once to measure, once to apply) only to set it aside. When the run compares records in the database, it now leaves those findings out of both passes and takes from the database exactly what the passes took from them -- how many there are of each type, and which reports found them on the CI (a record whose report no longer covers its asset's tier closes as out of scope only when nothing of that report is reported on the CI). The records of those CIs are read and decided as before. A CI is read in full as before whenever there is any doubt: it also holds records under a previous id (they are moved to the current id), it is kept back for any other reason, another CI's findings land on it, or one of its findings cannot be rebuilt exactly in the database. The run log says how many CIs and findings were left out, and why each CI that is planned in full is planned that way (disabled, out of the collection scope, retired, not seen, records under a previous id), with its findings.
+
+**The work done once per finding runs as compiled code.** Each page pass handles every finding of its CIs: it copies the row into the CI key's space, turns it into the finding the plan compares (its key, type, title, report, component, sub-CI, OS family, patch cycle, affected software), keys it on the CI's current id, and sorts the page's findings into those to plan and those set aside (retired, not seen, frozen, another page's). On a large install that is close to a million findings, twice per run, and most of the time went into the scripting language's own cost per step, not into the database. These steps now run in a small helper written in C# and compiled once when the run starts (`engine/asset-cmdb/_shared/SI-VulnFast.ps1`; plain .NET, nothing installed). Every decision about a value stays where it was: the finding key, the type, the fields taken from a row's multi-value columns, the affected software and the CI key are still worked out by the same functions as before, once for each distinct value (the run already remembered them per page); the helper only reads the fields, builds the same entries in the same order and filters the same lists. Where the helper meets a shape it does not handle exactly (a list where one value is expected, an empty slot in a list, a set of another kind), that one call runs the previous code; where the helper cannot be built at all, the whole run does. Nothing it produces differs: each function was run old against new on the same varied input with every value, type, key order and dictionary compared, and the whole paged block old against new on real SQL, run after run, with every record, event and item change identical (`SIv3-VulnFastSame`, `SIv3-VulnFastPagesSame`).
+
 ### 6. Pro web app
 
 The Pro web app runs in the customer's own container environment and signs users in with Entra ID. Who may do what
@@ -11766,6 +11801,24 @@ has no line of its own, one plain log line). The loops and their words:
 A loop whose total is not known says what it has done; a pass that does more than the total it was given says its count
 alone. The progress is measurement only: it never changes a row of product data, a decision or the order of the work, and
 a progress record that cannot be written is said once in the log and the step goes on.
+
+**A risk analysis report in a long recovery keeps its step moving (#1274).** A report whose query slices advanced hunting
+refuses (504 Gateway Timeout, throttling) is recovered after its slice loop: late retries, then ever smaller slices. That
+can go on for hours with a query every few seconds and no slice finishing, and the not-moving check reads only the step's
+OWN progress record (the newest `LastUtc` of its execution's row in `cfg.StepProgress`, or of its execution's phase rows) --
+a queue worker's record is not the step's. Two parts keep a working step moving and a stuck one still:
+
+- **The report's beat (the worker).** Every advanced-hunting call of the recovery writes the report's progress record
+  again -- the same `report <name>` and the same query slice done / total its slice loop last wrote -- at most every 15
+  seconds (the record's normal spacing). Only its time moves; nothing is written before the slice loop wrote a count.
+- **The coordinating job follows the beat.** While it waits for the queue workers, the job moves its own progress record
+  (every 5 minutes at most, as before) when reports finished, when the running reports' slices moved, OR when a running
+  report's worker record moved since its last write. The counts it writes are the same as without the beat (the beat
+  carries no new count). The job's own record (`reports ...`) and the recovery's log-ticker record never count as a
+  worker's beat, so a run whose workers stand still -- no call, no record -- leaves the step's record where it is and is
+  still reported as not moving.
+
+No query, split decision, time limit or row changes; the beat is a progress write like any other and never fails a report.
 
 **A run stopped or cancelled before its end.** Such a run never reads as finished: `stepsDone` counts only the steps that
 ran to their end (a run cancelled at step 8 of 12 reads 7 of 12, not 12 of 12), and `step` / `stepSinceUtc` name the step

@@ -558,21 +558,27 @@ function Get-RAScaleOutSliceProgress {
         worker writes 'report <name>', query slice done / total, to cfg.StepProgress as it goes -- Write-RAStepProgressRow).
         -Rows: @(@{ Phase; Done; Total }) (Get-SIStepProgressRows); -OpenReports: Get-RAScaleOutOpenReports. A record of a
         report that has its marker is left out. Returns @{ Done; Total } or $null when no running report has a record.
+        #1274: and LastUtc -- the newest time a running report's record moved (its worker's beat: a report in a long recovery
+        writes its record again while it asks advanced hunting, with the same done / total), $null when no row carries one.
+        Done / Total are counted exactly as before; a record with a beat but no count gives Done / Total -1.
     #>
     param([object[]]$Rows = @(), [string[]]$OpenReports = @())
     $open = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
     foreach ($r in @($OpenReports)) { if ("$r") { [void]$open.Add([string]$r) } }
-    $d = 0L; $t = 0L; $n = 0
+    $d = 0L; $t = 0L; $n = 0; $beat = $null
     foreach ($r in @($Rows)) {
         if ($null -eq $r) { continue }
         $ph = [string]$r.Phase
         if (-not $ph.StartsWith('report ', [StringComparison]::Ordinal)) { continue }
         if (-not $open.Contains($ph.Substring(7))) { continue }
+        # #1274: the worker's beat (a row without the field -- an older reader -- has none)
+        $lu = $null; try { $lu = if ($r -is [System.Collections.IDictionary]) { $r['LastUtc'] } elseif ($r.PSObject.Properties['LastUtc']) { $r.LastUtc } else { $null } } catch { $lu = $null }
+        if ($lu -is [datetime]) { $lu = ([datetime]$lu).ToUniversalTime(); if ($null -eq $beat -or $lu -gt $beat) { $beat = $lu } }
         if ([long]$r.Total -le 0 -or [long]$r.Done -lt 0) { continue }
         $d += [Math]::Min([long]$r.Done, [long]$r.Total); $t += [long]$r.Total; $n++
     }
-    if ($n -eq 0) { return $null }
-    @{ Done = $d; Total = $t }
+    if ($n -eq 0) { if ($null -eq $beat) { return $null }; return @{ Done = -1L; Total = -1L; LastUtc = $beat } }
+    @{ Done = $d; Total = $t; LastUtc = $beat }
 }
 
 function Wait-RAScaleOutItems {
@@ -591,6 +597,9 @@ function Wait-RAScaleOutItems {
         Get-RAScaleOutSliceProgress) and is added to the progress line; -OnProgress { param($ReportsDone, $Reports,
         $SlicesDone, $SlicesTotal) } is called with that line (the step's progress record) -- only when the reports done or the
         slices done MOVED since its last call, so a run that really stands still still shows as still. Neither ever fails the wait.
+        #1274: a running report's worker record that moved (-SliceProgress's LastUtc newer than at the last call: a worker in
+        a long recovery still asking advanced hunting) counts as moved too -- still at most every -ProgressSeconds; the
+        counts passed are the same as without it. Workers whose records do not move leave the step's record where it is.
     #>
     param([Parameter(Mandatory)]$Store, [Parameter(Mandatory)]$Manifest, [scriptblock]$LocalWorker, [bool]$UseKeda = $true,
           [int]$StartGraceMinutes = $script:RAScaleOut.StartGraceMinutes, [int]$TimeoutMinutes = 0, [int]$PollSeconds = $script:RAScaleOut.PollSeconds,
@@ -602,7 +611,7 @@ function Wait-RAScaleOutItems {
     $engine = [string]$Manifest.Engine; $runId = [string]$Manifest.RunId; $n = [int]$Manifest.Parts
     $t0 = & $Now
     $lastProgress = [datetime]::MinValue
-    $progReports = 0; $progSlices = 0L
+    $progReports = 0; $progSlices = 0L; $progBeat = $null
     $localRuns = 0; $graceUsed = $false; $nextLocalAt = [datetime]::MinValue
     while ($true) {
         $markers = @(Read-SICollectPartMarkers -Store $Store -Engine $engine -RunId $runId)
@@ -615,20 +624,28 @@ function Wait-RAScaleOutItems {
         $started = Get-RAScaleOutStarted -Store $Store -Manifest $Manifest
         $nowT = & $Now
         if (($nowT - $lastProgress).TotalSeconds -ge $ProgressSeconds) {
-            $sd = -1L; $st = -1L
+            $sd = -1L; $st = -1L; $beat = $null
             if ($SliceProgress) {
                 try {
                     $sp = & $SliceProgress @(Get-RAScaleOutOpenReports -Manifest $Manifest -Markers $markers)
-                    if ($sp) { $sd = [long]$sp.Done; $st = [long]$sp.Total }
-                } catch { $sd = -1L; $st = -1L }
+                    if ($sp) {
+                        $sd = [long]$sp.Done; $st = [long]$sp.Total
+                        # #1274: when a running report's worker record last moved (none: $null)
+                        $bv = if ($sp -is [System.Collections.IDictionary]) { $sp['LastUtc'] } elseif ($sp.PSObject.Properties['LastUtc']) { $sp.LastUtc } else { $null }
+                        if ($bv -is [datetime]) { $beat = ([datetime]$bv).ToUniversalTime() }
+                    }
+                } catch { $sd = -1L; $st = -1L; $beat = $null }
             }
             & $Log 'INFO' (Format-RAScaleOutProgress -Items $n -Done $done -Failed $failed -Started $started.Count -SlicesDone $sd -SlicesTotal $st)
             $lastProgress = $nowT
             # #1180: the step's progress record moves only when something was done since the last one
-            if ($OnProgress -and (($done + $failed) -gt $progReports -or $sd -gt $progSlices)) {
+            # #1274: ... or a running report's worker record moved since then (a worker still asking advanced hunting)
+            $beatMoved = ($null -ne $beat -and ($null -eq $progBeat -or $beat -gt $progBeat))
+            if ($OnProgress -and (($done + $failed) -gt $progReports -or $sd -gt $progSlices -or $beatMoved)) {
                 try { & $OnProgress ($done + $failed) $n $sd $st } catch { }
                 # (a report that ends leaves the running ones: their slices count from what is running now)
                 $progReports = $done + $failed; $progSlices = $sd
+                if ($null -ne $beat) { $progBeat = $beat }
             }
         }
         $runLocal = $false

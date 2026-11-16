@@ -55,7 +55,7 @@ PART 2 -- PRO COMPONENTS THAT ARE NOT IN THE COMMUNITY EDITION
 
 These paths are delivered only to licensed customers through the private AutomateIT sync.
 
-  engine/asset-cmdb (every file except Invoke-SICloseLoopMail.ps1, _shared/SI-CloseLoopMail.ps1, _shared/SI-ExemptionMail.ps1, _shared/SI-VulnDesired.ps1, _shared/SI-VulnRelease.ps1, _shared/SI-VulnTarget.ps1 and _shared/SI-ReconcileGuards.ps1)
+  engine/asset-cmdb (every file except Invoke-SICloseLoopMail.ps1, _shared/SI-CloseLoopMail.ps1, _shared/SI-ExemptionMail.ps1, _shared/SI-VulnDesired.ps1, _shared/SI-VulnFast.ps1, _shared/SI-VulnRelease.ps1, _shared/SI-VulnTarget.ps1 and _shared/SI-ReconcileGuards.ps1)
   engine/pro-data/Invoke-SIDepartmentReport.ps1
   engine/pro-data/Invoke-SIGovernanceMail.ps1
   engine/pro-data/Invoke-SITaskDigest.ps1

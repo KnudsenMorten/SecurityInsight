@@ -22,6 +22,9 @@ if (-not (Get-Command -Name 'Get-SIAssetLifecycleState' -ErrorAction SilentlyCon
 if (-not (Get-Command -Name 'Get-SICiKey' -ErrorAction SilentlyContinue)) { . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) '_shared\data-sql\SI-CiKey.ps1') }
 # #533: disabled accounts and devices (Test-SIAssetDisabled, Get-SIDisabledAssetPolicy)
 if (-not (Get-Command -Name 'Get-SIDisabledAssetPolicy' -ErrorAction SilentlyContinue)) { . ([System.IO.Path]::Combine($PSScriptRoot, '..', '..', '_shared', 'SI-DisabledAssets.ps1')) }
+# 2026-11-16 the per-finding work compiled (SI-VulnFast.ps1): ConvertTo-SIVulnKeySpaceRows, ConvertTo-SIVulnDesired,
+# Resolve-SIVulnDesiredAlias and Select-SIVulnDisabledDesired call its helper; without it they run their PowerShell bodies
+if (-not (Get-Command -Name 'Get-SIVulnFastType' -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot 'SI-VulnFast.ps1') }
 
 # =====================================================================================================================
 #  EVERY SECURITY RECOMMENDATION IS A VULNERABILITY (operator ruling 2026-10-06, verbatim: "any security recommendation
@@ -796,8 +799,16 @@ function ConvertTo-SIVulnKeySpaceRows {
         same properties) -- the snapshot holds one row per finding; without a lean type, PSCustomObjects as before.
     #>
     param([AllowEmptyCollection()][object[]]$Rows = @(), [hashtable]$KeyMap = @{})
-    $out = New-Object System.Collections.Generic.List[object]
     $lean = [bool](Get-Command -Name New-SIVulnRowMaker -ErrorAction SilentlyContinue)
+    # 2026-11-16 (SI-VulnFast.ps1): the copy per row is compiled; the CI key is Get-SICiKey, once per distinct asset id, and the
+    # lean row maker New-SIVulnRowMaker, once per distinct property list -- the same rows, in the same order
+    $fx = Get-SIVulnFastType
+    if ($null -ne $fx) {
+        $ck = { param([string]$a) [string](Get-SICiKey -AssetId $a -KeyMap $KeyMap).Key }
+        $nm = if ($lean) { { param([string[]]$n) New-SIVulnRowMaker -Names $n } } else { $null }
+        return $fx::KeySpaceRows([object[]]$Rows, $ck, $nm)
+    }
+    $out = New-Object System.Collections.Generic.List[object]
     $makers = @{}   # one maker per property list (the rows of one query share one)
     foreach ($r in @($Rows)) {
         if ($null -eq $r) { continue }
@@ -936,6 +947,13 @@ function Resolve-SIVulnDesiredAlias {
         id and name are the current ones), else the first. Returns @{ Desired; Resolved (rows re-keyed); Merged (twins dropped) }.
     #>
     param([AllowEmptyCollection()][object[]]$Desired = @(), [hashtable]$Alias = @{})
+    # 2026-11-16 (SI-VulnFast.ps1): compiled for the desired set's own shape (dictionaries); any other row: the body below
+    $fx = Get-SIVulnFastType
+    if ($null -ne $fx) {
+        $n = [int[]]::new(2)
+        $r = $fx::DesiredAlias([object[]]$Desired, $Alias, $n)
+        if ($null -ne $r) { return [pscustomobject]@{ Desired = $r; Resolved = $n[0]; Merged = $n[1] } }
+    }
     $get = { param($o, [string]$n) if ($o -is [System.Collections.IDictionary]) { $o[$n] } else { $o.$n } }
     $set = { param($o, [string]$n, $v) if ($o -is [System.Collections.IDictionary]) { $o[$n] = $v } else { $o | Add-Member -NotePropertyName $n -NotePropertyValue $v -Force } }
     $resolved = 0; $merged = 0
@@ -1224,6 +1242,18 @@ function ConvertTo-SIVulnDesired {
            OsFamily = [string](@(@($fams | Where-Object { $_ -notin 'Unknown', 'Other' }) + @($fams | Where-Object { $_ -ne 'Unknown' }) + @($fams) | Select-Object -First 1))
            PatchCycle = [string](@(@($pcs | Where-Object { $_ -like 'Catch-up*' }) + @($pcs | Where-Object { $_ -eq 'In monthly cycle' }) + @($pcs | Where-Object { $_ -eq 'No fix available' }) + @($pcs) | Select-Object -First 1)) }
     }
+    # 2026-11-16 (SI-VulnFast.ps1): the loop below, compiled -- the field reads, the memo and the entries; every value it decides
+    # is still worked out HERE, by the same functions and the same $derive, once per distinct input (the memo above)
+    $fx = Get-SIVulnFastType
+    if ($null -ne $fx) {
+        $fk = { param([string]$c) Get-SIVulnFindingKey $c }
+        $ft = { param([string]$k, [string]$d, [string]$p) Get-SIVulnFindingType -Key $k -Domain $d -Report $p }
+        $af = { param($v) , [object[]]@(Get-SIVulnRowNames $v | ForEach-Object { $_ -split ';' } | ForEach-Object { $_.Trim() } | Where-Object { $_ }) }
+        $ck = { param([string]$a) [string](Get-SICiKey -AssetId $a -KeyMap $KeyMap).Key }
+        $n = [int[]]::new(3)
+        $d = $fx::Desired([object[]]$Rows, ($null -ne $KeyMap), $fk, $derive, $ft, $af, $ck, $n)
+        return [pscustomobject]@{ Desired = $d; WithoutAssetId = $n[0]; WithoutFindingId = $n[1]; Bookkeeping = $n[2] }
+    }
     foreach ($r in $Rows) {
         if ($null -eq $r) { continue }
         if ([string]::IsNullOrWhiteSpace([string](& $val $r 'AssetId'))) { $noId++; continue }
@@ -1505,6 +1535,7 @@ function Select-SIVulnDisabledDesired {
     $set = $KeySet
     if ($null -eq $set) { $set = New-SIVulnDisabledKeySet -FrozenKeys $FrozenKeys }
     if ($set.Count -eq 0) { return [pscustomobject]@{ Desired = @($Desired); Removed = 0 } }
-    $kept = @($Desired | Where-Object { $_ -and -not $set.Contains(([string]$_.CorrelationId).Trim()) })
+    # (2026-11-16: the filter is compiled, SI-VulnFast.ps1 -- the same items in the same order)
+    $kept = Select-SIVulnDesiredByKey -Items $Desired -Set $set -Truthy
     [pscustomobject]@{ Desired = $kept; Removed = (@($Desired).Count - $kept.Count) }
 }

@@ -277,15 +277,17 @@ IF OBJECT_ID(N'cfg.StepProgress') IS NOT NULL
 
 function Get-SIStepProgressRows {
     <# The progress records (Get-SIStepProgressRowsSql) through the settings database seam, as @(@{ Execution; Phase; Done;
-       Total }) -- Done / Total -1 when not counted. NEVER throws: not readable = @(). #>
+       Total; LastUtc }) -- Done / Total -1 when not counted; LastUtc (#1274: when the record last moved, UTC) $null when not
+       read. NEVER throws: not readable = @(). #>
     param([Parameter(Mandatory)][scriptblock]$Invoke, [Parameter(Mandatory)][string]$Job, [Parameter(Mandatory)][datetime]$SinceUtc, [string]$PhasePrefix = '')
     try {
         $target = Get-SIStepProgressTarget -Invoke $Invoke
         $p = @{ Job = $Job; PhasePrefix = $PhasePrefix; SinceUtc = $SinceUtc.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fff', [Globalization.CultureInfo]::InvariantCulture) }
         $num = { param($v) if ($null -eq $v -or $v -is [System.DBNull]) { -1L } else { [long]$v } }
+        $utc = { param($g) try { $v = if ($g -is [System.Collections.IDictionary]) { $g['LastUtc'] } else { $g.LastUtc }; if ($null -eq $v -or $v -is [System.DBNull]) { $null } else { $d = [datetime]$v; if ($d.Kind -eq [DateTimeKind]::Unspecified) { $d = [datetime]::SpecifyKind($d, [DateTimeKind]::Utc) }; $d.ToUniversalTime() } } catch { $null } }
         @(@(& $target (Get-SIStepProgressRowsSql) $p 'reader') | ForEach-Object { $_ } | Where-Object { $null -ne $_ } | ForEach-Object {
             $g = $_; $val = { param($n) if ($g -is [System.Collections.IDictionary]) { $g[$n] } else { $g.$n } }
-            @{ Execution = [string](& $val 'Execution'); Phase = [string](& $val 'Phase'); Done = (& $num (& $val 'Done')); Total = (& $num (& $val 'Total')) } })
+            @{ Execution = [string](& $val 'Execution'); Phase = [string](& $val 'Phase'); Done = (& $num (& $val 'Done')); Total = (& $num (& $val 'Total')); LastUtc = (& $utc $g) } })
     } catch { @() }
 }
 

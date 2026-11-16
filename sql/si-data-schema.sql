@@ -5048,6 +5048,18 @@ IF COL_LENGTH('sidata.Finding', 'RiskWeightBy') IS NULL ALTER TABLE sidata.Findi
 IF COL_LENGTH('sidata.Collection', 'RiskPartsAt') IS NULL ALTER TABLE sidata.Collection ADD RiskPartsAt DATETIME2(0) NULL;
 IF COL_LENGTH('sidata.Collection', 'RiskPartsUpto') IS NULL ALTER TABLE sidata.Collection ADD RiskPartsUpto BIGINT NULL;
 
+-- ---------------------------------------------------------------------------------------------
+-- #1273 EACH FINDING'S ROW READ ONCE BY THE DERIVE. The derive writes every typed column from ONE read of DetailJson
+-- (Get-SIDataDeriveTypedSql); the facet counts and their counted twin then read typed columns only, never DetailJson:
+--   sidata.Finding.DetailIsJson   1 = DetailJson is JSON (the rows the derive reads), 0 = it is not -- what ISJSON said
+--   sidata.Finding.ViewComponent  the facet "component" (si_component, trimmed, at most 64), NULL when DetailJson is not JSON
+--   sidata.Collection.TypedAt     every row of the collection carries both (and the fix columns), set after the derive's
+--                                 last range; cleared when the derive starts again. NULL = the facets read DetailJson as before.
+-- ---------------------------------------------------------------------------------------------
+IF COL_LENGTH('sidata.Finding', 'DetailIsJson') IS NULL ALTER TABLE sidata.Finding ADD DetailIsJson BIT NULL;
+IF COL_LENGTH('sidata.Finding', 'ViewComponent') IS NULL ALTER TABLE sidata.Finding ADD ViewComponent NVARCHAR(64) NULL;
+IF COL_LENGTH('sidata.Collection', 'TypedAt') IS NULL ALTER TABLE sidata.Collection ADD TypedAt DATETIME2(3) NULL;
+
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_Finding_AssetSidePage' AND object_id = OBJECT_ID('sidata.Finding'))
     EXEC (N'CREATE INDEX IX_Finding_AssetSidePage ON sidata.Finding (CollectionId, RiskAssetSide DESC) INCLUDE (ExemptionId)');
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_Finding_VulnSidePage' AND object_id = OBJECT_ID('sidata.Finding'))

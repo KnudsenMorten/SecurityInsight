@@ -929,6 +929,158 @@ WHERE f.CollectionId = @CollectionId AND f.FindingId > @After AND f.FindingId <=
 '@).Replace('{0}', $svc).Replace('{1}', $apply).Replace('{2}', $tail)
 }
 
+# ---- #1273 THE DERIVE READS EACH FINDING'S ROW ONCE -------------------------------------------------------------------
+#  Measured at a large install (1,565,118 findings in one collection): the derive above parsed every finding's DetailJson
+#  once per JSON_VALUE / JSON_QUERY (about twenty times a row), the risk score's parts read the row again in a pass of
+#  their own (Get-SIDataRiskPartsSql), and the facet counts and their counted twin read it again for the component, the
+#  fix and an ISJSON check (Get-SIDataFacetFactsSql) -- four reads of every row's large JSON text from disk, ~35 parses.
+#  Get-SIDataDeriveTypedSql writes the SAME columns with the SAME expressions from ONE OPENJSON of the row, in the same
+#  statement as the risk score's parts, and stores what the facets still took from the JSON (DetailIsJson, ViewComponent),
+#  so the facets read typed columns only (Get-SIDataFacetFactsSql -Typed). A JSON_VALUE is read from the parsed scalar as
+#  JSON_VALUE gives it (NULL past 4,000 characters), a JSON_QUERY from the same field read AS JSON. Rows whose DetailJson
+#  is not JSON are not touched by the derive columns (as before) -- a second statement of the same range gives them only
+#  their risk score's parts (as the parts' pass did: none, both sides worked out) and the two new columns, finding them by
+#  what the first one wrote (never by reading DetailJson). SIv3-DeriveTyped.Tests.ps1 proves every column of every row
+#  equal to the statements above on a real SQL Server.
+
+function Get-SIDataDeriveTypedFields {
+    <# PURE. The fields the one-parse derive reads: the row columns' fields first, in their order (so their parsed columns
+       keep their place, Get-SIDataRowColumnExpr -Parsed), then the rest once each. Json = also read AS JSON (JSON_QUERY). #>
+    param([switch]$Services, [switch]$Fix, [switch]$Category, [switch]$RiskParts)
+    $list = New-Object System.Collections.Generic.List[string]
+    $json = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
+    foreach ($x in (Get-SIDataRowFieldList)) { $list.Add($x); [void]$json.Add($x) }
+    $add = { param([string]$f, [bool]$j) if (-not $list.Contains($f)) { $list.Add($f) }; if ($j) { [void]$json.Add($f) } }
+    foreach ($f in 'RiskScoreTotal_Weighted', 'RiskRating', 'MaxCvssScore', 'Impact', 'HasExploit', 'si_component') { & $add $f $false }
+    foreach ($f in 'MITRE_Tactics', 'MITRE_Techniques', 'ComplianceTags') { & $add $f $true }
+    if ($Services) { foreach ($f in 'cmdbId', 'cmdbName') { & $add $f $false } }
+    if ($Fix) { foreach ($f in 'si_fix_remediation', 'si_fix_recommended_update', 'si_fix_recommended_update_id', 'si_affected_software') { & $add $f $false } }
+    if ($Category) { & $add 'Category' $false }
+    if ($RiskParts) {
+        foreach ($f in 'RiskConsequenceBase', 'RiskConsequenceScore', 'RiskFactor_Consequence', 'RiskFactor_Consequence_Impacts', 'RiskFactor_Consequence_Detailed',
+                       'RiskProbabilityBase', 'RiskProbabilityScore', 'RiskFactor_Probability', 'RiskFactor_Probability_Impacts', 'RiskFactor_Probability_Detailed',
+                       'RiskScore_Weight_Factor', 'RiskScore_Weight_Detailed') { & $add $f $false }
+    }
+    [pscustomobject]@{ Fields = $list; Json = $json }
+}
+
+function Get-SIDataDeriveTypedSql {
+    <#
+        One FindingId range of one collection: EVERY typed column the derive writes, from ONE parse of the row (see above).
+        The same switches as Get-SIDataDeriveFindingSql, plus -RiskParts (the database has the risk score's parts columns:
+        they are written in the same statement, for every row of the range, exactly as Get-SIDataRiskPartsSql). Also writes
+        DetailIsJson and ViewComponent on every row of the range. Answers the rows whose DetailJson is JSON (what the derive
+        answered). Idempotent.
+    #>
+    param([switch]$Services, [switch]$Fix, [switch]$Category, [switch]$RowColumns, [switch]$CarriedRowColumns, [switch]$RiskParts)
+    $fl = Get-SIDataDeriveTypedFields -Services:$Services -Fix:$Fix -Category:$Category -RiskParts:$RiskParts
+    $flds = $fl.Fields
+    $at = { param([string]$f) $i = $flds.IndexOf($f); if ($i -lt 0) { throw ("not a derive field: '{0}'" -f $f) }; $i }
+    # THE PARSE, ONCE PER ROW, made in the OPENJSON's own argument (evaluated once per row -- an expression of an APPLY
+    # that the SET list names many times is worked out again at each use: measured, an ISJSON there doubled the statement's
+    # time). rj = the row when it is a JSON OBJECT; ra = the row when it is any other JSON (an array): JSON_VALUE /
+    # JSON_QUERY (f.DetailJson, '$.x') of an array row are NULL, so the derive columns read rj only; the row values and
+    # the risk score's parts read OPENJSON's own answer for any JSON, as their own statements did (rj, else ra).
+    $jv = { param([string]$f) "CASE WHEN DATALENGTH(rj.[v$(& $at $f)]) <= 8000 THEN rj.[v$(& $at $f)] END" }
+    $jq = { param([string]$f) "rj.[j$(& $at $f)]" }
+    $raw = { param([string]$f) "COALESCE(rj.[v$(& $at $f)], ra.[v$(& $at $f)])" }
+    $list = {
+        param([string]$f, [int]$n, [switch]$Tags)
+        $inner = "COALESCE($(& $jv $f),`r`n                            REPLACE(REPLACE(REPLACE(REPLACE($(& $jq $f), N'`",`"', N';'), N'[', N''), N']', N''), N'`"', N''))"
+        if ($Tags) { return "LEFT(NULLIF(REPLACE(REPLACE($inner,`r`n                            N'; ', N';'), N' ;', N';'), N''), $n)" }
+        "LEFT(NULLIF(REPLACE(REPLACE(REPLACE(REPLACE($inner,`r`n                            N', ', N';'), N',', N';'), N'; ', N';'), N' ;', N';'), N''), $n)"
+    }
+    $trim = { param([string]$f, [int]$n) "LEFT(NULLIF(LTRIM(RTRIM($(& $jv $f))), N''), $n)" }
+    $set = New-Object System.Collections.Generic.List[string]
+    $add = { param([string]$c, [string]$e) $set.Add(('    {0} = {1}' -f $c, $e)) }
+    & $add 'RiskScoreWeighted' "TRY_CONVERT(float, $(& $jv 'RiskScoreTotal_Weighted'))"
+    & $add 'RiskRating' (& $trim 'RiskRating' 16)
+    & $add 'MitreTactics' (& $list 'MITRE_Tactics' 1000)
+    & $add 'MitreTechniques' (& $list 'MITRE_Techniques' 2000)
+    & $add 'ComplianceTags' (& $list 'ComplianceTags' 2000 -Tags)
+    & $add 'Cvss' "COALESCE(TRY_CONVERT(float, $(& $jv 'MaxCvssScore')),`r`n                 CASE WHEN f.Cve IS NOT NULL THEN TRY_CONVERT(float, $(& $jv 'Impact')) END)"
+    & $add 'HasExploit' "CASE LOWER($(& $jv 'HasExploit')) WHEN 'true' THEN 1 WHEN '1' THEN 1 WHEN 'false' THEN 0 WHEN '0' THEN 0 END"
+    if ($Services) { & $add 'CmdbId' (& $trim 'cmdbId' 256); & $add 'CmdbName' (& $trim 'cmdbName' 400) }
+    if ($Fix) {
+        & $add 'FixRemediation' (& $trim 'si_fix_remediation' 4000)
+        & $add 'FixRecommendedUpdate' (& $trim 'si_fix_recommended_update' 1000)
+        & $add 'FixRecommendedUpdateId' (& $trim 'si_fix_recommended_update_id' 1000)
+        & $add 'AffectedSoftware' (& $trim 'si_affected_software' 2000)
+    }
+    if ($Category) { & $add 'RaCategory' "LEFT($(& $jv 'Category'), 128)" }
+    if ($RowColumns) {
+        foreach ($rc in $script:SIDataRowColumns.Keys) {
+            # the row values' own expression over OPENJSON's answer for any JSON (rj, else ra)
+            $e = [regex]::Replace((Get-SIDataRowColumnExpr -Column $rc -Parsed), 'rj\.\[([vj]\d+)\]', 'COALESCE(rj.[$1], ra.[$1])')
+            & $add $rc $e
+        }
+    }
+    & $add 'DetailIsJson' '1'
+    & $add 'ViewComponent' (& $trim 'si_component' 64)
+    $parts = ''; $partsNone = ''
+    if ($RiskParts) {
+        & $add 'RiskAssetSide' 'p.ASide'
+        & $add 'RiskAssetPoints' 'p.APoints'
+        & $add 'RiskAssetBase' 'CASE WHEN p.ABase IS NOT NULL THEN p.ABase WHEN p.ASide IS NOT NULL THEN p.ASide - ISNULL(p.APoints, 0) END'
+        & $add 'RiskAssetDerived' 'CASE WHEN p.ABase IS NOT NULL THEN 0 ELSE 1 END'
+        & $add 'RiskAssetFactors' "(SELECT CASE WHEN DATALENGTH(x.v) > 0 THEN x.v END FROM (SELECT CASE WHEN p.ABase IS NOT NULL THEN $(& $raw 'RiskFactor_Consequence_Impacts') ELSE $(& $raw 'RiskFactor_Consequence_Detailed') END AS v) AS x)"
+        & $add 'RiskVulnSide' 'p.VSide'
+        & $add 'RiskVulnPoints' 'p.VPoints'
+        & $add 'RiskVulnBase' 'CASE WHEN p.VBase IS NOT NULL THEN p.VBase WHEN p.VSide IS NOT NULL THEN p.VSide - ISNULL(p.VPoints, 0) END'
+        & $add 'RiskVulnDerived' 'CASE WHEN p.VBase IS NOT NULL THEN 0 ELSE 1 END'
+        & $add 'RiskVulnFactors' "(SELECT CASE WHEN DATALENGTH(x.v) > 0 THEN x.v END FROM (SELECT CASE WHEN p.VBase IS NOT NULL THEN $(& $raw 'RiskFactor_Probability_Impacts') ELSE $(& $raw 'RiskFactor_Probability_Detailed') END AS v) AS x)"
+        & $add 'RiskWeightPct' 'p.Weight'
+        & $add 'RiskWeightBy' "CASE WHEN DATALENGTH($(& $raw 'RiskScore_Weight_Detailed')) > 0 THEN LEFT($(& $raw 'RiskScore_Weight_Detailed'), 1000) END"
+        $n = { param([string]$f) Get-SIDataRiskPartsNumberExpr -Text (& $raw $f) }
+        $parts = "`r`nCROSS APPLY (SELECT $(& $n 'RiskConsequenceBase') AS ABase, $(& $n 'RiskConsequenceScore') AS ASide, $(& $n 'RiskFactor_Consequence') AS APoints,`r`n" +
+                 "                    $(& $n 'RiskProbabilityBase') AS VBase, $(& $n 'RiskProbabilityScore') AS VSide, $(& $n 'RiskFactor_Probability') AS VPoints,`r`n" +
+                 "                    $(& $n 'RiskScore_Weight_Factor') AS Weight) AS p"
+        # a row that is not JSON: the parts' statement gave it no parts and both sides worked out (its OPENJSON was empty)
+        $partsNone = ",`r`n    RiskAssetSide = NULL, RiskAssetPoints = NULL, RiskAssetBase = NULL, RiskAssetDerived = 1, RiskAssetFactors = NULL," +
+                     "`r`n    RiskVulnSide = NULL, RiskVulnPoints = NULL, RiskVulnBase = NULL, RiskVulnDerived = 1, RiskVulnFactors = NULL, RiskWeightPct = NULL, RiskWeightBy = NULL"
+    }
+    $w = @(for ($i = 0; $i -lt $flds.Count; $i++) {
+        $x = $flds[$i]; "[v$i] nvarchar(max) N'$.$x'"
+        if ($fl.Json.Contains($x)) { "[j$i] nvarchar(max) N'$.$x' AS JSON" }
+    }) -join ', '
+    $first = "SUBSTRING(f.DetailJson, PATINDEX(N'%[^' + CHAR(9) + CHAR(10) + CHAR(13) + CHAR(32) + N']%', f.DetailJson), 1)"
+    $tail = if ($CarriedRowColumns -and -not $RowColumns) { (Get-SIDataRowColumnsSql -Carried -NoCount) + "`r`n" } else { '' }
+    # (1) the rows whose DetailJson is JSON (the old derive's rows): every column; (2) the others in the range: only what the
+    # old statements wrote on them (the parts) and the two new columns -- found by what (1) wrote, never by reading DetailJson
+    @"
+SET NOCOUNT ON;
+DECLARE @o TABLE (id bigint NOT NULL);
+UPDATE f SET
+$($set -join ",`r`n")
+OUTPUT inserted.FindingId INTO @o (id)
+FROM sidata.Finding AS f
+OUTER APPLY OPENJSON(CASE WHEN $first = N'{' THEN CASE WHEN ISJSON(f.DetailJson) = 1 THEN f.DetailJson END END) WITH ($w) AS rj
+OUTER APPLY OPENJSON(CASE WHEN $first = N'{' THEN NULL ELSE CASE WHEN ISJSON(f.DetailJson) = 1 THEN f.DetailJson END END) WITH ($w) AS ra$parts
+WHERE f.CollectionId = @CollectionId AND f.FindingId > @After AND f.FindingId <= @Upto AND ISJSON(f.DetailJson) = 1;
+DECLARE @n int = (SELECT COUNT(DISTINCT id) FROM @o);
+UPDATE f SET DetailIsJson = 0, ViewComponent = NULL$partsNone
+FROM sidata.Finding AS f
+WHERE f.CollectionId = @CollectionId AND f.FindingId > @After AND f.FindingId <= @Upto AND NOT EXISTS (SELECT 1 FROM @o AS o WHERE o.id = f.FindingId);
+$($tail)SELECT @n;
+"@
+}
+
+function Get-SIDataTypedReadySql {
+    <# 1 = the database has the columns of the one-parse derive (DetailIsJson, ViewComponent, TypedAt), else 0. #>
+    "SELECT CASE WHEN COL_LENGTH('sidata.Finding', 'DetailIsJson') IS NOT NULL AND COL_LENGTH('sidata.Finding', 'ViewComponent') IS NOT NULL AND COL_LENGTH('sidata.Collection', 'TypedAt') IS NOT NULL THEN 1 ELSE 0 END"
+}
+
+function Test-SIDataCollectionTyped {
+    <# $true when the collection's rows carry the typed facet columns: TypedAt is set (by the one-parse derive with the fix
+       columns, after its last range; the derive clears it when it starts again). Never throws: $false = the facets read
+       DetailJson as before. #>
+    param([Parameter(Mandatory)][scriptblock]$Invoke, [Parameter(Mandatory)][int]$CollectionId)
+    try {
+        $sql = "IF COL_LENGTH('sidata.Collection', 'TypedAt') IS NULL OR COL_LENGTH('sidata.Finding', 'FixRecommendedUpdate') IS NULL SELECT 0; ELSE EXEC sp_executesql N'SELECT CASE WHEN EXISTS (SELECT 1 FROM sidata.Collection WHERE CollectionId = @c AND TypedAt IS NOT NULL) THEN 1 ELSE 0 END', N'@c int', @c = @CollectionId;"
+        return ([string](& $Invoke $sql @{ CollectionId = $CollectionId } 'scalar') -eq '1')
+    } catch { return $false }
+}
+
 function Get-SIDataFacetSql {
     <#
         The collection's aggregates for the facet views, replacing what it held, and DerivedAt -- one transaction, so a
@@ -937,7 +1089,7 @@ function Get-SIDataFacetSql {
         -Counted (#264): the same aggregates over the findings WITHOUT an exemption mark, into sidata.FindingFacetCounted;
         DerivedAt is not touched (the exempted step stamps ExemptedDerivedAt; a DerivedAt newer than it makes the twin stale).
     #>
-    param([switch]$Counted)
+    param([switch]$Counted, [switch]$Typed)
     $table = 'FindingFacet'; $mark = ''
     $stamp = "UPDATE sidata.Collection SET DerivedAt = SYSUTCDATETIME() WHERE CollectionId = @CollectionId;"
     if ($Counted) { $table = 'FindingFacetCounted'; $mark = ' AND ExemptionId IS NULL'; $stamp = '' }
@@ -957,7 +1109,7 @@ DECLARE @n int = @@ROWCOUNT;
 {STAMP}
 COMMIT;
 SELECT @n;
-'@).Replace('{FACTS}', (Get-SIDataFacetFactsSql -Where ('CollectionId = @CollectionId' + $mark))).Replace('{TABLE}', $table).Replace('{STAMP}', $stamp)
+'@).Replace('{FACTS}', (Get-SIDataFacetFactsSql -Where ('CollectionId = @CollectionId' + $mark) -Typed:$Typed)).Replace('{TABLE}', $table).Replace('{STAMP}', $stamp)
 }
 
 function Get-SIDataFacetFactsSql {
@@ -968,14 +1120,22 @@ function Get-SIDataFacetFactsSql {
         stored column (FixRecommendedUpdate, written by the derive with the SAME expression just before) instead of
         parsing DetailJson again -- the same value, one JSON parse less per finding.
     #>
-    param([Parameter(Mandatory)][string]$Where, [switch]$FixColumn)
+    param([Parameter(Mandatory)][string]$Where, [switch]$FixColumn,
+          # #1273 the collection carries the one-parse derive's typed columns (Test-SIDataCollectionTyped): the component, the
+          # fix and "is JSON" from typed columns written with the SAME expressions -- DetailJson is not read at all
+          [switch]$Typed)
     $fix = "CASE WHEN ISJSON(DetailJson) = 1 THEN LEFT(NULLIF(LTRIM(RTRIM(JSON_VALUE(DetailJson, '$.si_fix_recommended_update'))), N''), 1000) END AS FixUpdate"
     if ($FixColumn) { $fix = 'CASE WHEN ISJSON(DetailJson) = 1 THEN FixRecommendedUpdate END AS FixUpdate' }
+    $comp = "CASE WHEN ISJSON(DetailJson) = 1 THEN LEFT(NULLIF(LTRIM(RTRIM(JSON_VALUE(DetailJson, '$.si_component'))), N''), 64) END AS Component"
+    if ($Typed) {
+        $fix = 'CASE WHEN DetailIsJson = 1 THEN FixRecommendedUpdate END AS FixUpdate'
+        $comp = 'CASE WHEN DetailIsJson = 1 THEN ViewComponent END AS Component'
+    }
     (@'
 WITH f AS (
     SELECT FindingId, AssetKey, RiskScore, RiskScoreWeighted, RiskRating, MitreTactics, MitreTechniques, ComplianceTags, Cvss,
            Severity, Tier, SecurityDomain, ReportName, Category, Subcategory, DepartmentName,
-           CASE WHEN ISJSON(DetailJson) = 1 THEN LEFT(NULLIF(LTRIM(RTRIM(JSON_VALUE(DetailJson, '$.si_component'))), N''), 64) END AS Component,
+           {COMP},
            {FIX}
     -- #855: the facets count ACTIVE CIs only (a finding no CI carries, or of an unstamped collection, counts as active) -- their
     -- key (CollectionId, Facet, Value) cannot take the lifecycle in an additive schema; the views say so
@@ -1002,7 +1162,7 @@ WITH f AS (
 ), d AS (
     SELECT DISTINCT FindingId, Facet, LEFT(Value, 256) AS Value, AssetKey, RiskScore, RiskScoreWeighted FROM facts WHERE Value <> N''
 )
-'@).Replace('{FIX}', $fix).Replace('{WHERE}', $Where).TrimEnd()
+'@).Replace('{COMP}', $comp).Replace('{FIX}', $fix).Replace('{WHERE}', $Where).TrimEnd()
 }
 
 # ---- THE FACETS IN FINDING RANGES (a large collection) --------------------------------------------------------------
@@ -1026,7 +1186,7 @@ function Get-SIDataFacetStageClearSql {
 function Get-SIDataFacetRangeSql {
     <# One FindingId range (@After, @Upto] of one collection: its partial facet aggregate per (facet, value, CI), staged.
        -Counted: the findings without an exemption mark. Returns the rows staged. #>
-    param([switch]$Counted, [switch]$FixColumn)
+    param([switch]$Counted, [switch]$FixColumn, [switch]$Typed)
     $where = 'CollectionId = @CollectionId AND FindingId > @After AND FindingId <= @Upto'
     if ($Counted) { $where += ' AND ExemptionId IS NULL' }
     (@'
@@ -1036,7 +1196,7 @@ INSERT sidata.FindingFacetStage (CollectionId, Counted, Facet, Value, AssetKey, 
 SELECT @CollectionId, {C}, Facet, Value, AssetKey, COUNT(*), SUM(RiskScore), SUM(RiskScoreWeighted), MAX(RiskScore)
 FROM d GROUP BY Facet, Value, AssetKey;
 SELECT @@ROWCOUNT;
-'@).Replace('{FACTS}', (Get-SIDataFacetFactsSql -Where $where -FixColumn:$FixColumn)).Replace('{C}', $(if ($Counted) { '1' } else { '0' }))
+'@).Replace('{FACTS}', (Get-SIDataFacetFactsSql -Where $where -FixColumn:$FixColumn -Typed:$Typed)).Replace('{C}', $(if ($Counted) { '1' } else { '0' }))
 }
 
 function Get-SIDataFacetFinishSql {
@@ -1077,7 +1237,9 @@ function Invoke-SIDataFacet {
         Returns the aggregate's rows (as the one statement did).
     #>
     param([Parameter(Mandatory)][scriptblock]$Invoke, [Parameter(Mandatory)][int]$CollectionId, [switch]$Counted, [switch]$FixColumn,
-          [ref]$BatchSize, [long]$TargetMs = 5000, [scriptblock]$Log)
+          [ref]$BatchSize, [long]$TargetMs = 5000, [scriptblock]$Log,
+          # #1273 the collection carries the typed facet columns (Test-SIDataCollectionTyped): DetailJson is not read
+          [switch]$Typed)
     $ready = $false
     try { $ready = ([int](& $Invoke (Get-SIDataFacetStageReadySql) @{} 'scalar')) -eq 1 } catch { $ready = $false }
     if (-not $ready) {
@@ -1085,7 +1247,7 @@ function Invoke-SIDataFacet {
             $script:SIDataFacetStageMissingSaid = $true
             & $Log 'WARN' 'facets      : the database does not have the table that builds the facet counts in parts yet -- they are built in one statement (the next update adds the table).'
         }
-        return [int](& $Invoke (Get-SIDataFacetSql -Counted:$Counted) @{ CollectionId = $CollectionId } 'scalar')
+        return [int](& $Invoke (Get-SIDataFacetSql -Counted:$Counted -Typed:$Typed) @{ CollectionId = $CollectionId } 'scalar')
     }
     $cv = $(if ($Counted) { 1 } else { 0 })
     $del = [long]0
@@ -1097,7 +1259,7 @@ function Invoke-SIDataFacet {
         $size = [long]20000; if ($BatchSize -and $BatchSize.Value -gt 0) { $size = [long]$BatchSize.Value }
         $after = $lo - 1
         $paced = [bool](Get-Command -Name Invoke-SISqlPacing -ErrorAction SilentlyContinue); $lastMs = 0L
-        $sql = Get-SIDataFacetRangeSql -Counted:$Counted -FixColumn:$FixColumn
+        $sql = Get-SIDataFacetRangeSql -Counted:$Counted -FixColumn:$FixColumn -Typed:$Typed
         $all = [Diagnostics.Stopwatch]::StartNew(); $saidAt = 0.0; $ranges = 0
         while ($after -lt $hi) {
             if ($paced) { $pace = Invoke-SISqlPacing -Invoke $Invoke -LastBatchMs $lastMs; if ($pace.Shrink) { $size = [Math]::Max(500L, [long][Math]::Floor($size / 2)) } }
@@ -1683,28 +1845,50 @@ function Invoke-SIDataDeriveCollection {
         try { $rowsDone = ([string](& $Invoke "SELECT CASE WHEN EXISTS (SELECT 1 FROM sidata.Collection WHERE CollectionId = @CollectionId AND RaRowsAt IS NOT NULL) THEN 1 ELSE 0 END" @{ CollectionId = $CollectionId } 'scalar') -eq '1') } catch { $rowsDone = $false }
         try { $carriedCol = ([string](& $Invoke "SELECT CASE WHEN COL_LENGTH('sidata.Finding', 'CarriedFrom') IS NOT NULL THEN 1 ELSE 0 END" @{} 'scalar') -eq '1') } catch { $carriedCol = $false }
     }
-    $sql = if ($rowsDone) { Get-SIDataDeriveFindingSql -Services:$Services -Fix:$Fix -Category:$cat -CarriedRowColumns:$carriedCol }
-           else { Get-SIDataDeriveFindingSql -Services:$Services -Fix:$Fix -Category:$cat -RowColumns:$rowCols }
-    if ($b -and $null -ne $b['Lo'] -and -not ($b['Lo'] -is [System.DBNull])) {
+    # #1273 the database has the one-parse derive's columns: every typed column (and the risk score's parts) from ONE read of
+    # each row, in one statement per range; else the statements as before
+    $typed = $false
+    try { $typed = ([string](& $Invoke (Get-SIDataTypedReadySql) @{} 'scalar') -eq '1') } catch { $typed = $false }
+    $partsReady = Test-SIDataRiskPartsReady -Invoke $Invoke
+    $hasRows = [bool]($b -and $null -ne $b['Lo'] -and -not ($b['Lo'] -is [System.DBNull]))
+    if ($typed) {
+        # the facets read the typed columns only once every range wrote them: cleared now, stamped after the last range
+        $null = & $Invoke 'UPDATE sidata.Collection SET TypedAt = NULL WHERE CollectionId = @CollectionId AND TypedAt IS NOT NULL; SELECT 1;' @{ CollectionId = $CollectionId } 'scalar'
+        $sql = if ($rowsDone) { Get-SIDataDeriveTypedSql -Services:$Services -Fix:$Fix -Category:$cat -CarriedRowColumns:$carriedCol -RiskParts:$partsReady }
+               else { Get-SIDataDeriveTypedSql -Services:$Services -Fix:$Fix -Category:$cat -RowColumns:$rowCols -RiskParts:$partsReady }
+    } else {
+        $sql = if ($rowsDone) { Get-SIDataDeriveFindingSql -Services:$Services -Fix:$Fix -Category:$cat -CarriedRowColumns:$carriedCol }
+               else { Get-SIDataDeriveFindingSql -Services:$Services -Fix:$Fix -Category:$cat -RowColumns:$rowCols }
+    }
+    if ($hasRows) {
         $rg = @{ Invoke = $Invoke; CollectionId = $CollectionId; Lo = [long]$b['Lo']; Hi = [long]$b['Hi']; Sql = $sql; TargetMs = $TargetMs }
         if ($BatchSize) { $rg.BatchSize = $BatchSize }
         $done = Invoke-SIDataFindingRanges @rg
     }
     # #830 / #834 every range carried the row values: the readers read this collection from its typed columns from now on
     if ($rowCols -and -not $rowsDone) { $null = & $Invoke 'UPDATE sidata.Collection SET RaRowsAt = SYSUTCDATETIME() WHERE CollectionId = @CollectionId; SELECT 1;' @{ CollectionId = $CollectionId } 'scalar' }
-    # the risk score's parts as columns, when the database has them (the updater adds them): every row, then the stamp
-    if (Test-SIDataRiskPartsReady -Invoke $Invoke) {
-        $parts = @{ Invoke = $Invoke; CollectionId = $CollectionId; Sql = (Get-SIDataRiskPartsSql); TargetMs = $TargetMs }
+    # the risk score's parts as columns, when the database has them (the updater adds them): every row, then the stamp --
+    # #1273 already written by the one-parse derive above (the same statement), else in a pass of their own as before
+    if ($partsReady) {
         $hiPart = 0L
-        if ($b -and $null -ne $b['Lo'] -and -not ($b['Lo'] -is [System.DBNull])) {
-            $parts.Lo = [long]$b['Lo']; $parts.Hi = [long]$b['Hi']; $hiPart = [long]$b['Hi']
-            $null = Invoke-SIDataFindingRanges @parts
+        if ($hasRows) {
+            $hiPart = [long]$b['Hi']
+            if (-not $typed) {
+                $parts = @{ Invoke = $Invoke; CollectionId = $CollectionId; Sql = (Get-SIDataRiskPartsSql); TargetMs = $TargetMs; Lo = [long]$b['Lo']; Hi = [long]$b['Hi'] }
+                $null = Invoke-SIDataFindingRanges @parts
+            }
         }
         $null = & $Invoke (Get-SIDataRiskPartsStampSql) @{ CollectionId = $CollectionId; Upto = $hiPart } 'scalar'
     }
+    # #1273 every row carries DetailIsJson / ViewComponent and the fix columns: the facets (and the counted twin later) read them
+    $typedFacets = $false
+    if ($typed -and $Fix) {
+        $null = & $Invoke 'UPDATE sidata.Collection SET TypedAt = SYSUTCDATETIME() WHERE CollectionId = @CollectionId; SELECT 1;' @{ CollectionId = $CollectionId } 'scalar'
+        $typedFacets = $true
+    }
     # the facet aggregate in FindingId ranges (a large collection's one statement ran past the SQL limit)
     $fsz = [long]0
-    $facets = Invoke-SIDataFacet -Invoke $Invoke -CollectionId $CollectionId -FixColumn:$Fix -BatchSize ([ref]$fsz) -TargetMs $TargetMs -Log $Log
+    $facets = Invoke-SIDataFacet -Invoke $Invoke -CollectionId $CollectionId -FixColumn:$Fix -Typed:$typedFacets -BatchSize ([ref]$fsz) -TargetMs $TargetMs -Log $Log
     $svc = $null
     if ($Services) { $svc = [int](Invoke-SIDataServices -Invoke $Invoke -CollectionId $CollectionId -Log $Log) }
     [pscustomobject]@{ CollectionId = $CollectionId; Findings = $done; Facets = $facets; Services = $svc }
@@ -1946,7 +2130,10 @@ function Invoke-SIDataExemptedVariants {
     $out.Daily = [int](Invoke-SIDataFindingDaily -Invoke $Invoke -Counted -Day $t.ToString('yyyy-MM-dd', [Globalization.CultureInfo]::InvariantCulture) -Log $Log)
     if ([int]$Collection.Derived -ne 1) { return [pscustomobject]$out }
     $fsz = [long]0
-    $out.Facets = Invoke-SIDataFacet -Invoke $Invoke -CollectionId $cid -Counted -BatchSize ([ref]$fsz) -Log $Log
+    # #1273 a collection the one-parse derive wrote (TypedAt): the counted facets read typed columns only, never DetailJson;
+    # any other: as before
+    $typedFacets = Test-SIDataCollectionTyped -Invoke $Invoke -CollectionId $cid
+    $out.Facets = Invoke-SIDataFacet -Invoke $Invoke -CollectionId $cid -Counted -Typed:$typedFacets -BatchSize ([ref]$fsz) -Log $Log
     if ($Departments -and [int]$Collection.Resolved -eq 1) { $out.Departments = [int](Invoke-SIDataDepartmentFacet -Invoke $Invoke -CollectionId $cid -Counted -Log $Log) }
     if ($Services -and [int]$Collection.ServicesDerived -eq 1) { $out.Services = [int](Invoke-SIDataServices -Invoke $Invoke -CollectionId $cid -Counted -Log $Log) }
     $out.Stamped = ([int](& $Invoke (Get-SIDataExemptedStampSql) @{ CollectionId = $cid } 'scalar')) -eq 1

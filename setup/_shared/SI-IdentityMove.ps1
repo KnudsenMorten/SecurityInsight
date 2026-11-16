@@ -1129,8 +1129,10 @@ function Read-SIIdentityMoveMode {
 }
 
 function Set-SIIdentityMoveMode {
-    <# The per-install approval: cfg.InstallState 'IdentityMoveMode' = plan | apply | off, written and READ BACK. Set through
-       the Support app (ops identity move -UpdaterMode) once the install's plan is approved. $true = it reads back. #>
+    <# The per-install approval: cfg.InstallState 'IdentityMoveMode' = plan | apply | off, written and READ BACK. At an
+       install it is set as a CONTROL-PLANE value (#1270, Invardia ruling 2026-11-15): SI_UPDATER_STATE_IDENTITYMOVEMODE on
+       the updater job, which the update itself writes here (setup\_shared\SI-ControlPlaneValues.ps1) once the install's
+       plan is approved -- never an ops SQL write. $true = it reads back. #>
     param([Parameter(Mandatory)][hashtable]$Ctx, [Parameter(Mandatory)][ValidateSet('plan', 'apply', 'off')][string]$Mode)
     Save-SIMoveInstallState -Ctx $Ctx -Name 'IdentityMoveMode' -Value $Mode
 }
@@ -1733,11 +1735,15 @@ function Invoke-SIMoveProve {
         else { $lines.Add(('{0}: {1} -- {2}' -f $p.Name, $p.State, $p.Why)) }
     }
     if (-not $evidenceRead) { $lines.Add('why those runs failed could not be read, so they count as waiting') }
-    # evidence: the new identity's own sign-ins (its object id) since the switch -- read when the Support app may
-    $f = [uri]::EscapeDataString(("createdDateTime ge {0} and servicePrincipalId eq '{1}' and signInEventTypes/any(t: t eq 'managedIdentity')" -f $sw.ToString('yyyy-MM-ddTHH:mm:ssZ'), $sel.New.PrincipalId))
-    $sg = Invoke-SIMoveGraph -Uri ("{0}/auditLogs/signIns?`$top=1&`$filter={1}" -f $script:SIMove.GraphBeta, $f) -Reason $Ctx.Reason
-    if ($sg.Status -eq 200) { $lines.Add(('sign-in log: {0} sign-in(s) of object id {1} since the switch' -f @(Get-SIMoveProp $sg.Body @('value')).Count, $sel.New.PrincipalId)) }
-    else { $lines.Add(('sign-in log: not readable (HTTP {0}) -- the proof rests on the runs' -f $sg.Status)) }
+    # evidence: the new identity's own sign-ins (its object id) since the switch -- read only in the Support app's run. SI #1268:
+    # the updater holds no AuditLog.Read.All (retired), so its own run never asks; the proof rests on the runs either way
+    if ("$($Ctx.Mode)" -eq 'updater') { $lines.Add('sign-in log: not read by the update -- the proof rests on the runs') }
+    else {
+        $f = [uri]::EscapeDataString(("createdDateTime ge {0} and servicePrincipalId eq '{1}' and signInEventTypes/any(t: t eq 'managedIdentity')" -f $sw.ToString('yyyy-MM-ddTHH:mm:ssZ'), $sel.New.PrincipalId))
+        $sg = Invoke-SIMoveGraph -Uri ("{0}/auditLogs/signIns?`$top=1&`$filter={1}" -f $script:SIMove.GraphBeta, $f) -Reason $Ctx.Reason
+        if ($sg.Status -eq 200) { $lines.Add(('sign-in log: {0} sign-in(s) of object id {1} since the switch' -f @(Get-SIMoveProp $sg.Body @('value')).Count, $sel.New.PrincipalId)) }
+        else { $lines.Add(('sign-in log: not readable (HTTP {0}) -- the proof rests on the runs' -f $sg.Status)) }
+    }
     $verdict = Get-SIIdentityMoveRoleProof -Items $items
     if ($verdict -eq 'proven' -and $Ctx.Apply) {
         $now = [datetime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ', [Globalization.CultureInfo]::InvariantCulture)

@@ -1,5 +1,19 @@
 # What's new in SecurityInsight
 
+## 3.1.27 · 2026-11-15 · Security
+
+The right rights, set by the update itself.
+
+### New features
+
+None in this version.
+
+### Fixes
+
+- **Exactly the rights each part needs** - Unused rights are removed, rare ones are given only on demand, and the needed ones are set up and read back.
+- **The web app reads no Azure details** - The environment report's facts come from the update, so the web app needs no read right on your resources.
+- **Settings change only through the update** - A value set on the update job is applied, read back and recorded by the update itself.
+
 ## 3.1.26.1 · 2026-11-15 · Security
 
 Tighter Key Vault rights for the web app.

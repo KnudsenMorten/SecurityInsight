@@ -1,4 +1,4 @@
-﻿#Requires -Version 5.1
+#Requires -Version 5.1
 <#
     CONTAINER HOSTING IS FOR BOTH EDITIONS -- SI EXACTLY AS PIM (#164, operator 2026-10-02: "we must support community as
     well and we already have the same setup in pim ... only difference is the license and the features if paid or not").
@@ -28,7 +28,7 @@ BeforeAll {
         $d = Join-Path ([IO.Path]::GetTempPath()) ('sipro-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
         New-Item -ItemType Directory -Force (Join-Path $d 'setup\_shared'), (Join-Path $d 'config') | Out-Null
         foreach ($f in 'setup\Upgrade-SIToPro.ps1', 'setup\Invoke-SIContainerUpdate.ps1', 'setup\_shared\SI-ContainerUpdate.ps1', 'setup\_shared\SI-BuildStage.ps1', 'setup\_shared\SI-FastRoll.ps1', 'setup\_shared\SI-ScriptRun.ps1',
-                       'setup\_shared\SI-UpdateRest.ps1', 'setup\_shared\SI-AcrBuild.ps1', 'VERSION') {
+                       'setup\_shared\SI-UpdateRest.ps1', 'setup\_shared\SI-AcrBuild.ps1', 'setup\_shared\SI-UpdateSqlBeat.ps1', 'VERSION') {
             Copy-Item (Join-Path $script:SIRoot $f) (Join-Path $d $f)
         }
         $stub = 'param([string]$SubscriptionId,[string]$ResourceGroupName,[string]$AcrName,[string]$EnvName,[string]$KeyVaultName,[string]$CertSecretName,[string]$SpnClientId,[string]$TenantId,[string]$JobName,[int]$UpdateRing = -1,[switch]$UseManagedIdentity,[switch]$GrantSpnRoles,[switch]$Apply)' + "`r`n" +

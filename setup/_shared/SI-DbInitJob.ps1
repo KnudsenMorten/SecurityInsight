@@ -1461,7 +1461,11 @@ function Get-SIDbInitRetiredGraphRoleNames {
     <# PURE. G5a: the updater identity's Microsoft Graph application permissions it held before and holds NO LONGER -- never
        granted again, taken off where an install still holds them. #>
     # (the group's PIM policy read went with them: it served only the PIM-for-Groups assignment, which nothing makes now)
-    @('PrivilegedAssignmentSchedule.ReadWrite.AzureADGroup', 'PrivilegedAssignmentSchedule.Read.AzureADGroup', 'RoleManagementPolicy.Read.AzureADGroup')
+    # SI #1268 (the owner's approved rights list, 2026-11-15): GroupMember.ReadWrite.All (the updater only READS the
+    # membership; the direct add is the person's or the Support app's step) and AuditLog.Read.All (the identity move's
+    # sign-in-log evidence is read only in the Support app's run; the update's proof rests on the runs) are retired too
+    @('PrivilegedAssignmentSchedule.ReadWrite.AzureADGroup', 'PrivilegedAssignmentSchedule.Read.AzureADGroup', 'RoleManagementPolicy.Read.AzureADGroup',
+      'GroupMember.ReadWrite.All', 'AuditLog.Read.All')
 }
 
 function Get-SIDbInitUpdaterGraphRoleNames {

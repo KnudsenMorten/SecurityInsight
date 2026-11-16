@@ -313,10 +313,39 @@ function Resolve-SISigninStoreVaultId {
     [pscustomobject]@{ Id = $id; Vault = $v }
 }
 
+function Invoke-SISigninStoreUserViaDbInit {
+    <#
+        SI #1268 (the updater holds no ALTER ANY USER): the sign-in front identity's database user is made by the database
+        setup job caj-si-dbinit -- the identity that holds the SQL rights; its plan carries the web identity's user and the
+        sign-in store's user (setup\_shared\SI-DbInitJob.ps1 Get-SIDbInitPlan, Get-SISigninStoreSql) -- started here with
+        SI_DBINIT_STEPS=grants (users, role memberships and grants only) and waited for. The caller reads the user back.
+        -Arm { param([string]$Method, [string]$Path, $Body) } (Path WITH its api-version). Returns @{ Ok; Why }. Never throws.
+    #>
+    param([Parameter(Mandatory)][scriptblock]$Arm, [Parameter(Mandatory)][string]$SIRoot, [Parameter(Mandatory)][string]$SubscriptionId,
+          [Parameter(Mandatory)][string]$ResourceGroup, [scriptblock]$Sleep = { param($s) Start-Sleep -Seconds $s }, [int]$TimeoutSeconds = 1500)
+    try {
+        if (-not (Get-Command -Name Start-SIDbInitRun -ErrorAction SilentlyContinue)) {
+            $file = [IO.Path]::Combine($SIRoot, 'setup', '_shared', 'SI-DbInitJob.ps1')
+            if (-not (Test-Path -LiteralPath $file)) { return [pscustomobject]@{ Ok = $false; Why = 'this release carries no database setup job' } }
+            . $file
+        }
+        $n = Get-SIDbInitNames
+        $jobId = '/subscriptions/{0}/resourceGroups/{1}/providers/Microsoft.App/jobs/{2}' -f $SubscriptionId, $ResourceGroup, $n.Job
+        $job = & $Arm 'GET' ('{0}?api-version={1}' -f $jobId, $n.AppApi) $null
+        if (-not $job) { return [pscustomobject]@{ Ok = $false; Why = ('the database setup job {0} is not there yet -- the next update makes it, and it makes the user' -f $n.Job) } }
+        $r = Start-SIDbInitRun -Arm $Arm -JobId $jobId -Job $job -By 'updater' -Steps 'grants' -TimeoutSeconds $TimeoutSeconds -Sleep $Sleep
+        if (-not $r.Ok) { return [pscustomobject]@{ Ok = $false; Why = ('the database setup job {0} did not complete (execution {1}: {2}) -- the next update starts it again' -f $n.Job, $(if ($r.Execution) { $r.Execution } else { 'not started' }), $r.Status) } }
+        [pscustomobject]@{ Ok = $true; Why = ('made by the database setup job {0} (execution {1})' -f $n.Job, $r.Execution) }
+    } catch { [pscustomobject]@{ Ok = $false; Why = ([string]$_.Exception.Message -replace '\s+', ' ') } }
+}
+
 function Invoke-SISigninFrontStore {
     <#
         Makes sure of every piece (see the file header) for the identity -Identity (@{ ClientId; PrincipalId; Name }) in the
         install's vault -VaultName and its Pro database (-SqlServer / -SqlDatabase, reached through -Sql as the CALLER).
+        -UserMaker { param($ClientId, $UserName) } -> @{ Ok; Why } (SI #1268, the update): the identity's database user is NOT
+        made as the caller but by that block (Invoke-SISigninStoreUserViaDbInit: the database setup job), then READ BACK;
+        without it (setup, the person's sign-in as the server's admin) the caller makes it.
         -Apply:$false = the plan only (what is missing, one line each; nothing changed). Never throws.
         Returns @{ Ok (every piece reads back); Env (the front's settings -- ONLY when Ok, else empty); Actions (what was
         missing); Lines; Failed (the piece that could not be made, '' = none); Why }.
@@ -325,7 +354,7 @@ function Invoke-SISigninFrontStore {
           [string]$ResourceGroup = '', [Parameter(Mandatory)][string]$VaultName, [Parameter(Mandatory)][string]$SqlServer,
           [Parameter(Mandatory)][string]$SqlDatabase, [Parameter(Mandatory)]$Identity, [string]$KeyName = $script:SISigninStoreKeyName,
           [switch]$Apply, [scriptblock]$Log = { param($m) Write-Host $m }, [scriptblock]$Sleep = { param($s) Start-Sleep -Seconds $s },
-          [int]$ReadBackTries = 6, [int]$ReadBackSeconds = 5)
+          [int]$ReadBackTries = 6, [int]$ReadBackSeconds = 5, [scriptblock]$UserMaker)
     $lines = New-Object System.Collections.Generic.List[string]
     $say = { param($m) $lines.Add([string]$m); & $Log $m }
     $res = { param([bool]$ok, $actions, [string]$failed, [string]$why, $env)
@@ -386,6 +415,16 @@ function Invoke-SISigninFrontStore {
                             if ($ok) { break }; if ($i -lt $ReadBackTries) { & $Sleep $ReadBackSeconds }
                         }
                         if (-not $ok) { throw 'the role assignment does not read back' }
+                    }
+                    'sql-user' {
+                        if ($UserMaker) {
+                            # SI #1268: the database setup job makes it (the caller holds no ALTER ANY USER), read back here
+                            $m = & $UserMaker $cid $uname
+                            if (-not $m -or -not $m.Ok) { throw ('not made by the database setup job: {0}' -f $(if ($m) { $m.Why } else { 'no answer' })) }
+                            $u2 = ConvertFrom-SISigninStoreStateRow -Row (@(& $Sql (Get-SISigninStoreStateSql) ([ordered]@{ ClientId = $cid; UserName = $uname }) 'reader' | ForEach-Object { $_ }) | Select-Object -First 1)
+                            if (-not $u2.User) { throw ('the user does not read back after the database setup job ({0})' -f $m.Why) }
+                            $text += (' -- ' + $m.Why)
+                        } else { $null = & $Sql (Get-SISigninStoreSql -Action $a) ([ordered]@{ ClientId = $cid; UserName = $uname }) 'nonquery' }
                     }
                     default { $null = & $Sql (Get-SISigninStoreSql -Action $a) ([ordered]@{ ClientId = $cid; UserName = $uname }) 'nonquery' }
                 }

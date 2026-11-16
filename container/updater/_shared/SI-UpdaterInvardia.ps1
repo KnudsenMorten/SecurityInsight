@@ -350,7 +350,7 @@ function Invoke-SIUpdaterFromInvardia {
             Invoke-SIUpdaterRunGate -Store $Store -Holder $holder -SubscriptionId $SubscriptionId -StartingRun $startingRun `
                 -BusyJobs { $en = Get-SIUpdaterEnvironment -ResourceGroup $ResourceGroup -AcrName $AcrName -SubscriptionId $SubscriptionId -UpdaterJob $updaterJob
                             @(Get-SIUpdaterBusyJobs -JobNames @($en.JobNames) -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId) } `
-                -DatabaseMissing { if ($Store -and "$($Store.Server)" -and "$($Store.Database)") { Test-SIUpdaterDatabaseMissing -Server ([string]$Store.Server) -Database ([string]$Store.Database) -SubscriptionId $SubscriptionId } else { $false } }
+                -DatabaseMissing { if ($Store -and "$($Store.Server)" -and "$($Store.Database)") { Test-SIUpdaterDatabaseMissing -Server ([string]$Store.Server) -Database ([string]$Store.Database) -SubscriptionId $SubscriptionId -ResourceGroup $ResourceGroup } else { $false } }
         } else { [pscustomobject]@{ Go = $true; Verdict = 'Go'; Kind = ''; Reason = 'no run gate in this image'; RunId = ''; LockTaken = $false; Holder = '' } }
     }
     $passGate = {

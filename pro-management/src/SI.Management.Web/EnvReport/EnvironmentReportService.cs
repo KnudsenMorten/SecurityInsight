@@ -12,7 +12,8 @@ namespace SI.Management.Web.EnvReport;
 /// Reads the environment report's facts NOW, each part on its own (one that cannot be read says so; the others still
 /// show): Get Started's facts (licence, access, mail, the engines' runs and permission self-checks, ring, settings,
 /// connectors -- the same reads its steps make), the header facts (tenant, environment, ring), the Azure resource group
-/// through ARM, the permission list, the settings catalog and the configuration commits.
+/// as the updater last read it (SI #1268: from the Pro database, with its age -- the web app never calls ARM for it), the
+/// permission list, the settings catalog and the configuration commits.
 /// </summary>
 public sealed class EnvironmentReportService(GetStartedService getStarted, HeaderContext header, InstallTenantReader tenant, IAzureFactsReader azure,
     SettingsCatalog catalog, IConfigJournalStore journal, IOptions<EstateOptions> estate, IConfiguration config, TimeProvider clock, ILogger<EnvironmentReportService> log)

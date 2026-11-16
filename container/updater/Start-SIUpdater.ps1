@@ -84,6 +84,9 @@ if (Test-Path -LiteralPath $siWebRoll) { . $siWebRoll }
 $siDbStep = Join-Path $PSScriptRoot '_shared/SI-UpdaterDatabase.ps1'
 if (Test-Path -LiteralPath $siDbStep) { . $siDbStep }
 # the secret hand-over -- the web app never writes a secret; this run stores what it handed over (SI-UpdaterSecretHandover.ps1)
+# SI #1268: the environment report's Azure facts, read by the updater (the web app holds no Reader on the resource group)
+$siEnvFacts = Join-Path $PSScriptRoot '_shared/SI-UpdaterEnvFacts.ps1'
+if (Test-Path -LiteralPath $siEnvFacts) { . $siEnvFacts }
 $siHandover = Join-Path $PSScriptRoot '_shared/SI-UpdaterSecretHandover.ps1'
 if (Test-Path -LiteralPath $siHandover) { . $siHandover }
 # The two switches the customer has (automatic licence request, Pro updates from Invardia -- both ON by default) and the
@@ -483,6 +486,29 @@ function Invoke-SIUpdaterOpenAIRightsStep {
         foreach ($l in @($r.Lines)) { Write-UpdLog $(if ($l -match 'NOT CHECKED|support step') { 'WARNING: ' + $l } else { $l }) }
         $r
     } catch { Write-UpdLog ('WARNING: Azure OpenAI rights: not checked ({0}) -- the next update checks again' -f $_.Exception.Message); $null }
+}
+
+function Invoke-SIUpdaterControlPlaneStep {
+    <#
+        #1270 CONTROL-PLANE VALUES (Invardia ruling 2026-11-15: install state is never changed by an ops SQL write): what
+        Invardia sets on THIS job's environment -- SI_UPDATER_STATE_IDENTITYMOVEMODE (plan | apply | off) and
+        SI_UPDATER_SETTINGS (a JSON object, allow-listed settings only, never a secret) -- written into the Pro store by
+        this update itself, each with its change-log row and read back (setup\_shared\SI-ControlPlaneValues.ps1). Runs
+        BEFORE the identity-names step, so a mode set on the job is the mode that step reads in the same run. Each applied
+        value is one line; a refusal is a warning, never a failed update. The library is dot-sourced and called HERE, in
+        this scope (never from a .GetNewClosure() scriptblock: see Invoke-SIUpdaterSupportQueue). NEVER throws.
+        -Lib: the test seam (another copy of the step file); -Store: the Pro store.
+    #>
+    param([hashtable]$Env = @{}, $Store, [string]$Lib = '')
+    try {
+        if (-not $Store) { return $null }
+        $file = if ($Lib) { $Lib } elseif ($siAutoRoot) { [IO.Path]::Combine($siAutoRoot, 'setup', '_shared', 'SI-ControlPlaneValues.ps1') } else { '' }
+        if (-not $file -or -not (Test-Path -LiteralPath $file)) { return $null }
+        $global:SI_UpdaterStep = 'control-plane'
+        . $file
+        $root = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $file))
+        Invoke-SIControlPlaneValues -Env $Env -Store $Store -SIRoot $root -UpdaterJob (Get-SIUpdaterInstallName -Role updater -Env $Env) -Log { param($m) Write-UpdLog $m }
+    } catch { Write-UpdLog ('WARNING: control-plane values: not applied ({0}) -- the next update tries again' -f $_.Exception.Message); $null }
 }
 
 function Invoke-SIUpdaterIdentityNamesStep {
@@ -1466,7 +1492,10 @@ function Invoke-SIUpdaterCore {
             $null = Invoke-SIUpdaterIndexBuildJob -SIRoot $siAutoRoot -Store $proStore -SubscriptionId $sub -ResourceGroup $rg -UpdaterJob (Get-SIUpdaterInstallName -Role updater -Env $Env)
         }
         # #1145 (framework §5.5, owner 2026-11-04): every SI identity to its standard name, id-si-<role>, the updater itself last
-        # (setup\_shared\SI-IdentityNamesStep.ps1). PLAN unless the install's IdentityMoveMode says apply; never fails the run
+        # (setup\_shared\SI-IdentityNamesStep.ps1). PLAN unless the install's IdentityMoveMode says apply; never fails the run.
+        # #1270 FIRST the control-plane values on this job (SI_UPDATER_STATE_IDENTITYMOVEMODE, SI_UPDATER_SETTINGS) into the
+        # store, read back -- the mode set on the job is the mode the identity-names step reads in this same run
+        $null = Invoke-SIUpdaterControlPlaneStep -Env $Env -Store $proStore
         $null = Invoke-SIUpdaterIdentityNamesStep -Env $Env -SubscriptionId $sub -ResourceGroup $rg -TenantId $tenant -Auth $auth
     }
     # SECURE-WEB-1: the internet-facing identities lose any job / owner / contributor / role-assignment right, read back --
@@ -1516,6 +1545,13 @@ function Invoke-SIUpdaterCore {
     $global:SI_UpdaterStep = 'endpoints'
     $null = Invoke-SIUpdaterRecordEndpoints -Store $proStore -SubscriptionId $sub -ResourceGroup $rg `
                 -WebApp (Get-SIUpdaterInstallName -Role web -Env $Env) -McpApp (Get-SIUpdaterInstallName -Role mcp -Env $Env)
+    # SI #1268: the environment report's Azure facts (the install's resources and the role assignments at its resource group)
+    # read with the updater's own rights and written to the Pro database, read back -- the web app reads them from SQL only.
+    # (reported under the step 'endpoints': a step name Invardia's uplink already knows.) Never fails or holds the update.
+    if ($proStore -and (Get-Command -Name Invoke-SIUpdaterEnvFactsStep -ErrorAction SilentlyContinue)) {
+        $ef = Invoke-SIUpdaterEnvFactsStep -Store $proStore -SubscriptionId $sub -ResourceGroup $rg
+        Write-UpdLog $ef.Line
+    }
     # #1262 THE POST-ROLL RUN (SI_UPDATER_MODE = post-roll): started ONCE by an update that moved the updater onto the
     # release's image (Start-SIUpdaterSecondPass), so the release's post-roll steps run in the release's OWN code within its
     # own update -- not one scheduled update later. Everything above ran in this code already (the AI settings among it);

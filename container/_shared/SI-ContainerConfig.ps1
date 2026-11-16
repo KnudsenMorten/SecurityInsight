@@ -1878,6 +1878,23 @@ function Get-SIContainerIdentityGrantPlan {
     return $plan.ToArray()
 }
 
+function Get-SIEngineJobsGrant {
+    <#
+        PURE. SI #1268 (the owner's approved rights list 2026-11-15, engine.azure.ContainerAppsJobsContributor): a CONTAINER
+        install's engine identity starts and follows the jobs (the daily flow caj-si-flow, a job's stop of its own duplicate,
+        the heartbeat's updater start, data-out's start) -- Container Apps Jobs Contributor on the install's resource group
+        (-ResourceGroupId), nothing wider. The same grant Bootstrap-ContainerAppJob.ps1 makes. -Jobs: the resource group's
+        jobs (ARM shape); none of SecurityInsight's (caj-si-*) there = not a container install = nothing (a VM or Arc server
+        identity starts no job). ReadBack = the grant is read back after it is made (setup\Grant-SIIdentity.ps1).
+    #>
+    param([string]$ResourceGroupId = '', [object[]]$Jobs = @())
+    if (-not "$ResourceGroupId".Trim()) { return @() }
+    $si = @(@($Jobs) | Where-Object { $_ -and ([string]$_.name) -like 'caj-si-*' })
+    if (-not $si.Count) { return @() }
+    [pscustomobject]@{ Kind = 'AzureRole'; Role = 'Container Apps Jobs Contributor'; Scope = "$ResourceGroupId".Trim().TrimEnd('/'); ReadBack = $true
+        Why = 'the daily job flow (caj-si-flow) starts each job of the flow and follows it to its end; a job stops its own duplicate; the heartbeat starts the updater' }
+}
+
 # ==================================================================================================================
 #  ASSET TAGGING'S OWN IDENTITY (#236)
 # ==================================================================================================================

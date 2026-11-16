@@ -80,6 +80,11 @@ param(
     # admin's delegated Exchange token -- the "Set up mail" click flow. Several installs in one tenant share the app:
     # each adds its own credential (named after its identity); nothing another install added is touched.
     [ValidatePattern('^$|^[0-9a-fA-F-]{36}$')][string]$WebIdentityPrincipalId = '',
+    # SI #1268: the updater identity (its OBJECT / principal id). Given: it is made an OWNER of this app registration and given
+    # Microsoft Graph Application.ReadWrite.OwnedBy, each read back (setup\_shared\SI-UpdaterSigninRights.ps1) -- the update
+    # keeps the app current and may change only the apps it owns. setup\Install-SIUpdaterJob.ps1 does the same once the
+    # updater identity exists (a new install makes the web app first).
+    [ValidatePattern('^$|^[0-9a-fA-F-]{36}$')][string]$UpdaterPrincipalId = '',
     [switch]$Apply
 )
 
@@ -424,6 +429,16 @@ if ($WebIdentityPrincipalId) {
     }
 } else { Write-Host '  -WebIdentityPrincipalId not given: the "Set up mail" click flow stays off (the page hands over setup\Set-SIMail.ps1).' }
 
+# SI #1268: the updater identity as an OWNER of this app registration + Application.ReadWrite.OwnedBy, each read back
+Write-Step '4b. The updater identity: an owner of this app registration, with Application.ReadWrite.OwnedBy (read back)'
+$updaterSigninRights = $null
+if ($UpdaterPrincipalId) {
+    . ([IO.Path]::Combine((Split-Path -Parent (Split-Path -Parent $PSScriptRoot)), 'setup', '_shared', 'SI-UpdaterSigninRights.ps1'))
+    $updGraph = { param([string]$Method, [string]$Uri, $Body) if ($Method -eq 'GET') { Invoke-Graph -Method get -Url $Uri -Read } else { Invoke-Graph -Method $Method.ToLowerInvariant() -Url $Uri -Body $Body } }
+    $updaterSigninRights = Grant-SIUpdaterSigninRights -Graph $updGraph -PrincipalId $UpdaterPrincipalId -SigninClientId $(if ($clientId -notlike '<*') { $clientId } else { '' }) -Apply:$Apply
+    foreach ($l in @($updaterSigninRights.Lines)) { Write-Host ('  ' + $l) -ForegroundColor $(if ($l -match '^customer step') { 'Yellow' } else { 'Gray' }) }
+} else { Write-Host '  -UpdaterPrincipalId not given: setup\Install-SIUpdaterJob.ps1 makes the updater identity an owner once it exists.' }
+
 Write-Host ''
 Write-Host ('  client id (AzureAd__ClientId):   {0}' -f $clientId)
 Write-Host ('  API (MCP token audience):        api://{0}   (an MCP client asks for api://{0}/mcp.access)' -f $clientId)
@@ -432,5 +447,6 @@ if (-not $Fqdn) { Write-Host '  No redirect URI yet: re-run with -Fqdn <web app 
 if (-not $Apply) { Write-Host 'Plan only -- nothing was changed. Re-run with -Apply to make these changes.' -ForegroundColor Yellow }
 
 [pscustomobject]@{ AppId = $clientId; ApplicationObjectId = $app.id; ServicePrincipalId = $spId; WebFederatedCredential = $ficPresent
-                   SignInConsent = $signInConsent; SignInConsentError = $signInConsentError }
+                   SignInConsent = $signInConsent; SignInConsentError = $signInConsentError
+                   UpdaterSigninRights = $(if ($updaterSigninRights) { [bool]$updaterSigninRights.Ok } else { $null }) }
 } finally { Stop-SIScriptRun -Run $siRun }

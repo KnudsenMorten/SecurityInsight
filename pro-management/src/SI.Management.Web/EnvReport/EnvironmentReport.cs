@@ -23,7 +23,7 @@ public sealed record EnvironmentReport(DateTime ReadUtc, ReportSummary Summary, 
         report = "SecurityInsight environment report", schema = 1, readUtc = ReadUtc, summary = Summary,
         architecture = new
         {
-            Azure.SubscriptionId, Azure.ResourceGroup, error = Azure.Error,
+            Azure.SubscriptionId, Azure.ResourceGroup, error = Azure.Error, azureReadUtc = Azure.ReadUtc,
             resources = Azure.Resources.Select(r => new { r.Name, r.Kind, r.Type, r.Location, network = r.Network.Select(n => new { fact = n.Fact, value = n.Value }), r.PrincipalId, r.UserAssigned, r.ClientId }),
             roleAssignments = Azure.Roles,
         },
@@ -111,7 +111,8 @@ public static class EnvironmentReportBuilder
             new("Risk Analysis", "Log Analytics", "in", "HTTPS (KQL)", "managed identity", "the Kusto reports' data", "read-only"),
             new("browser", "web app", "in", "HTTPS", "Entra sign-in (OpenID Connect), app roles", "every page a signed-in person opens", "on"),
             new("web app", "Pro database (Azure SQL)", "out", "TDS (encrypted)", "the web app's managed identity", "configuration, views, audit trail", sql ? "configured" : "not configured"),
-            new("web app", "Azure Resource Manager", "out", "HTTPS (REST)", "the web app's managed identity (Reader, job operator)", "jobs: list, start, schedule; this report's Azure part", "on"),
+            new("web app", "Azure Resource Manager", "out", "HTTPS (REST)", "the web app's managed identity (Container Apps Jobs Reader)", "jobs: list, read their runs", "on"),
+            new("updater job", "Azure Resource Manager", "in", "HTTPS (REST)", "the updater's managed identity (Contributor on the resource group)", "this report's Azure part: the install's resources and role assignments, written to the Pro database", "on every update run"),
             new("mail job", "Exchange Online / SMTP relay", "out", "HTTPS (Graph sendMail) or SMTP", "the mail identity, scoped to the shared mailbox", "reports, alerts, reminders", mail),
             new("SecurityInsight", "Invardia support link", "out", "HTTPS", "the install key", "health and run results for Invardia support (no tenant data)", telemetry),
             new("Invardia", "updater job", "in", "HTTPS", "the install key; signed source", "new versions for the update ring", f?.Ring is { } r ? "ring " + r.Ring.ToString(System.Globalization.CultureInfo.InvariantCulture) : "ring not recorded"),
@@ -138,7 +139,7 @@ public static class EnvironmentReportBuilder
             }
         foreach (var r in azure.Resources.Where(r => r.Network.Any(n => n.Fact == "external ingress" && n.Value.Equals("true", StringComparison.OrdinalIgnoreCase)) && r.Network.Any(n => n.Fact == "IP restrictions" && n.Value == "0")))
             list.Add(new("low", "network", $"{r.Kind} {r.Name}: reachable from the internet without IP restrictions (sign-in still required)", "Add IP restrictions to the container app's ingress if only known networks should reach it."));
-        if (azure.Error is not null) list.Add(new("info", "architecture", "The Azure part could not be read completely: " + azure.Error, "Give the web app's identity Reader on the install's resource group."));
+        if (azure.Error is not null) list.Add(new("info", "architecture", "The Azure part could not be read completely: " + azure.Error, "The updater reads it on every run and records it in the Pro database; when this stays, check the updater's last run on the Jobs page."));
         if (gs?.Facts?.Licence is { } l)
         {
             var st = l.StateOn(nowUtc);

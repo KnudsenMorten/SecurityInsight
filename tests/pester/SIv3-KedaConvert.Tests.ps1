@@ -63,15 +63,23 @@ BeforeAll {
         $guidC = '974c5e8b-45b9-4653-ba55-5f855dd0fb88'; $guidR = '19e7f393-937e-4f77-808e-94535e297925'
         # the account read in its resource group (World.RgStorage = $false: not there / not allowed); the subscription-wide list
         # (World.SubList403: refused, as for an identity with rights on the resource group only -- internal ring 1 2026-10-10)
-        if ($Method -eq 'GET' -and $Uri -like '*/resourceGroups/*/providers/Microsoft.Storage/storageAccounts/stsi?*') { if ($w.PSObject.Properties['RgStorage'] -and $w.RgStorage -eq $false) { return (& $ok 404 'ResourceNotFound') }; return (& $ok 200 @{ name = 'stsi'; id = $script:Stg }) }
-        if ($Method -eq 'GET' -and $Uri -like '*/providers/Microsoft.Storage/storageAccounts?*') { if ($w.PSObject.Properties['SubList403'] -and $w.SubList403) { return (& $ok 403 'AuthorizationFailed') }; return (& $ok 200 @{ value = @(@{ name = 'other'; id = '/x' }, @{ name = 'stsi'; id = $script:Stg }) }) }
+        if ($Method -eq 'GET' -and $Uri -like '*/resourceGroups/*/providers/Microsoft.Storage/storageAccounts/stsi[?]*') { if ($w.PSObject.Properties['RgStorage'] -and $w.RgStorage -eq $false) { return (& $ok 404 'ResourceNotFound') }; return (& $ok 200 @{ name = 'stsi'; id = $script:Stg }) }
+        if ($Method -eq 'GET' -and $Uri -like '*/providers/Microsoft.Storage/storageAccounts[?]*') { if ($w.PSObject.Properties['SubList403'] -and $w.SubList403) { return (& $ok 403 'AuthorizationFailed') }; return (& $ok 200 @{ value = @(@{ name = 'other'; id = '/x' }, @{ name = 'stsi'; id = $script:Stg }) }) }
         if ($Method -eq 'GET' -and $Uri -like '*/roleAssignments?*') {
             $v = if ($w.HasRole) { @(@{ properties = @{ roleDefinitionId = "/subscriptions/sub-1/providers/Microsoft.Authorization/roleDefinitions/$guidC" } }, @{ properties = @{ roleDefinitionId = "/subscriptions/sub-1/providers/Microsoft.Authorization/roleDefinitions/$guidR" } }) } else { @() }
             return (& $ok 200 @{ value = $v })
         }
         if ($Method -eq 'PUT' -and $Uri -like '*/roleAssignments/*') { if ($w.Fail.grant) { return (& $ok 403 '{"error":{"code":"AuthorizationFailed"}}') }; $w.HasRole = $true; return (& $ok 201 '{}') }
         if ($Method -eq 'POST' -and $Uri -like '*/listSecrets?*') { return (& $ok 200 @{ value = @($w.Secrets) }) }
-        if ($Uri -like 'https://*.queue.core.windows.net/*') { if ($w.Fail.queue) { return (& $ok 403 'AuthorizationPermissionMismatch') }; return (& $ok 201 '') }
+        # the queue through ARM (SI #1268: no storage data-plane role) -- made by PUT, read back by GET
+        $qm = [regex]::Match($Uri, '/queueServices/default/queues/([^/?]+)\?')
+        if ($qm.Success) {
+            if (-not $w.PSObject.Properties['Queues']) { $w | Add-Member -NotePropertyName Queues -NotePropertyValue @{} }
+            $qn = $qm.Groups[1].Value
+            if ($Method -eq 'PUT') { if ($w.Fail.queue) { return (& $ok 403 '{"error":{"code":"AuthorizationFailed"}}') }; if (-not $w.Fail.queueReadBack) { $w.Queues[$qn] = $true }; return (& $ok 200 @{ name = $qn }) }
+            if ($Method -eq 'GET') { if ($w.Queues.ContainsKey($qn)) { return (& $ok 200 @{ name = $qn; id = "$script:Stg/queueServices/default/queues/$qn" }) }; return (& $ok 404 'ResourceNotFound') }
+        }
+        if ($Uri -like 'https://*.queue.core.windows.net/*') { return (& $ok 400 "the queue data plane is never called (SI #1268): $line") }
         $m = [regex]::Match($Uri, '/providers/Microsoft\.App/jobs/([^/?]+)\?')
         if ($m.Success) {
             $n = $m.Groups[1].Value
@@ -205,8 +213,11 @@ Describe 'Invoke-SIKedaConvert against a fake Azure (REST)' {
         # the producer was CREATED without a timer
         (Get-PutBody 'caj-si-identity-producer').properties.configuration.triggerType | Should -Be 'Manual'
         (Get-PutBody 'caj-si-identity-worker').location | Should -Be 'westeurope'
-        $q = @($script:World.Req | Where-Object { $_.Uri -eq 'https://stsi.queue.core.windows.net/si-identity-shards' })
-        $q.Count | Should -Be 1; $q[0].Method | Should -Be 'PUT'; $q[0].Resource | Should -Be 'https://storage.azure.com/'; $q[0].Headers['x-ms-version'] | Should -Not -BeNullOrEmpty
+        # SI #1268: the queue through ARM (the resource group's Contributor), read back -- never the storage data plane
+        $q = @($script:World.Req | Where-Object { $_.Uri -like ('https://management.azure.com' + $script:Stg + '/queueServices/default/queues/si-identity-shards?api-version=*') })
+        @($q | ForEach-Object Method) | Should -Be @('PUT', 'GET')
+        $q[0].Resource | Should -Be 'https://management.azure.com/'
+        @($script:World.Req | Where-Object { $_.Uri -like '*.queue.core.windows.net*' -or $_.Resource -eq 'https://storage.azure.com/' }) | Should -BeNullOrEmpty
         # the order: worker, producer, both read back, THEN the old job off, THEN the producer on
         $c = [string[]]@($script:World.Calls)
         $iw = [array]::FindIndex($c, [Predicate[string]] { param($x) $x -like 'PUT */jobs/caj-si-identity-worker?*' })
@@ -217,11 +228,28 @@ Describe 'Invoke-SIKedaConvert against a fake Azure (REST)' {
         ($iw -ge 0 -and $ip -gt $iw -and $is -gt $ip -and $io -gt $is -and $ipo -gt $io) | Should -BeTrue
         @($c | Where-Object { $_ -like 'DELETE *' }).Count | Should -Be 0
         foreach ($q in $script:World.Req) {
-            if ($q.Uri -like 'https://management.azure.com/*') { $q.Uri | Should -BeLike 'https://management.azure.com/subscriptions/sub-1/*'; $q.Resource | Should -Be 'https://management.azure.com/' }
-            else { $q.Resource | Should -Be 'https://storage.azure.com/' }
+            $q.Uri | Should -BeLike 'https://management.azure.com/subscriptions/sub-1/*'; $q.Resource | Should -Be 'https://management.azure.com/'
         }
         ($r.Lines -join "`n") | Should -Match "identity now runs as a producer \(caj-si-identity-producer, on its schedule '30 4 \* \* \*'\) and up to 30 workers"
         ($r.Lines -join "`n") | Should -Match 'the old scheduled job caj-si-identity is switched off and kept'
+    }
+    It 'SI #1268: the queue is made through ARM and READ BACK; a refused PUT or a queue that does not read back is said, and the conversion still goes on (the producer makes the queue on its first run)' {
+        $script:World = New-World -Jobs @()
+        $q = New-SIKedaConvertQueue -Call $script:Rest -StorageAccountId $script:Stg -QueueName 'qa'
+        $q.Ok | Should -BeTrue
+        @($script:World.Calls) | Should -Be @(
+            ('PUT https://management.azure.com{0}/queueServices/default/queues/qa?api-version=2023-05-01' -f $script:Stg),
+            ('GET https://management.azure.com{0}/queueServices/default/queues/qa?api-version=2023-05-01' -f $script:Stg))
+        $script:World = New-World -Jobs @() -Fail @{ queue = $true }
+        $q = New-SIKedaConvertQueue -Call $script:Rest -StorageAccountId $script:Stg -QueueName 'qa'
+        $q.Ok | Should -BeFalse; $q.Why | Should -Match 'HTTP 403'
+        $script:World = New-World -Jobs @() -Fail @{ queueReadBack = $true }
+        $q = New-SIKedaConvertQueue -Call $script:Rest -StorageAccountId $script:Stg -QueueName 'qa'
+        $q.Ok | Should -BeFalse; $q.Why | Should -Match 'does not read back'
+        $script:World = New-World -Jobs @(New-PlainJob 'identity') -Fail @{ queue = $true }
+        $r = Invoke-Convert -Jobs @(New-PlainJob 'identity')
+        ($r.Results | Where-Object Engine -eq 'identity').Action | Should -Be 'converted'
+        ($r.Lines -join "`n") | Should -Match 'the queue si-identity-shards could not be created from here \(HTTP 403'
     }
     It 'the storage account is read in its RESOURCE GROUP: an updater identity with rights on the resource group only converts (internal ring 1 2026-10-10)' {
         $script:World = New-World -Jobs @(New-PlainJob 'identity')

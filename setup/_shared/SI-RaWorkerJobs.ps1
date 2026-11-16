@@ -202,7 +202,7 @@ function Test-SIRaWorkerReadBack {
 function Invoke-SIRaWorkerJobs {
     <#
         EXISTING INSTALLS: give the Detailed Risk Analysis job its queue-scaled worker job (the plan: Get-SIRaWorkerJobPlan).
-        -Rest: the REST seam (ARM https://management.azure.com/, the queue data plane https://storage.azure.com/). -WhatIf:
+        -Rest: the REST seam (ARM https://management.azure.com/; the queue too, through ARM -- SI #1268). -WhatIf:
         the plan only. Returns @{ Results = @(@{ Grain; Action = off | unflagged | would-unflag | created | flagged |
         would-create | would-flag | present | keep | none | failed; Line }); Lines }. NEVER throws. Off (switched off by the
         customer, no producer to undo) = not one call of -Rest.
@@ -214,7 +214,7 @@ function Invoke-SIRaWorkerJobs {
     $add = { param($r, $a, $l) $results.Add([pscustomobject]@{ Grain = $r.Grain; Worker = $r.Worker; Action = $a; Line = $l }); if ($l) { $lines.Add($l) } }
     try {
         $plan = @(Get-SIRaWorkerJobPlan -Jobs $Jobs -Globals $Globals -UpdaterUseKeda $UpdaterUseKeda -UpdaterRaScaleOut $UpdaterRaScaleOut)
-        $arm = 'https://management.azure.com/'; $stor = 'https://storage.azure.com/'
+        $arm = 'https://management.azure.com/'
         $api = $script:SIRaWorkerJobsArmApi
         $call = {
             param([string]$Method, [string]$Uri, $Body, [string]$Resource, [hashtable]$Headers)
@@ -340,9 +340,10 @@ function Invoke-SIRaWorkerJobs {
                 }
                 if ($regPwRef -and -not $regPassword -and -not [string](Get-SIKedaConvertProp $reg @('identity'))) { & $fail 'the registry password of the Risk Analysis job could not be read'; continue }
                 $spec = Get-SIRaWorkerJobSpec -Producer $prod -Plan $row -ResourceGroup $ResourceGroup -SecretArgs $secretArgs -RegistryPassword $regPassword -MaxExecutions $max
-                # (3) the work queue (the producer creates it on its first run as well)
-                $r = & $call 'PUT' ('https://{0}.queue.core.windows.net/{1}' -f $acct, $spec.QueueName) $null $stor @{ 'x-ms-version' = '2021-08-06' }
-                if (-not ((& $isOk $r) -or [int]$r.Status -eq 409)) { $lines.Add(('risk analysis workers: the queue {0} could not be created from here ({1}) -- the producer creates it on its first run' -f $spec.QueueName, (& $why $r))) }
+                # (3) the work queue, through ARM, read back (SI #1268: the resource group's Contributor covers it -- no storage
+                #     data-plane role); the producer creates it on its first run as well
+                $q = New-SIKedaConvertQueue -Call $call -StorageAccountId $stgId -QueueName $spec.QueueName
+                if (-not $q.Ok) { $lines.Add(('risk analysis workers: the queue {0} could not be created from here ({1}) -- the producer creates it on its first run' -f $spec.QueueName, $q.Why)) }
                 # (4) the worker -- idle until the producer queues reports, so creating it starts nothing
                 $r = & $call 'GET' (& $jobUri $spec.Name) $null $arm $null
                 if (& $isOk $r) { & $add $row 'present' ('risk analysis workers: {0} exists now (made meanwhile) -- the next update tells the Risk Analysis job' -f $spec.Name); continue }

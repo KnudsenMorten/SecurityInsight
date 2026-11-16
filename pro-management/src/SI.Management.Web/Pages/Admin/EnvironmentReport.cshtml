@@ -56,7 +56,7 @@
 
         <section id="env-architecture" class="report-section" data-part="architecture">
             <h2>2. Architecture</h2>
-            <p>Subscription <code class="tech">@(r.Azure.SubscriptionId ?? "not known")</code>, resource group <code class="tech">@(r.Azure.ResourceGroup ?? "not known")</code>.</p>
+            <p>Subscription <code class="tech">@(r.Azure.SubscriptionId ?? "not known")</code>, resource group <code class="tech">@(r.Azure.ResourceGroup ?? "not known")</code>.@if (r.Azure.AgeText(r.ReadUtc) is { } azAge) { <text> The Azure facts were </text><span data-azure-age>@azAge</span><text>.</text> }</p>
             @if (r.Azure.Error is not null) { <div class="notice warn" role="status" data-azure-error>@r.Azure.Error</div> }
             <svg class="report-diagram" viewBox="0 0 960 230" role="img" aria-label="Architecture: the sources, the collection jobs, the Pro database, Log Analytics, Risk Analysis, the web app and the mail" data-diagram="architecture">
                 <g fill="#ffffff" stroke="#1B4FE4" stroke-width="2">

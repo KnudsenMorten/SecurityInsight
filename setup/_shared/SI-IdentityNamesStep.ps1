@@ -22,7 +22,9 @@
       tagging           an install without asset tagging's identity gets id-si-tagging only when asset tagging is on
                         (SI_AssetTagging_Enabled); its rights are Grant-SIIdentity -Tagging (a support step)
       mode              cfg.InstallState 'IdentityMoveMode': plan (DEFAULT -- the per-install plan in the log and the report,
-                        nothing changed) | apply (set through the Support app once the install's plan is approved) | off
+                        nothing changed) | apply (once the install's plan is approved: SI_UPDATER_STATE_IDENTITYMOVEMODE=apply
+                        on the updater job -- the update's control-plane step writes it, read back, before this step; #1270)
+                        | off
 
     Never throws; never fails the update. The seams are handed in by the caller (container\updater\Start-SIUpdater.ps1) and
     by the tests: -Arm / -Graph { param($Method, $Uri, $Body) -> @{ StatusCode; Content } }, -Sql { param($Server, $Database,
@@ -171,7 +173,7 @@ function Invoke-SIUpdaterIdentityNames {
         $summaries = New-Object System.Collections.Generic.List[object]
         if ($mode -eq 'off') { & $say 'identity names: the move is off for this install (IdentityMoveMode) -- only the names are checked and reported' }
         else {
-        & $say ('identity names: {0} (the standard names id-si-engine / -web / -mcp / -tagging / -updater; the updater last)' -f $(if ($ctx.Apply) { 'APPLY' } else { 'PLAN -- the per-install plan, nothing is changed (IdentityMoveMode apply, set through the Support app, lets the update act)' }))
+        & $say ('identity names: {0} (the standard names id-si-engine / -web / -mcp / -tagging / -updater; the updater last)' -f $(if ($ctx.Apply) { 'APPLY' } else { 'PLAN -- the per-install plan, nothing is changed (set SI_UPDATER_STATE_IDENTITYMOVEMODE=apply on the updater job to let the update act)' }))
         $out.Ran = $true
         try {
         $tagOn = $false

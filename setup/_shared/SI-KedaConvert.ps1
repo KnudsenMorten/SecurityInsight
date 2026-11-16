@@ -26,9 +26,9 @@
         created are removed again, the old job runs on as before, one line says why, and the next update tries again.
       * Never throws; -WhatIf: the plan only, no Azure call at all.
 
-    NO az CLI, no PowerShell module: every call is ARM or storage data-plane REST through ONE seam,
+    NO az CLI, no PowerShell module: every call is ARM REST through ONE seam (the queue too -- SI #1268),
     -Rest { param([string]$Method, [string]$Uri, $Body, [string]$Resource, [hashtable]$Headers) } -> @{ Status; Body }
-    ($Resource = the token audience: https://management.azure.com/ or https://storage.azure.com/). The jobs are built by
+    ($Resource = the token audience: https://management.azure.com/). The jobs are built by
     translating Bootstrap's own job definitions (the az arguments) into the ARM resource (ConvertFrom-SIJobCreateArgs, PURE).
 #>
 
@@ -161,7 +161,29 @@ $script:SIKedaConvertQueueRoleIds = @{
 }
 $script:SIKedaConvertRoleApi = '2022-04-01'
 $script:SIKedaConvertStorageApi = '2023-05-01'
-$script:SIKedaConvertQueueVersion = '2021-08-06'   # the data-plane x-ms-version engine/_shared/SI-AzRest.ps1 uses
+
+function New-SIKedaConvertQueue {
+    <#
+        A storage queue made through ARM (SI #1268): PUT {storage account id}/queueServices/default/queues/{name}, then READ
+        BACK with a GET. The resource group's Contributor (the updater's right) covers it -- no storage data-plane role is
+        needed. -Call { param([string]$Method, [string]$Uri, $Body, [string]$Resource, [hashtable]$Headers) } -> @{ Status;
+        Body }. An existing queue is fine (the PUT is idempotent). Returns @{ Ok; Why }. Never throws.
+    #>
+    param([Parameter(Mandatory)][scriptblock]$Call, [Parameter(Mandatory)][string]$StorageAccountId, [Parameter(Mandatory)][string]$QueueName)
+    $arm = 'https://management.azure.com/'
+    $ok = { param($r) $r -and [int]$r.Status -ge 200 -and [int]$r.Status -lt 300 }
+    $why = { param($r) $t = ("$(if ($r) { $r.Body })" -replace '\s+', ' ').Trim(); if ($t.Length -gt 300) { $t = $t.Substring(0, 297) + '...' }; ('HTTP {0}{1}' -f $(if ($r) { [int]$r.Status } else { 0 }), $(if ($t) { ": $t" } else { '' })) }
+    $uri = 'https://management.azure.com{0}/queueServices/default/queues/{1}?api-version={2}' -f $StorageAccountId.TrimEnd('/'), $QueueName, $script:SIKedaConvertStorageApi
+    try {
+        $r = & $Call 'PUT' $uri '{"properties":{}}' $arm @{ 'Content-Type' = 'application/json' }
+        if (-not ((& $ok $r) -or ($r -and [int]$r.Status -eq 409))) { return [pscustomobject]@{ Ok = $false; Why = (& $why $r) } }
+        $b = & $Call 'GET' $uri $null $arm $null
+        if (-not (& $ok $b)) { return [pscustomobject]@{ Ok = $false; Why = ('it does not read back ({0})' -f (& $why $b)) } }
+        $o = $null; try { $o = "$($b.Body)" | ConvertFrom-Json } catch { $o = $null }
+        if ([string](Get-SIKedaConvertProp $o @('name')) -ne $QueueName) { return [pscustomobject]@{ Ok = $false; Why = 'it does not read back (another name came back)' } }
+        [pscustomobject]@{ Ok = $true; Why = '' }
+    } catch { [pscustomobject]@{ Ok = $false; Why = [string]$_.Exception.Message } }
+}
 
 function ConvertFrom-SIJobCreateArgs {
     <#
@@ -336,7 +358,7 @@ function Invoke-SIKedaConvert {
         EXISTING INSTALLS: move every parts engine that still runs as one scheduled job to a producer + queue-scaled workers
         (the plan: Get-SIKedaConvertPlan). -Jobs: the job list (ARM shape). -Rest { param([string]$Method, [string]$Uri,
         $Body, [string]$Resource, [hashtable]$Headers) } -> @{ Status; Body } -- ARM (https://management.azure.com/, every
-        path under /subscriptions/<-SubscriptionId>) and the queue data plane (https://storage.azure.com/). No az CLI.
+        path under /subscriptions/<-SubscriptionId>; the queue too, through ARM -- SI #1268: no storage data-plane role). No az CLI.
         -WhatIf: the plan only, no call. Returns @{ Results = @(@{ Engine; Action = converted | would-convert | keep | keda |
         failed; Line }); Lines }. NEVER throws.
     #>
@@ -347,7 +369,7 @@ function Invoke-SIKedaConvert {
     $add = { param($e, $a, $l) $results.Add([pscustomobject]@{ Engine = $e; Action = $a; Line = $l }); if ($l) { $lines.Add($l) } }
     try {
         $plan = @(Get-SIKedaConvertPlan -Jobs $Jobs -Globals $Globals -UpdaterUseKeda $UpdaterUseKeda)
-        $arm = 'https://management.azure.com/'; $stor = 'https://storage.azure.com/'
+        $arm = 'https://management.azure.com/'
         $api = $script:SIKedaConvertArmApi
         $call = {
             param([string]$Method, [string]$Uri, $Body, [string]$Resource, [hashtable]$Headers)
@@ -465,9 +487,11 @@ function Invoke-SIKedaConvert {
                 }
                 if ($regPwRef -and -not $regPassword -and -not [string](Get-SIKedaConvertProp $reg @('identity'))) { & $fail 'the registry password of the old job could not be read'; continue }
                 $spec = Get-SIKedaConvertJobSpec -Job $old -Plan $row -ResourceGroup $ResourceGroup -SecretArgs $secretArgs -RegistryPassword $regPassword -MaxExecutions $max
-                # (3) the shard queue (data plane) -- the producer creates it on its first run as well, so a refusal here changes nothing
-                $r = & $call 'PUT' ('https://{0}.queue.core.windows.net/{1}' -f $acct, $spec.QueueName) $null $stor @{ 'x-ms-version' = $script:SIKedaConvertQueueVersion }
-                if (-not ((& $isOk $r) -or [int]$r.Status -eq 409)) { $lines.Add(('queue scaling: {0}: the queue {1} could not be created from here ({2}) -- the producer creates it on its first run' -f $e, $spec.QueueName, (& $why $r))) }
+                # (3) the shard queue, through ARM (SI #1268: the resource group's Contributor covers it -- the updater holds no
+                #     storage data-plane role), READ BACK -- the producer creates it on its first run as well, so a refusal here
+                #     changes nothing
+                $q = New-SIKedaConvertQueue -Call $call -StorageAccountId $stgId -QueueName $spec.QueueName
+                if (-not $q.Ok) { $lines.Add(('queue scaling: {0}: the queue {1} could not be created from here ({2}) -- the producer creates it on its first run' -f $e, $spec.QueueName, $q.Why)) }
                 # (4) the worker -- idle until the producer queues work, so creating it starts nothing
                 $r = & $call 'PUT' (& $jobUri $spec.Worker) (& $toJson $spec.WorkerBody) $arm $null
                 if (-not (& $isOk $r)) { & $fail ('the worker could not be created ({0})' -f (& $why $r)); continue }

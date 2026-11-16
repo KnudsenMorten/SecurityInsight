@@ -96,6 +96,9 @@ param(
     # Only these application permissions of the plan, by name (e.g. SecurityAlert.Read.All). Implies -OnlyAppPermissions.
     # A name that is not in the plan stops the run: nothing outside the plan is ever granted.
     [string[]]$Only,
+    # SI #1268: a CONTAINER install's resource group (default: -IdentityResourceGroup). When SecurityInsight's jobs (caj-si-*)
+    # are there, the engine plan adds Container Apps Jobs Contributor on it (the daily flow starts the jobs), read back.
+    [string]$JobsResourceGroup,
     [switch]$Apply
 )
 
@@ -199,6 +202,14 @@ $plan = if ($WebApp) {
     @(Get-SIContainerIdentityGrantPlan -Mode ManagedIdentity -ReaderScopes $ReaderScopes -DcrResourceGroupId $dcrRgId `
         -WorkspaceResourceId $ws -DefenderWorkspaceResourceId ([string]$global:SI_DefenderWorkspaceResourceId) -StorageAccountId $stgId `
         -OpenAIKeyVaultId $kvId)
+    # SI #1268: a container install's engine identity starts the jobs (the daily flow) -- Container Apps Jobs Contributor on
+    # the install's resource group, the grant Bootstrap makes, read back below; a VM / Arc identity (no SI job there) gets none
+    $jobsRg = if ("$JobsResourceGroup".Trim()) { "$JobsResourceGroup".Trim() } elseif ("$IdentityResourceGroup".Trim()) { "$IdentityResourceGroup".Trim() } else { '' }
+    if ($jobsRg -and -not $OnlyAppPermissions) {
+        $jobsList = @()
+        try { $jobsList = @(Get-SIContainerAppJobList -ResourceGroupName $jobsRg -SubscriptionId $sub) } catch { Write-Host ('  the jobs of resource group {0} could not be read ({1}) -- Container Apps Jobs Contributor is not checked here' -f $jobsRg, (Get-SIGrantShortError $_)) -ForegroundColor Yellow }
+        @(Get-SIEngineJobsGrant -ResourceGroupId ('/subscriptions/{0}/resourceGroups/{1}' -f $sub, $jobsRg) -Jobs $jobsList)
+    }
 }
 if ($AllowSchemaCreate) {
     $plan += [pscustomobject]@{ Kind = 'AzureRole'; Role = 'Monitoring Contributor'; Scope = $dcrRgId; Why = 'the first run creates its data collection rules' }
@@ -238,7 +249,15 @@ foreach ($g in @($plan | Where-Object { $_.Kind -eq 'AzureRole' })) {
         $notKnown = Get-SIGrantShortError $_
     }
     $state = if ($have.Count) { 'present' } elseif ($Apply) {
-        try { New-SIRoleAssignment -ObjectId $principal -Scope $g.Scope -RoleDefinitionName $g.Role -PrincipalType ServicePrincipal -ErrorAction Stop | Out-Null; 'granted' }
+        try {
+            New-SIRoleAssignment -ObjectId $principal -Scope $g.Scope -RoleDefinitionName $g.Role -PrincipalType ServicePrincipal -ErrorAction Stop | Out-Null
+            # SI #1268: a grant marked ReadBack is read back from the scope (a few tries: ARM takes a write up async)
+            if ($g.PSObject.Properties['ReadBack'] -and $g.ReadBack) {
+                $back = $false
+                foreach ($w in 0, 5, 10, 20) { if ($w) { Start-Sleep -Seconds $w }; try { if (@(Get-SIAzRoleAssignment -ObjectId $principal -Scope $g.Scope -RoleDefinitionName $g.Role -ErrorAction Stop | Where-Object { $_.Scope -eq $g.Scope }).Count) { $back = $true; break } } catch { } }
+                if ($back) { 'granted' } else { $missing++; 'NO-READ' }
+            } else { 'granted' }
+        }
         catch {
             if ($_.Exception.Message -match 'Conflict|already exists') { 'present' }
             # the read was refused AND so is the write: whether the grant is there is not known -- a customer task
@@ -250,7 +269,8 @@ foreach ($g in @($plan | Where-Object { $_.Kind -eq 'AzureRole' })) {
     if ($state -eq 'UNKNOWN') {
         Write-Host ('            not known: this account may not read the role assignments there ({0}) -- a customer task, the run goes on' -f $notKnown) -ForegroundColor Yellow
     }
-    if ($state -in 'FAILED', 'MISSING', 'UNKNOWN') {
+    if ($state -eq 'NO-READ') { Write-Host '            granted, but it does not read back yet -- run this again in a few minutes' -ForegroundColor Yellow }
+    if ($state -in 'FAILED', 'MISSING', 'UNKNOWN', 'NO-READ') {
         $tasks.Add($(if ($state -eq 'UNKNOWN') { '# {0} -- NOT KNOWN: the account that ran setup may not read the role assignments at this scope; check it there and grant it when it is missing' -f $g.Why } else { '# {0}' -f $g.Why }))
         # #564: a portal path, never an az command (a customer has no az CLI); the guided install reads this line format
         $tasks.Add(('# Azure role "{1}" on "{2}" for the managed identity {0} -- Azure portal: open the scope > Access control (IAM) > Add > Add role assignment > {1} > Managed identity' -f $principal, $g.Role, $g.Scope))

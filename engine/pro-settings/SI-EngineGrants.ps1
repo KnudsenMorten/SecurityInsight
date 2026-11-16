@@ -223,7 +223,7 @@ $script:SIEngineNotEngine = @(
     @{ File = 'engine/pro-settings/SI-ProOverrideMigration.ps1'; Function = '*'; Why = 'setup\Publish-SITemplates.ps1' }
     @{ File = 'engine/asset-cmdb/_shared/SI-SnowTestPack.ps1';  Function = '*';  Why = 'setup\New-SIServiceNowTestPack.ps1 (reads the schema text, runs nothing)' }
     @{ File = 'engine/asset-cmdb/_shared/SI-Connector.ps1';     Function = 'Set-SIConnector';               Why = 'setup\Import-SIProSettings.ps1' }
-    @{ File = 'engine/pro-settings/SI-ProSettings.ps1';         Function = 'Set-SIProSetting';              Why = 'setup\Set-SIProSetting.ps1 / Import-SIProSettings.ps1' }
+    @{ File = 'engine/pro-settings/SI-ProSettingWrite.ps1';     Function = 'Set-SIProSetting';              Why = 'setup\Set-SIProSetting.ps1 / Import-SIProSettings.ps1 / the updater''s control-plane step (#1270)' }
     @{ File = 'engine/pro-settings/SI-ProSettings.ps1';         Function = 'Set-SIProDocument';             Why = 'setup\Import-SIProSettings.ps1' }
     @{ File = 'engine/pro-settings/SI-ProConfig.ps1';           Function = 'Set-SIProItem';                 Why = 'setup\Import-SIProSettings.ps1 / Publish-SITemplates.ps1' }
     @{ File = 'engine/pro-settings/SI-ProConfig.ps1';           Function = 'New-SIProExemption';            Why = 'no engine caller (the web app writes exemptions)' }

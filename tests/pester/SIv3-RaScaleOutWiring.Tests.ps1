@@ -292,7 +292,10 @@ Describe 'the update gives an existing install the worker job (REST seam)' {
             if ($Method -eq 'GET' -and $Uri -like '*/storageAccounts/stsi[?]*') { return (& $ok 200 @{ name = 'stsi'; id = $script:Stg }) }
             if ($Method -eq 'GET' -and $Uri -like '*/roleAssignments[?]*') { return (& $ok 200 @{ value = @(@{ properties = @{ roleDefinitionId = '/x/roleDefinitions/974c5e8b-45b9-4653-ba55-5f855dd0fb88' } }) }) }
             if ($Method -eq 'POST' -and $Uri -like '*/listSecrets[?]*') { return (& $ok 200 @{ value = @(@{ name = 'smtp-password'; keyVaultUrl = 'https://kv.vault.azure.net/secrets/smtp'; identity = $script:Uami }) }) }
-            if ($Uri -like 'https://*.queue.core.windows.net/*') { return (& $ok 201 '') }
+            # SI #1268: the queue through ARM (PUT, then read back by GET) -- never the storage data plane
+            $qm = [regex]::Match($Uri, '/queueServices/default/queues/([^/?]+)\?')
+            if ($qm.Success) { return (& $ok 200 @{ name = $qm.Groups[1].Value }) }
+            if ($Uri -like 'https://*.queue.core.windows.net/*') { return (& $ok 400 "the queue data plane is never called: $line") }
             $m = [regex]::Match($Uri, '/providers/Microsoft\.App/jobs/([^/?]+)\?')
             if ($m.Success) {
                 $n = $m.Groups[1].Value
@@ -342,6 +345,9 @@ Describe 'the update gives an existing install the worker job (REST seam)' {
         $iPut = [array]::IndexOf(@($script:World.Calls), @($script:World.Calls | Where-Object { $_ -like 'PUT*/jobs/caj-si-raworker-detailed?*' })[0])
         $iPatch = [array]::IndexOf(@($script:World.Calls), @($script:World.Calls | Where-Object { $_ -like 'PATCH*/jobs/caj-si-risk-analysis-detailed?*' })[0])
         $iPut | Should -BeLessThan $iPatch
+        # SI #1268: the work queue through ARM (the resource group's Contributor), read back -- no storage data-plane role
+        @($script:World.Calls | Where-Object { $_ -like '*/queueServices/default/queues/si-ra-detailed-items?api-version=*' } | ForEach-Object { ($_ -split ' ')[0] }) | Should -Be @('PUT', 'GET')
+        @($script:World.Calls | Where-Object { $_ -like '*.queue.core.windows.net*' }) | Should -BeNullOrEmpty
     }
     It 'a worker that does not read back is removed again; the Risk Analysis job is NOT told' {
         $j = New-RaJob; $script:World = New-World @($j) -Fail @{ provisioning = $true }

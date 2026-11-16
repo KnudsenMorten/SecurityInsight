@@ -1,0 +1,21 @@
+{
+  "version": "3.1.27",
+  "date": "2026-11-15",
+  "type": "security",
+  "summary": "The right rights, set by the update itself.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "Exactly the rights each part needs",
+      "text": "Unused rights are removed, rare ones are given only on demand, and the needed ones are set up and read back."
+    },
+    {
+      "title": "The web app reads no Azure details",
+      "text": "The environment report's facts come from the update, so the web app needs no read right on your resources."
+    },
+    {
+      "title": "Settings change only through the update",
+      "text": "A value set on the update job is applied, read back and recorded by the update itself."
+    }
+  ]
+}

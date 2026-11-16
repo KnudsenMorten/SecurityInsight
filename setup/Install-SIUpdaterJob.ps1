@@ -165,6 +165,26 @@ function Invoke-SIUpdaterDirectoryRead {
     } catch { return (($no -f $PrincipalId) + (' ({0})' -f $_.Exception.Message)) }
 }
 
+function Invoke-SIUpdaterSigninAppRights {
+    <# SI #1268 (the owner's approved rights list, 2026-11-15): the updater identity is given Microsoft Graph
+       Application.ReadWrite.OwnedBy and made an OWNER of the web app's sign-in app registration (its client id read from the
+       web app's AzureAd__ClientId), each only when missing, each READ BACK (setup\_shared\SI-UpdaterSigninRights.ps1) -- with
+       this setup's sign-in: the updater can never give itself either. NEVER throws, never counted as a missing Azure role:
+       a refusal is one plain customer step. -Graph / -App: test seams. Returns the lines. #>
+    param([Parameter(Mandatory)][string]$PrincipalId, [scriptblock]$Graph, $App = $null, [switch]$NoApp)
+    try {
+        if (-not (Get-Command -Name Grant-SIUpdaterSigninRights -ErrorAction SilentlyContinue)) { . ([IO.Path]::Combine($PSScriptRoot, '_shared', 'SI-UpdaterSigninRights.ps1')) }
+        if (-not $Graph) {
+            if (-not (Get-Command -Name Invoke-SIGraphRequest -ErrorAction SilentlyContinue)) { . ([IO.Path]::Combine($PSScriptRoot, '_shared', 'SI-GraphRest.ps1')) }
+            $Graph = { param([string]$Method, [string]$Uri, $Body) Invoke-SIGraphRequest -Method $Method -Uri $Uri -Body $Body }
+        }
+        if (-not $App -and -not $NoApp) { try { $App = Get-SIContainerApp -ResourceGroupName $ResourceGroupName -Name $WebAppName -SubscriptionId $sub } catch { $App = $null } }
+        $cid = ''
+        foreach ($c in @(if ($App) { $App.properties.template.containers })) { foreach ($e in @($c.env)) { if ($e -and [string]$e.name -eq 'AzureAd__ClientId' -and [string]$e.value -match '^[0-9a-fA-F-]{36}$') { $cid = [string]$e.value } } }
+        @((Grant-SIUpdaterSigninRights -Graph $Graph -PrincipalId $PrincipalId -SigninClientId $cid -Apply).Lines)
+    } catch { @(('the updater identity''s rights on the sign-in app registration could not be checked ({0}) -- run setup again' -f $_.Exception.Message)) }
+}
+
 function Remove-SIUpdaterJobWebSecretGrant {
     <#
         The secret hand-over: the Pro web app never writes a secret any more (it hands it to the updater), so the ONE grant
@@ -292,6 +312,9 @@ if ($GrantSpnRoles -and $UseManagedIdentity) {
     # what is missing). Without it the update sizes the jobs for a large tenant, so this never stops the setup.
     $dirRead = Invoke-SIUpdaterDirectoryRead -PrincipalId ([string]$uami.PrincipalId) -SubscriptionId $sub
     Info ("{0}: {1}" -f $IdentityName, $dirRead)
+    # SI #1268: Application.ReadWrite.OwnedBy + owner of the sign-in app registration, each read back (the updater keeps the
+    # sign-in app current on every update; it may change only the apps it owns)
+    foreach ($l in @(Invoke-SIUpdaterSigninAppRights -PrincipalId ([string]$uami.PrincipalId))) { Info ("{0}: {1}" -f $IdentityName, $l) }
 } elseif ($GrantSpnRoles) {
     $rgId = [string](Get-SIResourceGroupArm -Name $ResourceGroupName -SubscriptionId $sub).id
     # the SPN is named by its app (client) id: its service principal's object id is what a role assignment names

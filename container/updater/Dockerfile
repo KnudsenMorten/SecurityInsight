@@ -59,6 +59,10 @@ COPY config/job-flow.locked.json /si/config/
 # #1145 the identity names (setup/_shared/SI-IdentityNamesStep.ps1): the web identity's move checks and adds the sign-in
 # app's federated credential with the web deploy's own builder -- that one file, not the web app
 COPY pro-management/deploy/SI-ManagementSignInCredential.ps1 /si/pro-management/deploy/
+# #1270 the control-plane values (setup/_shared/SI-ControlPlaneValues.ps1): SI_UPDATER_SETTINGS is written with SI's ONE
+# setting writer and checked by the settings catalog -- those two files and the catalog, not the whole settings layer
+COPY engine/pro-settings/SI-Settings.ps1 engine/pro-settings/SI-ProSettingWrite.ps1 /si/engine/pro-settings/
+COPY config/settings.catalog.locked.json /si/config/
 # After an automatic licence request the updater mails the result with the transports the guard mails use.
 COPY engine/risk-analysis/_shared/RA-Mail.ps1 /si/engine/risk-analysis/_shared/
 

@@ -13,6 +13,16 @@ SecurityInsight Pro and the Pro trial install from invardia.com, never from GitH
 [invardia.com/trial](https://invardia.com/trial/), and your installation page there gives your two lines.
 <!-- /install lines -->
 
+## v3.1.27 — the right rights, set by the update itself
+
+### Security
+- **Each SecurityInsight identity holds exactly the rights it needs.** Rights it no longer uses are removed by the update;
+  rare, powerful rights are given only on demand by the support partner, never kept; the rights normal operation needs
+  are granted at setup and read back.
+- **The web app reads no Azure details itself.** The environment report's facts are gathered by the update and shown by
+  the web app from the database, so the internet-facing web app needs no read right on your resource group.
+- **Settings are changed only by the update.** A support partner sets a value on the update job; the update applies it,
+  reads it back and records it -- never a direct database change.
 ## v3.1.26.1 — tighter Key Vault rights for the web app
 
 ### Security

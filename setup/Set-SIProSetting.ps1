@@ -17,6 +17,13 @@
     consent, or the customer consented only to troubleshoot) the setting is NOT written and the script fails, saying why
     and what to do. Where the Support app still holds the right, nothing changes: no grant is asked.
 
+    AT A CUSTOMER INSTALL, -SupportSql IS FOR READS AND PLANS ONLY (Invardia ruling 2026-11-15, SI #1270): install state
+    is never changed by an ops SQL write, not even behind a just-in-time setup grant. A change goes as a CONTROL-PLANE
+    value on the install's updater job (caj-si-updater): SI_UPDATER_SETTINGS = '{"<SettingName>": <value>}' for the
+    settings the update accepts that way (setup\_shared\SI-ControlPlaneValues.ps1: OpenAI_endpoint, OpenAI_deployment,
+    OpenAI_apiVersion, SI_EnableAI), which SI's own updater writes on its next run with this same writer, read back and in
+    the change log. -SupportSql -Apply stays for local / admin use.
+
 .EXAMPLE
     .\setup\Set-SIProSetting.ps1 -Name SI_Guard_RaOutputRowDrop_Enabled -Value false -Reason 'a smaller report must not stop the demo data'
 .EXAMPLE
@@ -51,6 +58,7 @@ param(
     [string]$TenantId = [string]$global:SI_SPN_TenantId,
     [string]$CertThumbprint = [string]$global:SI_SPN_CertThumbprint,
     # Reach the database through the Invardia Support app's audited SQL (Invoke-InvardiaSupportSql; open the session first).
+    # At a customer install: reads / plans only -- a change goes as SI_UPDATER_SETTINGS on the updater job (#1270).
     [switch]$SupportSql,
     # With -SupportSql: where the install is, for the support grant (else the Support session finds it).
     [string]$SubscriptionId = '',

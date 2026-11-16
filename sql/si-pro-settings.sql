@@ -254,6 +254,19 @@ CREATE TABLE cfg.InstallState (
     UpdatedBy   NVARCHAR(256)   NOT NULL
 );
 
+-- THE ENVIRONMENT REPORT'S AZURE FACTS (SI #1268, the owner's approved rights list 2026-11-15): the web app holds no Reader on
+-- the install's resource group, so the UPDATER reads them with its own rights on every run (container\updater\_shared\
+-- SI-UpdaterEnvFacts.ps1) and writes them here: one row 'install', compact JSON { readUtc, subscriptionId, resourceGroup,
+-- resources, roles, error } -- named facts only, never a key or a secret. Too large for cfg.InstallState (400). Read by the
+-- web app's environment report (EnvReport\AzureFacts.cs SqlAzureFactsReader), which shows ReadUtc as the facts' age.
+IF OBJECT_ID('cfg.EnvironmentFacts') IS NULL
+CREATE TABLE cfg.EnvironmentFacts (
+    Name        NVARCHAR(64)    NOT NULL CONSTRAINT PK_EnvironmentFacts PRIMARY KEY,
+    Facts       NVARCHAR(MAX)   NOT NULL,
+    ReadUtc     DATETIME2(0)    NOT NULL,
+    UpdatedBy   NVARCHAR(256)   NOT NULL
+);
+
 -- INDEXES THAT DID NOT FIT AN UPDATE (#1050, owner 2026-11-01): one row per index the update could not build in its time
 -- (a filtered index cannot pause; its estimate from this database's measured rate was longer than the update had). The
 -- statement is kept here, so the updater builds it later in an idle window (SI_UPDATER_MODE = index-build) without the

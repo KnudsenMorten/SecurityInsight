@@ -1637,8 +1637,11 @@ function Invoke-SIUpdateSigninStore {
             } finally { $cn.Dispose() }
         }   # dynamic scope: $proSrv, $proDb come from this function
         $wi = (-not $Apply -or $DetectOnly)
+        # SI #1268: the front identity's database user is made by the database setup job caj-si-dbinit (the SQL admin), never
+        # as this update -- the updater holds no ALTER ANY USER; read back by Invoke-SISigninFrontStore
+        $userMaker = { param($ClientId, $UserName) Invoke-SISigninStoreUserViaDbInit -Arm $arm -SIRoot $solRoot -SubscriptionId $sub -ResourceGroup $rg }
         $r = Invoke-SISigninFrontStore -Arm $arm -Sql $sql -SubscriptionId $sub -ResourceGroup $rg -VaultName $kvName -SqlServer $proSrv -SqlDatabase $proDb `
-                 -Identity $id -Apply:(-not $wi) -Log { param($m) Info $m }
+                 -Identity $id -Apply:(-not $wi) -Log { param($m) Info $m } -UserMaker $userMaker
         $global:SI_UpdateSigninStore = $r
         # the marker (cfg.InstallState 'SigninFrontStore'): when it was checked, ready or not, what was made -- read by
         # people and support; the step itself always decides from what it reads (idempotent), never from this record

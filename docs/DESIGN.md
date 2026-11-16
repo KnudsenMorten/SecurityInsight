@@ -9917,8 +9917,18 @@ Support app may do.
   ONE `Move-SIIdentity -Step copy-rights -AllRoles -Apply` before the update switches anything (inventory, ensure and
   copy-rights for every role; it records `rightsUtc`), ONE `Move-SIIdentity -Step clean-up -AllRoles -Apply` after the proof.
 - **Plan first, per install**: without the row `cfg.InstallState 'IdentityMoveMode'` the step PLANS -- the per-install plan in
-  the update's log and the report row, nothing changed. `apply` (set and read back through the Support app once the
-  install's plan is approved) lets the update act; `off` skips the step.
+  the update's log and the report row, nothing changed. `apply` (once the install's plan is approved:
+  `SI_UPDATER_STATE_IDENTITYMOVEMODE=apply` on the updater job -- the update's control-plane step writes it, read back,
+  right before this step; never an ops SQL write, #1270) lets the update act; `off` skips the step.
+- **Control-plane values (#1270, Invardia ruling 2026-11-15)**: install state is never changed by an ops SQL write, not
+  even behind a just-in-time grant. Invardia sets an env on `caj-si-updater`; the update copies it into the Pro store
+  (`setup/_shared/SI-ControlPlaneValues.ps1`, `Invoke-SIUpdaterControlPlaneStep`, before the identity-names step):
+  `SI_UPDATER_STATE_IDENTITYMOVEMODE` (plan | apply | off -> `cfg.InstallState 'IdentityMoveMode'`) and
+  `SI_UPDATER_SETTINGS` (a JSON object; allow-list `OpenAI_endpoint`, `OpenAI_deployment`, `OpenAI_apiVersion`,
+  `SI_EnableAI`; never a secret) through `Set-SIProSetting` (now `engine/pro-settings/SI-ProSettingWrite.ps1`, which the
+  updater image carries with `SI-Settings.ps1` and the catalog), `cfg.ChangeLog` ChangedBy `the update (control-plane
+  value)` + the reason (`SI_UPDATER_CONTROLPLANE_REASON`, else a standard one), each read back. Equal = nothing written;
+  a refusal is a warning.
 #### Support-app cut-overs -- the shared pattern
 
 `setup/_shared/SI-SupportCutover.ps1`, used by `Set-SISecurityBaseline.ps1` and `Move-SIEngineToLeastPrivilege.ps1` (the

@@ -125,15 +125,23 @@ function Test-SIUpdaterDatabaseMissing {
         fullyQualifiedDomainName is -Server, then its database -Database -> 404 = missing ($true). Anything that cannot be
         read is NOT missing ($false): only a database Azure says does not exist counts. -Arm { param($Method, $Path) }: the
         test seam (default Invoke-SIUpdaterArm).
+        SI #1268 (no standing Reader at the subscription): the server is looked for in the install's resource group
+        -ResourceGroup FIRST (the updater's Contributor there covers it); the subscription-wide list only when it is not
+        found there (a server in another resource group) -- a refusal of that list reads as 'not missing'.
     #>
-    param([Parameter(Mandatory)][string]$Server, [Parameter(Mandatory)][string]$Database, [Parameter(Mandatory)][string]$SubscriptionId, [scriptblock]$Arm)
+    param([Parameter(Mandatory)][string]$Server, [Parameter(Mandatory)][string]$Database, [Parameter(Mandatory)][string]$SubscriptionId, [scriptblock]$Arm,
+          [string]$ResourceGroup = '')
     if (-not $Arm) {
         $Arm = { param($Method, $Path, [switch]$List, [switch]$AllowNotFound)
                  if ($List) { Invoke-SIUpdaterArm -Path $Path -ApiVersion $script:SIUpdaterRunGate.SqlApi -List } else { Invoke-SIUpdaterArm -Path $Path -ApiVersion $script:SIUpdaterRunGate.SqlApi -AllowNotFound } }
     }
     try {
-        $servers = @(& $Arm 'GET' ('/subscriptions/{0}/providers/Microsoft.Sql/servers' -f $SubscriptionId) -List | Where-Object { $_ })
-        $hit = @($servers | Where-Object { [string]$_.properties.fullyQualifiedDomainName -ieq $Server -or [string]$_.name -ieq (($Server -split '\.')[0]) })[0]
+        $match = { param($list) @($list | Where-Object { $_ -and ([string]$_.properties.fullyQualifiedDomainName -ieq $Server -or [string]$_.name -ieq (($Server -split '\.')[0])) })[0] }
+        $hit = $null
+        if ("$ResourceGroup".Trim()) {
+            try { $hit = & $match @(& $Arm 'GET' ('/subscriptions/{0}/resourceGroups/{1}/providers/Microsoft.Sql/servers' -f $SubscriptionId, "$ResourceGroup".Trim()) -List) } catch { $hit = $null }
+        }
+        if (-not $hit) { $hit = & $match @(& $Arm 'GET' ('/subscriptions/{0}/providers/Microsoft.Sql/servers' -f $SubscriptionId) -List) }
         if (-not $hit) { return $false }
         $db = & $Arm 'GET' ('{0}/databases/{1}' -f [string]$hit.id, $Database) -AllowNotFound
         return ($null -eq $db)

@@ -1,0 +1,17 @@
+{
+  "version": "3.1.28",
+  "date": "2026-11-16",
+  "type": "security",
+  "summary": "Only the images in use are kept.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "Only the running images are kept",
+      "text": "After an update the registry keeps just the images in use; earlier ones are removed."
+    },
+    {
+      "title": "Unused repositories are emptied",
+      "text": "A SecurityInsight repository nothing runs from is emptied; other repositories are never touched."
+    }
+  ]
+}

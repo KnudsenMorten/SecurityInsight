@@ -1,17 +1,19 @@
 #Requires -Version 5.1
 <#
-    SI #1215 -- IMAGE-PRUNE (framework IMAGE-PATCH-1 "IMAGE-PRUNE", owner 2026-11-12): after a successful update and its
-    read-back, the install's OWN registry keeps only the images of the current release and of the one before
-    (container/updater/_shared/SI-UpdaterImagePrune.ps1, called from _shared/SI-UpdaterInvardia.ps1 after the post-roll).
+    SI IMAGE-PRUNE (framework IMAGE-PATCH-1 "IMAGE-PRUNE"; owner 2026-11-16: CURRENT ONLY -- "we will not keep an old image in
+    any repo"): after a proven update the install's OWN registry keeps ONLY the images the install runs now -- no previous
+    release, in any repository (container/updater/_shared/SI-UpdaterImagePrune.ps1, called from _shared/SI-UpdaterInvardia.ps1
+    after the post-roll, and after a proven image-only swap).
 
     EVERYTHING IS OFFLINE. The registry is a fake (List / Manifest / Delete over an in-memory set of manifests); the REST seam
     of the real registry seam is a fake that records every address; Azure reads are mocks. A real HTTP call fails the test.
 
-    Covered: current + previous kept, older deleted; NEVER before a healthy read-back (and a failed or unread update prunes
-    nothing); NEVER another registry (a registry outside the install's resource group; images of other registries; every
-    address the real seam calls is the install's registry); previous NOT recorded = everything kept; a tag shared with a
-    kept image kept; a base image used by a kept build kept (and one that cannot be proven unused kept); multi-platform
-    children kept; the read-back count per repository; the switch; the record and the state row; the wiring.
+    Covered: only what runs kept (templates, active revisions, the pending self-update image, the images of runs in
+    progress), every older image deleted; NEVER before a healthy read-back (a failed or unread update prunes nothing; the
+    runs in progress not read = nothing deleted); a running digest is NEVER deleted; NEVER another registry; a tag shared
+    with a kept image kept; a base image a running image is built on kept (and one that cannot be proven unused kept);
+    multi-platform children and signatures / attestations of a kept image kept; the read-back count per repository; the
+    switch; the record (written before the first delete, history only) and the state row; the wiring.
 #>
 
 BeforeAll {
@@ -29,9 +31,10 @@ BeforeAll {
         try { 'sha256:' + (($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($n)) | ForEach-Object { $_.ToString('x2') }) -join '') } finally { $sha.Dispose() }
     }
     # one manifest of the fake registry
-    function script:M([string]$Name, [string[]]$Tags = @(), [string[]]$Layers = @(), [string[]]$Children = @(), [bool]$DeleteEnabled = $true, [switch]$Unreadable) {
+    # (-Subject: the name of the image this manifest signs or attests -- an OCI referrer)
+    function script:M([string]$Name, [string[]]$Tags = @(), [string[]]$Layers = @(), [string[]]$Children = @(), [bool]$DeleteEnabled = $true, [switch]$Unreadable, [string]$Subject = '') {
         [pscustomobject]@{ Digest = (D $Name); Name = $Name; Tags = @($Tags); Layers = @($Layers | ForEach-Object { D $_ }); Children = @($Children | ForEach-Object { D $_ })
-                           DeleteEnabled = $DeleteEnabled; Unreadable = [bool]$Unreadable }
+                           DeleteEnabled = $DeleteEnabled; Unreadable = [bool]$Unreadable; Subject = $(if ($Subject) { D $Subject } else { '' }) }
     }
     # the fake registry: repo -> manifests; every call recorded; Delete removes; ListFails = repos whose listing throws
     function script:New-FakeRegistry([hashtable]$Repos, [string[]]$ListFails = @(), [string[]]$DeleteFails = @()) {
@@ -58,6 +61,7 @@ BeforeAll {
                 }
                 if ($m.Unreadable) { return $null }
                 if (@($m.Children).Count) { return [pscustomobject]@{ mediaType = 'application/vnd.oci.image.index.v1+json'; manifests = @($m.Children | ForEach-Object { [pscustomobject]@{ digest = $_ } }) } }
+                if ($m.Subject) { return [pscustomobject]@{ mediaType = 'application/vnd.oci.image.manifest.v1+json'; layers = @($m.Layers | ForEach-Object { [pscustomobject]@{ digest = $_ } }); subject = [pscustomobject]@{ digest = $m.Subject } } }
                 [pscustomobject]@{ mediaType = 'application/vnd.docker.distribution.manifest.v2+json'; layers = @($m.Layers | ForEach-Object { [pscustomobject]@{ digest = $_ } }) }
             }.GetNewClosure()
             Delete = {
@@ -97,58 +101,72 @@ BeforeAll {
     $script:Prev = { Snap @('si-orchestrator:v3-bbb', 'si-management:src-1') }
 }
 
-Describe 'IMAGE-PRUNE: the current and the previous release are kept, older images are deleted' {
-    It 'deletes the engine and web images of older releases and the base no kept build uses; keeps the rest' {
+Describe 'IMAGE-PRUNE: only what runs is kept -- no previous release, in any repository (owner 2026-11-16)' {
+    It 'deletes every engine and web image the install does not run, and the base no running image is built on; keeps what runs' {
         $f = New-StandardRegistry
-        $r = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current (& $script:Cur) -Previous (& $script:Prev) -RegistryResourceGroup 'rg-si' -InstallResourceGroup 'rg-si'
+        $r = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current (& $script:Cur) -RunningKnown $true -RegistryResourceGroup 'rg-si' -InstallResourceGroup 'rg-si'
         $r.Done | Should -BeTrue
-        @($f.Deleted | Sort-Object) | Should -Be @(@('si-base/base-h0', 'si-management/web-s0', 'si-orchestrator/orch-v1', 'si-orchestrator/orch-v2') | Sort-Object)
-        @($f.Repos['si-orchestrator'] | ForEach-Object { $_.Name }) | Should -Be @('orch-v4', 'orch-v3')
-        @($f.Repos['si-base'] | ForEach-Object { $_.Name }) | Should -Be @('base-h1')
-        @($f.Repos['si-management'] | ForEach-Object { $_.Name }) | Should -Be @('web-s2', 'web-s1')
+        @($f.Deleted | Sort-Object) | Should -Be @(@('si-base/base-h0', 'si-management/web-s0', 'si-management/web-s1', 'si-orchestrator/orch-v1', 'si-orchestrator/orch-v2', 'si-orchestrator/orch-v3') | Sort-Object)
+        @($f.Repos['si-orchestrator'] | ForEach-Object { $_.Name }) | Should -Be @('orch-v4')
+        @($f.Repos['si-base'] | ForEach-Object { $_.Name }) | Should -Be @('base-h1') -Because 'the base a running image is built FROM stays'
+        @($f.Repos['si-management'] | ForEach-Object { $_.Name }) | Should -Be @('web-s2')
+    }
+    It 'the previous release (the read before the roll) is deleted -- nothing of it is kept' {
+        $f = New-StandardRegistry
+        $null = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current (& $script:Cur) -RunningKnown $true
+        foreach ($n in 'si-orchestrator/orch-v3', 'si-management/web-s1') { @($f.Deleted) | Should -Contain $n }
     }
     It 'reads back what is left and says the count per repository, one plain line each' {
         $f = New-StandardRegistry
-        $r = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current (& $script:Cur) -Previous (& $script:Prev)
+        $r = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current (& $script:Cur) -RunningKnown $true
         $o = @($r.Repos | Where-Object { $_.Repo -eq 'si-orchestrator' })[0]
-        $o.Deleted | Should -Be 2; $o.Left | Should -Be 2; $o.Before | Should -Be 4; $o.Kept | Should -Be 2
+        $o.Deleted | Should -Be 3; $o.Left | Should -Be 1; $o.Before | Should -Be 4; $o.Kept | Should -Be 1
         @($r.Repos | Where-Object { $_.Repo -eq 'si-base' })[0].Left | Should -Be 1
-        @($r.Repos | Where-Object { $_.Repo -eq 'si-management' })[0].Left | Should -Be 2
-        @($r.Lines) | Should -Contain 'si-orchestrator: 2 old images deleted, 2 left (this release and the one before)'
-        ($r.Lines -join "`n") | Should -Match 'si-base: 1 old base images deleted, 1 left'
+        @($r.Repos | Where-Object { $_.Repo -eq 'si-management' })[0].Left | Should -Be 1
+        @($r.Lines) | Should -Contain 'si-orchestrator: 3 old images deleted, 1 left (what runs)'
+        @($r.Lines) | Should -Contain 'si-base: 1 old base images deleted, 1 left (the base layers of what runs)'
         # the read-back is a second listing after the deletes
         @($f.Calls | Where-Object { $_ -eq 'LIST si-orchestrator' }).Count | Should -Be 2
-        ($r.Lines -join "`n") | Should -Not -Match '#\d|1215' -Because 'customer-facing text carries no internal numbers'
+        ($r.Lines -join "`n") | Should -Not -Match '#\d|1215|1271' -Because 'customer-facing text carries no internal numbers'
+        ($r.Lines -join "`n") | Should -Not -Match 'one before|previous' -Because 'nothing of a previous release is kept any more'
     }
     It 'a repository the install records nothing for is never touched' {
         $f = New-StandardRegistry
         $f.Repos['someone-else'] = New-Object System.Collections.ArrayList
         $null = $f.Repos['someone-else'].Add((M 'x1' @('1.0') @('X0')))
-        $null = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current (& $script:Cur) -Previous (& $script:Prev)
+        $null = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current (& $script:Cur) -RunningKnown $true
         @($f.Calls | Where-Object { $_ -like '*someone-else*' }).Count | Should -Be 0
     }
-    It 'the release record''s current (the release before, as the last update recorded it) is kept too' {
+    It 'an image a run in progress started with is kept, and the base it is built on (a pipeline that began before the update)' {
         $f = New-StandardRegistry
-        $rec = @((Snap @('si-orchestrator:v2-ccc')).Refs)
-        $null = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current (& $script:Cur) -Previous (& $script:Prev) -Recorded $rec
+        $run = @((Snap @('si-orchestrator:v2-ccc')).Refs)
+        $run[0] | Add-Member -NotePropertyName From -NotePropertyValue 'caj-si-flow (running execution e1)' -Force
+        $col = New-Object System.Collections.Generic.List[string]
+        $null = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current (& $script:Cur) -RunningRefs $run -RunningKnown $true -Log { param($l) $col.Add($l) }
         @($f.Deleted) | Should -Not -Contain 'si-orchestrator/orch-v2'
-        @($f.Deleted) | Should -Not -Contain 'si-base/base-h0' -Because 'orch-v2 is kept, so the base it is built on is kept'
-        @($f.Deleted) | Should -Contain 'si-orchestrator/orch-v1'
+        @($f.Deleted) | Should -Not -Contain 'si-base/base-h0' -Because 'orch-v2 runs, so the base it is built on is kept'
+        @($f.Deleted) | Should -Contain 'si-orchestrator/orch-v3'
+        ($col -join "`n") | Should -Match 'si-orchestrator@sha256:[0-9a-f]{12}: kept -- runs: caj-si-flow \(running execution e1\)'
     }
     It 'an image named by digest is kept by its digest' {
         $f = New-StandardRegistry
         $cur = Snap @(('si-orchestrator@' + (D 'orch-v4')), 'si-management:src-2')
-        $prev = Snap @(('si-orchestrator@' + (D 'orch-v2')), 'si-management:src-1')
-        $null = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current $cur -Previous $prev
-        @($f.Deleted) | Should -Contain 'si-orchestrator/orch-v3'
-        @($f.Deleted) | Should -Not -Contain 'si-orchestrator/orch-v2'
+        $null = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current $cur -RunningKnown $true
+        @($f.Deleted) | Should -Not -Contain 'si-orchestrator/orch-v4'
+        foreach ($n in 'orch-v3', 'orch-v2', 'orch-v1') { @($f.Deleted) | Should -Contain "si-orchestrator/$n" }
+    }
+    It 'the first clean-up of an install (no release record, nothing read before) still keeps only what runs' {
+        $f = New-StandardRegistry
+        $r = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current (& $script:Cur) -RunningKnown $true
+        $r.Done | Should -BeTrue
+        $f.Deleted.Count | Should -Be 6
     }
 }
 
 Describe 'IMAGE-PRUNE NEGATIVE: never before a healthy read-back; a failed or unread update prunes nothing' {
     It 'an update that did not end healthy deletes nothing and does not even read the registry' {
         $f = New-StandardRegistry
-        $r = Invoke-SIUpdaterImagePrune -On $true -Healthy $false -Registry $f.Seam -Current (& $script:Cur) -Previous (& $script:Prev)
+        $r = Invoke-SIUpdaterImagePrune -On $true -Healthy $false -Registry $f.Seam -Current (& $script:Cur) -RunningKnown $true
         $r.Done | Should -BeFalse
         $f.Calls.Count | Should -Be 0
         $r.Reason | Should -Match 'did not end healthy'
@@ -156,10 +174,37 @@ Describe 'IMAGE-PRUNE NEGATIVE: never before a healthy read-back; a failed or un
     It 'what runs now could not be read back: nothing deleted' {
         $f = New-StandardRegistry
         foreach ($c in @($null, (Snap @() -Ok $false -Reason 'ARM 503'), (Snap @()))) {
-            $r = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current $c -Previous (& $script:Prev)
+            $r = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current $c -RunningKnown $true
             $r.Done | Should -BeFalse
         }
         @($f.Calls | Where-Object { $_ -like 'DELETE*' }).Count | Should -Be 0
+    }
+    It 'the runs in progress could not be read: nothing deleted, nothing read from the registry, said in one line' {
+        $f = New-StandardRegistry
+        $r = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current (& $script:Cur) -RunningKnown $false
+        $r.Done | Should -BeFalse
+        $f.Calls.Count | Should -Be 0
+        @($r.Lines) | Should -Be @('old images: not cleaned up -- the runs in progress could not be read, so an image one of them still uses could be lost; every image is kept')
+        # the default is "not read"
+        $g = New-StandardRegistry
+        (Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $g.Seam -Current (& $script:Cur)).Done | Should -BeFalse
+        $g.Calls.Count | Should -Be 0
+    }
+    It 'a running digest is NEVER deleted: every image a job, app, active revision or run in progress names survives, in every repository' {
+        $f = New-FakeRegistry @{
+            'si-orchestrator' = @((M 'orch-v4' @('v4') @('L0', 'Lb1', 'L4')), (M 'orch-v3' @('v3') @('L0', 'Lb1', 'L3')), (M 'orch-v2' @('v2') @('L0', 'Lb1', 'L2')), (M 'orch-v1' @('v1') @('L0', 'Lb1', 'L1')))
+            'si-base'         = @((M 'base-h1' @('h1') @('L0', 'Lb1')))
+            'si-updater'      = @((M 'upd-new' @('3.1.12') @('U0', 'U2')), (M 'upd-pend' @('3.1.13') @('U0', 'U3')), (M 'upd-old' @('3.1.11') @('U0', 'U1')))
+            'si-management'   = @((M 'web-a' @('src-a') @('W0', 'Wa')), (M 'web-b' @('src-b') @('W0', 'Wb')), (M 'web-c' @('src-c') @('W0', 'Wc')))
+        }
+        # what runs: the engine job by digest, the updater + its pending self-update image, two ACTIVE revisions of the web app,
+        # and a run in progress on an older engine image
+        $cur = Snap @(('si-orchestrator@' + (D 'orch-v4')), 'si-updater:3.1.12', 'si-updater:3.1.13', 'si-management:src-a', 'si-management:src-b')
+        $run = @((Snap @(('si-orchestrator:v2@' + (D 'orch-v2')))).Refs)
+        $null = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current $cur -RunningRefs $run -RunningKnown $true
+        $running = @('orch-v4', 'orch-v2', 'base-h1', 'upd-new', 'upd-pend', 'web-a', 'web-b') | ForEach-Object { D $_ }
+        foreach ($c in @($f.Calls | Where-Object { $_ -like 'DELETE*' })) { $running | Should -Not -Contain ($c -replace '^DELETE [^@]+@', '') -Because "$c must not delete a running image" }
+        @($f.Deleted | Sort-Object) | Should -Be @(@('si-management/web-c', 'si-orchestrator/orch-v1', 'si-orchestrator/orch-v3', 'si-updater/upd-old') | Sort-Object)
     }
     It 'the step itself: Healthy false = no registry, no Azure read, no record written' {
         $f = New-StandardRegistry
@@ -178,7 +223,7 @@ Describe 'IMAGE-PRUNE NEGATIVE: never before a healthy read-back; a failed or un
 Describe 'IMAGE-PRUNE NEGATIVE: never another registry, never anything else' {
     It 'a registry outside the install''s own resource group is never pruned' {
         $f = New-StandardRegistry
-        $r = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current (& $script:Cur) -Previous (& $script:Prev) -RegistryResourceGroup 'rg-shared' -InstallResourceGroup 'rg-si'
+        $r = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current (& $script:Cur) -RunningKnown $true -RegistryResourceGroup 'rg-shared' -InstallResourceGroup 'rg-si'
         $r.Done | Should -BeFalse
         $r.Reason | Should -Match 'not in this install''s own resource group'
         $f.Calls.Count | Should -Be 0
@@ -189,7 +234,7 @@ Describe 'IMAGE-PRUNE NEGATIVE: never another registry, never anything else' {
         (ConvertTo-SIUpdaterImageRef -Image 'si-orchestrator:v4' -LoginServer $script:Login) | Should -BeNullOrEmpty
         $f = New-StandardRegistry
         $cur = Snap @('si-orchestrator:v4-aaa', 'si-management:src-2', 'mcr.microsoft.com/k8se/quickstart:latest', 'otheracr.azurecr.io/thing:1')
-        $null = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current $cur -Previous (& $script:Prev)
+        $null = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current $cur -RunningKnown $true
         @($f.Calls | Where-Object { $_ -match 'quickstart|thing|k8se' }).Count | Should -Be 0
     }
     It 'the real registry seam calls ONLY https://(the install''s login server)/ -- the token exchange, the listing, the manifest, the delete' {
@@ -261,26 +306,23 @@ Describe 'IMAGE-PRUNE NEGATIVE: never another registry, never anything else' {
     }
 }
 
-Describe 'IMAGE-PRUNE NEGATIVE: where the previous release is not recorded, everything is kept' {
-    It 'no read before the update, an unreadable one, or one that found nothing: nothing deleted, and it says so' {
-        foreach ($p in @($null, (Snap @() -Ok $false -Reason 'the jobs could not be read'), (Snap @()))) {
-            $f = New-StandardRegistry
-            $r = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current (& $script:Cur) -Previous $p
-            $r.Done | Should -BeFalse
-            $r.Reason | Should -Match 'previous release are not recorded'
-            $r.Reason | Should -Match 'every image is kept'
-            @($f.Calls | Where-Object { $_ -like 'DELETE*' }).Count | Should -Be 0
-        }
+Describe 'IMAGE-PRUNE NEGATIVE: what cannot be read is kept' {
+    It 'an untagged manifest that cannot be read is kept (it cannot be proven unused); a readable one nothing runs goes' {
+        $f = New-FakeRegistry @{ 'si-orchestrator' = @((M 'orch-v4' @('v4') @('L0', 'L4')), (M 'ghost' @() @('G0') -Unreadable), (M 'loose' @() @('X0'))) }
+        $col = New-Object System.Collections.Generic.List[string]
+        $null = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current (Snap @('si-orchestrator:v4')) -RunningKnown $true -Log { param($l) $col.Add($l) }
+        @($f.Deleted) | Should -Be @('si-orchestrator/loose')
+        ($col -join "`n") | Should -Match 'si-orchestrator@sha256:[0-9a-f]{12}: kept -- it could not be read, so it cannot be proven unused'
     }
     It 'a kept image that cannot be read keeps its whole repository' {
         $f = New-FakeRegistry @{ 'si-orchestrator' = @((M 'orch-v4' @('v4') @('L0') -Unreadable), (M 'orch-v3' @('v3') @('L0')), (M 'orch-v1' @('v1') @('L1'))) }
-        $r = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current (Snap @('si-orchestrator:v4')) -Previous (Snap @('si-orchestrator:v3'))
+        $r = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current (Snap @('si-orchestrator:v4')) -RunningKnown $true
         $f.Deleted.Count | Should -Be 0
         ($r.Lines -join "`n") | Should -Match 'si-orchestrator: not cleaned up'
     }
     It 'a repository that cannot be listed is kept, and its bases are kept (their use cannot be proven)' {
         $f = New-FakeRegistry @{ 'si-orchestrator' = @((M 'orch-v4' @('v4') @('L0', 'Lb1', 'L4'))); 'si-base' = @((M 'base-h0' @('h0') @('L0', 'Lb0'))) } -ListFails @('si-management')
-        $r = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current (Snap @('si-orchestrator:v4', 'si-management:src-2')) -Previous (Snap @('si-orchestrator:v4', 'si-management:src-1'))
+        $r = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current (Snap @('si-orchestrator:v4', 'si-management:src-2')) -RunningKnown $true
         $f.Deleted.Count | Should -Be 0
         ($r.Lines -join "`n") | Should -Match 'si-management: not cleaned up -- its images could not be listed'
         ($r.Lines -join "`n") | Should -Match 'si-base: not cleaned up'
@@ -290,30 +332,31 @@ Describe 'IMAGE-PRUNE NEGATIVE: where the previous release is not recorded, ever
 Describe 'IMAGE-PRUNE: shared tags, base images, multi-platform images, failures' {
     It 'a tag shared with a kept image is kept: an old tag on the current image''s digest is never deleted' {
         $f = New-FakeRegistry @{ 'si-orchestrator' = @((M 'orch-v4' @('v4-aaa', 'v2-ccc', 'latest') @('L0', 'L4')), (M 'orch-v3' @('v3-bbb') @('L0', 'L3')), (M 'orch-v1' @('v1-ddd') @('L0', 'L1'))) }
-        $null = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current (Snap @('si-orchestrator:v4-aaa')) -Previous (Snap @('si-orchestrator:v3-bbb'))
-        @($f.Deleted) | Should -Be @('si-orchestrator/orch-v1')
+        $null = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current (Snap @('si-orchestrator:v4-aaa')) -RunningKnown $true
+        @($f.Deleted | Sort-Object) | Should -Be @(@('si-orchestrator/orch-v1', 'si-orchestrator/orch-v3') | Sort-Object)
         @($f.Calls | Where-Object { $_ -eq ('DELETE si-orchestrator@' + (D 'orch-v4')) }).Count | Should -Be 0
     }
     It 'deletes go by manifest digest only' {
         $f = New-StandardRegistry
-        $null = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current (& $script:Cur) -Previous (& $script:Prev)
+        $null = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current (& $script:Cur) -RunningKnown $true
         foreach ($c in @($f.Calls | Where-Object { $_ -like 'DELETE*' })) { $c | Should -Match '@sha256:[0-9a-f]{64}$' }
     }
-    It 'a base image a kept build is made FROM is kept; a base only older builds used goes; the updater''s own base too' {
+    It 'a base image a running image is built FROM is kept; every other base goes (also the previous release''s); the updater''s own base too' {
         $f = New-FakeRegistry @{
             'si-updater'      = @((M 'upd-new' @('3.1.11-abc') @('U0', 'Ub2', 'U9')), (M 'upd-prev' @('3.1.10-def') @('U0', 'Ub1', 'U8')), (M 'upd-old' @('3.1.9-0aa') @('U0', 'Ub0', 'U7')))
             'si-updater-base' = @((M 'ub2' @('hb2') @('U0', 'Ub2')), (M 'ub1' @('hb1') @('U0', 'Ub1')), (M 'ub0' @('hb0') @('U0', 'Ub0')))
         }
-        $null = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current (Snap @('si-updater:3.1.11-abc')) -Previous (Snap @('si-updater:3.1.10-def'))
-        @($f.Deleted | Sort-Object) | Should -Be @(@('si-updater-base/ub0', 'si-updater/upd-old') | Sort-Object)
+        $null = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current (Snap @('si-updater:3.1.11-abc')) -RunningKnown $true
+        @($f.Deleted | Sort-Object) | Should -Be @(@('si-updater-base/ub0', 'si-updater-base/ub1', 'si-updater/upd-old', 'si-updater/upd-prev') | Sort-Object)
+        @($f.Repos['si-updater-base'] | ForEach-Object { $_.Name }) | Should -Be @('ub2')
     }
     It 'a base image whose manifest cannot be read is kept (it cannot be proven unused)' {
         $f = New-FakeRegistry @{
             'si-orchestrator' = @((M 'orch-v4' @('v4') @('L0', 'Lb1', 'L4')), (M 'orch-v3' @('v3') @('L0', 'Lb1', 'L3')))
             'si-base' = @((M 'base-h1' @('h1') @('L0', 'Lb1')), (M 'base-hx' @('hx') @('L0', 'Lbx') -Unreadable), (M 'base-h0' @('h0') @('L0', 'Lb0')))
         }
-        $null = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current (Snap @('si-orchestrator:v4')) -Previous (Snap @('si-orchestrator:v3'))
-        @($f.Deleted) | Should -Be @('si-base/base-h0')
+        $null = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current (Snap @('si-orchestrator:v4')) -RunningKnown $true
+        @($f.Deleted) | Should -Be @('si-orchestrator/orch-v3', 'si-base/base-h0')
     }
     It 'a base is kept only when ALL its layers are the first layers of a kept image (a shared Microsoft layer is not enough)' {
         (Test-SIUpdaterLayerPrefix -Base @('a', 'b') -Image @('a', 'b', 'c')) | Should -BeTrue
@@ -327,20 +370,37 @@ Describe 'IMAGE-PRUNE: shared tags, base images, multi-platform images, failures
                 (M 'idx-v4' @('v4') -Children @('p-amd64', 'p-att')),
                 (M 'p-amd64' @() @('L0', 'L4')), (M 'p-att' @() @('A0')),
                 (M 'orch-v3' @('v3') @('L0', 'L3')), (M 'orch-v1' @('v1') @('L0', 'L1')), (M 'stray' @() @('S0'))) }
-        $null = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current (Snap @('si-orchestrator:v4')) -Previous (Snap @('si-orchestrator:v3'))
-        @($f.Deleted | Sort-Object) | Should -Be @(@('si-orchestrator/orch-v1', 'si-orchestrator/stray') | Sort-Object)
+        $null = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current (Snap @('si-orchestrator:v4')) -RunningKnown $true
+        @($f.Deleted | Sort-Object) | Should -Be @(@('si-orchestrator/orch-v1', 'si-orchestrator/orch-v3', 'si-orchestrator/stray') | Sort-Object)
+    }
+    It 'the signatures and attestations of a running image are kept (a subject on it, or a sha256-<digest> tag); those of a deleted image go' {
+        $f = New-FakeRegistry @{
+            'si-orchestrator' = @(
+                (M 'orch-v4' @('v4') @('L0', 'L4')), (M 'orch-v3' @('v3') @('L0', 'L3')),
+                (M 'att-v4' @() @('A4') -Subject 'orch-v4'),                 # Defender's attestation of the running image
+                (M 'sig-att-v4' @() @('S4') -Subject 'att-v4'),              # a signature over that attestation (transitive)
+                (M 'cosign-v4' @(((D 'orch-v4') -replace ':', '-') + '.sig') @('C4')),
+                (M 'att-v3' @() @('A3') -Subject 'orch-v3'))
+            'si-base' = @((M 'base-1' @('h1') @('L0')), (M 'att-base-1' @() @('B1') -Subject 'base-1'))
+        }
+        $col = New-Object System.Collections.Generic.List[string]
+        $null = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current (Snap @('si-orchestrator:v4')) -RunningKnown $true -Log { param($l) $col.Add($l) }
+        @($f.Deleted | Sort-Object) | Should -Be @(@('si-orchestrator/att-v3', 'si-orchestrator/orch-v3') | Sort-Object)
+        @($f.Repos['si-orchestrator'] | ForEach-Object { $_.Name } | Sort-Object) | Should -Be @(@('att-v4', 'cosign-v4', 'orch-v4', 'sig-att-v4') | Sort-Object)
+        @($f.Repos['si-base'] | ForEach-Object { $_.Name } | Sort-Object) | Should -Be @('att-base-1', 'base-1') -Because 'the attestation of a kept base stays with it'
+        ($col -join "`n") | Should -Match 'kept -- a signature or attestation of the running sha256:'
     }
     It 'a delete the registry refuses is said and kept; the clean-up goes on and never throws' {
         $f = New-FakeRegistry @{ 'si-orchestrator' = @((M 'orch-v4' @('v4') @('L0')), (M 'orch-v3' @('v3') @('L0', 'L3')), (M 'orch-v2' @('v2') @('L0', 'L2')), (M 'orch-v1' @('v1') @('L0', 'L1'))) } -DeleteFails @('orch-v2')
-        $r = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current (Snap @('si-orchestrator:v4')) -Previous (Snap @('si-orchestrator:v3'))
-        @($f.Deleted) | Should -Be @('si-orchestrator/orch-v1')
-        $o = @($r.Repos)[0]; $o.Failed | Should -Be 1; $o.Left | Should -Be 3
+        $r = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current (Snap @('si-orchestrator:v4')) -RunningKnown $true
+        @($f.Deleted | Sort-Object) | Should -Be @(@('si-orchestrator/orch-v1', 'si-orchestrator/orch-v3') | Sort-Object)
+        $o = @($r.Repos)[0]; $o.Failed | Should -Be 1; $o.Left | Should -Be 2
         $o.Line | Should -Match '1 could not be deleted \(HTTP 403\) -- kept, the next update tries again'
     }
     It 'an image locked against deletion is kept and said' {
         $f = New-FakeRegistry @{ 'si-orchestrator' = @((M 'orch-v4' @('v4') @('L0')), (M 'orch-v3' @('v3') @('L0', 'L3')), (M 'orch-v1' @('v1') @('L0', 'L1') -DeleteEnabled $false)) }
-        $r = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current (Snap @('si-orchestrator:v4')) -Previous (Snap @('si-orchestrator:v3'))
-        $f.Deleted.Count | Should -Be 0
+        $r = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current (Snap @('si-orchestrator:v4')) -RunningKnown $true
+        @($f.Deleted) | Should -Be @('si-orchestrator/orch-v3')
         @($r.Repos)[0].Line | Should -Match 'locked against deletion -- kept'
     }
 }
@@ -366,11 +426,11 @@ Describe 'IMAGE-PRUNE: the switch SI_Updater_ImagePrune (on by default)' {
     }
     It 'off: nothing is read or deleted' {
         $f = New-StandardRegistry
-        $r = Invoke-SIUpdaterImagePrune -On $false -Healthy $true -Registry $f.Seam -Current (& $script:Cur) -Previous (& $script:Prev)
+        $r = Invoke-SIUpdaterImagePrune -On $false -Healthy $true -Registry $f.Seam -Current (& $script:Cur) -RunningKnown $true
         $r.Done | Should -BeFalse; $f.Calls.Count | Should -Be 0
         Mock Write-UpdLog { }
         Mock Get-SIUpdaterRegistry { throw 'must not be read' }
-        $null = Invoke-SIUpdaterImagePruneStep -ResourceGroup 'rg-si' -AcrName 'acrsi' -SubscriptionId 'sub' -Healthy $true -Before (& $script:Prev) -After (& $script:Cur) -Registry $f.Seam -Get { param($n) if ($n -eq 'SI_CFG_SI_Updater_ImagePrune') { 'off' } else { '' } }
+        $null = Invoke-SIUpdaterImagePruneStep -ResourceGroup 'rg-si' -AcrName 'acrsi' -SubscriptionId 'sub' -Healthy $true -Before (& $script:Prev) -After (& $script:Cur) -RunningRefs @() -Registry $f.Seam -Get { param($n) if ($n -eq 'SI_CFG_SI_Updater_ImagePrune') { 'off' } else { '' } }
         $f.Calls.Count | Should -Be 0
         Should -Invoke Get-SIUpdaterRegistry -Times 0 -Exactly
     }
@@ -413,7 +473,7 @@ Describe 'IMAGE-PRUNE: what the install records (the read of jobs and apps, the 
         (ConvertTo-SIUpdaterImageRef -Image 'acrsi.azurecr.io/si-web' -LoginServer $script:Login).Tag | Should -Be 'latest'
         (ConvertTo-SIUpdaterImageRef -Image 'acrsi.azurecr.io/si-web@sha256:bad' -LoginServer $script:Login) | Should -BeNullOrEmpty
     }
-    It 'the step: one log line per repository, the release record (current + previous) and the state row of at most 400 characters' {
+    It 'the step: one log line per repository, the release record (what runs + the release before as history) and the state row of at most 400 characters' {
         $f = New-StandardRegistry
         $script:Log = New-Object System.Collections.Generic.List[string]
         Mock Write-UpdLog { $script:Log.Add($m) }
@@ -421,12 +481,12 @@ Describe 'IMAGE-PRUNE: what the install records (the read of jobs and apps, the 
         $script:Rows = @{}
         Mock Save-SIUpdaterInstallStateValue { $script:Rows[$Name] = $Value; $true }
         $script:Written = @{}
-        $res = Invoke-SIUpdaterImagePruneStep -ResourceGroup 'rg-si' -AcrName 'acrsi' -SubscriptionId 'sub' -Healthy $true -Before (& $script:Prev) -After (& $script:Cur) `
+        $res = Invoke-SIUpdaterImagePruneStep -ResourceGroup 'rg-si' -AcrName 'acrsi' -SubscriptionId 'sub' -Healthy $true -Before (& $script:Prev) -After (& $script:Cur) -RunningRefs @() `
                    -Version '3.1.11' -PreviousVersion '3.1.10' -Registry $f.Seam -Get { param($n) '' } -Store @{ Invoke = {} } `
                    -ReadSecret { param($n) $null } -WriteSecret { param($n, $v) $script:Written[$n] = $v }
         $res.Done | Should -BeTrue
         @($script:Log | Where-Object { $_ -like 'si-orchestrator:*deleted*' }).Count | Should -Be 1
-        @($script:Log | Where-Object { $_ -eq 'si-orchestrator: 4 images, 2 kept, 2 to delete' }).Count | Should -Be 1 -Because 'the plan is said before the deletes'
+        @($script:Log | Where-Object { $_ -eq 'si-orchestrator: 4 images, 1 kept, 3 to delete' }).Count | Should -Be 1 -Because 'the plan is said before the deletes'
         @($script:Log | Where-Object { $_ -like 'si-management:*deleted*' }).Count | Should -Be 1
         $rec = ConvertFrom-SIUpdaterReleaseImageRecord -Json $script:Written['SI-Release-Images']
         $rec.CurrentVersion | Should -Be '3.1.11'; $rec.PreviousVersion | Should -Be '3.1.10'
@@ -434,24 +494,39 @@ Describe 'IMAGE-PRUNE: what the install records (the read of jobs and apps, the 
         @($rec.Previous | ForEach-Object { Format-SIUpdaterImageRef -Ref $_ }) | Should -Be @('si-management:src-1', 'si-orchestrator:v3-bbb')
         $row = $script:Rows['ImagePrune']; $row.Length | Should -BeLessOrEqual 400
         $j = $row | ConvertFrom-Json
-        $j.done | Should -BeTrue; $j.deleted | Should -Be 4; $j.left.'si-orchestrator' | Should -Be 2
+        $j.done | Should -BeTrue; $j.deleted | Should -Be 6; $j.left.'si-orchestrator' | Should -Be 1
     }
-    It 'the step keeps what the last record names as the release running before, and writes the record also when it prunes nothing' {
+    It 'NEGATIVE: the release record keeps nothing -- what it names as the release before is deleted like any image that does not run' {
         $f = New-StandardRegistry
         Mock Write-UpdLog { }
         Mock Get-SIUpdaterRegistry { [pscustomobject]@{ id = 'x'; name = 'acrsi'; resourceGroup = 'rg-si'; loginServer = 'acrsi.azurecr.io' } }
-        $old = ConvertTo-SIUpdaterReleaseImageRecord -Version '3.1.9' -Current @((Snap @('si-orchestrator:v2-ccc')).Refs)
+        $old = ConvertTo-SIUpdaterReleaseImageRecord -Version '3.1.9' -Current @((Snap @('si-orchestrator:v2-ccc')).Refs) -PreviousVersion '3.1.8' -Previous @((Snap @('si-orchestrator:v1-ddd')).Refs)
         $script:Written = @{}
-        $null = Invoke-SIUpdaterImagePruneStep -ResourceGroup 'rg-si' -AcrName 'acrsi' -SubscriptionId 'sub' -Healthy $true -Before (& $script:Prev) -After (& $script:Cur) `
-                   -Registry $f.Seam -Get { param($n) '' } -ReadSecret { param($n) $old }.GetNewClosure() -WriteSecret { param($n, $v) $script:Written[$n] = $v }
-        @($f.Deleted) | Should -Not -Contain 'si-orchestrator/orch-v2'
-        # previous not recorded: nothing pruned, but the record of THIS release is written for the next update
-        $f2 = New-StandardRegistry; $script:Written = @{}
-        $r2 = Invoke-SIUpdaterImagePruneStep -ResourceGroup 'rg-si' -AcrName 'acrsi' -SubscriptionId 'sub' -Healthy $true -Before (Snap @() -Ok $false -Reason 'x') -After (& $script:Cur) `
-                   -Version '3.1.11' -Registry $f2.Seam -Get { param($n) '' } -ReadSecret { param($n) $null } -WriteSecret { param($n, $v) $script:Written[$n] = $v }
-        $r2.Done | Should -BeFalse
-        $f2.Deleted.Count | Should -Be 0
+        $r = Invoke-SIUpdaterImagePruneStep -ResourceGroup 'rg-si' -AcrName 'acrsi' -SubscriptionId 'sub' -Healthy $true -Before (& $script:Prev) -After (& $script:Cur) -RunningRefs @() `
+                 -Registry $f.Seam -Get { param($n) '' } -ReadSecret { param($n) $old }.GetNewClosure() -WriteSecret { param($n, $v) $script:Written[$n] = $v }
+        $r.Done | Should -BeTrue
+        foreach ($n in 'orch-v3', 'orch-v2', 'orch-v1') { @($f.Deleted) | Should -Contain "si-orchestrator/$n" }
+        @($f.Repos['si-orchestrator'] | ForEach-Object { $_.Name }) | Should -Be @('orch-v4')
+    }
+    It 'NEGATIVE: an unproven update deletes nothing -- the runs in progress not readable, or what runs not read back; the record is still written when what runs was read' {
+        Mock Get-SIUpdaterRegistry { [pscustomobject]@{ id = 'x'; name = 'acrsi'; resourceGroup = 'rg-si'; loginServer = 'acrsi.azurecr.io' } }
+        Mock Get-SIUpdaterJobs { throw 'HTTP 503' }
+        $script:Log = New-Object System.Collections.Generic.List[string]
+        Mock Write-UpdLog { $script:Log.Add($m) }
+        $f = New-StandardRegistry; $script:Written = @{}
+        $r = Invoke-SIUpdaterImagePruneStep -ResourceGroup 'rg-si' -AcrName 'acrsi' -SubscriptionId 'sub' -Healthy $true -Before (& $script:Prev) -After (& $script:Cur) `
+                 -Version '3.1.11' -Registry $f.Seam -Get { param($n) '' } -ReadSecret { param($n) $null } -WriteSecret { param($n, $v) $script:Written[$n] = $v }
+        $r.Done | Should -BeFalse
+        @($f.Calls | Where-Object { $_ -like 'DELETE*' }).Count | Should -Be 0
+        @($script:Log | Where-Object { $_ -like 'old images: not cleaned up -- the runs in progress could not be read*' }).Count | Should -Be 1
         (ConvertFrom-SIUpdaterReleaseImageRecord -Json $script:Written['SI-Release-Images']).CurrentVersion | Should -Be '3.1.11'
+        # what runs not read back: nothing deleted, no record
+        $f2 = New-StandardRegistry; $script:Written = @{}
+        $r2 = Invoke-SIUpdaterImagePruneStep -ResourceGroup 'rg-si' -AcrName 'acrsi' -SubscriptionId 'sub' -Healthy $true -Before (& $script:Prev) -After (Snap @() -Ok $false -Reason 'ARM 503') -RunningRefs @() `
+                  -Version '3.1.11' -Registry $f2.Seam -Get { param($n) '' } -ReadSecret { param($n) $null } -WriteSecret { param($n, $v) $script:Written[$n] = $v }
+        $r2.Done | Should -BeFalse
+        @($f2.Calls | Where-Object { $_ -like 'DELETE*' }).Count | Should -Be 0
+        $script:Written.Count | Should -Be 0
     }
     It 'the step never throws: a registry that cannot be found = a warning, every image kept' {
         $script:Log = New-Object System.Collections.Generic.List[string]
@@ -472,26 +547,26 @@ Describe 'IMAGE-PRUNE: a long clean-up stays alive and says what it did as it go
             $orig = $f.Seam[$k]
             $f.Seam[$k] = { $seq.Add('CALL'); & $orig @args }.GetNewClosure()
         }
-        $null = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current (& $script:Cur) -Previous (& $script:Prev) -BeatSeconds 0 -Beat { param($w) $script:Seq.Add("BEAT $w") }
+        $null = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current (& $script:Cur) -RunningKnown $true -BeatSeconds 0 -Beat { param($w) $script:Seq.Add("BEAT $w") }
         # one beat right before EVERY registry call
         $calls = @(for ($i = 0; $i -lt $script:Seq.Count; $i++) { if ($script:Seq[$i] -eq 'CALL') { $i } })
         $calls.Count | Should -Be $f.Calls.Count
         foreach ($i in $calls) { $script:Seq[$i - 1] | Should -BeLike 'BEAT *' -Because 'a beat comes right before every registry call' }
-        @($script:Seq | Where-Object { $_ -like 'BEAT deleting si-orchestrator (* of 2)' }).Count | Should -Be 2
+        @($script:Seq | Where-Object { $_ -like 'BEAT deleting si-orchestrator (* of 3)' }).Count | Should -Be 3
     }
     It 'a beat is TRIED at most once per -BeatSeconds, also when it fails (a slow or unreachable database never slows the clean-up to hours)' {
         $f = New-StandardRegistry
         $script:Tries = 0
-        $r = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current (& $script:Cur) -Previous (& $script:Prev) -BeatSeconds 3600 -Beat { $script:Tries++; throw 'database unreachable' }
+        $r = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current (& $script:Cur) -RunningKnown $true -BeatSeconds 3600 -Beat { $script:Tries++; throw 'database unreachable' }
         $script:Tries | Should -Be 1
-        $r.Done | Should -BeTrue; $f.Deleted.Count | Should -Be 4
+        $r.Done | Should -BeTrue; $f.Deleted.Count | Should -Be 6
     }
     It 'the step''s beat asks the lock for a beat every 30 seconds at most (with the 15-second try limit: at least once a minute)' {
         $f = New-StandardRegistry
         Mock Write-UpdLog { }
         Mock Get-SIUpdaterRegistry { [pscustomobject]@{ id = 'x'; name = 'acrsi'; resourceGroup = 'rg-si'; loginServer = 'acrsi.azurecr.io' } }
         Mock Invoke-SIUpdaterLockBeat { $true }
-        $null = Invoke-SIUpdaterImagePruneStep -ResourceGroup 'rg-si' -AcrName 'acrsi' -SubscriptionId 'sub' -Healthy $true -Before (& $script:Prev) -After (& $script:Cur) `
+        $null = Invoke-SIUpdaterImagePruneStep -ResourceGroup 'rg-si' -AcrName 'acrsi' -SubscriptionId 'sub' -Healthy $true -Before (& $script:Prev) -After (& $script:Cur) -RunningRefs @() `
                     -Version '3.1.13' -PreviousVersion '3.1.12' -Registry $f.Seam -Get { param($n) '' } -WriteSecret { param($n, $v) }
         Should -Invoke Invoke-SIUpdaterLockBeat -ParameterFilter { $MinSeconds -eq 30 }
     }
@@ -505,25 +580,30 @@ Describe 'IMAGE-PRUNE: a long clean-up stays alive and says what it did as it go
                 (M 'orch-v1' @('v1-ddd') @('L0', 'L1') -DeleteEnabled $false))
         }
         $script:Seq = New-Object System.Collections.Generic.List[string]
-        $r = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current (Snap @('si-orchestrator:v4-aaa')) -Previous (Snap @('si-orchestrator:v3-bbb')) `
+        $r = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current (Snap @('si-orchestrator:v4-aaa')) -RunningKnown $true `
                  -BeatSeconds 0 -Beat { param($w) $script:Seq.Add($w) } -Log { param($l) $script:Seq.Add($l) }
-        $script:Seq | Should -Contain 'si-orchestrator: 6 images, 4 kept (2 of them child manifests of multi-platform images), 2 to delete'
-        @($script:Seq | Where-Object { $_ -like 'deleting si-orchestrator (*' }) | Should -Be @('deleting si-orchestrator (1 of 1)')
+        $script:Seq | Should -Contain 'si-orchestrator: 6 images, 3 kept (2 of them child manifests of multi-platform images), 3 to delete'
+        @($script:Seq | Where-Object { $_ -like 'deleting si-orchestrator (*' }) | Should -Be @('deleting si-orchestrator (1 of 2)', 'deleting si-orchestrator (2 of 2)')
         $o = @($r.Repos | Where-Object { $_.Repo -eq 'si-orchestrator' })[0]
-        $o.Kept | Should -Be 4; $o.Children | Should -Be 2; $o.Deleted | Should -Be 1
+        $o.Kept | Should -Be 3; $o.Children | Should -Be 2; $o.Deleted | Should -Be 2
         ($o.Line) | Should -Match '1 locked against deletion'
     }
     It 'each repository''s plan is written before its deletes and its result right after, before the next repository' {
         $f = New-StandardRegistry
         $script:Seq = New-Object System.Collections.Generic.List[string]
         $f.Seam.Delete = { param($Repo, $Digest) $script:Seq.Add("DELETE $Repo"); [pscustomobject]@{ Ok = $true; Status = 202; Why = '' } }
-        $null = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current (& $script:Cur) -Previous (& $script:Prev) -Log { param($l) $script:Seq.Add("LOG $l") } -Sleep { param($s) }
-        $o = @($script:Seq | Where-Object { $_ -like '*si-orchestrator*' })
-        $o[0] | Should -Be 'LOG si-orchestrator: 4 images, 2 kept, 2 to delete'
-        $o[1] | Should -Be 'DELETE si-orchestrator'; $o[2] | Should -Be 'DELETE si-orchestrator'
-        $o[3] | Should -BeLike 'LOG si-orchestrator: 2 old images deleted*'
+        $null = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current (& $script:Cur) -RunningKnown $true -Log { param($l) $script:Seq.Add("LOG $l") } -Sleep { param($s) }
+        # (the per-image lines -- 'repo@digest: kept / deleted -- why' -- are left out here: plan, deletes, result)
+        $o = @($script:Seq | Where-Object { $_ -like '*si-orchestrator*' -and $_ -notmatch '^LOG [^ :]+@' })
+        $o[0] | Should -Be 'LOG si-orchestrator: 4 images, 1 kept, 3 to delete'
+        $o[1] | Should -Be 'DELETE si-orchestrator'; $o[2] | Should -Be 'DELETE si-orchestrator'; $o[3] | Should -Be 'DELETE si-orchestrator'
+        $o[4] | Should -BeLike 'LOG si-orchestrator: 3 old images deleted*'
+        # every per-image line of a repository comes between its plan and its result
+        $all = @($script:Seq)
+        $planAt = [array]::IndexOf($all, 'LOG si-orchestrator: 4 images, 1 kept, 3 to delete'); $resAt = [array]::IndexOf($all, $o[4])
+        for ($i = 0; $i -lt $all.Count; $i++) { if ($all[$i] -like 'LOG si-orchestrator@*') { $i | Should -BeGreaterThan $planAt; $i | Should -BeLessThan $resAt } }
         # plan, result, plan, result ... -- a repository's result is written before the next repository starts
-        $logs = @($script:Seq | Where-Object { $_ -like 'LOG *' })
+        $logs = @($script:Seq | Where-Object { $_ -like 'LOG *' -and $_ -notmatch '^LOG [^ :]+@' })
         $logs.Count | Should -Be 6
         for ($i = 0; $i -lt $logs.Count; $i += 2) {
             $logs[$i] | Should -BeLike '* to delete'
@@ -533,10 +613,10 @@ Describe 'IMAGE-PRUNE: a long clean-up stays alive and says what it did as it go
     }
     It 'a beat or a log line that fails never stops the clean-up' {
         $f = New-StandardRegistry
-        $r = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current (& $script:Cur) -Previous (& $script:Prev) -Beat { throw 'lock table gone' } -Log { throw 'log gone' }
+        $r = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current (& $script:Cur) -RunningKnown $true -Beat { throw 'lock table gone' } -Log { throw 'log gone' }
         $r.Done | Should -BeTrue
-        $f.Deleted.Count | Should -Be 4
-        @($r.Lines) | Should -Contain 'si-orchestrator: 2 old images deleted, 2 left (this release and the one before)'
+        $f.Deleted.Count | Should -Be 6
+        @($r.Lines) | Should -Contain 'si-orchestrator: 3 old images deleted, 1 left (what runs)'
     }
     It 'the step beats the update''s own sign of life through Invoke-SIUpdaterLockBeat and writes each line once' {
         $f = New-StandardRegistry
@@ -544,11 +624,11 @@ Describe 'IMAGE-PRUNE: a long clean-up stays alive and says what it did as it go
         Mock Write-UpdLog { $script:Log.Add($m) }
         Mock Get-SIUpdaterRegistry { [pscustomobject]@{ id = 'x'; name = 'acrsi'; resourceGroup = 'rg-si'; loginServer = 'acrsi.azurecr.io' } }
         Mock Invoke-SIUpdaterLockBeat { $true }
-        $null = Invoke-SIUpdaterImagePruneStep -ResourceGroup 'rg-si' -AcrName 'acrsi' -SubscriptionId 'sub' -Healthy $true -Before (& $script:Prev) -After (& $script:Cur) `
+        $null = Invoke-SIUpdaterImagePruneStep -ResourceGroup 'rg-si' -AcrName 'acrsi' -SubscriptionId 'sub' -Healthy $true -Before (& $script:Prev) -After (& $script:Cur) -RunningRefs @() `
                     -Version '3.1.13' -PreviousVersion '3.1.12' -Registry $f.Seam -Get { param($n) '' } -WriteSecret { param($n, $v) }
         Should -Invoke Invoke-SIUpdaterLockBeat -ParameterFilter { $What -like 'old images: *' }
         @($script:Log | Where-Object { $_ -like 'si-base: *deleted*' }).Count | Should -Be 1
-        @($script:Log | Where-Object { $_ -eq 'old images: 4 deleted in 3 repositories' }).Count | Should -Be 1
+        @($script:Log | Where-Object { $_ -eq 'old images: 6 deleted in 3 repositories' }).Count | Should -Be 1
     }
 }
 
@@ -558,13 +638,13 @@ Describe 'IMAGE-PRUNE CONTRACT point 5: the release record is written BEFORE the
         $script:Log = New-Object System.Collections.Generic.List[string]
         Mock Write-UpdLog { $script:Log.Add($m) }
     }
-    It 'the record (this release + the one before, no result yet) is written before any delete; then again with what was done' {
+    It 'the record (what runs now + the release before as history, no result yet) is written before any delete; then again with what was done' {
         $f = New-StandardRegistry
         $script:Seq = New-Object System.Collections.Generic.List[string]
         $seq = $script:Seq; $origDelete = $f.Seam.Delete
         $f.Seam.Delete = { param($Repo, $Digest) $seq.Add('DELETE'); & $origDelete $Repo $Digest }.GetNewClosure()
         $script:Written = New-Object System.Collections.Generic.List[string]
-        $null = Invoke-SIUpdaterImagePruneStep -ResourceGroup 'rg-si' -AcrName 'acrsi' -SubscriptionId 'sub' -Healthy $true -Before (& $script:Prev) -After (& $script:Cur) `
+        $null = Invoke-SIUpdaterImagePruneStep -ResourceGroup 'rg-si' -AcrName 'acrsi' -SubscriptionId 'sub' -Healthy $true -Before (& $script:Prev) -After (& $script:Cur) -RunningRefs @() `
                     -Version '3.1.13' -PreviousVersion '3.1.12' -Registry $f.Seam -Get { param($n) '' } -WriteSecret { param($n, $v) $script:Seq.Add('RECORD'); $script:Written.Add($v) }
         $script:Seq.IndexOf('RECORD') | Should -Be 0 -Because 'the record comes before the first delete'
         $script:Seq.IndexOf('DELETE') | Should -BeGreaterThan 0
@@ -576,7 +656,7 @@ Describe 'IMAGE-PRUNE CONTRACT point 5: the release record is written BEFORE the
     }
     It 'NEGATIVE: the record cannot be written -> NOTHING is deleted, said once' {
         $f = New-StandardRegistry
-        $r = Invoke-SIUpdaterImagePruneStep -ResourceGroup 'rg-si' -AcrName 'acrsi' -SubscriptionId 'sub' -Healthy $true -Before (& $script:Prev) -After (& $script:Cur) `
+        $r = Invoke-SIUpdaterImagePruneStep -ResourceGroup 'rg-si' -AcrName 'acrsi' -SubscriptionId 'sub' -Healthy $true -Before (& $script:Prev) -After (& $script:Cur) -RunningRefs @() `
                  -Version '3.1.13' -PreviousVersion '3.1.12' -Registry $f.Seam -Get { param($n) '' } -WriteSecret { param($n, $v) throw 'vault refused' }
         $r.Done | Should -BeFalse
         $f.Deleted.Count | Should -Be 0
@@ -586,38 +666,45 @@ Describe 'IMAGE-PRUNE CONTRACT point 5: the release record is written BEFORE the
     It 'the second record write (with what was done) fails: the deletes stand, the first record stands, said once, the step does not throw' {
         $f = New-StandardRegistry
         $script:Writes = New-Object System.Collections.Generic.List[string]
-        $r = Invoke-SIUpdaterImagePruneStep -ResourceGroup 'rg-si' -AcrName 'acrsi' -SubscriptionId 'sub' -Healthy $true -Before (& $script:Prev) -After (& $script:Cur) `
+        $r = Invoke-SIUpdaterImagePruneStep -ResourceGroup 'rg-si' -AcrName 'acrsi' -SubscriptionId 'sub' -Healthy $true -Before (& $script:Prev) -After (& $script:Cur) -RunningRefs @() `
                  -Version '3.1.13' -PreviousVersion '3.1.12' -Registry $f.Seam -Get { param($n) '' } `
                  -WriteSecret { param($n, $v) if ($script:Writes.Count -ge 1) { throw 'vault refused the second write' }; $script:Writes.Add($v) }
         $r.Done | Should -BeTrue
-        $f.Deleted.Count | Should -Be 4
+        $f.Deleted.Count | Should -Be 6
         $script:Writes.Count | Should -Be 1
         ($script:Writes[0] | ConvertFrom-Json).current.version | Should -Be '3.1.13'
         @($script:Log | Where-Object { $_ -like 'NOTE: old images: what the clean-up did could not be added to the release record*' }).Count | Should -Be 1
     }
     It 'NEGATIVE: no place to write the record -> nothing is deleted' {
         $f = New-StandardRegistry
-        $r = Invoke-SIUpdaterImagePruneStep -ResourceGroup 'rg-si' -AcrName 'acrsi' -SubscriptionId 'sub' -Healthy $true -Before (& $script:Prev) -After (& $script:Cur) `
+        $r = Invoke-SIUpdaterImagePruneStep -ResourceGroup 'rg-si' -AcrName 'acrsi' -SubscriptionId 'sub' -Healthy $true -Before (& $script:Prev) -After (& $script:Cur) -RunningRefs @() `
                  -Version '3.1.13' -Registry $f.Seam -Get { param($n) '' }
         $r.Done | Should -BeFalse
         $f.Deleted.Count | Should -Be 0
         @($script:Log | Where-Object { $_ -like '*no place to write the release record*' }).Count | Should -Be 1
     }
-    It 'an early "not cleaned up" (the previous release not recorded) goes through the step and is logged exactly once' {
+    It 'an early "not cleaned up" (what runs not read back) goes through the step and is logged exactly once' {
         $f = New-StandardRegistry
-        $null = Invoke-SIUpdaterImagePruneStep -ResourceGroup 'rg-si' -AcrName 'acrsi' -SubscriptionId 'sub' -Healthy $true -Before (Snap @() -Ok $false -Reason 'x') -After (& $script:Cur) `
+        $null = Invoke-SIUpdaterImagePruneStep -ResourceGroup 'rg-si' -AcrName 'acrsi' -SubscriptionId 'sub' -Healthy $true -Before (& $script:Prev) -After (Snap @() -Ok $false -Reason 'x') -RunningRefs @() `
                     -Version '3.1.13' -Registry $f.Seam -Get { param($n) '' } -ReadSecret { param($n) $null } -WriteSecret { param($n, $v) }
-        @($script:Log | Where-Object { $_ -like 'old images: not cleaned up -- the images of the previous release are not recorded*' }).Count | Should -Be 1
+        @($script:Log | Where-Object { $_ -like 'old images: not cleaned up -- what the install runs now could not be read back*' }).Count | Should -Be 1
         $f.Deleted.Count | Should -Be 0
+    }
+    It 'a previous release that is not recorded no longer stops the clean-up: only what runs is kept' {
+        $f = New-StandardRegistry
+        $r = Invoke-SIUpdaterImagePruneStep -ResourceGroup 'rg-si' -AcrName 'acrsi' -SubscriptionId 'sub' -Healthy $true -Before (Snap @() -Ok $false -Reason 'x') -After (& $script:Cur) -RunningRefs @() `
+                 -Version '3.1.13' -Registry $f.Seam -Get { param($n) '' } -ReadSecret { param($n) $null } -WriteSecret { param($n, $v) }
+        $r.Done | Should -BeTrue
+        $f.Deleted.Count | Should -Be 6
     }
     It 'the plan line is said live but is not one of the result lines' {
         $f = New-StandardRegistry
-        $r = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current (& $script:Cur) -Previous (& $script:Prev) -Log { param($l) }
+        $r = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current (& $script:Cur) -RunningKnown $true -Log { param($l) }
         @($r.Lines | Where-Object { $_ -like '* to delete' }).Count | Should -Be 0
     }
 }
 
-Describe 'IMAGE-PRUNE: the same release again keeps the release before it (second pass after the self-roll, a re-run)' {
+Describe 'IMAGE-PRUNE: the same release again (second pass after the self-roll, a re-run) -- also only what runs; the record''s previous is history' {
     BeforeAll {
         # the standard registry as releases: v4 / src-2 = 3.1.10, v3 / src-1 = 3.1.9, v2 = 3.1.8, v1 + src-0 older
         $script:R10 = { @((Snap @('si-orchestrator:v4-aaa', 'si-management:src-2')).Refs) }
@@ -625,7 +712,7 @@ Describe 'IMAGE-PRUNE: the same release again keeps the release before it (secon
         $script:R8 = { @((Snap @('si-orchestrator:v2-ccc')).Refs) }
         function script:Invoke-Step($Registry, $Before, $After, [string]$Version, [string]$PreviousVersion = '', [AllowNull()][string]$Record) {
             $script:Vault = @{}; if ("$Record".Trim()) { $script:Vault['SI-Release-Images'] = $Record }
-            Invoke-SIUpdaterImagePruneStep -ResourceGroup 'rg-si' -AcrName 'acrsi' -SubscriptionId 'sub' -Healthy $true -Before $Before -After $After `
+            Invoke-SIUpdaterImagePruneStep -ResourceGroup 'rg-si' -AcrName 'acrsi' -SubscriptionId 'sub' -Healthy $true -Before $Before -After $After -RunningRefs @() `
                 -Version $Version -PreviousVersion $PreviousVersion -Registry $Registry -Get { param($n) '' } `
                 -ReadSecret { param($n) $script:Vault[$n] } -WriteSecret { param($n, $v) $script:Vault[$n] = $v }
         }
@@ -635,38 +722,21 @@ Describe 'IMAGE-PRUNE: the same release again keeps the release before it (secon
         Mock Write-UpdLog { $script:Log.Add($m) }
         Mock Get-SIUpdaterRegistry { [pscustomobject]@{ id = 'x'; name = 'acrsi'; resourceGroup = 'rg-si'; loginServer = 'acrsi.azurecr.io' } }
     }
-    It 'the second pass after the self-roll: 3.1.9 (the record''s previous) is kept although the read before the roll is 3.1.10 itself' {
+    It 'the second pass after the self-roll: the record''s previous release (3.1.9) is NOT kept -- only what runs' {
         $f = New-StandardRegistry
         $rec = ConvertTo-SIUpdaterReleaseImageRecord -Version '3.1.10' -Current (& $script:R10) -PreviousVersion '3.1.9' -Previous (& $script:R9)
         $r = Invoke-Step $f.Seam (& $script:Cur) (& $script:Cur) '3.1.10' '3.1.10' $rec
         $r.Done | Should -BeTrue
-        @($f.Deleted) | Should -Not -Contain 'si-orchestrator/orch-v3'
-        @($f.Deleted) | Should -Not -Contain 'si-management/web-s1'
-        @($f.Deleted | Sort-Object) | Should -Be @(@('si-base/base-h0', 'si-management/web-s0', 'si-orchestrator/orch-v1', 'si-orchestrator/orch-v2') | Sort-Object)
+        @($f.Deleted | Sort-Object) | Should -Be @(@('si-base/base-h0', 'si-management/web-s0', 'si-management/web-s1', 'si-orchestrator/orch-v1', 'si-orchestrator/orch-v2', 'si-orchestrator/orch-v3') | Sort-Object)
     }
-    It 'a re-run of the same release keeps the previous one, also when the read before the roll differs' {
+    It 'the same release with no record, or with a record without its previous release: only what runs is kept (no previous release is needed)' {
         $f = New-StandardRegistry
-        $rec = ConvertTo-SIUpdaterReleaseImageRecord -Version '3.1.10' -Current (& $script:R10) -PreviousVersion '3.1.9' -Previous (& $script:R9)
-        $null = Invoke-Step $f.Seam (Snap @('si-management:src-2')) (& $script:Cur) '3.1.10' '' $rec
-        @($f.Deleted) | Should -Not -Contain 'si-orchestrator/orch-v3'
-        @($f.Deleted) | Should -Contain 'si-orchestrator/orch-v2'
-    }
-    It 'NEGATIVE: the same release with no record = nothing deleted, and it says the previous release is not known' {
-        $f = New-StandardRegistry
-        $r = Invoke-Step $f.Seam (& $script:Cur) (& $script:Cur) '3.1.10' '3.1.10' $null
-        $r.Done | Should -BeFalse
-        $f.Deleted.Count | Should -Be 0
-        ($script:Log -join "`n") | Should -Match 'the previous release is not known'
-        # a record of this release WITHOUT its previous release is the same: nothing deleted
+        (Invoke-Step $f.Seam (& $script:Cur) (& $script:Cur) '3.1.10' '3.1.10' $null).Done | Should -BeTrue
+        @($f.Repos['si-orchestrator'] | ForEach-Object { $_.Name }) | Should -Be @('orch-v4')
         $f2 = New-StandardRegistry
         $rec = ConvertTo-SIUpdaterReleaseImageRecord -Version '3.1.10' -Current (& $script:R10)
-        (Invoke-Step $f2.Seam (& $script:Cur) (& $script:Cur) '3.1.10' '' $rec).Done | Should -BeFalse
-        $f2.Deleted.Count | Should -Be 0
-    }
-    It 'NEGATIVE: the same images before and after with no record (version unknown) = nothing deleted' {
-        $f = New-StandardRegistry
-        (Invoke-Step $f.Seam (& $script:Cur) (& $script:Cur) '' '' $null).Done | Should -BeFalse
-        $f.Deleted.Count | Should -Be 0
+        (Invoke-Step $f2.Seam (& $script:Cur) (& $script:Cur) '3.1.10' '' $rec).Done | Should -BeTrue
+        @($f2.Repos['si-management'] | ForEach-Object { $_.Name }) | Should -Be @('web-s2')
     }
     It 'the record''s previous survives re-runs: never replaced by the release itself' {
         $f = New-StandardRegistry
@@ -678,15 +748,15 @@ Describe 'IMAGE-PRUNE: the same release again keeps the release before it (secon
         $r.CurrentVersion | Should -Be '3.1.10'
         $r.PreviousVersion | Should -Be '3.1.9'
         @($r.Previous | ForEach-Object { Format-SIUpdaterImageRef -Ref $_ }) | Should -Be @(@('si-management:src-1', 'si-orchestrator:v3-bbb') | Sort-Object -Unique)
-        @($f.Repos['si-orchestrator'] | ForEach-Object { $_.Name }) | Should -Be @('orch-v4', 'orch-v3')
+        @($f.Repos['si-orchestrator'] | ForEach-Object { $_.Name }) | Should -Be @('orch-v4') -Because 'the record names the release before; it keeps none of its images'
     }
-    It 'NEGATIVE: a normal update (record current 3.1.9, now 3.1.10) still deletes 3.1.8, and records 3.1.9 as the previous' {
+    It 'a normal update (record current 3.1.9, now 3.1.10) deletes 3.1.9 AND 3.1.8, and records 3.1.9 as the previous (history)' {
         $f = New-StandardRegistry
         $rec = ConvertTo-SIUpdaterReleaseImageRecord -Version '3.1.9' -Current (& $script:R9) -PreviousVersion '3.1.8' -Previous (& $script:R8)
         $r = Invoke-Step $f.Seam (& $script:Prev) (& $script:Cur) '3.1.10' '3.1.9' $rec
         $r.Done | Should -BeTrue
         @($f.Deleted) | Should -Contain 'si-orchestrator/orch-v2'
-        @($f.Deleted) | Should -Not -Contain 'si-orchestrator/orch-v3'
+        @($f.Deleted) | Should -Contain 'si-orchestrator/orch-v3'
         $w = ConvertFrom-SIUpdaterReleaseImageRecord -Json $script:Vault['SI-Release-Images']
         $w.CurrentVersion | Should -Be '3.1.10'; $w.PreviousVersion | Should -Be '3.1.9'
     }
@@ -741,7 +811,7 @@ Describe 'IMAGE-PRUNE: the read-back count is the count the registry ends at (it
     # was still listed for a moment. The listing is read again (short pauses, a sign of life before each) while an image the
     # registry took as deleted is still listed; still listed after the last re-read = "deletes still completing".
     BeforeAll {
-        # one engine repository, current v4 + previous v3 kept, v2 + v1 deleted
+        # one engine repository, current v4 kept, v3 + v2 + v1 deleted
         function script:New-OneRepo { New-FakeRegistry @{ 'si-orchestrator' = @((M 'orch-v4' @('v4-aaa') @('L0', 'L4')), (M 'orch-v3' @('v3-bbb') @('L0', 'L3')), (M 'orch-v2' @('v2-ccc') @('L0', 'L2')), (M 'orch-v1' @('v1-ddd') @('L0', 'L1'))) } }
         # the first deleted manifest stays listed for -Times listings after it was deleted (-1 = it never goes)
         function script:Add-Ghost($Fake, [int]$Times) {
@@ -756,7 +826,7 @@ Describe 'IMAGE-PRUNE: the read-back count is the count the registry ends at (it
             }.GetNewClosure()
             $state
         }
-        $script:One = @{ Current = (Snap @('si-orchestrator:v4-aaa')); Previous = (Snap @('si-orchestrator:v3-bbb')) }
+        $script:One = @{ Current = (Snap @('si-orchestrator:v4-aaa')) }
     }
     BeforeEach {
         $script:Slept = New-Object System.Collections.Generic.List[int]
@@ -764,11 +834,11 @@ Describe 'IMAGE-PRUNE: the read-back count is the count the registry ends at (it
     }
     It 'a deleted image still listed on the first re-read: read again after a short pause, and the line says the count it ends at' {
         $f = New-OneRepo; $null = Add-Ghost $f 1
-        $r = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current $script:One.Current -Previous $script:One.Previous `
+        $r = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current $script:One.Current -RunningKnown $true `
                  -BeatSeconds 0 -Beat { param($w) $script:Beats.Add($w) } -Sleep { param($s) $script:Slept.Add($s) }
         $o = @($r.Repos)[0]
-        $o.Deleted | Should -Be 2; $o.Left | Should -Be 2; $o.Pending | Should -Be 0
-        $o.Line | Should -Be 'si-orchestrator: 2 old images deleted, 2 left (this release and the one before)'
+        $o.Deleted | Should -Be 3; $o.Left | Should -Be 1; $o.Pending | Should -Be 0
+        $o.Line | Should -Be 'si-orchestrator: 3 old images deleted, 1 left (what runs)'
         @($script:Slept) | Should -Be @(5) -Because 'one short pause before the one re-read that was needed'
         @($f.Calls | Where-Object { $_ -eq 'LIST si-orchestrator' }).Count | Should -Be 3 -Because 'the plan, the read-back, one re-read'
         $wi = $script:Beats.IndexOf('waiting for the deletes of si-orchestrator to complete')
@@ -778,27 +848,27 @@ Describe 'IMAGE-PRUNE: the read-back count is the count the registry ends at (it
     }
     It 'the registry settled at once: no pause, no extra read (as before)' {
         $f = New-OneRepo
-        $r = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current $script:One.Current -Previous $script:One.Previous -Sleep { param($s) $script:Slept.Add($s) }
+        $r = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current $script:One.Current -RunningKnown $true -Sleep { param($s) $script:Slept.Add($s) }
         $script:Slept.Count | Should -Be 0
         @($f.Calls | Where-Object { $_ -eq 'LIST si-orchestrator' }).Count | Should -Be 2
-        @($r.Repos)[0].Left | Should -Be 2
+        @($r.Repos)[0].Left | Should -Be 1
     }
     It 'still listed after the last re-read: bounded (three pauses, 30 seconds in all), and said as deletes still completing with the count seen' {
         $f = New-OneRepo; $null = Add-Ghost $f -1
-        $r = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current $script:One.Current -Previous $script:One.Previous -Sleep { param($s) $script:Slept.Add($s) }
+        $r = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current $script:One.Current -RunningKnown $true -Sleep { param($s) $script:Slept.Add($s) }
         @($script:Slept) | Should -Be @(5, 10, 15)
         @($f.Calls | Where-Object { $_ -eq 'LIST si-orchestrator' }).Count | Should -Be 5 -Because 'the plan, the read-back and three re-reads -- never more'
         $o = @($r.Repos)[0]
-        $o.Left | Should -Be 3; $o.Pending | Should -Be 1
-        $o.Line | Should -Be 'si-orchestrator: 2 old images deleted, 3 listed right after -- deletes still completing (1 of the deleted images still listed; the registry removes them shortly)'
+        $o.Left | Should -Be 2; $o.Pending | Should -Be 1
+        $o.Line | Should -Be 'si-orchestrator: 3 old images deleted, 2 listed right after -- deletes still completing (1 of the deleted images still listed; the registry removes them shortly)'
         $o.Line | Should -Not -Match 'WARNING' -Because 'a delete still completing is not a lost image'
         $r.Done | Should -BeTrue
     }
     It 'a kept image missing stays the loud case, also while deletes are still completing' {
         $f = New-OneRepo; $null = Add-Ghost $f -1
         $origDel = $f.Seam.Delete; $w = $f
-        $f.Seam.Delete = { param($Repo, $Digest) $res = & $origDel $Repo $Digest; $k = @($w.Repos[$Repo] | Where-Object { $_.Name -eq 'orch-v3' }) | Select-Object -First 1; if ($k) { $w.Repos[$Repo].Remove($k) }; $res }.GetNewClosure()
-        $r = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current $script:One.Current -Previous $script:One.Previous -Sleep { param($s) }
+        $f.Seam.Delete = { param($Repo, $Digest) $res = & $origDel $Repo $Digest; $k = @($w.Repos[$Repo] | Where-Object { $_.Name -eq 'orch-v4' }) | Select-Object -First 1; if ($k) { $w.Repos[$Repo].Remove($k) }; $res }.GetNewClosure()
+        $r = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current $script:One.Current -RunningKnown $true -Sleep { param($s) }
         @($r.Repos)[0].Line | Should -Match 'deletes still completing'
         @($r.Repos)[0].Line | Should -Match 'WARNING: 1 image\(s\) that should be kept are not there any more'
     }
@@ -807,13 +877,13 @@ Describe 'IMAGE-PRUNE: the read-back count is the count the registry ends at (it
         # (counted for the engine repository only: its base repository is listed too, between the plan and the read-back)
         $inner = $f.Seam.List; $n = @{ c = 0 }
         $f.Seam.List = { param($Repo) if ($Repo -eq 'si-orchestrator') { $n.c++; if ($n.c -ge 3) { throw 'HTTP 500' } }; & $inner $Repo }.GetNewClosure()
-        $r = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current $script:One.Current -Previous $script:One.Previous -Sleep { param($s) }
-        $o = @($r.Repos)[0]; $o.Left | Should -Be 3; $o.Line | Should -Match '3 listed right after -- deletes still completing'
+        $r = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current $script:One.Current -RunningKnown $true -Sleep { param($s) }
+        $o = @($r.Repos)[0]; $o.Left | Should -Be 2; $o.Line | Should -Match '2 listed right after -- deletes still completing'
         $f2 = New-OneRepo; $inner2 = $f2.Seam.List; $n2 = @{ c = 0 }
         $f2.Seam.List = { param($Repo) if ($Repo -eq 'si-orchestrator') { $n2.c++; if ($n2.c -ge 2) { throw 'HTTP 500' } }; & $inner2 $Repo }.GetNewClosure()
-        $r2 = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f2.Seam -Current $script:One.Current -Previous $script:One.Previous -Sleep { param($s) }
+        $r2 = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f2.Seam -Current $script:One.Current -RunningKnown $true -Sleep { param($s) }
         @($r2.Repos)[0].Left | Should -Be -1
-        @($r2.Repos)[0].Line | Should -Be 'si-orchestrator: 2 old images deleted; what is left could not be read back'
+        @($r2.Repos)[0].Line | Should -Be 'si-orchestrator: 3 old images deleted; what is left could not be read back'
     }
 }
 Describe 'THE END OF AN UPDATE REACHES THE LOG: flush + a short, bounded pause on every way out of the updater' {
@@ -863,11 +933,11 @@ Describe 'THE END OF AN UPDATE REACHES THE LOG: flush + a short, bounded pause o
         }
     }
 }
-Describe 'SEC-LANE-1: after a HEALTHY image-only swap only what runs stays (owner 2026-11-14: "when swap works we remove old")' {
-    It '-RunningOnly: the previous release is not kept -- every image no job, app, revision or running execution uses is deleted' {
+Describe 'SEC-LANE-1: after a PROVEN image-only swap only what runs stays (owner 2026-11-14: "when swap works we remove old")' {
+    It 'the previous release is not kept -- every image no job, app, revision or running execution uses is deleted, each said with its reason' {
         $f = New-StandardRegistry
         $collected = New-Object System.Collections.Generic.List[string]
-        $r = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current (& $script:Cur) -RunningOnly -RegistryResourceGroup 'rg-si' -InstallResourceGroup 'rg-si' -Log { param($l) $collected.Add($l) }
+        $r = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current (& $script:Cur) -RunningKnown $true -RegistryResourceGroup 'rg-si' -InstallResourceGroup 'rg-si' -Log { param($l) $collected.Add($l) }
         $r.Done | Should -BeTrue
         @($f.Repos['si-orchestrator'] | ForEach-Object { $_.Name }) | Should -Be @('orch-v4')
         @($f.Repos['si-management'] | ForEach-Object { $_.Name }) | Should -Be @('web-s2')
@@ -880,29 +950,61 @@ Describe 'SEC-LANE-1: after a HEALTHY image-only swap only what runs stays (owne
         @($collected | Where-Object { $_ -match ': deleted -- ' }).Count | Should -Be 6
         @($r.Lines) | Should -Contain 'si-orchestrator: 3 old images deleted, 1 left (what runs)'
     }
-    It '-RunningOnly: an image a RUNNING execution started with is kept (its replica may restart)' {
+    It 'an image a RUNNING execution started with is kept (its replica may restart)' {
         $f = New-StandardRegistry
         $cur = & $script:Cur
         $run = @(ConvertTo-SIUpdaterImageRef -Image "$($script:Login)/si-orchestrator:v3-bbb" -LoginServer $script:Login)
         $run[0] | Add-Member -NotePropertyName From -NotePropertyValue 'caj-si-flow (running execution e1)' -Force
         $collected = New-Object System.Collections.Generic.List[string]
-        $null = Invoke-SIUpdaterImageOnlyCleanup -ResourceGroup 'rg-si' -AcrName 'acrsi' -SubscriptionId 'sub' -Healthy $true -Registry $f.Seam -After $cur -RunningRefs $run -RegistryResourceGroup 'rg-si' -Get { param($n) '' } 6>$null
+        $null = Invoke-SIUpdaterImageOnlyCleanup -ResourceGroup 'rg-si' -AcrName 'acrsi' -SubscriptionId 'sub' -Healthy $true -Registry $f.Seam -After $cur -RunningRefs $run -RegistryResourceGroup 'rg-si' -Get { param($n) '' } -WriteSecret { param($n, $v) } 6>$null
         @($f.Repos['si-orchestrator'] | ForEach-Object { $_.Name } | Sort-Object) | Should -Be @('orch-v3', 'orch-v4')
+        @($f.Repos['si-management'] | ForEach-Object { $_.Name }) | Should -Be @('web-s2')
     }
-    It 'a swap that is NOT proven healthy deletes NOTHING (the previous images are its way back); the switch off deletes nothing' {
+    It 'the release record is written BEFORE the first delete (what runs, the swap''s release); not written or no place to write it = nothing deleted' {
+        $f = New-StandardRegistry
+        $script:Seq = New-Object System.Collections.Generic.List[string]
+        $seq = $script:Seq; $origDelete = $f.Seam.Delete
+        $f.Seam.Delete = { param($Repo, $Digest) $seq.Add('DELETE'); & $origDelete $Repo $Digest }.GetNewClosure()
+        $script:Rec = $null
+        $null = Invoke-SIUpdaterImageOnlyCleanup -ResourceGroup 'rg-si' -AcrName 'acrsi' -SubscriptionId 'sub' -Healthy $true -Registry $f.Seam -After (& $script:Cur) -RunningRefs @() -RegistryResourceGroup 'rg-si' `
+                    -Get { param($n) '' } -Version '3.1.17.1' -ReadSecret { param($n) $null } -WriteSecret { param($n, $v) $script:Seq.Add('RECORD'); $script:Rec = $v } 6>$null
+        $script:Seq.IndexOf('RECORD') | Should -Be 0 -Because 'the record comes before the first delete'
+        $script:Seq.IndexOf('DELETE') | Should -BeGreaterThan 0
+        (ConvertFrom-SIUpdaterReleaseImageRecord -Json $script:Rec).CurrentVersion | Should -Be '3.1.17.1'
+        foreach ($w in @({ param($n, $v) throw 'vault refused' }, $null)) {
+            $g = New-StandardRegistry
+            $r = Invoke-SIUpdaterImageOnlyCleanup -ResourceGroup 'rg-si' -AcrName 'acrsi' -SubscriptionId 'sub' -Healthy $true -Registry $g.Seam -After (& $script:Cur) -RunningRefs @() -RegistryResourceGroup 'rg-si' `
+                     -Get { param($n) '' } -WriteSecret $w 6>$null
+            $r.Done | Should -BeFalse
+            @($g.Calls | Where-Object { $_ -like 'DELETE*' }).Count | Should -Be 0
+        }
+    }
+    It 'NEGATIVE: the runs in progress cannot be read -> nothing is deleted after a proven swap, said' {
+        $f = New-StandardRegistry
+        Mock Get-SIUpdaterRegistry { [pscustomobject]@{ id = 'x'; name = 'acrsi'; resourceGroup = 'rg-si'; loginServer = 'acrsi.azurecr.io' } }
+        Mock Get-SIUpdaterJobs { throw 'HTTP 503' }
+        $script:Log = New-Object System.Collections.Generic.List[string]
+        Mock Write-UpdLog { $script:Log.Add($m) }
+        $r = Invoke-SIUpdaterImageOnlyCleanup -ResourceGroup 'rg-si' -AcrName 'acrsi' -SubscriptionId 'sub' -Healthy $true -Registry $f.Seam -After (& $script:Cur) `
+                 -Get { param($n) '' } -WriteSecret { param($n, $v) }
+        $r.Done | Should -BeFalse
+        @($f.Calls | Where-Object { $_ -like 'DELETE*' }).Count | Should -Be 0
+        @($script:Log | Where-Object { $_ -like 'old images: not cleaned up -- the runs in progress could not be read*' }).Count | Should -Be 1
+    }
+    It 'a swap that is NOT proven deletes NOTHING; the switch off deletes nothing' {
         $f = New-StandardRegistry
         Invoke-SIUpdaterImageOnlyCleanup -ResourceGroup 'rg-si' -AcrName 'acrsi' -SubscriptionId 'sub' -Healthy $false -Registry $f.Seam -After (& $script:Cur) -RunningRefs @() -RegistryResourceGroup 'rg-si' -Get { param($n) '' } 6>$null | Should -BeNullOrEmpty
         $f.Deleted.Count | Should -Be 0
         @($f.Calls | Where-Object { $_ -like 'DELETE*' }).Count | Should -Be 0
         $g = New-StandardRegistry
-        $null = Invoke-SIUpdaterImageOnlyCleanup -ResourceGroup 'rg-si' -AcrName 'acrsi' -SubscriptionId 'sub' -Healthy $true -Registry $g.Seam -After (& $script:Cur) -RunningRefs @() -RegistryResourceGroup 'rg-si' -Get { param($n) if ($n -eq 'SI_UPDATER_IMAGE_PRUNE') { 'off' } else { '' } } 6>$null
+        $null = Invoke-SIUpdaterImageOnlyCleanup -ResourceGroup 'rg-si' -AcrName 'acrsi' -SubscriptionId 'sub' -Healthy $true -Registry $g.Seam -After (& $script:Cur) -RunningRefs @() -RegistryResourceGroup 'rg-si' -Get { param($n) if ($n -eq 'SI_UPDATER_IMAGE_PRUNE') { 'off' } else { '' } } -WriteSecret { param($n, $v) } 6>$null
         $g.Deleted.Count | Should -Be 0
     }
     It 'what runs that cannot be read back, or a registry outside the install''s resource group: nothing deleted' {
         $f = New-StandardRegistry
-        $null = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current (Snap @() $false 'not read') -RunningOnly
+        $null = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current (Snap @() $false 'not read') -RunningKnown $true
         $f.Deleted.Count | Should -Be 0
-        $null = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current (& $script:Cur) -RunningOnly -RegistryResourceGroup 'rg-other' -InstallResourceGroup 'rg-si'
+        $null = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current (& $script:Cur) -RunningKnown $true -RegistryResourceGroup 'rg-other' -InstallResourceGroup 'rg-si'
         $f.Deleted.Count | Should -Be 0
     }
     It 'the running executions: only Running / Processing ones without an end, from the install''s registry' {
@@ -997,7 +1099,7 @@ Describe 'IMAGE-PRUNE amendment (Invardia 2026-11-14): the previous image goes o
         $bad = Exec 'Failed' $script:SwapAt.AddMinutes(40) $script:NewD
         $r = Invoke-Pend -Jobs $jobs -ExecsByJob @{ 'caj-si-flow' = @((Exec 'Succeeded' $script:SwapAt.AddMinutes(10) $script:NewD)); 'caj-si-index-build' = @($bad) }
         $r.Cleanups | Should -Be 0; $r.Cleared | Should -BeFalse
-        $r.Lines | Should -Match ('a run on the new image failed \(caj-si-index-build, execution {0}\); the previous image stays, it is the way back' -f [regex]::Escape($bad.name))
+        $r.Lines | Should -Match ('a run on the new image failed \(caj-si-index-build, execution {0}\); nothing is deleted until a run on the new image succeeds' -f [regex]::Escape($bad.name))
     }
     It 'PER IMAGE: only on-demand jobs ran and succeeded -> cleaned up (any job counts)' {
         $jobs = @((Job 'caj-si-flow' $script:NewD), (Job 'caj-si-support-grant' $script:NewD))
@@ -1009,10 +1111,10 @@ Describe 'IMAGE-PRUNE amendment (Invardia 2026-11-14): the previous image goes o
         (Invoke-Pend -Execs @((Exec 'Succeeded' $script:SwapAt.AddMinutes(10) $script:OldD))).Cleanups | Should -Be 0
         (Invoke-Pend -Execs @((Exec 'Succeeded' $script:SwapAt.AddMinutes(-10) $script:NewD))).Cleanups | Should -Be 0
     }
-    It 'a FAILED run on the new image: kept -- the previous image is the way back -- and said' {
+    It 'a FAILED run on the new image: not proven, nothing deleted, said' {
         $r = Invoke-Pend -Execs @((Exec 'Succeeded' $script:SwapAt.AddMinutes(5) $script:NewD), (Exec 'Failed' $script:SwapAt.AddMinutes(30) $script:NewD))
         $r.Cleanups | Should -Be 0; $r.Cleared | Should -BeFalse
-        $r.Lines | Should -Match 'a run on the new image failed \(caj-si-flow, execution e-[0-9a-f]+\); the previous image stays, it is the way back'
+        $r.Lines | Should -Match 'a run on the new image failed \(caj-si-flow, execution e-[0-9a-f]+\); nothing is deleted until a run on the new image succeeds'
     }
     It 'executions that cannot be read: not proven = kept' {
         $r = Invoke-Pend -ExecThrows
@@ -1035,6 +1137,7 @@ Describe 'IMAGE-PRUNE amendment (Invardia 2026-11-14): the previous image goes o
         $u = Get-Content -Raw -LiteralPath (Join-Path $script:SIRoot 'container\updater\_shared\SI-UpdaterInvardia.ps1')
         $u | Should -Match ([regex]::Escape('if (-not $imageOnlyRan) {'))
         $u | Should -Match ([regex]::Escape('Invoke-SIUpdaterImageOnlyPendingPrune -ResourceGroup $ResourceGroup -AcrName $AcrName -SubscriptionId $SubscriptionId -Store $Store'))
+        $u | Should -Match ([regex]::Escape('-Get $get -ReadSecret $s[''ReadSecret''] -WriteSecret $s[''WriteSecret'']')) -Because 'the record is written before the first delete of a proven swap too'
     }
 }
 
@@ -1053,35 +1156,152 @@ Describe 'SI''s one-off repositories (Invardia''s central image scan 2026-11-14:
     It 'the full update: every probe image nothing runs is deleted, one line each with the reason; the rest as before' {
         $f = New-ProbeRegistry
         $col = New-Object System.Collections.Generic.List[string]
-        $r = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current (& $script:Cur) -Previous (& $script:Prev) -RegistryResourceGroup 'rg-si' -InstallResourceGroup 'rg-si' `
+        $r = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current (& $script:Cur)  -RegistryResourceGroup 'rg-si' -InstallResourceGroup 'rg-si' `
                  -RunningRefs @() -RunningKnown $true -Log { param($l) $col.Add($l) }
         $r.Done | Should -BeTrue
         $f.Repos['si-management-probe'].Count | Should -Be 0
         @($col | Where-Object { $_ -match '^si-management-probe@sha256:[0-9a-f]{12} \(\d{8}-\d{6}\): deleted -- a one-off proof image, nothing runs it$' }).Count | Should -Be 2
-        @($f.Repos['si-orchestrator'] | ForEach-Object { $_.Name }) | Should -Be @('orch-v4', 'orch-v3') -Because 'the full release keeps current + previous, unchanged'
+        @($f.Repos['si-orchestrator'] | ForEach-Object { $_.Name }) | Should -Be @('orch-v4') -Because 'only what runs is kept'
     }
     It 'a probe image a RUNNING execution uses is kept (the other goes)' {
         $f = New-ProbeRegistry
         $run = ConvertTo-SIUpdaterImageRef -Image "$($script:Login)/si-management-probe:20261110-090000" -LoginServer $script:Login
         $run | Add-Member -NotePropertyName From -NotePropertyValue 'caj-si-mgmt-probe (running execution e1)' -Force
         $col = New-Object System.Collections.Generic.List[string]
-        $null = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current (& $script:Cur) -Previous (& $script:Prev) -RunningRefs @($run) -RunningKnown $true -Log { param($l) $col.Add($l) }
+        $null = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current (& $script:Cur) -RunningRefs @($run) -RunningKnown $true -Log { param($l) $col.Add($l) }
         @($f.Repos['si-management-probe'] | ForEach-Object { $_.Name }) | Should -Be @('probe-2')
         ($col -join "`n") | Should -Match 'si-management-probe@sha256:[0-9a-f]{12}: kept -- runs: caj-si-mgmt-probe \(running execution e1\)'
     }
     It 'the running executions not read, or the probe repository not readable: every probe image kept, said' {
         $f = New-ProbeRegistry
-        $r = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current (& $script:Cur) -Previous (& $script:Prev) -RunningKnown $false
+        $r = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current (& $script:Cur) -RunningKnown $false
         $f.Repos['si-management-probe'].Count | Should -Be 2
-        ($r.Lines -join "`n") | Should -Match 'si-management-probe: not cleaned up -- the running executions could not be read'
+        ($r.Lines -join "`n") | Should -Match 'old images: not cleaned up -- the runs in progress could not be read'
         $g = New-ProbeRegistry; $g.ListFails = @('si-management-probe')
-        $r2 = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $g.Seam -Current (& $script:Cur) -Previous (& $script:Prev) -RunningRefs @() -RunningKnown $true
+        $r2 = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $g.Seam -Current (& $script:Cur) -RunningRefs @() -RunningKnown $true
         $g.Repos['si-management-probe'].Count | Should -Be 2
         ($r2.Lines -join "`n") | Should -Match 'si-management-probe: not cleaned up -- its images could not be listed'
     }
     It 'the image-only clean-up (what runs only) removes the probe images too' {
         $f = New-ProbeRegistry
-        $null = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current (& $script:Cur) -RunningOnly
+        $null = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current (& $script:Cur) -RunningKnown $true
         $f.Repos['si-management-probe'].Count | Should -Be 0
+    }
+}
+
+Describe 'IMAGE-PRUNE point 3 (Invardia 2026-11-16): the repositories SI created that nothing runs from any more are emptied; no other repository is touched' {
+    BeforeAll {
+        # the standard registry + an abandoned sign-in front (the install moved to the built-in sign-in) + repositories SI
+        # did not create; the fake's Catalog lists every repository (or throws)
+        function script:New-AbandonRegistry([switch]$CatalogFails) {
+            $f = New-StandardRegistry
+            $add = { param($repo, [object[]]$ms) $l = New-Object System.Collections.ArrayList; foreach ($m in $ms) { $null = $l.Add($m) }; $f.Repos[$repo] = $l }
+            & $add 'signin-front' @((M 'front-2' @('2.1.1-src-2') @('F0', 'F2')), (M 'front-1' @('2.1.0-src-1') @('F0', 'F1')))
+            & $add 'signin-front-base' @((M 'front-base' @('hf') @('F0')))
+            & $add 'customer-app' @((M 'cust-1' @('1.0') @('C0')))
+            & $add 'si-customer-tool' @((M 'cust-2' @('2.0') @('C1')))           # looks like SI's, is not on SI's list
+            & $add 'team/signin-front' @((M 'cust-3' @('3.0') @('C2')))          # a nested name is not SI's either
+            $w = $f
+            $fails = [bool]$CatalogFails
+            $f.Seam.Catalog = { $w.Calls.Add('CATALOG'); if ($fails) { throw 'HTTP 401' }; @($w.Repos.Keys) }.GetNewClosure()
+            $f
+        }
+        $script:NotSI = @('customer-app', 'si-customer-tool', 'team/signin-front')
+    }
+    It 'an abandoned signin-front (and its base) is emptied to zero, one plain line each' {
+        $f = New-AbandonRegistry
+        $col = New-Object System.Collections.Generic.List[string]
+        $r = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current (& $script:Cur) -RunningKnown $true -RegistryResourceGroup 'rg-si' -InstallResourceGroup 'rg-si' -Log { param($l) $col.Add($l) }
+        $r.Done | Should -BeTrue
+        $f.Repos['signin-front'].Count | Should -Be 0
+        $f.Repos['signin-front-base'].Count | Should -Be 0
+        @($r.Lines) | Should -Contain 'signin-front: nothing runs from it any more, 2 images deleted'
+        @($r.Lines) | Should -Contain 'signin-front-base: nothing runs from it any more, 1 images deleted'
+        ($col -join "`n") | Should -Match 'signin-front@sha256:[0-9a-f]{12} \(2\.1\.1-src-2\): deleted -- nothing runs from this repository any more'
+        ($r.Lines -join "`n") | Should -Not -Match '#\d|1271' -Because 'customer-facing text carries no internal numbers'
+    }
+    It 'NEGATIVE: a repository SI did not create is never touched -- not listed, not read, not deleted (exact names, never a pattern)' {
+        $f = New-AbandonRegistry
+        $null = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current (& $script:Cur) -RunningKnown $true
+        foreach ($n in $script:NotSI) {
+            @($f.Calls | Where-Object { $_ -match (' ' + [regex]::Escape($n) + '(@|$)') }).Count | Should -Be 0 -Because "$n is not SI's"
+            $f.Repos[$n].Count | Should -Be 1
+        }
+        @($script:SIImagePruneOwnRepos) | Should -Contain 'signin-front'
+        foreach ($n in $script:SIImagePruneOwnRepos) { $n | Should -Match '^(si-[a-z-]+|signin-front(-base)?)$' }
+    }
+    It 'NEGATIVE: the list of repositories cannot be read -> nothing is deleted from a repository nothing runs; said once; the running repositories as before' {
+        $f = New-AbandonRegistry -CatalogFails
+        $r = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current (& $script:Cur) -RunningKnown $true
+        $r.Done | Should -BeTrue
+        $f.Repos['signin-front'].Count | Should -Be 2
+        $f.Repos['signin-front-base'].Count | Should -Be 1
+        @($f.Calls | Where-Object { $_ -like '*signin-front*' }).Count | Should -Be 0
+        @($r.Lines | Where-Object { $_ -like 'old images: the registry''s repositories could not be listed*nothing is deleted from repositories nothing runs*' }).Count | Should -Be 1
+        @($f.Repos['si-orchestrator'] | ForEach-Object { $_.Name }) | Should -Be @('orch-v4')
+    }
+    It 'a running repository is unchanged by it: signin-front that runs keeps its running image (the old one goes as an old image, not as an abandoned repository)' {
+        $f = New-AbandonRegistry
+        $cur = Snap @('si-orchestrator:v4-aaa', 'si-management:src-2', 'signin-front:2.1.1-src-2')
+        $r = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current $cur -RunningKnown $true
+        @($f.Repos['signin-front'] | ForEach-Object { $_.Name }) | Should -Be @('front-2')
+        @($f.Repos['signin-front-base'] | ForEach-Object { $_.Name }) | Should -Be @('front-base') -Because 'the base a running image is built from stays'
+        @($r.Lines | Where-Object { $_ -like 'signin-front*nothing runs from it*' }).Count | Should -Be 0
+        @($f.Repos['si-orchestrator'] | ForEach-Object { $_.Name }) | Should -Be @('orch-v4')
+        # a run in progress on signin-front: not abandoned either
+        $g = New-AbandonRegistry
+        $run = @((Snap @('signin-front:2.1.0-src-1')).Refs)
+        $null = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $g.Seam -Current (& $script:Cur) -RunningRefs $run -RunningKnown $true
+        @($g.Repos['signin-front'] | ForEach-Object { $_.Name }) | Should -Be @('front-1')
+    }
+    It 'an abandoned base repository keeps a base a running image is built from' {
+        $f = New-AbandonRegistry
+        $l = New-Object System.Collections.ArrayList
+        $null = $l.Add((M 'mcp-base-used' @('hm1') @('W0'))); $null = $l.Add((M 'mcp-base-old' @('hm0') @('Z0')))
+        $f.Repos['si-management-mcp-base'] = $l
+        $null = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $f.Seam -Current (& $script:Cur) -RunningKnown $true
+        @($f.Repos['si-management-mcp-base'] | ForEach-Object { $_.Name }) | Should -Be @('mcp-base-used') -Because 'web-s2 (running) is built on W0'
+    }
+    It 'NEGATIVE: an unproven update never lists the registry -- not healthy, the runs in progress not read, what runs not read back, the switch off' {
+        foreach ($args2 in @(@{ Healthy = $false; RunningKnown = $true; Current = (& $script:Cur); On = $true }, @{ Healthy = $true; RunningKnown = $false; Current = (& $script:Cur); On = $true },
+                             @{ Healthy = $true; RunningKnown = $true; Current = (Snap @() -Ok $false -Reason 'x'); On = $true }, @{ Healthy = $true; RunningKnown = $true; Current = (& $script:Cur); On = $false })) {
+            $f = New-AbandonRegistry
+            $null = Invoke-SIUpdaterImagePrune -On $args2.On -Healthy $args2.Healthy -Registry $f.Seam -Current $args2.Current -RunningKnown $args2.RunningKnown
+            $f.Calls.Count | Should -Be 0
+        }
+    }
+    It 'the step writes the release record BEFORE the first delete of an abandoned repository too' {
+        $f = New-AbandonRegistry
+        Mock Write-UpdLog { }
+        Mock Get-SIUpdaterRegistry { [pscustomobject]@{ id = 'x'; name = 'acrsi'; resourceGroup = 'rg-si'; loginServer = 'acrsi.azurecr.io' } }
+        $script:Seq = New-Object System.Collections.Generic.List[string]
+        $seq = $script:Seq; $origDelete = $f.Seam.Delete
+        $f.Seam.Delete = { param($Repo, $Digest) $seq.Add("DELETE $Repo"); & $origDelete $Repo $Digest }.GetNewClosure()
+        $r = Invoke-SIUpdaterImagePruneStep -ResourceGroup 'rg-si' -AcrName 'acrsi' -SubscriptionId 'sub' -Healthy $true -Before (& $script:Prev) -After (& $script:Cur) -RunningRefs @() `
+                 -Version '3.1.30' -Registry $f.Seam -Get { param($n) '' } -WriteSecret { param($n, $v) $script:Seq.Add('RECORD') }
+        $r.Done | Should -BeTrue
+        $script:Seq[0] | Should -Be 'RECORD'
+        @($script:Seq | Where-Object { $_ -eq 'DELETE signin-front' }).Count | Should -Be 2
+    }
+    It 'the real seam lists the repositories only at https://(login server)/v2/_catalog, with a list-only token, never following another host' {
+        $script:Uris = New-Object System.Collections.Generic.List[string]
+        $script:Bodies = New-Object System.Collections.Generic.List[string]
+        $rest = {
+            param($Method, $Uri, $Body, $Resource, $Headers)
+            $script:Uris.Add("$Method $Uri"); if ($Body) { $script:Bodies.Add([string]$Body) }
+            if ($Uri -like '*/oauth2/exchange') { return [pscustomobject]@{ Status = 200; Body = '{"refresh_token":"r"}'; Headers = @{} } }
+            if ($Uri -like '*/oauth2/token') { return [pscustomobject]@{ Status = 200; Body = '{"access_token":"a"}'; Headers = @{} } }
+            if ($Uri -like '*/v2/_catalog?n=1000') { return [pscustomobject]@{ Status = 200; Body = '{"repositories":["si-orchestrator","signin-front"]}'; Headers = @{ Link = '</v2/_catalog?last=signin-front&n=1000>; rel="next"' } } }
+            if ($Uri -like '*/v2/_catalog?last=*') { return [pscustomobject]@{ Status = 200; Body = '{"repositories":["Customer-App"]}'; Headers = @{ Link = '<https://evil.example.com/v2/_catalog?last=x>; rel="next"' } } }
+            [pscustomobject]@{ Status = 404; Body = ''; Headers = @{} }
+        }
+        $seam = New-SIUpdaterRegistrySeam -LoginServer $script:Login -Rest $rest -Token { param($r) 'aad-token' }
+        @(& $seam.Catalog) | Should -Be @('si-orchestrator', 'signin-front', 'customer-app')
+        foreach ($u in $script:Uris) { ($u -split ' ', 2)[1] | Should -BeLike "https://$($script:Login)/*" }
+        @($script:Bodies | Where-Object { $_ -like '*scope=*' }) | Should -Be @(@($script:Bodies | Where-Object { $_ -like '*scope=registry%3Acatalog%3A*' }))
+        @($script:Bodies | Where-Object { $_ -like '*scope=*' }).Count | Should -Be 1
+        # a listing that fails throws (the clean-up then deletes nothing from repositories nothing runs)
+        $bad = New-SIUpdaterRegistrySeam -LoginServer $script:Login -Rest { param($Method, $Uri) if ($Uri -like '*/oauth2/exchange') { return [pscustomobject]@{ Status = 200; Body = '{"refresh_token":"r"}' } }; if ($Uri -like '*/oauth2/token') { return [pscustomobject]@{ Status = 200; Body = '{"access_token":"a"}' } }; [pscustomobject]@{ Status = 403; Body = '' } } -Token { param($r) 'aad' }
+        { & $bad.Catalog } | Should -Throw '*could not be listed*'
     }
 }

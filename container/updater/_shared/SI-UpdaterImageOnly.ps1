@@ -21,7 +21,7 @@
     THEN (owner 2026-11-14: "when swap works we remove old"): ONLY when every part read back healthy, the install's own
     registry keeps only what runs -- every template, active revision, the pending self-update image and every image a running
     execution started with (SI-UpdaterImagePrune.ps1 Invoke-SIUpdaterImageOnlyPruneStep, called by SI-UpdaterInvardia.ps1);
-    each kept and each deleted image is said with its reason. A swap that is not proven deletes nothing (its way back).
+    each kept and each deleted image is said with its reason. A swap that is not proven deletes nothing.
     WHAT IT NEVER DOES: wait for, hold for or stop a running pipeline or execution (no run gate -- a running execution keeps
     the image it started with, the next one takes the new one); a database, schema, template or data step (none of the
     release script's steps after the roll, no database setup job, no size step).

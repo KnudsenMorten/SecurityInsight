@@ -1,5 +1,18 @@
 # What's new in SecurityInsight
 
+## 3.1.28 · 2026-11-16 · Security
+
+Only the images in use are kept.
+
+### New features
+
+None in this version.
+
+### Fixes
+
+- **Only the running images are kept** - After an update the registry keeps just the images in use; earlier ones are removed.
+- **Unused repositories are emptied** - A SecurityInsight repository nothing runs from is emptied; other repositories are never touched.
+
 ## 3.1.27 · 2026-11-15 · Security
 
 The right rights, set by the update itself.

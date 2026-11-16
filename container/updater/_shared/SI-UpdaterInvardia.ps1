@@ -569,7 +569,7 @@ function Invoke-SIUpdaterFromInvardia {
                 # owner 2026-11-14 ("when swap works we remove old") + the framework IMAGE-PRUNE amendment (Invardia 2026-11-14:
                 # the previous image goes only AFTER A JOB HAS SUCCEEDED ON THE NEW IMAGE): a swap that read back HEALTHY in every
                 # part deletes NOTHING now -- it is recorded as a pending clean-up, which a later updater run proves and does; a
-                # swap that is not healthy records nothing (the previous images are its way back)
+                # swap that is not healthy records nothing and deletes nothing
                 $ioHealthy = [bool]([int]$ioRes.Code -eq 0 -and "$($ioRes.Result)" -eq 'done')
                 $imageOnlyRan = $true
                 if ($s['ImageOnlyPrune']) { $null = & $s.ImageOnlyPrune $ioHealthy }
@@ -588,9 +588,9 @@ function Invoke-SIUpdaterFromInvardia {
                     Write-UpdLog ("code: deferred -- {0}" -f $gr.Reason); & $markWaits $gr; & $save; return 0
                 }
                 & $beat ('installing {0}' -f $code.Version)
-                # IMAGE-PRUNE (owner 2026-11-12): what ran until now -- the PREVIOUS release's images, as the install records them
-                # on its jobs and apps -- read BEFORE anything is rolled (SI-UpdaterImagePrune.ps1). Only read here; the
-                # clean-up itself runs after a healthy post-roll below. Not readable = nothing is pruned this run.
+                # IMAGE-PRUNE: what ran until now, as the install records it on its jobs and apps -- read BEFORE anything is rolled
+                # (SI-UpdaterImagePrune.ps1), for the release record's history only (owner 2026-11-16: current only -- it keeps no
+                # image). The clean-up itself runs after a healthy post-roll below.
                 $imgBefore = $null
                 if ($s['ImageSnapshot']) { $imgBefore = & $s.ImageSnapshot }
                 elseif ($real -and (Get-Command -Name Get-SIUpdaterImageSnapshot -ErrorAction SilentlyContinue)) {
@@ -639,9 +639,9 @@ function Invoke-SIUpdaterFromInvardia {
                     if ($post.Code -ne 0) { $rc = 1; $state.lastError = "code: $($post.Text)"; & $fail 'post-roll' ([string]$post.Text) }
                     # the updater moved onto this release: its update steps run in the second update, started at the end of this run
                     elseif ($post.PSObject.Properties['SelfAction'] -and [string]$post.SelfAction -eq 'rolled') { $gate.SecondPass = $true }
-                    # IMAGE-PRUNE (owner 2026-11-12): ONLY after the update AND its read-back ended well (the engine roll verified,
-                    # the post-roll healthy): the install's own registry keeps this release + the one before; one line per
-                    # repository. Never fails the update (SI-UpdaterImagePrune.ps1; SI_Updater_ImagePrune = off turns it off).
+                    # IMAGE-PRUNE (owner 2026-11-16, current only): ONLY after the update AND its read-back ended well (the engine roll
+                    # verified, the post-roll healthy): the install's own registry keeps ONLY what runs now -- no previous release;
+                    # one line per repository and per image. Never fails the update (SI-UpdaterImagePrune.ps1; SI_Updater_ImagePrune = off turns it off).
                     if ($post.Code -eq 0) {
                         & $beat 'old images'
                         if ($s['ImagePrune']) { $null = & $s.ImagePrune $imgBefore }
@@ -752,7 +752,7 @@ function Invoke-SIUpdaterFromInvardia {
             if ($s['ImageOnlyPendingPrune']) { $null = & $s.ImageOnlyPendingPrune }
             elseif ($real -and $Store -and (Get-Command -Name Invoke-SIUpdaterImageOnlyPendingPrune -ErrorAction SilentlyContinue)) {
                 $null = Invoke-SIUpdaterImageOnlyPendingPrune -ResourceGroup $ResourceGroup -AcrName $AcrName -SubscriptionId $SubscriptionId -Store $Store `
-                            -UpdaterJob (& $nameOf 'updater') -Get $get
+                            -UpdaterJob (& $nameOf 'updater') -Get $get -ReadSecret $s['ReadSecret'] -WriteSecret $s['WriteSecret']
             }
         }
     } catch {

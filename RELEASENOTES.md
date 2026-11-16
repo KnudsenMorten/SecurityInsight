@@ -13,6 +13,15 @@ SecurityInsight Pro and the Pro trial install from invardia.com, never from GitH
 [invardia.com/trial](https://invardia.com/trial/), and your installation page there gives your two lines.
 <!-- /install lines -->
 
+## v3.1.28 — only the images in use are kept
+
+### Security
+- **The image clean-up keeps only what runs.** After an update, the installation's container registry keeps only the
+  images its jobs and apps run (and their signatures); earlier images are removed. A rollback is a newer fixed release.
+- **Unused SecurityInsight repositories are emptied.** A repository SecurityInsight created that nothing runs from any
+  more is emptied; repositories SecurityInsight did not create are never touched. When what runs cannot be read, nothing
+  is deleted.
+
 ## v3.1.27 — the right rights, set by the update itself
 
 ### Security

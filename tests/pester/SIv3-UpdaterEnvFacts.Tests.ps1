@@ -19,11 +19,11 @@ BeforeAll {
             if ($List -and $Path -eq "$rg/resources") {
                 if ($f.ListFail) { throw 'HTTP 403 AuthorizationFailed' }
                 return @(
-                    [pscustomobject]@{ id = "$rg/providers/Microsoft.KeyVault/vaults/kv1"; name = 'kv1'; type = 'Microsoft.KeyVault/vaults'; location = 'westeurope' }
+                    [pscustomobject]@{ id = "$rg/providers/Microsoft.KeyVault/vaults/vault-a"; name = 'vault-a'; type = 'Microsoft.KeyVault/vaults'; location = 'westeurope' }
                     [pscustomobject]@{ id = "$rg/providers/Microsoft.App/containerApps/ca-si-management"; name = 'ca-si-management'; type = 'Microsoft.App/containerApps'; location = 'westeurope' }
                     [pscustomobject]@{ id = "$rg/providers/Microsoft.Insights/dataCollectionRules/dcr1"; name = 'dcr1'; type = 'Microsoft.Insights/dataCollectionRules' })
             }
-            if ($Path -like '*/vaults/kv1') { return [pscustomobject]@{ properties = [pscustomobject]@{ publicNetworkAccess = 'Enabled'; networkAcls = [pscustomobject]@{ defaultAction = 'Allow' }; secretValue = 'do-not-take'; accessPolicies = @([pscustomobject]@{ x = 1 }) } } }
+            if ($Path -like '*/vaults/vault-a') { return [pscustomobject]@{ properties = [pscustomobject]@{ publicNetworkAccess = 'Enabled'; networkAcls = [pscustomobject]@{ defaultAction = 'Allow' }; secretValue = 'do-not-take'; accessPolicies = @([pscustomobject]@{ x = 1 }) } } }
             if ($Path -like '*/containerApps/ca-si-management') {
                 return [pscustomobject]@{ identity = [pscustomobject]@{ type = 'UserAssigned'; userAssignedIdentities = [pscustomobject]@{ "$rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-si-web" = [pscustomobject]@{} } }
                     properties = [pscustomobject]@{ configuration = [pscustomobject]@{ ingress = [pscustomobject]@{ external = $true }; secrets = @([pscustomobject]@{ name = 's'; value = 'do-not-take' }) } } }
@@ -56,7 +56,7 @@ Describe 'the updater reads the environment report''s Azure facts (Read-SIUpdate
         $f.readUtc | Should -Be '2026-11-15T18:30:00Z'
         $f.error | Should -BeNullOrEmpty
         @($f.resources).Count | Should -Be 3
-        $kv = @($f.resources | Where-Object { $_.name -eq 'kv1' })[0]
+        $kv = @($f.resources | Where-Object { $_.name -eq 'vault-a' })[0]
         @($kv.network | ForEach-Object { '{0}={1}' -f $_.fact, $_.value }) | Should -Be @('public network access=Enabled', 'default network rule=Allow')
         $ca = @($f.resources | Where-Object { $_.name -eq 'ca-si-management' })[0]
         @($ca.network | ForEach-Object { '{0}={1}' -f $_.fact, $_.value }) | Should -Be @('external ingress=true', 'IP restrictions=0')

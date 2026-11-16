@@ -9513,8 +9513,8 @@ a waited-for run, or for its own second pass.
    and roll of the engine jobs (`setup/Invoke-SIContainerUpdate.ps1 -Apply`: build, roll, verify, restore on failure; ring 1
    installs the release's templates directly), then, Pro, the web app and MCP server (image built from the release, app
    rolled, a healthy revision and `/healthz` 200 awaited, the previous image restored on failure), the record, and the
-   updater itself last. Only when all of that ended well, the install's registry is cleared of images older than the
-   release before (*Old images leave the install's registry*, below). A second pass then runs that release's own update steps.
+   updater itself last. Only when all of that ended well, the install's registry keeps only the images the install runs
+   now (*Old images leave the install's registry*, below). A second pass then runs that release's own update steps.
 8. With no new code to roll: only the size steps. Then template packs from the template channel, then the web app's
    sign-in owner and name checks, and the run's state and any failure report.
 
@@ -9669,52 +9669,71 @@ in [A2b](#a2b-rights-per-identity); they are given by the database setup job, or
 `setup/Grant-SIUpdaterDatabase.ps1 -Apply` (or `Install-SIUpdaterJob.ps1 -GrantSql`). Its user is found by SID, so an
 existing one is reused.
 
-#### Old images leave the install's registry -- only this release and the one before are kept
+#### Old images leave the install's registry -- only the images the install runs are kept
 
 Microsoft Defender for Cloud scans every image STORED in a container registry, not only the images that run. Old images
-that no longer run kept showing vulnerabilities that the running images no longer have. So after every successful update
-the updater keeps, in the install's own registry, only the images of the release it now runs and of the release before it
--- the one a rollback of one version needs -- and deletes the others (`container/updater/_shared/SI-UpdaterImagePrune.ps1`,
-the same rule in every product of the platform).
+that no longer run kept showing vulnerabilities that the running images no longer have -- and an old image kept "just in
+case" ages: a vulnerability disclosed days later lands on it, Defender flags it again, and an attack-path finding on an
+internet-facing app comes back. So after every proven update the updater keeps, in the install's own registry, ONLY the
+images the install runs now, and deletes every other image -- no image of a previous release is kept, in any repository
+(owner decision 2026-11-16; `container/updater/_shared/SI-UpdaterImagePrune.ps1`, the same rule in every product of the
+platform). Going back to an earlier release is a roll-forward: a new release is published, and its update builds every
+image it needs.
 
 - **When.** Only after the update AND its read-back ended well: the engine jobs rolled and verified, the web app and MCP
-  server healthy, the record written. A failed, held or unread update deletes nothing.
-- **What is kept** comes only from what the install records, never from what a tag looks like:
-  - the images the install runs now, read back from Azure after the update: every container of every job and app of the
-    install's resource group (the engine jobs, the updater, the web app, the MCP server, the sign-in front), every active
-    revision of each app, and an updater image that is still waiting to be applied;
-  - the images it ran before this update, read the same way just before anything was rolled, and the release record of the
-    last update (Key Vault secret `SI-Release-Images`: the release then running and its images);
-  - the base images those images are built on (`si-base`, `si-updater-base`, `<image>-base`): a base is kept when all its
-    layers are the first layers of a kept image, read from the registry's own image descriptions;
-  - every tag of a kept image (images are deleted by their content address, never one a kept tag points at), and every
-    platform image of a kept multi-platform image.
-- **The same release again** (the updater's second pass after it moved onto the new release, or a re-run of a release
-  already recorded): what ran before this run is that release itself, so the release before it is taken from the release
-  record's previous release, and the record keeps that previous release when it is written again. Not recorded = nothing
-  is deleted, and the log says the previous release is not known.
-- **When it cannot be proven old, it stays.** If what ran before the update is not known (it could not be read, or nothing
-  was recorded), nothing is deleted and the log says so. An image or repository that cannot be read is kept; a repository
-  the install records nothing for is never touched; an image locked against deletion is kept.
+  server healthy, the record written, and what runs now read back. A failed, held or unread update deletes nothing -- its
+  roll restores the images that ran before, which are still there. After an **image-only swap** (the short security path)
+  nothing is deleted at the swap: the clean-up waits until the swap is proven -- a job has SUCCEEDED on the new image and
+  the web app's new revision is healthy and running -- and a later updater run (the nightly one, an update now) then
+  deletes, the same way. A failed run on the new image, or one that cannot be read, is not a proof: nothing is deleted.
+- **What is kept** comes only from what the install runs, read back from Azure, never from what a tag looks like:
+  - every container of every job and app of the install's resource group (the engine jobs, the updater, the web app, the
+    MCP server, the sign-in front), every ACTIVE revision of each app, and an updater image that is still waiting to be
+    applied;
+  - every image a run IN PROGRESS started with (a pipeline that began before the update keeps its image: a replica it
+    restarts must still find it). If the runs in progress cannot be read, nothing is deleted, said in one line;
+  - the base images a kept image is built FROM (`si-base`, `si-updater-base`, `<image>-base`): a base is kept when all its
+    layers are the first layers of a kept image, read from the registry's own image descriptions. A base only an older
+    image was built on goes;
+  - every tag of a kept image (images are deleted by their content address, never one a kept tag points at), every platform
+    image of a kept multi-platform image, and every signature or attestation of a kept image (an image description whose
+    subject is a kept image, or a `sha256-<digest>.*` tag of one), also when one signs another.
+- **The release record** (Key Vault secret `SI-Release-Images`) is written BEFORE the first delete -- what runs now, and
+  the release before it as history only; it keeps no image. If it cannot be written (or there is no place to write it),
+  nothing is deleted this time, said once. The same release again (the updater's second pass after it moved onto the new
+  release, or a re-run) keeps the record's release before as it is.
+- **Repositories nothing runs from any more** (framework IMAGE-PRUNE point 3, 2026-11-16). The whole registry is listed,
+  and every repository SI itself created that no job, app, active revision or run in progress uses is emptied to zero --
+  for example `signin-front` at an install that moved to Microsoft's built-in sign-in. "Created by SI" is one explicit
+  list of exact names, never a pattern (`$script:SIImagePruneOwnRepos`: `si-orchestrator`, `si-base`,
+  `si-orchestrator-base`, `si-updater`, `si-updater-base`, `si-management`, `si-management-base`, `si-management-mcp`,
+  `si-management-mcp-base`, `signin-front`, `signin-front-base`, `si-management-probe`). A base-layer repository on the list
+  still keeps a base a running image is built from. A repository SI did not create -- a customer's own, a nested name, a
+  name that only looks like SI's -- is never listed, read or touched. If the list of repositories cannot be read, nothing
+  is deleted from a repository nothing runs (said once; the next update tries again). One plain line each:
+  *"signin-front: nothing runs from it any more, 2 images deleted"*.
+- **When it cannot be proven unused, it stays.** An image or repository that cannot be read is kept; an image locked
+  against deletion is kept.
 - **Only the install's own registry.** Only the registry the updater builds into, and only while it is in the install's own
   resource group (a registry elsewhere may hold images of others: nothing is deleted there, said once). Only the registry's
   own interface is used, with the updater's existing sign-in and the delete right of its registry role; nothing else in
   Azure is changed.
-- **What it says.** After the deletes the registry is read again, and the run log has one line per repository, for example
-  *"si-orchestrator: 3 old images deleted, 2 left (this release and the one before)"*. The registry completes a delete a
-  moment after it answers it, so while an image it took as deleted is still listed, the listing is read again -- at most
-  three more times, with short pauses (5, 10 and 15 seconds) and a sign of life before each; if one is still listed after
-  that, the line says the deletes are still completing and gives the count it saw. A kept image that is missing is always
-  said as a warning. The same counts are recorded for
-  the web app and the health report (`cfg.InstallState 'ImagePrune'`) and in the release record. A delete the registry
-  refuses is said and kept; the next update tries again. It never fails the update.
-- **A rollback.** A rollback to the release before finds its images kept. A rollback further back is an ordinary update to
-  an older release: the update builds every image that is missing from that signed release, as it does for any release.
+- **What it says.** Each repository's plan before its deletes, every kept and every deleted image in its own line with its
+  reason, and after the deletes the registry is read again: one line per repository, for example
+  *"si-orchestrator: 3 old images deleted, 1 left (what runs)"*. The registry completes a delete a moment after it answers
+  it, so while an image it took as deleted is still listed, the listing is read again -- at most three more times, with
+  short pauses (5, 10 and 15 seconds) and a sign of life before each; if one is still listed after that, the line says the
+  deletes are still completing and gives the count it saw. A kept image that is missing is always said as a warning. The
+  same counts are recorded for the web app and the health report (`cfg.InstallState 'ImagePrune'`) and in the release
+  record. A delete the registry refuses is said and kept; the next update tries again. The update's sign of life keeps
+  beating during the clean-up. It never fails the update.
+- **Going back.** There is no kept previous image. To go back, Invardia publishes a new release (or an older version with
+  a higher sequence); its update builds every image that is missing from that signed release, as it does for any release.
 - **The switch.** `SI_Updater_ImagePrune` -- on by default; `off` keeps every image (set in the configuration, or as
   `SI_CFG_SI_Updater_ImagePrune` / `SI_UPDATER_IMAGE_PRUNE` on the updater job).
-- **The first update after this version.** The release that brings this step is installed by the updater of the release
-  before it, which does not prune; the old images go with the next update after it.
-
+- **Which version's code runs it.** The clean-up runs in the updater that rolls the release (the OLD one), so this rule acts
+  from the update AFTER the release that carries it: that release is installed by the updater before it, which still keeps
+  the previous release; the next update (or the updater's second pass on the new code) keeps only what runs.
 #### The security baseline quick wins -- registry password off, Key Vault purge protection, SQL auditing
 
 Three Azure settings of the install itself (`setup/_shared/SI-SecurityBaseline.ps1`, one library for both ways they reach

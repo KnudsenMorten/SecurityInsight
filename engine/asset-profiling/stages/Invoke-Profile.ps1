@@ -22,6 +22,12 @@
       Verdict.SI_RuleTags    = unique flattened set of tags from matched rules
 #>
 
+function Get-SIProfileExceptionStop {
+    <# PURE. The line a run's endpoint profile stops with when the per-server software exceptions could not be read. #>
+    param([string]$Reason)
+    'The endpoint profile was NOT stored this run: the per-server software exceptions could not be read ({0}). Profiling without them would change the tier of a server an Admin excepted a detection on; every device keeps its last good profile and the next run tries again.' -f $Reason
+}
+
 function Invoke-SIProfile {
     [CmdletBinding()]
     param(
@@ -81,6 +87,33 @@ function Invoke-SIProfile {
         $s = $indexStats[$k]
         if ($s.Built) { Write-SIInfo ("index '{0}' built ({1} entries, {2} ms)" -f $k, $s.Rows, $s.Ms) }
         else          { Write-SIInfo ("index '{0}' NOT built ({1})" -f $k, $s.Error) }
+    }
+
+    # ---- Pass 2.1: PER-SERVER SOFTWARE EXCEPTIONS (#1219, Pro) ----
+    # An Admin marked one rule's match of one software a false positive on one CI (sidata.CiSoftwareException): that rule does
+    # not look at that software on the CI's Defender devices (Test-SIKind_hasSoftwareInstalled). None in force (or no
+    # database) = an empty index = every rule exactly as before (a database without the table answers no rows).
+    # A FAILED read uses the LAST GOOD read (owner 2026-11-17; Read-SIDeviceSoftwareExceptions, said as a warning) -- never a
+    # profile without the exceptions an Admin set. Only when there is no last good copy either does the endpoint profile stop
+    # before anything is written (every device keeps its last good profile; Get-SIProfileExceptionStop).
+    if ($engine -eq 'endpoint') {
+        $_swxError = $null
+        try {
+            if (-not (Get-Command -Name Read-SIDeviceSoftwareExceptions -ErrorAction SilentlyContinue)) { . (Join-Path (Split-Path -Parent $sharedRoot) '_shared\SI-SoftwareException.ps1') }
+            $_swx = Read-SIDeviceSoftwareExceptions
+            if ($_swx.Error) { $_swxError = [string]$_swx.Error }
+            elseif ($_swx.FromCache) { Write-SIWarn ('per-server software exceptions could not be read ({0}) -- the last good read{1} is applied this run, so every excepted detection stays excepted' -f $_swx.ReadError, $(if ($_swx.CacheAt) { ' (' + ([string]$_swx.CacheAt) + ' UTC)' } else { '' })) }
+            if (-not $_swx.Error -and $_swx.Index.Count -gt 0) {
+                $script:SIRuleIndexes['softwareExceptions'] = $_swx.Index
+                $script:SIRuleIndexes['softwareExceptionsApplied'] = @{}
+                Write-SIInfo ('per-server software exceptions: {0} device(s) carry one' -f $_swx.Index.Count)
+            }
+        } catch { $_swxError = $_.Exception.Message }
+        if ($null -ne $_swxError) {
+            $_stop = Get-SIProfileExceptionStop -Reason $_swxError
+            Write-SIWarn $_stop
+            throw $_stop
+        }
     }
 
     # ---- Pass 2.5: BUCKET RULES BY OS CLASS ----
@@ -265,6 +298,26 @@ function Invoke-SIProfile {
         if ($matchArr.Count -gt 0) { $matchedAssets++ } else { $noMatchAssets++ }
     }
     Write-SIInfo ("per-asset eval: assets-matched={0} no-match={1} total-matches={2}" -f $matchedAssets, $noMatchAssets, $totalMatches)
+    try {
+        if ($script:SIRuleIndexes -is [System.Collections.IDictionary] -and $script:SIRuleIndexes['softwareExceptionsApplied'] -and $script:SIRuleIndexes['softwareExceptionsApplied'].Count -gt 0) {
+            Write-SIInfo ('per-server software exceptions: {0} software match(es) of a rule were left out on the server an Admin excepted them for' -f $script:SIRuleIndexes['softwareExceptionsApplied'].Count)
+        }
+    } catch { }
+    # #1219 the software detections with path / install-kind / version conditions: how many devices they were evaluated for,
+    # and how many matched by name only because their software evidence was unknown (said, never a silent tier drop)
+    try {
+        $srh = $null; $srf = $null
+        if ($script:SIRuleIndexes -is [System.Collections.IDictionary]) { $srh = $script:SIRuleIndexes['softwareRuleHits']; $srf = $script:SIRuleIndexes['softwareRuleFallbacks'] }
+        if ($srh -and $srh.Count -gt 0) {
+            $nf = 0; if ($srf) { $nf = $srf.Count }
+            $line = 'software rule conditions (path / install kind / version): evaluated for {0} device(s)' -f $srh.Count
+            if ($nf -gt 0) {
+                $why = @($srf.Values | Group-Object | Sort-Object Count -Descending | ForEach-Object { '{0} {1}' -f $_.Count, $_.Name }) -join ', '
+                $line += ('; {0} device(s) matched by name only because their software evidence is unknown ({1}) -- their tier from these rules is as before' -f $nf, $why)
+            }
+            Write-SIInfo $line
+        }
+    } catch { }
     # per-rule fire breakdown so operators see WHICH rules fired
     if ($perRuleHits.Count -gt 0) {
         Write-SIInfo 'rule-fire summary:'

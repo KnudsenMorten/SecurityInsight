@@ -7,6 +7,7 @@
   "actions": [
     { "action": "access.assignment.save", "source": "web", "what": "a role / scope assignment created or changed (Configuration > Access (roles + scopes))" },
     { "action": "access.assignment.remove", "source": "web", "what": "a role / scope assignment removed (Configuration > Access (roles + scopes))" },
+    { "action": "access.directory.search", "source": "web", "what": "an Admin asked SecurityInsight's engine to search the tenant for a name the people picker did not find (the text and the reason; the engine reads only and stores the names found)" },
     { "action": "audit.trail.export", "source": "web", "what": "the audit trail exported (CSV or Excel) -- the filter and the row count" },
     { "action": "audit.trail.print", "source": "web", "what": "the audit trail's print view opened (evidence)" },
     { "action": "audit.retention.apply", "source": "job", "what": "audit rows older than the retention removed by the data sync's retention step" },
@@ -52,6 +53,8 @@
     { "action": "datamodel.item.stage", "source": "web", "what": "a risk factor or provider mapping of the Pro data model changed, turned off or put back (Configuration > Risk factors), staged" },
     { "action": "cioverride.set.stage", "source": "web", "what": "a manual override of one CI field (tier, purpose, category, department or a CMDB field) set or changed, with its reason and expiry, staged" },
     { "action": "cioverride.remove.stage", "source": "web", "what": "the removal (soft) of a manual CI override staged" },
+    { "action": "cisoftwareexception.set.stage", "source": "web", "what": "a software detection marked as a false positive on one server (this rule, this software, this CI), with its reason, staged; the CI build and the endpoint tier then leave that software out of the rule for that server" },
+    { "action": "cisoftwareexception.remove.stage", "source": "web", "what": "the undo (soft) of a per-server software exception staged -- the rule uses that software on that server again" },
     { "action": "cisuspect.decide.stage", "source": "web", "what": "a decision about a group of correlation suspects staged -- the same machine (the next CI build merges them) or not the same machine, with its reason" },
     { "action": "cisuspect.remove.stage", "source": "web", "what": "the removal (soft) of a correlation decision staged -- a \"same machine\" decision is split again by the next CI build" },
     { "action": "cibuild.cutoff.set", "source": "setup", "what": "the one-time CI cut-off set (setup\\Set-SICiCutoff.ps1, hidden -- not a setting; #1100): the CI build ignores the records collected before it and retires at once the CIs built only from them -- the time, the reason, the CIs counted to retire, the data-out outputs that are on" },

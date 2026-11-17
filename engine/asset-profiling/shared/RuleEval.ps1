@@ -51,6 +51,12 @@
     later. No stage calls it today and no setting turns it on.
 #>
 
+# the software evidence (#1219): the optional path / install-kind / version conditions of hasSoftwareInstalled. Loaded when
+# it is there -- a stripped copy of this file (the rule lint's scratch tree) runs without it, and a conditioned detection then
+# matches by name as before.
+$script:SIRuleEvalEvidenceFile = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) '_shared\SI-SoftwareEvidence.ps1'
+if (-not (Get-Command -Name Test-SISoftwareSpecConditions -ErrorAction SilentlyContinue) -and (Test-Path -LiteralPath $script:SIRuleEvalEvidenceFile)) { . $script:SIRuleEvalEvidenceFile }
+
 # ----------------------------------------------------------------------------
 # Helpers (asset-row reader + safe regex match)
 # ----------------------------------------------------------------------------
@@ -326,7 +332,11 @@ function Test-SIKind_hasEntraExtensionAttributeTag {
 
 function Test-SIKind_hasSoftwareInstalled {
     <# Looks up MDE_DeviceId in tvmSoftware index. Pattern '<vendor>/<name>'
-       allows wildcards via -like. Returns true on first match. #>
+       allows wildcards via -like. Returns true on first match.
+       OPTIONAL CONDITIONS (#1219): pathPatterns / notPathPatterns / installKinds / versionRange, checked only AFTER the name
+       matched, against the device's software evidence (Metadata 'SoftwareEvidence', engine/_shared/SI-SoftwareEvidence.ps1
+       Test-SISoftwareSpecConditions -- the fallback is there: evidence unknown = matches by name as before, and said). A
+       detection without them returns exactly what it returned before. #>
     param([Parameter(Mandatory)]$Asset, [Parameter(Mandatory)]$Args)
     $patterns = @($Args.tvmSoftwareNames)
     if (-not $patterns -or $patterns.Count -eq 0) { return $false }
@@ -340,13 +350,99 @@ function Test-SIKind_hasSoftwareInstalled {
     $pairs = $idx[$devId.ToLower()]
     if (-not $pairs) { return $false }
 
+    # A PER-SERVER EXCEPTION (an Admin marked THIS rule's match of a software a false positive on THIS server, Pro; engine\
+    # _shared\SI-SoftwareException.ps1): that software is not looked at for this rule on this device -- every other software,
+    # every other rule and every other device exactly as before. No exception for the device + rule = $null = the loop as before.
+    $excepted = Get-SIRuleEvalSoftwareExceptions -DeviceId $devId.ToLower() -Spec $Args
+
+    $named = $false
     foreach ($pair in $pairs) {
         foreach ($p in $patterns) {
             $glob = ([string]$p).ToLower()
-            if ($pair -like $glob -or $pair -like ('*/' + $glob)) { return $true }
+            if ($pair -like $glob -or $pair -like ('*/' + $glob)) {
+                if ($null -ne $excepted -and $excepted.Contains([string]$pair)) { Add-SIRuleEvalSoftwareExceptionUse -DeviceId $devId.ToLower() -Spec $Args -Software ([string]$pair); continue }
+                $named = $true; break
+            }
         }
+        if ($named) { break }
+    }
+    if (-not $named) { return $false }
+    if (-not (Test-SIRuleEvalSoftwareConditionsPresent -Spec $Args)) { return $true }
+    return (Invoke-SIRuleEvalSoftwareConditions -Asset $Asset -Spec $Args -DeviceId $devId.ToLower() -Patterns $patterns -Exclude $excepted)
+}
+
+function Get-SIRuleEvalSoftwareExceptions {
+    <# The software ('vendor/product', a case-insensitive set) excepted for THIS rule (-Spec's __ruleId) on THIS device, from
+       $script:SIRuleIndexes.softwareExceptions (device -> rule id -> set; Profile fills it, Read-SIDeviceSoftwareExceptions);
+       $null when there is none -- the common case, and every caller then runs exactly as before. #>
+    param([string]$DeviceId, $Spec)
+    if (-not (Get-Variable -Name SIRuleIndexes -Scope Script -ErrorAction SilentlyContinue)) { return $null }
+    $ri = $script:SIRuleIndexes
+    if (-not ($ri -is [System.Collections.IDictionary]) -or -not $ri.Contains('softwareExceptions')) { return $null }
+    $ix = $ri['softwareExceptions']
+    if ($null -eq $ix -or $ix.Count -eq 0 -or -not $DeviceId -or -not $ix.ContainsKey($DeviceId)) { return $null }
+    $rid = ''
+    if ($Spec -is [System.Collections.IDictionary]) { if ($Spec.Contains('__ruleId')) { $rid = [string]$Spec['__ruleId'] } }
+    elseif ($null -ne $Spec -and $Spec.PSObject.Properties['__ruleId']) { $rid = [string]$Spec.__ruleId }
+    $byRule = $ix[$DeviceId]
+    if (-not $rid -or $null -eq $byRule -or -not $byRule.ContainsKey($rid)) { return $null }
+    return , $byRule[$rid]
+}
+
+function Add-SIRuleEvalSoftwareExceptionUse {
+    <# Records that an exception took a software match away from a rule on a device (device|rule -> the software), so Profile
+       can say how many exceptions acted this run. #>
+    param([string]$DeviceId, $Spec, [string]$Software)
+    if (-not (Get-Variable -Name SIRuleIndexes -Scope Script -ErrorAction SilentlyContinue)) { return }
+    $ri = $script:SIRuleIndexes
+    if (-not ($ri -is [System.Collections.IDictionary])) { return }
+    if (-not $ri.Contains('softwareExceptionsApplied') -or $null -eq $ri['softwareExceptionsApplied']) { $ri['softwareExceptionsApplied'] = @{} }
+    $rid = ''; if ($Spec -is [System.Collections.IDictionary] -and $Spec.Contains('__ruleId')) { $rid = [string]$Spec['__ruleId'] }
+    $ri['softwareExceptionsApplied'][('{0}|{1}|{2}' -f $DeviceId, $rid, $Software)] = $true
+}
+
+function Test-SIRuleEvalSoftwareConditionsPresent {
+    <# Does the detection carry pathPatterns / notPathPatterns / installKinds / versionRange (any non-empty)? #>
+    param($Spec)
+    foreach ($k in 'pathPatterns', 'notPathPatterns', 'installKinds', 'versionRange') {
+        $v = $null
+        if ($Spec -is [System.Collections.IDictionary]) { if ($Spec.Contains($k)) { $v = $Spec[$k] } } else { $pp = $Spec.PSObject.Properties[$k]; if ($pp) { $v = $pp.Value } }
+        if ($null -ne $v -and @(@($v) | Where-Object { $null -ne $_ -and ([string]$_).Trim() }).Count -gt 0) { return $true }
     }
     return $false
+}
+
+function Invoke-SIRuleEvalSoftwareConditions {
+    <#
+        The conditioned half of hasSoftwareInstalled (the name already matched; -Spec = the detection's arguments -- never a
+        parameter named Args in a plain function, where PowerShell's own $args wins). Evaluated by the software evidence module;
+        the detection's key is recorded for the device when it matches (si_software_rule_hits -- the CI rule reads it), every
+        device it was evaluated for is marked (so the CI tells "not matched" from "not evaluated"), and a match made only
+        because the evidence was unknown is counted ($script:SIRuleIndexes.softwareRuleFallbacks -- said by Profile).
+    #>
+    param($Asset, $Spec, [string]$DeviceId, [object[]]$Patterns,
+          # the software a per-server exception takes away from this rule on this device (none = as before)
+          $Exclude)
+    $ruleId = ''; if ($Spec -is [System.Collections.IDictionary] -and $Spec.Contains('__ruleId')) { $ruleId = [string]$Spec['__ruleId'] }
+    $hasIdx = (Get-Variable -Name SIRuleIndexes -Scope Script -ErrorAction SilentlyContinue) -and ($script:SIRuleIndexes -is [System.Collections.IDictionary])
+    if ($hasIdx) {
+        if (-not $script:SIRuleIndexes.Contains('softwareRuleHits') -or $null -eq $script:SIRuleIndexes['softwareRuleHits']) { $script:SIRuleIndexes['softwareRuleHits'] = @{} }
+        if (-not $script:SIRuleIndexes.Contains('softwareRuleFallbacks') -or $null -eq $script:SIRuleIndexes['softwareRuleFallbacks']) { $script:SIRuleIndexes['softwareRuleFallbacks'] = @{} }
+    }
+    # the module missing (a stripped copy of the engine): today's answer, counted as a fallback
+    if (-not (Get-Command -Name Test-SISoftwareSpecConditions -ErrorAction SilentlyContinue)) {
+        if ($hasIdx) { $script:SIRuleIndexes['softwareRuleFallbacks'][$DeviceId] = 'module-missing' }
+        return $true
+    }
+    $evidence = Get-SIAssetField -Asset $Asset -Name 'SoftwareEvidence'
+    $r = Test-SISoftwareSpecConditions -Spec $Spec -Evidence $evidence -Patterns @($Patterns) -Exclude $Exclude
+    if ($hasIdx) {
+        $hits = $script:SIRuleIndexes['softwareRuleHits']
+        if (-not $hits.ContainsKey($DeviceId)) { $hits[$DeviceId] = New-Object 'System.Collections.Generic.SortedSet[string]' ([StringComparer]::Ordinal); [void]$hits[$DeviceId].Add('-') }
+        if ($r.Match -and $ruleId) { [void]$hits[$DeviceId].Add((Get-SISoftwareSpecKey -RuleId $ruleId -Spec $Spec)) }
+        if ($r.Fallback) { $script:SIRuleIndexes['softwareRuleFallbacks'][$DeviceId] = [string]$r.Reason }
+    }
+    return [bool]$r.Match
 }
 
 function Test-SIKind_groupMembership {

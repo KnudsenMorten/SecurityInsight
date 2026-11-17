@@ -10,6 +10,8 @@
         { "target": "Linked objects", "from": "si_linked_objects", "op": "render:provider:id" }
 
       from   an SI field of the item | finding.<x> / summary.<x> / record.<x> (a property of the item) |
+             extra.<field> (a value of the finding field map, SI-FindingFieldMapper.ps1: worked out once per item, only
+             when the map has such a column; an item that already carries its 'extra' object is read as it is) |
              a system token: $run_id  $run_time  $changed_at  $row_hash  $const:<value>
              #914 the contract envelope, filled by the data-out writer: $action $batch_id $cleared $reason $replaces
       op     the CLOSED output operation set (no code runs from a map):
@@ -27,6 +29,7 @@
 #>
 
 . (Join-Path $PSScriptRoot 'SI-FieldMapper.ps1')
+. (Join-Path $PSScriptRoot 'SI-FindingFieldMapper.ps1')
 
 function Get-SIOutputColumnName {
     <# PURE. The name an output gives one column: its 'as' (the customer's rename) when set, else its target. #>
@@ -34,6 +37,18 @@ function Get-SIOutputColumnName {
     $as = [string](Get-SIItemValue $Column 'as')
     if (-not [string]::IsNullOrWhiteSpace($as)) { return $as.Trim() }
     return [string]$Column.target
+}
+
+function Get-SIOutputSoftColumns {
+    <#
+        PURE. The columns of an output map that are ON BY DEFAULT ("soft": true -- shipped on, not chosen by an admin), by the
+        name they are sent under. A ServiceNow output sends such a column only when its Import Set table has it; missing, it is
+        left out of the send with a warning (Compare-SISnowSendColumns -Soft) -- never a hold of the whole push. A column an
+        admin chose (the override carries no "soft") holds as before when the table lacks it.
+    #>
+    param($Map)
+    if ($null -eq $Map) { return }
+    @($Map.columns) | Where-Object { $null -ne $_ -and ($($sv = Get-SIItemValue $_ 'soft'; $sv -eq $true -or [string]$sv -ieq 'true')) } | ForEach-Object { Get-SIOutputColumnName $_ }
 }
 
 function Get-SIOutputColumnsInOrder {
@@ -78,7 +93,20 @@ function Get-SIOutputValue {
     }
     $m = [regex]::Match($From, '^(finding|summary|record)\.(.+)$')
     if ($m.Success) { return (Get-SIItemValue $Item $m.Groups[2].Value) }
+    if ($From.StartsWith('extra.')) { return (Get-SIOutputExtraValue -Carrier (Get-SIItemValue $Item 'extra') -Field $From.Substring(6)) }
     return (Get-SIItemValue $Item $From)
+}
+
+function Get-SIOutputExtraValue {
+    <# PURE. One field of a finding's carrier (the finding field map's values): a dictionary, an object or its JSON text. #>
+    param($Carrier, [string]$Field)
+    if ($null -eq $Carrier -or $Carrier -is [System.DBNull]) { return $null }
+    if ($Carrier -is [string]) {
+        $t = $Carrier.Trim()
+        if (-not $t.StartsWith('{')) { return $null }
+        try { $Carrier = ConvertFrom-Json -InputObject $t } catch { return $null }
+    }
+    Get-SIItemValue $Carrier $Field
 }
 
 function Invoke-SIOutputOp {
@@ -186,16 +214,50 @@ function Invoke-SIOutputMap {
     # row look changed to a connector's delta
     $cols = @(Get-SIOutputColumnsInOrder -Columns @($Map.columns))
     $hashCols = @($Map.columns)
+    # extra.<field> columns (the finding field map): the item's carrier is worked out ONCE per item, only the fields the map
+    # reads, and only when the map has such a column -- a map without one runs exactly as before
+    $xFields = @(Get-SIOutputExtraFields -Map $Map)
+    $xMap = $null; $xPlan = $null
+    if ($xFields.Count) {
+        if ($Context.ContainsKey('FindingFields')) { $xMap = $Context.FindingFields } else { $xMap = Get-SIFindingFieldMap }
+        if ($null -ne $xMap) { $xPlan = Get-SIFindingFieldPlan -Map $xMap }
+    }
+    # the finding mark of a per-server software exception (si_detection_excepted, column shipped off): read ONLY when a
+    # switched-on column reads it -- the exceptions in force, once per output run (a failed read throws: never an unknown value sent)
+    $xEx = $null
+    if ($null -ne $xPlan -and @($xFields | ForEach-Object { $_ } | ForEach-Object { [string]$_ }) -contains 'si_detection_excepted') {
+        if ($Context.ContainsKey('SoftwareExceptions')) { $xEx = $Context.SoftwareExceptions }
+        else {
+            if (-not (Get-Command -Name Read-SIOutputSoftwareExceptionIndex -ErrorAction SilentlyContinue)) { . (Join-Path (Split-Path -Parent $PSScriptRoot) '_shared\SI-SoftwareException.ps1') }
+            $xEx = Read-SIOutputSoftwareExceptionIndex -Invoke $Context.SqlInvoke
+        }
+    }
     $sha = [System.Security.Cryptography.SHA256]::Create()
     try {
         foreach ($it in $Items) {
             if ($null -eq $it -or -not (Test-SIOutputFilter -Item $it -Filter $Map.filter)) { continue }
             $row = [ordered]@{}
             $hashCol = $null
+            $carrier = $null
             foreach ($c in $cols) {
                 $from = [string]$c.from
                 $name = Get-SIOutputColumnName $c
                 if ($from -eq '$row_hash') { $hashCol = $name; $row[$hashCol] = $null; continue }
+                if ($xFields.Count -and $from.StartsWith('extra.')) {
+                    if ($null -eq $carrier) {
+                        $own = Get-SIItemValue $it 'extra'
+                        if ($null -ne $own -and -not ($own -is [System.DBNull])) { $carrier = $own }
+                        elseif ($null -ne $xPlan) {
+                            if ($null -ne $xEx) { Add-SIFindingDetectionExcepted -Item $it -Index $xEx }
+                            $carrier = ConvertTo-SIFindingFieldValues -Item $it -Map $xMap -ValueMaps $ValueMaps -Fields $xFields -Plan $xPlan
+                        }
+                        else { $carrier = [ordered]@{} }
+                    }
+                    $v = Get-SIOutputExtraValue -Carrier $carrier -Field $from.Substring(6)
+                    $v = Invoke-SIOutputOp -Value $v -Op ([string]$c.op) -Item $it -ValueMaps $ValueMaps
+                    $row[$name] = $v
+                    continue
+                }
                 $v = Get-SIOutputValue -Item $it -From $from -Context $Context
                 $v = Invoke-SIOutputOp -Value $v -Op ([string]$c.op) -Item $it -ValueMaps $ValueMaps
                 $row[$name] = $v

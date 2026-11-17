@@ -5107,6 +5107,98 @@ CREATE TABLE sidata.DataOutLock (
 );
 
 -- ---------------------------------------------------------------------------------------------
+-- WHERE EACH SOFTWARE COPY IS (ADDED 2026-11-16, REQUIREMENTS #1219 + #1277, one lane; owner: "every full path, every drive
+-- and the registry, plus the application name"). Defender's software evidence (advanced hunting DeviceTvmSoftwareEvidenceBeta),
+-- read by the endpoint collection one page of devices at a time (engine\asset-profiling\discovery\Get-SIDefenderSoftwareEvidence.ps1),
+-- every path -- no cap -- with what SecurityInsight derives from it (engine\_shared\SI-SoftwareEvidence.ps1).
+-- ONLY THE NEWEST RUN IS KEPT (owner 2026-11-16: "Keep only the newest run"): one device's rows are the evidence of the run
+-- that last read it, never an older run's.
+--   SoftwareEvidence        one row per device x vendor x product x version x path: PathType (disk | registry), FullPath, Drive,
+--                           InstallKind (installed | bundled | user-profile | data-folder | registry-only | unknown),
+--                           Application (the product folder the path lies in -- named from the device's own Defender software
+--                           inventory when it matches: ApplicationSource 'inventory' with its vendor / version; else the folder
+--                           name: 'folder'), LastSeen (Defender's), CollectionTime (the run that wrote it). DeviceId = the
+--                           Defender device id: the CI is found through sidata.CiLink (sidata.vSoftwareEvidence).
+--   SoftwareEvidenceDevice  one row per device: State 'read' (its evidence of the run in CollectionTime; Rows may be 0 = nothing
+--                           found), 'unknown' (its evidence could not be read that run -- it holds NO rows: an older run's paths
+--                           are never shown as current) or 'writing' (a write in progress: its rows are not shown until the
+--                           write ends with 'read'). A run REPLACES a device's rows: the old rows go and the state turns
+--                           'writing' in one transaction, the rows follow in chunks, the last chunk sets 'read' -- readers take
+--                           rows of 'read' devices only, so a device is shown whole or not at all.
+-- Retention: a device whose evidence was last written more than SI_ActiveStaleDays (default 30) before the newest run is
+-- removed with its rows (Invoke-SISoftwareEvidenceRetention). Additive and guarded.
+-- ---------------------------------------------------------------------------------------------
+IF OBJECT_ID('sidata.SoftwareEvidence') IS NULL
+CREATE TABLE sidata.SoftwareEvidence (
+    EvidenceId          BIGINT IDENTITY(1, 1) NOT NULL CONSTRAINT PK_SoftwareEvidence PRIMARY KEY NONCLUSTERED,
+    CollectionTime      DATETIME2(3)   NOT NULL,
+    DeviceId            NVARCHAR(64)   NOT NULL,
+    Vendor              NVARCHAR(256)  NOT NULL,
+    Product             NVARCHAR(256)  NOT NULL,
+    Version             NVARCHAR(128)  NOT NULL,
+    PathType            NVARCHAR(16)   NOT NULL,
+    FullPath            NVARCHAR(MAX)  NOT NULL,
+    Drive               NVARCHAR(260)  NULL,
+    InstallKind         NVARCHAR(16)   NOT NULL,
+    Application         NVARCHAR(400)  NULL,
+    ApplicationVendor   NVARCHAR(256)  NULL,
+    ApplicationVersion  NVARCHAR(128)  NULL,
+    ApplicationSource   NVARCHAR(16)   NULL,
+    LastSeen            DATETIME2(3)   NULL,
+    CONSTRAINT CK_SoftwareEvidence_PathType CHECK (PathType IN ('disk', 'registry')),
+    CONSTRAINT CK_SoftwareEvidence_InstallKind CHECK (InstallKind IN ('installed', 'bundled', 'user-profile', 'data-folder', 'registry-only', 'unknown'))
+);
+-- (device): a device's evidence -- also the order a run replaces it by
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'CX_SoftwareEvidence_Device' AND object_id = OBJECT_ID('sidata.SoftwareEvidence'))
+    EXEC (N'CREATE CLUSTERED INDEX CX_SoftwareEvidence_Device ON sidata.SoftwareEvidence (DeviceId)');
+-- (vendor, product, version): every copy of one software (the finding join, the remediation tasks, the suggestions)
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_SoftwareEvidence_Software' AND object_id = OBJECT_ID('sidata.SoftwareEvidence'))
+    EXEC (N'CREATE INDEX IX_SoftwareEvidence_Software ON sidata.SoftwareEvidence (Vendor, Product, Version) INCLUDE (DeviceId, PathType, InstallKind, Application, ApplicationSource)');
+IF OBJECT_ID('sidata.SoftwareEvidenceDevice') IS NULL
+CREATE TABLE sidata.SoftwareEvidenceDevice (
+    DeviceId        NVARCHAR(64)   NOT NULL,
+    CollectionTime  DATETIME2(3)   NOT NULL,
+    State           NVARCHAR(16)   NOT NULL,
+    [Rows]          INT            NULL,
+    WrittenAt       DATETIME2(0)   NOT NULL CONSTRAINT DF_SoftwareEvidenceDevice_WrittenAt DEFAULT SYSUTCDATETIME(),
+    CONSTRAINT PK_SoftwareEvidenceDevice PRIMARY KEY CLUSTERED (DeviceId),
+    CONSTRAINT CK_SoftwareEvidenceDevice_State CHECK (State IN ('read', 'unknown', 'writing'))
+);
+-- the evidence with its CI, of devices whose evidence is READ (a device without a CI link yet has CiId NULL)
+IF OBJECT_ID('sidata.vSoftwareEvidence') IS NULL
+    EXEC (N'CREATE VIEW sidata.vSoftwareEvidence AS
+SELECT e.EvidenceId, e.CollectionTime, l.CiId, e.DeviceId, e.Vendor, e.Product, e.Version, e.PathType, e.FullPath, e.Drive, e.InstallKind,
+       e.Application, e.ApplicationVendor, e.ApplicationVersion, e.ApplicationSource, e.LastSeen
+FROM sidata.SoftwareEvidence e
+JOIN sidata.SoftwareEvidenceDevice s ON s.DeviceId = e.DeviceId AND s.State = N''read''
+OUTER APPLY (SELECT TOP (1) c.CiId FROM sidata.CiLink c WHERE c.Provider = N''mde'' AND c.NativeId = e.DeviceId ORDER BY c.IsPrimary DESC, c.CiId) l');
+
+-- ---------------------------------------------------------------------------------------------
+-- A PER-SERVER EXCEPTION OF A SOFTWARE DETECTION (ADDED 2026-11-16, REQUIREMENTS #1219 (4); owner: "we need a way to fine tune
+-- on a per server so i can exempt a wrong detection of wordpress so it doesnt use that on that specific server"). An Admin
+-- (SI GUI, Pro) marks ONE rule's match of ONE software on ONE CI a false positive, with a mandatory reason -- the same pattern
+-- as the manual CI overrides (sidata.CiOverride): soft removal (who removed it, when, why), one cfg.ChangeLog row per set and
+-- per undo (Scope 'ci', Kind 'cisoftwareexception'). The CI build and the profiler leave that software out of THAT rule on THAT
+-- CI (engine\_shared\SI-SoftwareException.ps1); the findings stay. Additive: a database without the table has no exceptions.
+-- ---------------------------------------------------------------------------------------------
+IF OBJECT_ID('sidata.CiSoftwareException') IS NULL
+CREATE TABLE sidata.CiSoftwareException (
+    ExceptionId    BIGINT IDENTITY(1, 1) NOT NULL CONSTRAINT PK_CiSoftwareException PRIMARY KEY,
+    CiId           NVARCHAR(64)   NOT NULL,
+    RuleId         NVARCHAR(200)  NOT NULL,
+    Vendor         NVARCHAR(256)  NOT NULL,
+    Product        NVARCHAR(256)  NOT NULL,
+    Reason         NVARCHAR(1000) NOT NULL,
+    SetBy          NVARCHAR(256)  NOT NULL,
+    SetAt          DATETIME2(0)   NOT NULL CONSTRAINT DF_CiSoftwareException_SetAt DEFAULT SYSUTCDATETIME(),
+    Removed        BIT            NOT NULL CONSTRAINT DF_CiSoftwareException_Removed DEFAULT 0,
+    RemovedBy      NVARCHAR(256)  NULL,
+    RemovedAt      DATETIME2(0)   NULL,
+    RemovedReason  NVARCHAR(1000) NULL
+);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_CiSoftwareException_Ci' AND object_id = OBJECT_ID('sidata.CiSoftwareException'))
+CREATE INDEX IX_CiSoftwareException_Ci ON sidata.CiSoftwareException (CiId, Removed) INCLUDE (RuleId, Vendor, Product);
+-- ---------------------------------------------------------------------------------------------
 -- THE VIEWS READ NARROW INDEXES, NEVER THE DOCUMENTS (ADDED 2026-11-05; owner: "every views must be fast" / "it is a missing
 -- index issue"). Measured at a ring-0 install: a device page 72 s, a CI's findings 20 s, its daily history 16 s, every page's
 -- data version 6-26 s -- each read the wide rows (DocJson in row) or scanned a day range of every CI, and the database's
@@ -5304,3 +5396,311 @@ END');
 -- engine's least-privilege cut-over (the product's gated-procedure pattern); the work procedure has no grant at all
 IF IS_ROLEMEMBER(N'db_owner') = 1 OR IS_ROLEMEMBER(N'db_securityadmin') = 1
 GRANT EXECUTE ON OBJECT::sidata.StatisticsRefresh TO public;
+
+
+-- ---------------------------------------------------------------------------------------------
+-- THE NAMES OF THE PEOPLE AND GROUPS, FROM SECURITYINSIGHT'S OWN COLLECTION (ADDED 2026-11-16; owner: "can engine provide
+-- the data" -- yes). The web app's people picker (Access, Get started, a department's people) searches HERE when the web
+-- app's own directory lookup is off (Access:GraphLookup): no Microsoft Graph call from the web app and no directory right
+-- on its identity. Written by the ENGINE (its own Graph rights, nothing new):
+--   DirectoryName           one narrow row per Entra user or group: object id, kind (user | group), name, sign-in name, mail,
+--                           account enabled, guest, the group's kind (security / mail-enabled / groupTypes); Source
+--                           'collection' = the identity collection read it (every user page, and ONE light read of the groups
+--                           -- no members); 'search' = an Admin's "Search the tenant" found it (below). A complete read
+--                           replaces the kind's 'collection' rows (the rows it did not see go); a read that fails or stops
+--                           part-way removes NOTHING -- unknown is not gone. Indexed for a prefix search on the name, the
+--                           sign-in name and the mail.
+--   DirectoryNameLoad       one row per kind: when the newest read was, whether it was complete, how many rows -- the
+--                           picker's "names from SecurityInsight's last run (<time>)".
+--   DirectorySearchRequest  "Search the tenant": an Admin's request (the text, a reason, who, when), written by the web app
+--                           ONLY through sidata.DirectorySearchAsk (checked there; no limit on how many, owner 2026-11-17); the
+--                           engine's background job (caj-si-signin-methods, as the engine identity) looks the text up in
+--                           Microsoft Graph (names starting with it, at most 20 users and 20 groups, reads only), stores what
+--                           it finds as names (Source 'search') and records the outcome here. A request older than a day is
+--                           closed as expired, never run late.
+-- The web app reads them with its database reader right; the engine writes them with its sidata rights.
+-- ---------------------------------------------------------------------------------------------
+IF OBJECT_ID('sidata.DirectoryName') IS NULL
+CREATE TABLE sidata.DirectoryName (
+    ObjectId        NVARCHAR(64)   NOT NULL CONSTRAINT PK_DirectoryName PRIMARY KEY,
+    Kind            NVARCHAR(8)    NOT NULL,
+    DisplayName     NVARCHAR(256)  NULL,
+    Upn             NVARCHAR(256)  NULL,
+    Mail            NVARCHAR(256)  NULL,
+    AccountEnabled  BIT            NULL,
+    Guest           BIT            NOT NULL CONSTRAINT DF_DirectoryName_Guest DEFAULT 0,
+    SecurityEnabled BIT            NULL,
+    MailEnabled     BIT            NULL,
+    GroupTypes      NVARCHAR(200)  NULL,
+    Source          NVARCHAR(16)   NOT NULL CONSTRAINT DF_DirectoryName_Source DEFAULT N'collection',
+    SeenAt          DATETIME2(3)   NOT NULL CONSTRAINT DF_DirectoryName_SeenAt DEFAULT SYSUTCDATETIME()
+);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_DirectoryName_Name' AND object_id = OBJECT_ID('sidata.DirectoryName'))
+CREATE INDEX IX_DirectoryName_Name ON sidata.DirectoryName (DisplayName) INCLUDE (Kind, Upn, Mail, AccountEnabled, Guest);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_DirectoryName_Upn' AND object_id = OBJECT_ID('sidata.DirectoryName'))
+CREATE INDEX IX_DirectoryName_Upn ON sidata.DirectoryName (Upn) INCLUDE (Kind, DisplayName, Mail, AccountEnabled, Guest);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_DirectoryName_Mail' AND object_id = OBJECT_ID('sidata.DirectoryName'))
+CREATE INDEX IX_DirectoryName_Mail ON sidata.DirectoryName (Mail) INCLUDE (Kind, DisplayName, Upn, AccountEnabled, Guest);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_DirectoryName_Seen' AND object_id = OBJECT_ID('sidata.DirectoryName'))
+CREATE INDEX IX_DirectoryName_Seen ON sidata.DirectoryName (Kind, Source, SeenAt);
+IF OBJECT_ID('sidata.DirectoryNameLoad') IS NULL
+CREATE TABLE sidata.DirectoryNameLoad (
+    Kind            NVARCHAR(8)    NOT NULL CONSTRAINT PK_DirectoryNameLoad PRIMARY KEY,
+    ReadAt          DATETIME2(3)   NOT NULL,
+    Complete        BIT            NOT NULL,
+    [Rows]          INT            NOT NULL,
+    Detail          NVARCHAR(400)  NULL
+);
+IF OBJECT_ID('sidata.DirectorySearchRequest') IS NULL
+CREATE TABLE sidata.DirectorySearchRequest (
+    RequestId       BIGINT IDENTITY(1, 1) NOT NULL CONSTRAINT PK_DirectorySearchRequest PRIMARY KEY,
+    SearchText      NVARCHAR(100)  NOT NULL,
+    Reason          NVARCHAR(400)  NOT NULL,
+    RequestedBy     NVARCHAR(256)  NOT NULL,
+    RequestedUtc    DATETIME2(0)   NOT NULL CONSTRAINT DF_DirectorySearchRequest_RequestedUtc DEFAULT SYSUTCDATETIME(),
+    DoneUtc         DATETIME2(0)   NULL,
+    Outcome         NVARCHAR(16)   NULL,
+    Found           INT            NULL,
+    Detail          NVARCHAR(400)  NULL
+);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_DirectorySearchRequest_Pending' AND object_id = OBJECT_ID('sidata.DirectorySearchRequest'))
+CREATE INDEX IX_DirectorySearchRequest_Pending ON sidata.DirectorySearchRequest (DoneUtc, RequestId);
+EXEC (N'CREATE OR ALTER PROCEDURE sidata.DirectorySearchAsk @Text nvarchar(200), @Reason nvarchar(800), @By nvarchar(256)
+AS
+BEGIN
+    -- "Search the tenant" (the web app''s one write here): the text is the start of a name, sign-in name or mail (2 to 100
+    -- characters, no control character), a reason is required -- no limit on how many (owner 2026-11-17). Answers RequestId
+    -- (NULL when refused) and Refused (the reason, NULL when written).
+    SET NOCOUNT ON;
+    -- the web app only (its identity is a member of si_audit_writer), or the owner: never the read-only MCP server
+    IF ISNULL(IS_ROLEMEMBER(N''db_owner''), 0) <> 1 AND ISNULL(IS_ROLEMEMBER(N''si_audit_writer''), 0) <> 1
+        THROW 51807, N''only the web app may ask for a search of the tenant'', 1;
+    DECLARE @t nvarchar(200) = LTRIM(RTRIM(ISNULL(@Text, N''''))), @r nvarchar(800) = LTRIM(RTRIM(ISNULL(@Reason, N''''))), @b nvarchar(256) = LTRIM(RTRIM(ISNULL(@By, N'''')));
+    DECLARE @why nvarchar(200) = CASE
+        WHEN LEN(@t) < 2 OR LEN(@t) > 100 THEN N''type 2 to 100 characters of the name, sign-in name or mail''
+        WHEN PATINDEX(N''%['' + NCHAR(1) + N''-'' + NCHAR(31) + N'']%'', @t COLLATE Latin1_General_BIN2) > 0 THEN N''the text holds a control character''
+        WHEN LEN(@r) < 3 THEN N''give a reason''
+        WHEN LEN(@b) = 0 THEN N''the person asking is not known''
+        END;
+    IF @why IS NOT NULL BEGIN SELECT CAST(NULL AS bigint) AS RequestId, @why AS Refused; RETURN; END
+    INSERT sidata.DirectorySearchRequest (SearchText, Reason, RequestedBy) VALUES (@t, LEFT(@r, 400), @b);
+    SELECT CAST(SCOPE_IDENTITY() AS bigint) AS RequestId, CAST(NULL AS nvarchar(200)) AS Refused;
+END');
+-- the procedure checks its caller (the web app) and what it writes (one request row, never the table)
+IF IS_ROLEMEMBER(N'db_owner') = 1 OR IS_ROLEMEMBER(N'db_securityadmin') = 1
+GRANT EXECUTE ON OBJECT::sidata.DirectorySearchAsk TO public;
+
+-- ---------------------------------------------------------------------------------------------
+-- REMEDIATION TASKS PER CI (ADDED 2026-11-16, REQUIREMENTS #1277; owner: "one vulnerability per CI per task to perform" -- the
+-- findings the task resolves are information on it). Built by the data sync per collection (engine\pro-data\_shared\
+-- SI-DataRemediationTask.ps1) from the stored findings, the finding field map's grouping rule (si_security_grouping_parent /
+-- _kind, data-model\finding-fields.locked.json -- ONE rule with the ServiceNow grouping column) and, for a library bundled in
+-- another product, the software evidence (one task per application). Additive; nothing existing is changed.
+--   RemediationTask         one row per collection x CI x task: the task (key, name, kind; the product / version / application
+--                           and its paths for software), the counts (findings, CVEs), the highest severity and risk, the CI's
+--                           owner / department, first and last seen, the state (open | closed) and why it closed (fixed |
+--                           asset retired | report changed | task changed). A task CLOSES only when its findings are positively
+--                           gone on a complete run (absence is not remediation); a task whose findings are unknown is carried
+--                           as it was (InThisCollection = 0). TaskId = SHA-256 of '<owner>|<task key>' (stable run to run).
+--   RemediationTaskFinding  the links task <-> finding (many-to-many: one CVE row on two versions or in three applications
+--                           belongs to several tasks); the finding keeps its own key (the vulnerable item's key is unchanged).
+--   RemediationTaskSig / RemediationTaskSplit   the build's working rows (one build at a time, removed when it ends).
+--   Collection.RemediationTasksAt  when the collection's tasks were built (NULL = not yet).
+--   snowstage.vImportRemediationTask / vImportRemediationTaskFinding  the SQL hand-off of the newest built collection (the
+--                           columns of the output maps servicenow-remediation-task / -finding; ServiceNow reads them only when
+--                           its own data source names them).
+-- ---------------------------------------------------------------------------------------------
+IF COL_LENGTH('sidata.Collection', 'RemediationTasksAt') IS NULL ALTER TABLE sidata.Collection ADD RemediationTasksAt DATETIME2(0) NULL;
+IF OBJECT_ID('sidata.RemediationTask') IS NULL
+CREATE TABLE sidata.RemediationTask (
+    CollectionId     INT            NOT NULL,
+    TaskId           BINARY(32)     NOT NULL,
+    OwnerKey         NVARCHAR(450)  NOT NULL,   -- the CI id, or 'asset:<id>' for a finding no CI holds (the finding lifecycle's owner)
+    CiId             NVARCHAR(64)   NULL,
+    AssetKey         NVARCHAR(400)  NULL,
+    AssetName        NVARCHAR(400)  NULL,
+    TaskKey          NVARCHAR(MAX)  NOT NULL,   -- '<kind>|<name, lower case>', in full (the task id is a hash of it)
+    TaskName         NVARCHAR(MAX)  NOT NULL,
+    Kind             NVARCHAR(32)   NOT NULL,   -- security-update | software-upgrade | bundled-upgrade | configuration | cloud-recommendation | identity-rule | identity-review | attack-path
+    Product          NVARCHAR(400)  NULL,
+    Vendor           NVARCHAR(400)  NULL,
+    Version          NVARCHAR(400)  NULL,
+    Application      NVARCHAR(MAX)  NULL,       -- bundled: the product that bundles it (its vendor delivers the fix)
+    ApplicationPaths NVARCHAR(MAX)  NULL,       -- bundled: every path of that copy, ';'-separated
+    EvidenceAt       DATETIME2(3)   NULL,       -- bundled: the software evidence collection it was read from
+    Findings         INT            NOT NULL,
+    Cves             INT            NOT NULL,
+    HighestSeverity  NVARCHAR(16)   NULL,       -- critical | high | medium | low | info
+    MaxRiskScore     FLOAT          NULL,
+    MaxWeightedRisk  FLOAT          NULL,
+    Tier             TINYINT        NULL,
+    SecurityDomain   NVARCHAR(128)  NULL,       -- when every finding of the task has the same one
+    DepartmentId     INT            NULL,       -- when every finding of the task has the same one (NULL = none or several)
+    Departments      INT            NOT NULL,
+    CiOwner          NVARCHAR(400)  NULL,
+    CiDepartment     NVARCHAR(400)  NULL,
+    CmdbId           NVARCHAR(256)  NULL,
+    FirstSeen        DATETIME2(3)   NOT NULL,
+    LastSeen         DATETIME2(3)   NOT NULL,
+    State            NVARCHAR(16)   NOT NULL,
+    ClosedAt         DATETIME2(3)   NULL,
+    ClosedWhy        NVARCHAR(32)   NULL,
+    ReopenCount      INT            NOT NULL CONSTRAINT DF_RemediationTask_Reopen DEFAULT 0,
+    InThisCollection BIT            NOT NULL,
+    RowHash          BINARY(32)     NOT NULL,
+    ChangedAt        DATETIME2(3)   NOT NULL,
+    CONSTRAINT PK_RemediationTask PRIMARY KEY CLUSTERED (CollectionId, TaskId),
+    CONSTRAINT CK_RemediationTask_State CHECK (State IN ('open', 'closed'))
+);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_RemediationTask_Asset' AND object_id = OBJECT_ID('sidata.RemediationTask'))
+    EXEC (N'CREATE INDEX IX_RemediationTask_Asset ON sidata.RemediationTask (CollectionId, AssetKey) INCLUDE (State, Kind, TaskName, Findings, HighestSeverity)');
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_RemediationTask_Owner' AND object_id = OBJECT_ID('sidata.RemediationTask'))
+    EXEC (N'CREATE INDEX IX_RemediationTask_Owner ON sidata.RemediationTask (CollectionId, OwnerKey) INCLUDE (State)');
+IF OBJECT_ID('sidata.RemediationTaskFinding') IS NULL
+CREATE TABLE sidata.RemediationTaskFinding (
+    CollectionId     INT            NOT NULL,
+    TaskId           BINARY(32)     NOT NULL,
+    FindingKey       NVARCHAR(256)  NOT NULL,
+    OwnerKey         NVARCHAR(450)  NOT NULL,
+    FindingId        BIGINT         NULL,       -- the collection's own finding row (NULL: a link carried with its task)
+    Cve              NVARCHAR(256)  NULL,
+    Title            NVARCHAR(1000) NULL,
+    Severity         NVARCHAR(16)   NULL,
+    RiskScore        FLOAT          NULL,
+    Version          NVARCHAR(400)  NULL,
+    InThisCollection BIT            NOT NULL,
+    CONSTRAINT PK_RemediationTaskFinding PRIMARY KEY CLUSTERED (CollectionId, TaskId, FindingKey)
+);
+-- the scope decision when the task (the link) was last sent to ServiceNow (1 = in the vulnerable items' scope): a task CLOSED
+-- since is still sent as closed when it was in scope when last sent, whatever its findings are now (data out)
+IF COL_LENGTH('sidata.RemediationTask', 'SentInScope') IS NULL ALTER TABLE sidata.RemediationTask ADD SentInScope BIT NULL;
+IF COL_LENGTH('sidata.RemediationTaskFinding', 'SentInScope') IS NULL ALTER TABLE sidata.RemediationTaskFinding ADD SentInScope BIT NULL;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_RemediationTaskFinding_Finding' AND object_id = OBJECT_ID('sidata.RemediationTaskFinding'))
+    EXEC (N'CREATE INDEX IX_RemediationTaskFinding_Finding ON sidata.RemediationTaskFinding (CollectionId, OwnerKey, FindingKey) INCLUDE (TaskId)');
+IF OBJECT_ID('sidata.RemediationTaskSig') IS NULL
+CREATE TABLE sidata.RemediationTaskSig (
+    BuildId   UNIQUEIDENTIFIER NOT NULL,
+    SigHash   BINARY(32)     NOT NULL,
+    UnitNo    INT            NOT NULL,
+    TaskKey   NVARCHAR(MAX)  NOT NULL,
+    TaskName  NVARCHAR(MAX)  NOT NULL,
+    Kind      NVARCHAR(32)   NOT NULL,
+    Product   NVARCHAR(400)  NOT NULL,
+    Vendor    NVARCHAR(400)  NOT NULL,
+    Version   NVARCHAR(400)  NOT NULL,
+    CONSTRAINT PK_RemediationTaskSig PRIMARY KEY CLUSTERED (BuildId, SigHash, UnitNo)
+);
+IF OBJECT_ID('sidata.RemediationTaskSplit') IS NULL
+CREATE TABLE sidata.RemediationTaskSplit (
+    SplitId    BIGINT IDENTITY(1, 1) NOT NULL CONSTRAINT PK_RemediationTaskSplit PRIMARY KEY NONCLUSTERED,
+    BuildId    UNIQUEIDENTIFIER NOT NULL,
+    ComboHash  BINARY(32)     NOT NULL,   -- SHA-256 of owner, vendor, product, version (the software unit on the CI)
+    OwnerKey   NVARCHAR(450)  NOT NULL,
+    KeepPlain  BIT            NOT NULL,   -- a copy that is not bundled exists: the product's own task stays
+    TaskKey    NVARCHAR(MAX)  NULL,       -- NULL: the row only says the evidence of the unit was read
+    TaskName   NVARCHAR(MAX)  NULL,
+    Application NVARCHAR(MAX) NULL,
+    Paths      NVARCHAR(MAX)  NULL,
+    EvidenceAt DATETIME2(3)   NULL
+);
+-- when a working row was written: the rows a build left behind are removed only once they are a day old (never a running build's)
+IF COL_LENGTH('sidata.RemediationTaskSig', 'CreatedAt') IS NULL ALTER TABLE sidata.RemediationTaskSig ADD CreatedAt DATETIME2(0) NOT NULL CONSTRAINT DF_RemediationTaskSig_Created DEFAULT SYSUTCDATETIME();
+IF COL_LENGTH('sidata.RemediationTaskSplit', 'CreatedAt') IS NULL ALTER TABLE sidata.RemediationTaskSplit ADD CreatedAt DATETIME2(0) NOT NULL CONSTRAINT DF_RemediationTaskSplit_Created DEFAULT SYSUTCDATETIME();
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'CX_RemediationTaskSplit' AND object_id = OBJECT_ID('sidata.RemediationTaskSplit'))
+    EXEC (N'CREATE CLUSTERED INDEX CX_RemediationTaskSplit ON sidata.RemediationTaskSplit (BuildId, ComboHash)');
+IF SCHEMA_ID('snowstage') IS NULL EXEC ('CREATE SCHEMA snowstage');
+-- The two hand-off views live in the Pro database beside snowstage.vImportVulnerableItem (sql\si-vulnerability-target.sql, applied
+-- first by the same schema step), so ServiceNow's data source reads all of them the same way. THE VULNERABLE ITEMS' SCOPE: a task
+-- is in the view once at least one of its findings is a vulnerable item ServiceNow got (vuln.VulnerabilityItem, any state); a
+-- task that is still open but whose every such item was closed as out of scope is shown CLOSED, "out of scope" -- a task once
+-- sent never just vanishes. A link: once its own finding is such an item. Created only once the vulnerability table is there.
+-- THE SWITCH, read where it is kept: the views return rows ONLY while the setting SI_DataOut_Outputs (cfg.Setting, scope
+-- solution) names their output -- read live, so a switch-off takes effect at once and nothing written by a run can hold a
+-- view open. No settings table = no rows (fail closed).
+DECLARE @SIRemOn nvarchar(max) = N'EXISTS (SELECT 1 FROM cfg.Setting AS sw
+              CROSS APPLY OPENJSON(CASE WHEN ISJSON(sw.ValueJson) = 1 AND LEFT(LTRIM(sw.ValueJson), 1) = N''['' THEN sw.ValueJson
+                                        WHEN ISJSON(N''['' + sw.ValueJson + N'']'') = 1 THEN N''['' + sw.ValueJson + N'']'' ELSE N''[]'' END) AS sj
+              CROSS APPLY STRING_SPLIT(REPLACE(CONVERT(nvarchar(4000), sj.[value]), N'';'', N'',''), N'','') AS ss
+              WHERE sw.Name = N''SI_DataOut_Outputs'' AND sw.Scope = N''solution'' AND LOWER(LTRIM(RTRIM(ss.[value]))) = N''{OUT}'')';
+DECLARE @SIRemTaskOn nvarchar(max) = CASE WHEN OBJECT_ID('cfg.Setting') IS NOT NULL THEN REPLACE(@SIRemOn, N'{OUT}', N'servicenow-remediation-task') ELSE N'1 = 0' END;
+DECLARE @SIRemLinkOn nvarchar(max) = CASE WHEN OBJECT_ID('cfg.Setting') IS NOT NULL THEN REPLACE(@SIRemOn, N'{OUT}', N'servicenow-remediation-task-finding') ELSE N'1 = 0' END;
+-- THE SAME ROWS AS THE PUSH (review 3.1.30): the columns of the output maps (u_source_run, u_changed_at and the envelope
+-- u_action / u_si_batch_id / u_si_cleared included); every date in WHOLE SECONDS, UTC -- the vulnerable items' datetime2(0),
+-- cut (never rounded) as the push's 'yyyy-MM-dd HH:mm:ss' is; u_row_hash and u_source_run worked out by the SAME SQL the push
+-- reads (engine\data-out\SI-DataOut.ps1: Get-SIDataOutTaskHashSql, Get-SIDataOutTaskSourceRunSql); u_si_cleared lists the
+-- clearable columns that are empty, in the push's order (SI-DataOutContract.ps1, $script:SIDataOutClearable). The SQL route
+-- has no batch (u_si_batch_id NULL) and does not know what ServiceNow last read: u_action says the task's state (out_of_scope,
+-- close, update) -- a reopened task's cleared close reason and time are in u_si_cleared, as on the push.
+IF OBJECT_ID('vuln.VulnerabilityItem') IS NOT NULL
+    EXEC (N'CREATE OR ALTER VIEW snowstage.vImportRemediationTask AS
+SELECT LOWER(CONVERT(nvarchar(64), t.TaskId, 2)) AS u_si_task_id, t.CiId AS u_si_correlation_id, t.AssetName AS u_asset_name, t.CmdbId AS u_cmdb_ci,
+       t.TaskName AS u_task, t.Kind AS u_task_kind, t.Product AS u_product, t.Version AS u_product_version, t.Application AS u_application,
+       t.ApplicationPaths AS u_application_paths, t.Findings AS u_findings, t.Cves AS u_cves, t.HighestSeverity AS u_severity,
+       t.MaxRiskScore AS u_risk_score, t.Tier AS u_tier, t.CiOwner AS u_owner, t.CiDepartment AS u_department,
+       st.State AS u_state, st.Why AS u_close_reason, CONVERT(datetime2(0), CONVERT(char(19), st.ClosedAt, 120), 120) AS u_closed_at,
+       CONVERT(datetime2(0), CONVERT(char(19), t.FirstSeen, 120), 120) AS u_first_seen, CONVERT(datetime2(0), CONVERT(char(19), t.LastSeen, 120), 120) AS u_last_seen,
+       CONVERT(datetime2(0), CONVERT(char(19), st.ChangedAt, 120), 120) AS u_changed_at, N''SecurityInsight'' AS u_source,
+       LOWER(CONVERT(nvarchar(64), CASE WHEN so.Out = 1 THEN HASHBYTES(''SHA2_256'', rh.H + 0x01) ELSE rh.H END, 2)) AS u_row_hash,
+       sr.Run AS u_source_run,
+       CASE WHEN so.Out = 1 THEN N''out_of_scope'' WHEN st.State = N''closed'' THEN N''close'' ELSE N''update'' END AS u_action,
+       CAST(NULL AS nvarchar(160)) AS u_si_batch_id,
+       ISNULL(STUFF(CONCAT(CASE WHEN NULLIF(LTRIM(RTRIM(t.CmdbId)), N'''') IS NULL THEN N'',u_cmdb_ci'' END,
+                 CASE WHEN NULLIF(LTRIM(RTRIM(t.ApplicationPaths)), N'''') IS NULL THEN N'',u_application_paths'' END,
+                 CASE WHEN NULLIF(LTRIM(RTRIM(t.HighestSeverity)), N'''') IS NULL THEN N'',u_severity'' END,
+                 CASE WHEN t.MaxRiskScore IS NULL THEN N'',u_risk_score'' END, CASE WHEN t.Tier IS NULL THEN N'',u_tier'' END,
+                 CASE WHEN NULLIF(LTRIM(RTRIM(t.CiOwner)), N'''') IS NULL THEN N'',u_owner'' END,
+                 CASE WHEN NULLIF(LTRIM(RTRIM(t.CiDepartment)), N'''') IS NULL THEN N'',u_department'' END,
+                 CASE WHEN NULLIF(LTRIM(RTRIM(st.Why)), N'''') IS NULL THEN N'',u_close_reason'' END,
+                 CASE WHEN st.ClosedAt IS NULL THEN N'',u_closed_at'' END), 1, 1, N''''), N'''') AS u_si_cleared
+FROM sidata.RemediationTask AS t
+JOIN sidata.Collection AS c ON c.CollectionId = t.CollectionId
+CROSS APPLY (SELECT HASHBYTES(''SHA2_256'', t.RowHash + CONVERT(varbinary(max), ISNULL(t.AssetName, N''''))) AS H) AS rh
+CROSS APPLY (SELECT CONCAT(N''si-'', c.CollectionId, N''-'', CONVERT(nchar(8), c.CollectionTime, 112), REPLACE(CONVERT(nchar(8), c.CollectionTime, 108), N'':'', N'''')) AS Run) AS sr
+CROSS APPLY (SELECT COUNT(*) AS Sent,
+                    SUM(CASE WHEN v.State = N''Closed'' AND v.CloseReason = N''Out of scope'' THEN 0 ELSE 1 END) AS InScope,
+                    MAX(CASE WHEN v.State = N''Closed'' AND v.CloseReason = N''Out of scope'' THEN v.ClosedAt END) AS OutAt
+             FROM sidata.RemediationTaskFinding AS l
+             CROSS APPLY (SELECT CASE WHEN UPPER(l.FindingKey) LIKE N''CVE-%'' AND LEN(l.FindingKey) <= 100 THEN UPPER(l.FindingKey) WHEN LEN(l.FindingKey) <= 100 THEN l.FindingKey
+                    ELSE LEFT(l.FindingKey, 59) + N''~'' + LOWER(CONVERT(varchar(40), HASHBYTES(''SHA1'', CONVERT(varchar(8000), UPPER(l.FindingKey))), 2)) END AS Vk) AS k
+             JOIN vuln.VulnerabilityItem AS v ON v.CorrelationId = t.CiId AND v.Cve = k.Vk
+             WHERE l.CollectionId = t.CollectionId AND l.TaskId = t.TaskId) AS sc
+CROSS APPLY (SELECT CASE WHEN t.State = N''open'' AND ISNULL(sc.InScope, 0) = 0 THEN 1 ELSE 0 END AS Out) AS so
+CROSS APPLY (SELECT CASE WHEN so.Out = 1 THEN N''closed'' ELSE t.State END AS State,
+                    CASE WHEN so.Out = 1 THEN N''out of scope'' ELSE t.ClosedWhy END AS Why,
+                    CASE WHEN so.Out = 1 THEN sc.OutAt ELSE t.ClosedAt END AS ClosedAt,
+                    CASE WHEN so.Out = 1 AND sc.OutAt > t.ChangedAt THEN sc.OutAt ELSE t.ChangedAt END AS ChangedAt) AS st
+WHERE t.CollectionId = (SELECT TOP (1) x.CollectionId FROM sidata.Collection AS x WHERE x.RemediationTasksAt IS NOT NULL ORDER BY x.CollectionTime DESC)
+  AND ' + @SIRemTaskOn + N'
+  AND sc.Sent > 0');
+IF OBJECT_ID('vuln.VulnerabilityItem') IS NOT NULL
+    EXEC (N'CREATE OR ALTER VIEW snowstage.vImportRemediationTaskFinding AS
+SELECT LOWER(CONVERT(nvarchar(64), l.TaskId, 2)) AS u_si_task_id, t.CiId AS u_si_correlation_id, k.Vk AS u_vulnerability,
+       l.OwnerKey + N''|'' + l.FindingKey AS u_source_record_id, l.Cve AS u_cve, l.Title AS u_title, l.Severity AS u_severity,
+       l.Version AS u_product_version, l.InThisCollection AS u_in_collection, N''SecurityInsight'' AS u_source,
+       LOWER(CONVERT(nvarchar(64), HASHBYTES(''SHA2_256'', CONCAT(CONVERT(nvarchar(64), l.TaskId, 2), NCHAR(31), l.FindingKey, NCHAR(31), l.OwnerKey, NCHAR(31), l.Cve, NCHAR(31), l.Title, NCHAR(31), l.Severity, NCHAR(31), l.Version, NCHAR(31), l.InThisCollection)), 2)) AS u_row_hash,
+       CONVERT(datetime2(0), CONVERT(char(19), t.ChangedAt, 120), 120) AS u_changed_at,
+       CONCAT(N''si-'', c.CollectionId, N''-'', CONVERT(nchar(8), c.CollectionTime, 112), REPLACE(CONVERT(nchar(8), c.CollectionTime, 108), N'':'', N'''')) AS u_source_run,
+       N''update'' AS u_action, CAST(NULL AS nvarchar(160)) AS u_si_batch_id,
+       ISNULL(STUFF(CONCAT(CASE WHEN NULLIF(LTRIM(RTRIM(l.Title)), N'''') IS NULL THEN N'',u_title'' END,
+                 CASE WHEN NULLIF(LTRIM(RTRIM(l.Severity)), N'''') IS NULL THEN N'',u_severity'' END,
+                 CASE WHEN NULLIF(LTRIM(RTRIM(l.Version)), N'''') IS NULL THEN N'',u_product_version'' END), 1, 1, N''''), N'''') AS u_si_cleared
+FROM sidata.RemediationTaskFinding AS l
+JOIN sidata.RemediationTask AS t ON t.CollectionId = l.CollectionId AND t.TaskId = l.TaskId
+JOIN sidata.Collection AS c ON c.CollectionId = l.CollectionId
+CROSS APPLY (SELECT CASE WHEN UPPER(l.FindingKey) LIKE N''CVE-%'' AND LEN(l.FindingKey) <= 100 THEN UPPER(l.FindingKey) WHEN LEN(l.FindingKey) <= 100 THEN l.FindingKey
+                    ELSE LEFT(l.FindingKey, 59) + N''~'' + LOWER(CONVERT(varchar(40), HASHBYTES(''SHA1'', CONVERT(varchar(8000), UPPER(l.FindingKey))), 2)) END AS Vk) AS k
+WHERE l.CollectionId = (SELECT TOP (1) x.CollectionId FROM sidata.Collection AS x WHERE x.RemediationTasksAt IS NOT NULL ORDER BY x.CollectionTime DESC)
+  AND ' + @SIRemLinkOn + N'
+  AND EXISTS (SELECT 1 FROM vuln.VulnerabilityItem AS v WHERE v.CorrelationId = t.CiId AND v.Cve = k.Vk)');
+
+-- ---------------------------------------------------------------------------------------------
+-- THE LAST GOOD READ of what an Admin set for the tier computations (owner 2026-11-17): the per-server software exceptions
+-- (per CI and per Defender device) and the manual CI overrides, kept after every good read. A read that fails later uses it
+-- (and says so), so a failed read never stops a build and never lets the rules decide without them.
+-- ---------------------------------------------------------------------------------------------
+IF OBJECT_ID('sidata.CiBuildInputCache') IS NULL
+CREATE TABLE sidata.CiBuildInputCache (
+    Name     NVARCHAR(64)   NOT NULL CONSTRAINT PK_CiBuildInputCache PRIMARY KEY,
+    Json     NVARCHAR(MAX)  NOT NULL,
+    SavedAt  DATETIME2(0)   NOT NULL CONSTRAINT DF_CiBuildInputCache_SavedAt DEFAULT SYSUTCDATETIME()
+);

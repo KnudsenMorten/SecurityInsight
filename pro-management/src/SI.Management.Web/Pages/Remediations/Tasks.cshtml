@@ -1,0 +1,5 @@
+@page
+@model SI.Management.Web.Pages.Remediations.TasksModel
+<partial name="~/Pages/Collection/_Header.cshtml" model="Model" />
+@if (Model.Grid is not null) { <partial name="~/Pages/Collection/_Grid.cshtml" model="Model" /> }
+<partial name="~/Pages/Collection/_Queries.cshtml" model="Model" />

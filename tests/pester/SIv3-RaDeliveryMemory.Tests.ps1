@@ -288,7 +288,7 @@ Describe 'WIRING -- the engine delivers through these, and lets go of what built
         $script:Ra | Should -Match 'Rows posted      : \{0\} \(before the failure\)'
     }
     It 'the JSON file is written row by row' {
-        $script:Ra | Should -Match ([regex]::Escape('Write-RAJsonArrayFile -Rows $global:RA_ReportRows -Path $global:OutputJson -Depth 20')); $script:Ra | Should -Match ([regex]::Escape('Write-RAJsonArrayFile -Pager (New-RARowPager -Stream $script:RAStream -Source View -ReadAhead)'))   # #744: the next page read while one is written
+        $script:Ra | Should -Match ([regex]::Escape('Write-RAJsonArrayFile -Rows $global:RA_ReportRows -Path $global:OutputJson -Depth 20')); $script:Ra | Should -Match ([regex]::Escape('Write-RAJsonArrayFile -Pager (New-RARowPager -Stream $script:RAStream -Source View -ReadAhead -Held $script:RAJsonHeld)'))   # #744: the next page read while one is written (#1275 (5): the held set kept where it was written)
         $script:Ra | Should -Not -Match ([regex]::Escape('ConvertTo-Json -InputObject @($global:RA_ReportRows)'))
     }
     It 'what built the result is let go before delivery starts' {

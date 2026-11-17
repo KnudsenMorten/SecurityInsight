@@ -408,6 +408,7 @@ public class OutputFieldsModel : PageModel
     /// The plain words of a column's state.
     public static string StateText(OutputColumnRow c) => c.State switch
     {
+        _ when c.ShippedOff => "shipped switched off -- not sent (Change > Stage the change switches it on)",
         _ when c.Removed && c.State != TemplateConformance.UpgradeAvailable => "removed by you",
         TemplateConformance.UpToDate => "shipped",
         TemplateConformance.Overridden => "changed by you",

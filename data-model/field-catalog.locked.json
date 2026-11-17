@@ -10030,6 +10030,47 @@
       "defaultVisible": false,
       "pii": false,
       "description": "Where on the device the affected software was found: a few disk and registry paths (Defender vulnerability management software evidence), joined with a semicolon."
+    },    {
+      "name": "si_evidence_paths",
+      "classes": "finding",
+      "type": "string",
+      "group": "finding",
+      "level": "finding",
+      "join": "none",
+      "resolution": {
+        "policy": "computed"
+      },
+      "defaultVisible": false,
+      "pii": false,
+      "description": "Every path of the affected software copy on the device (Defender's software evidence: every drive and the registry, no cap), joined with a semicolon. Empty when the evidence of the copy is unknown -- never a claim that there is none. The finding count is the source's: one finding, all its paths."
+    },
+    {
+      "name": "si_install_kind",
+      "classes": "finding",
+      "type": "string",
+      "group": "finding",
+      "level": "finding",
+      "join": "none",
+      "resolution": {
+        "policy": "computed"
+      },
+      "defaultVisible": false,
+      "pii": false,
+      "description": "How the affected software copy is present, from its paths (semicolon-joined when they differ): installed, bundled (a library inside another product's folder), user-profile, data-folder, registry-only, unknown."
+    },
+    {
+      "name": "si_bundled_by",
+      "classes": "finding",
+      "type": "string",
+      "group": "finding",
+      "level": "finding",
+      "join": "none",
+      "resolution": {
+        "policy": "computed"
+      },
+      "defaultVisible": false,
+      "pii": false,
+      "description": "For a library bundled inside other products: the application(s) that carry this copy -- whose vendor ships the fix (the product folder of the path, named from the device's own Defender software inventory when it matches, else the folder name), semicolon-joined."
     },
     {
       "name": "si_evidence",
@@ -10676,6 +10717,77 @@
       "defaultVisible": false,
       "pii": false,
       "description": "The software products on the device past (or near) their end of support, as \"vendor/product version (status, date)\"."
+    },    {
+      "name": "si_software_evidence_paths",
+      "classes": "device",
+      "type": "dynamic",
+      "group": "os",
+      "level": "both",
+      "join": "none",
+      "resolution": {
+        "policy": "union",
+        "authority": [
+          "mde"
+        ],
+        "staleDays": 7
+      },
+      "defaultVisible": false,
+      "pii": false,
+      "description": "Where each software copy on the device is: every path Defender's software evidence gives (every drive and the registry, no cap), as \"vendor/product version | install kind | path\". Empty when the evidence is unknown (not read this run), never a claim that there is none."
+    },
+    {
+      "name": "si_software_install_kind",
+      "classes": "device",
+      "type": "dynamic",
+      "group": "os",
+      "level": "both",
+      "join": "none",
+      "resolution": {
+        "policy": "union",
+        "authority": [
+          "mde"
+        ],
+        "staleDays": 7
+      },
+      "defaultVisible": false,
+      "pii": false,
+      "description": "How each software product is present on the device, from the paths of its copies, as \"vendor/product|install kind\": installed (an install root), bundled (a library inside another product's folder), user-profile, data-folder (a data drive or share), registry-only, unknown."
+    },
+    {
+      "name": "si_software_bundled_by",
+      "classes": "device",
+      "type": "dynamic",
+      "group": "os",
+      "level": "both",
+      "join": "none",
+      "resolution": {
+        "policy": "union",
+        "authority": [
+          "mde"
+        ],
+        "staleDays": 7
+      },
+      "defaultVisible": false,
+      "pii": false,
+      "description": "The application each bundled library copy belongs to, as \"vendor/product version | application\": the product folder of the path, named from the device's own Defender software inventory when it matches (vendor/name version), else the folder name."
+    },
+    {
+      "name": "si_software_rule_hits",
+      "classes": "device",
+      "type": "dynamic",
+      "group": "os",
+      "level": "both",
+      "join": "none",
+      "resolution": {
+        "policy": "union",
+        "authority": [
+          "mde"
+        ],
+        "staleDays": 7
+      },
+      "defaultVisible": false,
+      "pii": false,
+      "description": "The software tier detections with path, install-kind or version conditions that the endpoint profiler evaluated on this device ('-') and those that matched (their keys). The CI rule of such a detection reads it; without it the detection matches by software name as before."
     },
     {
       "name": "si_vuln_newest_published",

@@ -13,6 +13,52 @@ SecurityInsight Pro and the Pro trial install from invardia.com, never from GitH
 [invardia.com/trial](https://invardia.com/trial/), and your installation page there gives your two lines.
 <!-- /install lines -->
 
+## v3.1.30 — remediation tasks per asset, ready for ServiceNow
+
+### New
+
+- **Remediation tasks, on by default.** SI now groups findings into tasks an admin can act on: one per vulnerability per
+  asset (split by software version), one per application for a library bundled inside other programs (all its paths
+  listed, in full), and one per configuration setting. Pages: Remediations > Tasks and Task findings, with export.
+  Department owners see the tasks of their own findings.
+  - A task closes as "fixed" only when its findings are proven gone; a version change with the finding still there closes
+    it as "task changed".
+  - Two new ServiceNow outputs (tasks and task findings) are on by default. They send once their Import Set table names
+    are entered on the ServiceNow data-out connector page; until then they are "not set up" (no error, nothing sent).
+    Installations that already send to ServiceNow get them switched on by the update, read back and recorded in the
+    change log; an admin can switch them off.
+  - The task build runs per owner range, so its memory and database load stay small at any size (tempdb at 600,000
+    findings: 220 MB instead of 4 GB), with exactly the same tasks as before. Values are kept in full: no task name, key,
+    application or CVE is cut.
+- **ServiceNow connector page.** The two new task tables can be entered next to the vulnerable-item table. "Verify table
+  schema" checks all tables: each column present, missing, too short or the wrong type, and which new columns can be
+  switched on.
+- **ServiceNow grouping fields.** The vulnerable-item output can carry 14 more fields (security domain, category,
+  subcategory, report, risk score and rating, tier, fix KB, affected vendor and product, security grouping, exception).
+  They ship OFF and are switched on per installation (Connectors > Fields sent, or by support), once ServiceNow has the
+  fields. A field ServiceNow lacks is left out with one warning per run; the rest of the row still goes.
+- **ServiceNow task outputs consistent with vulnerable items.** Same date format (UTC), the same clear marker (a reopened
+  task clears its close date and reason), and the same columns and row fingerprint on the REST push and the SQL hand-off
+  views. Long values reach the SQL route whole.
+- **Attack-path reports more reliable.** Each slice is sized to half of the query back end's own time limit (Defender,
+  Log Analytics and the Sentinel data lake each have their own); a timed-out key query now splits the slice like any other
+  timeout; a report is only marked complete when its row count was read after the query. The Top 50 report pass now
+  accepts columns written in another case.
+- **Where software was found.** Every software finding keeps the full path on every drive and the application it belongs
+  to, so a wrong conclusion (for example web-server files in a user folder on a file server) can be seen and corrected.
+- **False positive on this server.** An Admin can mark a software detection as a false positive for one server (Assets >
+  Software exceptions), with a reason, audited and reversible.
+- **Tenant name search from SI's own data.** People and group pickers search what SI already collected, with no result
+  limit; a name not yet collected is looked up by the engine. The web app holds no directory permission.
+- **Plainer warning mails.** Data-quality notices now say what happened, whether anything was lost, and whether you need to
+  do anything.
+- **Faster and leaner at large installations.** The vulnerability step and the software-evidence join use a fixed amount of
+  memory whatever the size; every record gets the same decision and ServiceNow receives the same as before.
+
+### Known
+
+- The finding key on a task link and the CI lifecycle are stored at up to 256 characters (real finding ids are at most
+  100), and a finding's title at up to 1,000; both are to be widened together with the finding lifecycle.
 ## v3.1.29 — faster nightly runs at large installations
 
 ### Performance

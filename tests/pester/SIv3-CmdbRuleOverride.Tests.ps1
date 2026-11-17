@@ -78,6 +78,9 @@ BeforeAll {
         $stages = Join-Path $t 'engine\asset-profiling\stages'; $shared = Join-Path $t 'engine\asset-profiling\shared'; $storage = Join-Path $t 'engine\asset-profiling\storage'
         foreach ($d in $stages, $shared, $storage) { New-Item -ItemType Directory -Force -Path $d | Out-Null }
         Copy-Item (Join-Path $script:Root 'engine\asset-profiling\stages\Invoke-Profile.ps1') $stages
+        # the endpoint profile reads the per-server software exceptions (none: no database configured here) -- the real file
+        New-Item -ItemType Directory -Force -Path (Join-Path $t 'engine\_shared') | Out-Null
+        Copy-Item (Join-Path $script:Root 'engine\_shared\SI-SoftwareException.ps1') (Join-Path $t 'engine\_shared')
         $real = Join-Path $script:Root 'engine\asset-profiling'
         Set-Content -Path (Join-Path $shared 'Get-SIRuleSet.ps1') -Value 'function Get-SIRuleSet { param($Engine) @($global:SITest_Rules) }'
         Set-Content -Path (Join-Path $shared 'RuleIndexes.ps1') -Value 'function Build-SIRuleIndexes { param($Engine, $Rules, $Assets, $RunContext) @{} }'

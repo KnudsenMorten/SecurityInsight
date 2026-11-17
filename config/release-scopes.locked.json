@@ -33,6 +33,7 @@
         "engine/asset-profiling/shared/IdentityRoleFetcher.ps1",
         "engine/asset-profiling/shared/SI-AuthMethodsRead.ps1",
         "engine/asset-profiling/shared/SI-SignInMethodsChoice.ps1",
+        "engine/asset-profiling/shared/SI-DirectoryNames.ps1",
         "engine/signin-methods/**",
         "engine/asset-profiling/shared/SI-IdentityPublishScope.ps1"
       ]

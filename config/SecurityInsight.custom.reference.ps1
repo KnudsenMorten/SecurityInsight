@@ -592,6 +592,8 @@ $global:SI_StorageAccount = '<storage-account-name>'
 # The Import Set tables of the two ServiceNow outputs (an output without its table is not written, and says so).
 # $global:SI_DataOut_ServiceNowCiTable   = ''
 # $global:SI_DataOut_ServiceNowVulnTable = ''   # the vulnerable item output's Import Set table (not set = that output is not written, and says so)
+# $global:SI_DataOut_ServiceNowTaskTable = ''          # the remediation task output's Import Set table (not set = that output is not written, and says so)
+# $global:SI_DataOut_ServiceNowTaskFindingTable = ''   # the remediation task links output's Import Set table (not set = that output is not written, and says so)
 # The staging status table: one row when a push of an output starts (writing) and one when it ends (complete, failed or
 # held), so your ServiceNow importer knows when a batch is complete. Every data row carries the batch id (u_si_batch_id).
 # Not set = u_si_staging_status. '' = no staging status table: the rows are sent without it, with a warning.
@@ -6512,6 +6514,32 @@ $global:SI_StorageAccount = '<storage-account-name>'
 #                     no transform map reads them. Reversible at once.
 #   Recommended:      Keep the default. Change it when: When you switch the servicenow-ci output on.
 #   More info:        https://invardia.com/docs/si/settings/SI_DataOut_ServiceNowCiTable/
+#
+# Data out: ServiceNow remediation task Import Set table  [SI_DataOut_ServiceNowTaskTable]  (advanced)
+#   What it is for:   The ServiceNow Import Set table the remediation task output (servicenow-remediation-task) sends
+#                     its rows to: one row per CI and task to perform, with its state.
+#   Default:          Not set: the ServiceNow remediation task output is not written, and its run says so
+#   If you change it: Rows are sent to this Import Set table, where your transform map reads the tasks per CI. Without
+#                     it the output does nothing.
+#   When to change:   When you switch the servicenow-remediation-task output on.
+#   Risk:             Rows go to the named ServiceNow Import Set table; a wrong table name means the rows land where
+#                     no transform map reads them. Reversible at once.
+#   Recommended:      Keep the default. Change it when: When you switch the servicenow-remediation-task output on.
+#   More info:        https://invardia.com/docs/si/settings/SI_DataOut_ServiceNowTaskTable/
+#
+# Data out: ServiceNow remediation task links Import Set table  [SI_DataOut_ServiceNowTaskFindingTable]  (advanced)
+#   What it is for:   The ServiceNow Import Set table the remediation task links output
+#                     (servicenow-remediation-task-finding) sends its rows to: one row per task and finding it
+#                     resolves.
+#   Default:          Not set: the ServiceNow remediation task links output is not written, and its run says so
+#   If you change it: Rows are sent to this Import Set table, where your transform map links each task to its
+#                     vulnerable items. Without it the output does nothing.
+#   When to change:   When you switch the servicenow-remediation-task-finding output on.
+#   Risk:             Rows go to the named ServiceNow Import Set table; a wrong table name means the rows land where
+#                     no transform map reads them. Reversible at once.
+#   Recommended:      Keep the default. Change it when: When you switch the servicenow-remediation-task-finding output
+#                     on.
+#   More info:        https://invardia.com/docs/si/settings/SI_DataOut_ServiceNowTaskFindingTable/
 #
 # Data out: ServiceNow resync or test batch  [SI_DataOut_ServiceNowRequest]  (advanced)
 #   What it is for:   A one-time request for the ServiceNow outputs, carried out on the next sync: a full resync

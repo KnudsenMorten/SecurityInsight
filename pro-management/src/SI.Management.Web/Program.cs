@@ -106,8 +106,12 @@ else
 {
     builder.Services.AddSingleton<NoDirectoryLookup>();
     builder.Services.AddSingleton<IGroupMembershipSource>(sp => sp.GetRequiredService<NoDirectoryLookup>());
-    builder.Services.AddSingleton<IDirectoryNames>(sp => sp.GetRequiredService<NoDirectoryLookup>());
+    // framework GRAPH-PICKER (SECURE-WEB-1): without the web app's own Graph lookup the people picker searches SecurityInsight's
+    // OWN names (sidata.DirectoryName, filled by the engine) with the database reader right -- no Graph call, no directory right
+    builder.Services.AddSingleton<IDirectoryNames>(sp => new SqlDirectoryNames(sp.GetRequiredService<SI.Management.Web.Data.ISqlExecutor>(), sp.GetRequiredService<ILogger<SqlDirectoryNames>>()));
 }
+// "Search the tenant": an Admin's request the engine runs (Auth/SqlDirectory.cs) -- one row through sidata.DirectorySearchAsk
+builder.Services.AddSingleton(sp => new DirectorySearchRequests(sp.GetRequiredService<SI.Management.Web.Data.ISqlExecutor>(), sp.GetRequiredService<ILogger<DirectorySearchRequests>>()));
 // #999: the sign-in carry-over follows the carry-over at start's one-install rule (Auth/AccessCarryOver.cs)
 builder.Services.AddSingleton(sp => new SignInAppSharing(sp.GetRequiredService<IDirectoryNames>(), builder.Configuration["AzureAd:ClientId"] ?? "",
     sp.GetRequiredService<ILogger<SignInAppSharing>>()));
@@ -450,6 +454,10 @@ builder.Services.AddSingleton<IStagedChangeHandler>(sp => sp.GetRequiredService<
 builder.Services.AddSingleton<CorrelationSuspectStore>();
 builder.Services.AddSingleton<CorrelationDecisionChanges>();
 builder.Services.AddSingleton<IStagedChangeHandler>(sp => sp.GetRequiredService<CorrelationDecisionChanges>());
+// #1219 (4) per-server software exceptions (sidata.CiSoftwareException, through Review & commit) and the software evidence of a CI
+builder.Services.AddSingleton<SoftwareExceptionStore>();
+builder.Services.AddSingleton<SoftwareExceptionChanges>();
+builder.Services.AddSingleton<IStagedChangeHandler>(sp => sp.GetRequiredService<SoftwareExceptionChanges>());
 builder.Services.AddSingleton<TemplateConformance>();
 builder.Services.AddSingleton<ConnectorRepository>();
 // The deviation report (Admin > Deviations): read-only; CSV and Excel export.

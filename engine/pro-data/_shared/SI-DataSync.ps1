@@ -639,6 +639,13 @@ function Invoke-SIDataSyncCore {
         $result['CiFindingSummary'] = Invoke-SIDataCiFindingSummary -Invoke $Invoke -DryRun:$DryRun -Log $Log
     }
     & $phase 'CI findings summary'
+    # ---- 4g (2b). the remediation tasks per CI (sidata.RemediationTask / RemediationTaskFinding, SI-DataRemediationTask.ps1):
+    # the newest collection's tasks, AFTER the findings per CI and their lifecycle (a task closes only on what the lifecycle
+    # knows). Additive to the Remediations of 4d (5), which are unchanged. Never fails the data sync.
+    if ($viewsReady -eq 1 -and (Get-Command -Name Invoke-SIDataRemediationTasks -ErrorAction SilentlyContinue)) {
+        $result['RemediationTasks'] = Invoke-SIDataRemediationTasks -Invoke $Invoke -DryRun:$DryRun -Log $Log
+    }
+    & $phase 'remediation tasks'
     # 2026-10-25 this run's narrow findings (SI-DataFindingNarrow.ps1) are emptied once the last step that reads them is done
     # #904: a narrow fill that FAILED this run is a part that failed (taken before the run's state is emptied)
     if (Get-Command -Name Get-SIDataFindingNarrowState -ErrorAction SilentlyContinue) { $result['Narrow'] = Get-SIDataFindingNarrowState }

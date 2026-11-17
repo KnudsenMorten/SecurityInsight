@@ -63,7 +63,7 @@ public sealed class OutputMapChanges : IStagedChangeHandler
                 if (row.Shipped is not null && row.Override is null && c == row.Shipped) return (null, new[] { "nothing changed -- this is the shipped column" });
                 if (row.Override is not null && c == row.Override) return (null, new[] { "nothing changed -- this is the column in force" });
                 body = OutputMapRules.Body(c);
-                title = $"Change the column {target} of the {map.Entry.Label}";
+                title = row.ShippedOff ? $"Switch on the column {target} of the {map.Entry.Label} (shipped switched off)" : $"Change the column {target} of the {map.Entry.Label}";
                 break;
             case "remove":
                 if (row is null) return (null, new[] { $"the output has no column '{target}'" });

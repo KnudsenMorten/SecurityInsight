@@ -38,7 +38,15 @@ public sealed class AccessModel : PageModel
     public IReadOnlyList<PersonRow> People { get; private set; } = Array.Empty<PersonRow>();
     public IReadOnlyList<string> Domains { get; private set; } = SecurityDomains.Known;
     public bool TableExists { get; private set; } = true;
-    public bool NameLookup => _names.Enabled;
+    /// The people picker searches (the directory, or SecurityInsight's own names from its last run).
+    public bool NameLookup => _names.CanSearch;
+    /// The web app's own directory lookup (group members from the directory, Entra role holders).
+    public bool LiveDirectory => _names.Enabled;
+    /// "Search the tenant" is offered (SecurityInsight's own names: the engine looks a name up).
+    public bool TenantAsk => _names.CanAskTenant;
+    /// When SecurityInsight's engine read the picker's names (null = a live directory, or not known).
+    public DirectoryFreshness? NamesFrom { get; private set; }
+    public IDirectoryNames Names => _names;
     public string? Error { get; private set; }
     public AccessAssignment? Editing { get; private set; }
     /// The row the last save wrote (highlighted, scrolled to): the redirect after a save names it.
@@ -74,16 +82,19 @@ public sealed class AccessModel : PageModel
     public async Task<IActionResult> OnGetSearchAsync(string? q, CancellationToken ct)
     {
         if (!User.IsSuperAdmin()) return Forbid();
-        var found = _names.Enabled ? await _names.SearchAsync(q ?? "", ct) : Array.Empty<DirectoryPerson>();
-        return new JsonResult(found.Select(p => new
-        {
-            id = p.ObjectId,
-            type = p.Type.Equals("group", StringComparison.OrdinalIgnoreCase) ? AccessAssignment.Group : AccessAssignment.User,
-            name = p.Name,
-            mail = p.Mail,
-            guest = p.Guest,
-        }));
+        return new JsonResult(PickerJson(_names.CanSearch ? await _names.SearchAsync(q ?? "", ct) : Array.Empty<DirectoryPerson>()));
     }
+
+    /// The picker's answer: id, type, name, mail, guest, disabled -- nothing else of a person.
+    public static IEnumerable<object> PickerJson(IEnumerable<DirectoryPerson> found) => found.Select(p => (object)new
+    {
+        id = p.ObjectId,
+        type = p.Type.Equals("group", StringComparison.OrdinalIgnoreCase) ? AccessAssignment.Group : AccessAssignment.User,
+        name = p.Name,
+        mail = p.Mail,
+        guest = p.Guest,
+        disabled = p.Disabled,
+    });
 
     private async Task LoadAsync(CancellationToken ct)
     {
@@ -108,6 +119,8 @@ public sealed class AccessModel : PageModel
         catch (Exception ex) when (ex is not OperationCanceledException) { _log.LogWarning(ex, "the security domains in the data could not be read"); }
         foreach (var a in Assignments) foreach (var d in a.Scope.Domains) if (d != AccessScope.AnyDomain) set.Add(d);
         Domains = set.ToList();
+        try { NamesFrom = await _names.FreshnessAsync(ct); }
+        catch (Exception ex) when (ex is not OperationCanceledException) { _log.LogWarning(ex, "the time of the picker's names could not be read"); }
         // the Entra app role holders not in the table yet (being carried over): in the SAME table, marked so
         var rows = Assignments.Select(a => new PersonRow(a, false)).ToList();
         try
@@ -164,7 +177,7 @@ public sealed class AccessModel : PageModel
         var id = (PrincipalId ?? "").Trim().ToLowerInvariant();
         var type = string.Equals(PrincipalType, AccessAssignment.Group, StringComparison.OrdinalIgnoreCase) ? AccessAssignment.Group : AccessAssignment.User;
         var name = (DisplayName ?? "").Trim();
-        if (name.Length == 0 && _names.Enabled && SqlAccessStore.ObjectId().IsMatch(id) && await _names.NameOfAsync(id, ct) is { } found)
+        if (name.Length == 0 && _names.CanSearch && SqlAccessStore.ObjectId().IsMatch(id) && await _names.NameOfAsync(id, ct) is { } found)
         {
             name = found.Name; type = found.Type;
         }

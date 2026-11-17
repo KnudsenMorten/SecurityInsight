@@ -786,6 +786,8 @@ foreach ($__raSqlDep in @('../_shared/data-sql/SI-DataModel.ps1', '../_shared/da
 . (Join-Path $PSScriptRoot '_shared/RA-DefenderCveContext.ps1')
 # #636: the source's own first-seen on each finding row (Defender's software vulnerabilities export, Defender for Cloud, Shodan)
 . (Join-Path $PSScriptRoot '_shared/RA-SourceFirstSeen.ps1')
+# #1219 / #1277: where the affected software is (every path, install kind, the application it is bundled in)
+. (Join-Path $PSScriptRoot '_shared/RA-SoftwareEvidence.ps1')
 . (Join-Path $PSScriptRoot '_shared/RA-DefenderRecommendationContext.ps1')
 # #505: the CI blocks every report reads its assets through (SI_CI_CL, regenerated with SI_ActiveStaleDays).
 . (Join-Path $PSScriptRoot '_shared/RA-CiKql.ps1')
@@ -3061,6 +3063,12 @@ if ($ResultAll.Count -eq 0) {
     # #636 (owner 2026-10-19): the source's own first-seen (si_source_first_seen) -- the protection score ages a finding by it
     # before SI's own first detection; Defender's software vulnerabilities export is read once per run (SI_RA_SourceFirstSeen)
     try { $ResultFiltered = Add-RASourceFirstSeen -Rows @($ResultFiltered) -Log { param($m) Write-Warn2 $m } } catch { Write-Warn2 ("The source's first-seen dates could not be added -- the findings are unchanged: {0}" -f $_.Exception.Message) }
+    # #1219 / #1277: WHERE the affected software is -- si_evidence_paths (every path), si_install_kind, si_bundled_by -- from the
+    # software evidence the endpoint collection stored (sidata.SoftwareEvidence), joined by device + vendor + product + version.
+    # Context columns only: the finding count, the score and si_affected_path are unchanged; no stored evidence = left empty
+    if ($script:RAStreamOn -and $script:RAStream) {
+        try { $ResultFiltered = Add-RASoftwareEvidence -Rows @($ResultFiltered) -Invoke $script:RAStream.Invoke -Log { param($m) Write-Warn2 $m } } catch { Write-Warn2 ("Where the affected software is could not be added -- the findings are unchanged: {0}" -f $_.Exception.Message) }
+    }
     # ... and what Defender says about the recommendation itself: its exposure impact and whether it has an active alert
     # (the Defender recommendations API) -- context columns only, one read per run, a refused read is said once
     try { $ResultFiltered = Add-RADefenderRecommendationContext -Rows @($ResultFiltered) -Log { param($m) Write-Warn2 $m } } catch { Write-Warn2 ("The exposure impact and active alert of the Defender recommendations could not be added -- the findings are unchanged: {0}" -f $_.Exception.Message) }
@@ -3393,8 +3401,11 @@ if ($ResultAll.Count -eq 0) {
     # (OUTPUT/RiskAnalysis_Summary.json): the pool carried 48 distinct columns while row 1
     # had 46, so AssetName and AssetType were lost from the delivered xlsx.
     # Union across reports instead, in first-seen order.
+    # STORED-ONLY columns (RA-SqlStream.ps1 Get-RAOutputColumns -- where the affected software is): on the stored finding
+    # for the web pages and a switched-on output column, never a column of the workbook / JSON file / Log Analytics
+    $__outCols = @(Get-RAOutputColumns -Columns @($DesiredColumns))
     if (-not $global:FinalDesiredColumns) {
-        $global:FinalDesiredColumns = @($DesiredColumns)
+        $global:FinalDesiredColumns = @($__outCols)
     } else {
         # 🔴 THE UNION MUST BE CASE-INSENSITIVE, AND THIS LINE IS THE WHOLE FIX.
         # `List[string].Contains()` uses the ORDINAL comparer, so 'OsPlatform' (endpoint reports) and
@@ -3415,7 +3426,7 @@ if ($ResultAll.Count -eq 0) {
         $mergedCols = New-Object 'System.Collections.Generic.List[string]'
         $seenCols   = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
         foreach ($c in $global:FinalDesiredColumns) { if ($seenCols.Add($c)) { [void]$mergedCols.Add($c) } }
-        foreach ($c in $DesiredColumns)             { if ($seenCols.Add($c)) { [void]$mergedCols.Add($c) } }
+        foreach ($c in $__outCols)                  { if ($seenCols.Add($c)) { [void]$mergedCols.Add($c) } }
         # Re-pin the trace columns last. They are appended per report (see $TraceCols
         # above, "always the LAST four columns"), so a plain union would leave report 1's
         # copies stranded mid-sheet with later reports' columns after them.
@@ -3447,7 +3458,7 @@ if ($ResultAll.Count -eq 0) {
     # loses data.
     if ($null -ne $global:RA_ColumnFillThisRun) {
         try {
-            $__snap = Get-RAColumnFillSnapshot -Rows @($Shaped); if ($script:RAStreamOn) { $__snap = Merge-RAColumnFillSnapshot -Into $global:RA_ColumnFillThisRun[[string]$ReportName] -Add $__snap }; $global:RA_ColumnFillThisRun[[string]$ReportName] = $__snap
+            $__snap = Get-RAColumnFillSnapshot -Rows @($Shaped) -Exclude @($script:RAStreamStoredOnlyCols); if ($script:RAStreamOn) { $__snap = Merge-RAColumnFillSnapshot -Into $global:RA_ColumnFillThisRun[[string]$ReportName] -Add $__snap }; $global:RA_ColumnFillThisRun[[string]$ReportName] = $__snap
         } catch {
             Write-Warn2 ("[ColumnFillGuard] snapshot skipped for {0}: {1}" -f $ReportName, $_.Exception.Message)
         }
@@ -3547,7 +3558,8 @@ function Test-RABucketRowCount {
 function Write-RAStreamBucketRows {
     <# One bucket's (or one staged page's) scored rows -> SQL, with which of them the workbook / mail view shows. #>
     param([AllowEmptyCollection()][object[]]$Shaped = @(), [string]$Bucket, [bool]$IsDetailedShape, [string[]]$DesiredColumns)
-    Add-RAStreamColumns -Stream $script:RAStream -Columns @($DesiredColumns)
+    # the report's columns as its rows are read back for the outputs: never a stored-only one (Get-RAOutputColumns)
+    Add-RAStreamColumns -Stream $script:RAStream -Columns @(Get-RAOutputColumns -Columns @($DesiredColumns))
     $view = Select-RAReportRows -Rows @($Shaped) -IncludeExempted:([bool]$global:SI_Exempted_CountInManagement)
     $script:RAStreamExemptedNotCounted += [long]$view.Exempted
     $vr = @($view.Rows)
@@ -3673,7 +3685,8 @@ function Get-RAReportExpectedRows {
         # is part of its slice.
         if ($null -ne $Retrieved -and -not $script:RALakeAnswered -and $LostSlices -le 0) {
             $__howN = if ($n -gt 1) { ('every one of the report''s {0} slices answered below the row limit' -f $n) } else { 'the report''s one query slice answered whole and below the row limit' }
-            return @{ Count = [long]$Retrieved; Error = ''; How = ('{0}, so the source holds what they returned (the whole count could not be sent: {1})' -f $__howN, $whole.Error) }
+            # #1275 (3): the run report says plainly where the count came from
+            return @{ Count = [long]$Retrieved; Error = ''; How = ('{0}, so the source holds what they returned (the whole count could not be sent: {1}) -- count taken from the slices' -f $__howN, $whole.Error) }
         }
         # The whole count was refused for its SIZE (413) and the slices' rows cannot stand for it: the count is asked IN PARTS,
         # the way the read is split -- each part with its own slice filter and its own cut of the inlined lookups -- and in
@@ -4774,6 +4787,9 @@ foreach ($includeItem in $script:RALoopList) {
             }
           }
 
+          # #1275 (2): the slices are sized at half the documented time limit of the back end that answers them -- known
+          # from the run so far (Get-RAQueryBackend; unknown = advanced hunting, the tightest); each answered slice says its own
+          try { $script:SIRaSliceBackend = Get-RAQueryBackend -Query $Query } catch { $script:SIRaSliceBackend = 'hunting' }
           # #831 B: ONE PART of a split report asks the slice count its producer planned for EVERY part (the remembered count) --
           # never sized again here: two parts with different counts would slice the report differently (rows twice, or none)
           if ($null -ne $script:RAScaleSplit) {
@@ -6535,6 +6551,17 @@ if (-not $script:RAStreamOn) { Invoke-RAWorkbookStep }
 
 if ($null -eq $global:WriteJsonOutput) { $global:WriteJsonOutput = $true }
 
+# #1275 (5) (owner 2026-11-17, stage 1; "no data loss"): WITH the database the JSON file is written AFTER the run's result is
+# completed in it (Complete-RAStream, below the end guards) -- the collection no longer waits for a file of every row (at
+# 1.5 M rows the longest step after the reports). ITS CONTENT IS EXACTLY WHAT IT WAS: the rows of the view, in the final
+# order, with the reports held back AT THIS POINT of the run left out exactly as before -- the held set is taken here
+# ($script:RAJsonHeld) and the file is read with it (New-RARowPager -Held). A report the end guards judge NOT COMPLETE is in
+# the file as it always was (the guards set a verdict; they never take rows out of the view). Without the database (the
+# result in memory) the file is written here, as before.
+$script:RAJsonHeld = $null
+if ($script:RAStreamOn) { [int[]]$script:RAJsonHeld = @(Get-RAStreamHeldOrdinals -Stream $script:RAStream) }
+$script:RAJsonViewCount = [long]$script:RAViewCount
+$script:RAJsonStep = {
 if ([bool]$global:WriteJsonOutput) {
     $global:OutputJson = [System.IO.Path]::ChangeExtension($global:OutputXlsx, 'json')
     Write-Step "exporting JSON sibling"
@@ -6556,9 +6583,10 @@ if ([bool]$global:WriteJsonOutput) {
         # #744: the next page read from the database while this one is written; the rows' text made on several cores.
         if ($script:RAStreamOn) {
             $__phJsonSw = [System.Diagnostics.Stopwatch]::StartNew()   # #873 A
-            Write-RAJsonArrayFile -Pager (New-RARowPager -Stream $script:RAStream -Source View -ReadAhead) -Path $global:OutputJson -Depth 20 -Upload $script:RAJsonStaged -Total $script:RAViewCount
-            Write-Info (Format-RAAfterReportsLine -What 'the JSON file' -Seconds $__phJsonSw.Elapsed.TotalSeconds -Rows ([long]$script:RAViewCount))
-            Write-RAStepPhaseRow -Stream $script:RAStream -Phase 'after the reports: the JSON file' -Seconds $__phJsonSw.Elapsed.TotalSeconds -Rows ([long]$script:RAViewCount)
+            # #1275 (5): the held set as it was where the file used to be written (the same rows as before the move)
+            Write-RAJsonArrayFile -Pager (New-RARowPager -Stream $script:RAStream -Source View -ReadAhead -Held $script:RAJsonHeld) -Path $global:OutputJson -Depth 20 -Upload $script:RAJsonStaged -Total $script:RAJsonViewCount
+            Write-Info (Format-RAAfterReportsLine -What 'the JSON file' -Seconds $__phJsonSw.Elapsed.TotalSeconds -Rows ([long]$script:RAJsonViewCount))
+            Write-RAStepPhaseRow -Stream $script:RAStream -Phase 'after the reports: the JSON file' -Seconds $__phJsonSw.Elapsed.TotalSeconds -Rows ([long]$script:RAJsonViewCount)
         }
         else { Write-RAJsonArrayFile -Rows $global:RA_ReportRows -Path $global:OutputJson -Depth 20 -Upload $script:RAJsonStaged -Total $script:RAViewCount }
         if ($script:RAJsonStaged) { $null = Complete-SIExportStagedUpload -Upload $script:RAJsonStaged }
@@ -6568,6 +6596,9 @@ if ([bool]$global:WriteJsonOutput) {
         Write-Warn "JSON export failed: $($_.Exception.Message) (continuing -- xlsx is still on disk)"
     }
 }
+}
+# without the database: here, as before; with it: right after the result is completed in the database (below)
+if (-not $script:RAStreamOn) { . $script:RAJsonStep }
 
 #########################################################################################################
 # LOG ANALYTICS INGEST  (Phase 2)
@@ -6846,6 +6877,7 @@ elseif ([bool]$global:SendToLogAnalytics) {
                 $__keyCols = @(Get-RAIngestKeyColumns | Where-Object { $_ -ne 'CollectionTime' })
                 $__laTypes = Get-RALaTableColumnTypes -WorkspaceResourceId $laWs -TableName $laTable
                 $schemaSample = @(); $__decCols = @(); $__txtCols = @(); $__numCols = @(); $__keyGaps = @($__keyCols)
+                $__phLaSchemaSw = [System.Diagnostics.Stopwatch]::StartNew()   # #1275: measurement only (cfg.StepPhaseTime)
                 $__pgS = if ($script:RAStreamOn) { New-RARowPager -Stream $script:RAStream -Source All } else { New-RARowPager -Rows $global:final }
                 while ($null -ne ($__pgPage = $__pgS.Next())) {
                     $schemaSample = @(Get-RASchemaCoverageSample -Rows (@($schemaSample) + @($__pgPage)) -BaseCount 100)
@@ -6858,6 +6890,7 @@ elseif ([bool]$global:SendToLogAnalytics) {
                     $__pgPage = $null
                 }
                 $__pgS = $null
+                if ($script:RAStreamOn) { Write-RAStepPhaseRow -Stream $script:RAStream -Phase 'after the reports: the Log Analytics schema pass' -Seconds $__phLaSchemaSw.Elapsed.TotalSeconds -Rows ([long]$script:RAAllCount) }
 
                 # DROP COLUMNS LOG ANALYTICS CANNOT ACCEPT (2026-08-08).
                 # The export carries 17 `<name>@odata.type` columns -- Graph/OData serialisation
@@ -7006,6 +7039,7 @@ elseif ([bool]$global:SendToLogAnalytics) {
                 # #738: the pages are read ahead while a page is posted, and the posts are made by a sender for the table
                 # (each filled close to the API's limit, up to 4 in flight, 429 / Retry-After honoured); the parts, the
                 # prepared rows and their JSON are what they were. RowsPosted = the rows the service CONFIRMED.
+                $__phLaPostSw = [System.Diagnostics.Stopwatch]::StartNew()   # #1275: measurement only (cfg.StepPhaseTime)
                 $__pgL = if ($script:RAStreamOn) { New-RARowPager -Stream $script:RAStream -Source All -ReadAhead } else { New-RARowPager -Rows $global:final }
                 $__laDelivery = Invoke-RALaPagedPost -Pager $__pgL -KeyColumns @(Get-RAIngestKeyColumns) -TableName $laTable `
                     -Prepare {
@@ -7032,6 +7066,7 @@ elseif ([bool]$global:SendToLogAnalytics) {
                     } `
                     -OnStopped { param($__confirmed) $script:_RALaRowsPosted = [long]$__confirmed }
                 $__pgL = $null
+                if ($script:RAStreamOn) { Write-RAStepPhaseRow -Stream $script:RAStream -Phase 'after the reports: the Log Analytics post' -Seconds $__phLaPostSw.Elapsed.TotalSeconds -Rows ([long]$__laDelivery.RowsPosted) }
                 $script:_RALaRowsPosted = [long]$__laDelivery.RowsPosted
                 if ($__laDelivery.Sender) { Write-Info ("  Log Analytics: {0} row(s) confirmed in {1} post(s)" -f $__laDelivery.RowsPosted, $__laDelivery.Posts) }
                 if ([long]$__laDelivery.RowsPosted -ne $script:RAAllCount) { throw ("Posted {0} of {1} row(s) -- the other rows are UNKNOWN, not posted." -f $__laDelivery.RowsPosted, $script:RAAllCount) }
@@ -7563,6 +7598,10 @@ if ($script:RAStreamOn -and $null -eq $script:_RAEndFailure) {
         }
     }
 }
+
+# #1275 (5): THE JSON FILE, after the result is completed in the database -- the same rows as before the move (the held set
+# taken where it used to be written, $script:RAJsonHeld); written whatever became of the completion, as it always was.
+if ($script:RAStreamOn) { . $script:RAJsonStep }
 
 # #743 (1): THE LOG ANALYTICS COPY, AFTER THE DELIVERY FROM SQL. The collection above is complete and delivered (the web app,
 # the mails and the connectors read the database); the copy goes to Log Analytics now. A copy that went out in full is
@@ -8150,6 +8189,12 @@ if ([bool]$global:BuildSummaryByAI -or [long]$script:RAViewCount -gt 0) {
                 $__sb = Invoke-RATopListsInSql -Stream $script:RAStream -ViewRows ([long]$script:RAViewCount) -Collapse $isDetailedTemplate -WithAi (-not $script:_RATopListsOnly) `
                             -TopAssetsN $TopAssetsN -TopFindingsN $TopFindingsN -KpiState $__sbKpi -Progress $__sbTick -Log { param($l, $t) Write-Info $t }
                 Write-Info (Format-RATopListsLine -Result $__sb)
+                # #1275: why the database pass declined, as a phase row (measurement only; cfg.StepPhaseTime.Phase is 128 characters)
+                if ([string]$__sb.Status -ne 'ok') {
+                    $__sbWhy = ('after the reports: the Top 50 lists declined: ' + [string]$__sb.Why)
+                    if ($__sbWhy.Length -gt 128) { $__sbWhy = $__sbWhy.Substring(0, 128) }
+                    Write-RAStepPhaseRow -Stream $script:RAStream -Phase $__sbWhy -Seconds ([double]$__sb.Seconds) -Rows ([long]$__sb.Rows)
+                }
                 if ([string]$__sb.Status -ne 'ok') { $__sb = $null }
             }
         }

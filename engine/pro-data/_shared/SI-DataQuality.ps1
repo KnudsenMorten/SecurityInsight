@@ -980,7 +980,7 @@ function Get-SIDataQualityCause {
     param([Parameter(Mandatory)]$Anomaly, [AllowEmptyCollection()][object[]]$Changes = @(), [string]$Since = 'the previous run')
     $found = Get-SIDataQualityCauseChanges -Anomaly $Anomaly -Changes $Changes
     $all = @($found.All)
-    if (-not $all.Count) { return ('No setting was changed since {0}, so the source data itself changed -- or a collection was incomplete.' -f $Since) }
+    if (-not $all.Count) { return ('No setting was changed since {0}. So the change most likely comes from the data itself (for example devices or resources that were added or removed), or a data source answered only in part.' -f $Since) }
     $rel = @($found.Relevant)
     $use = if ($rel.Count) { $rel } else { $all }
     $named = @($use | Select-Object -First 3 | ForEach-Object {
@@ -1081,34 +1081,85 @@ function Get-SIDataQualitySummaryLines {
 function Get-SIDataQualityHeadline {
     <#
         PURE. The headline a person understands without knowing the check (owner 2026-10-21 on the old "Data quality alert: an
-        unusual drop was detected": "Hard to understand"): what changed, and that nothing was lost -- "Fewer than usual in
-        the latest data -- nothing was lost" (or "More than usual", "Unusual numbers" for both).
+        unusual drop was detected": "Hard to understand"; 2026-11-16: "Customers dont understand this mail"): what changed
+        and whether anyone has to act -- "Some numbers are higher than usual - no action needed", "... lower than usual - no
+        action if expected", "Fewer assets than usual - no action if expected", "Some numbers changed more than usual - ...".
     #>
     param([AllowEmptyCollection()][object[]]$Anomalies = @())
-    $drops = @($Anomalies | Where-Object { $_.Direction -eq 'drop' }).Count
+    # owner 2026-11-16 ("Customers dont understand this mail"): the headline says in plain words what changed and whether
+    # anyone has to act; the subject puts "Notice:" in front (a notice, not a warning)
+    switch (Get-SIDataQualityDirection -Anomalies $Anomalies) {
+        'mixed'  { return 'Some numbers changed more than usual - no action if expected' }
+        'rise'   { return 'Some numbers are higher than usual - no action needed' }
+        'assets' { return 'Fewer assets than usual - no action if expected' }
+        default  { return 'Some numbers are lower than usual - no action if expected' }
+    }
+}
+
+function Get-SIDataQualityDirection {
+    <# PURE. Which way the warnings go: 'mixed' (up and down), 'rise' (only up), 'assets' (only down, and an asset count is
+       among them), 'drop' (only down). #>
+    param([AllowEmptyCollection()][object[]]$Anomalies = @())
+    $drops = @($Anomalies | Where-Object { $_.Direction -eq 'drop' })
     $rises = @($Anomalies | Where-Object { $_.Direction -eq 'rise' }).Count
-    $what = if ($drops -and $rises) { 'Unusual numbers' } elseif ($rises) { 'More than usual' } else { 'Fewer than usual' }
-    "$what in the latest data -- nothing was lost"
+    if ($drops.Count -and $rises) { return 'mixed' }
+    if ($rises) { return 'rise' }
+    if (@($drops | Where-Object { [string]$_.Kind -eq 'assets' }).Count) { return 'assets' }
+    'drop'
+}
+
+function Get-SIDataQualityPlainLabel {
+    <#
+        PURE. A key number's name as a customer reads it in the first lines of the mail (owner 2026-11-16): no column or code
+        names, no check words. "Assets from Defender for Endpoint (endpoint profiler)" -> "assets from Defender for Endpoint",
+        "Rows: Device_Missing_CVEs_Detailed (Detailed)" -> "findings in the report Device_Missing_CVEs_Detailed", "Fill: tier
+        (CriticalityTier)" -> "how often tier is filled in". The numbers further down keep the full name.
+    #>
+    param([Parameter(Mandatory)]$Anomaly)
+    $k = [string]$Anomaly.Key
+    $l = ([string]$Anomaly.Label).Trim()
+    # a code name in brackets at the end: "(endpoint profiler)", "(CriticalityTier)", "(si_owner / CMDB owner)"
+    $strip = { param($s) ([string]$s -replace '\s*\((?:[^()]*profiler|[^()]*_[^()]*|[A-Z][a-z]+[A-Z][A-Za-z]*)\)\s*$', '').Trim() }
+    if ($k -match '^rows\.[^.]+\.(.+)$') { return ('findings in the report {0}' -f $Matches[1]) }
+    if ($k -match '^assets\.') { $p = & $strip $l; if ($p) { return ($p.Substring(0, 1).ToLowerInvariant() + $p.Substring(1)) } }
+    if ($k -eq 'ci.active') { return 'active assets' }
+    if ($k -eq 'ci.to_retire') { return 'assets no longer seen' }
+    if ($k -match '^tier\.(.+)$') { return ('active assets in tier {0}' -f $Matches[1]) }
+    if ($k -match '^class\.(.+)$') { return ('active assets of type {0}' -f $Matches[1]) }
+    $p = ''
+    if ($k -match '^fill\.' -and $l -match '^Fill:\s*(.+)$') { $p = 'how often {0} is filled in' -f (& $strip $Matches[1]) }
+    elseif ($l -match '^Classification incomplete:\s*(.+)$') { $p = $Matches[1].Trim() }
+    else { $p = & $strip $l }
+    if (-not $p) { $p = $l }
+    ($p -replace '\bCIs\b', 'assets') -replace '\bCI\b', 'asset'
 }
 
 function Get-SIDataQualityInShort {
     <#
-        PURE. The three answers a reader needs first (owner 2026-10-21, SUP-2026-00231): what happened (in plain words, the
-        biggest change with its numbers), is anything lost (no: a check only), does anyone have to act (usually not).
-        Returns the three lines.
+        PURE. The three answers a reader needs first (owner 2026-10-21, SUP-2026-00231; plain words owner 2026-11-16:
+        "Customers dont understand this mail"): what happened (one sentence, the biggest change with its real numbers), is
+        anything lost (no -- what is kept), do you need to do anything (no, unless one concrete case). No check names, no
+        code words. Returns the three lines.
     #>
     param([AllowEmptyCollection()][object[]]$Anomalies = @(), [string]$When = 'the latest run', [int]$Numbers = 0,
           [System.Globalization.CultureInfo]$Culture = [System.Globalization.CultureInfo]::InvariantCulture)
     $a = @($Anomalies)
+    $dir = Get-SIDataQualityDirection -Anomalies $a
+    $how = switch ($dir) { 'mixed' { 'different from usual' } 'rise' { 'higher than usual' } default { 'lower than usual' } }
     $largest = $a | Sort-Object @{ Expression = { [math]::Abs([double]$_.ChangePct) }; Descending = $true } | Select-Object -First 1
     $big = if ($largest) {
-        (' The biggest: {0} -- {1} now, usually {2} ({3}).' -f [string]$largest.Label, (Format-SIDataQualityNumber $largest.Now $largest.Kind $Culture),
-            (Format-SIDataQualityNumber $largest.Expected $largest.Kind $Culture), (Format-SIDataQualityChange $largest $Culture))
+        (' The biggest change: {0} -- {1} now, usually {2} ({3}).' -f (Get-SIDataQualityPlainLabel $largest), (Format-SIDataQualityNumber $largest.Now $largest.Kind $Culture),
+            (Format-SIDataQualityNumber $largest.Expected $largest.Kind $Culture), ((Format-SIDataQualityChange $largest $Culture) -replace ' of all active CIs$', ' of all active assets'))
     } else { '' }
+    $act = switch ($dir) {
+        'rise'  { 'No, unless you did not add devices, users or Azure resources and did not change a setting. Then see "What you can do" below.' }
+        'mixed' { 'No, unless you did not add or remove devices, users or Azure resources on purpose. Then see "What you can do" below.' }
+        default { 'No, unless you did not remove devices, users or Azure resources on purpose. Then see "What you can do" below.' }
+    }
     @(
-        ('What happened: in the run of {0}, {1} number{2} {3} clearly different from the last 3 runs.{4}' -f $When, $Numbers, $(if ($Numbers -eq 1) { '' } else { 's' }), $(if ($Numbers -eq 1) { 'was' } else { 'were' }), $big),
-        'Is anything lost: no. This is a check only -- nothing was blocked or deleted. An asset a source no longer lists is kept for its grace period, never removed at once.',
-        'Does anyone have to act: usually not. If you know why (for example devices or Azure resources were removed on purpose), nothing is needed -- the usual range follows the new level after three runs. If you do not know why, see "What you can do" below.'
+        ('What happened: In the run of {0}, {1} number{2} {3} {4}.{5}' -f $When, $Numbers, $(if ($Numbers -eq 1) { '' } else { 's' }), $(if ($Numbers -eq 1) { 'was' } else { 'were' }), $how, $big),
+        'Is anything lost: No. Nothing was deleted or blocked. An asset that a data source no longer lists is kept for some days. It is not removed at once.',
+        ('Do you need to do anything: ' + $act)
     )
 }
 
@@ -1161,7 +1212,7 @@ function ConvertTo-SIDataQualityMail {
         [void]$body.Append((ConvertTo-SIMailParagraphHtml -Text ($since[0] + "`n`n" + (@($since | Select-Object -Skip 1) -join "`n"))))
     }
     # likely cause -- each distinct cause once, the numbers it concerns named
-    [void]$body.Append((& $h3 'Why this mail'))
+    [void]$body.Append((& $h3 'Why this can happen'))
     $causes = [ordered]@{}
     foreach ($x in $a) { $c = [string]$x.Cause; if (-not $c) { $c = 'Not known.' }; if (-not $causes.Contains($c)) { $causes[$c] = New-Object System.Collections.Generic.List[string] }; $causes[$c].Add([string]$x.Label) }
     if ($causes.Count -eq 1) { [void]$body.Append((ConvertTo-SIMailParagraphHtml -Text (@($causes.Keys)[0]))) }
@@ -1172,18 +1223,18 @@ function ConvertTo-SIDataQualityMail {
     # what to do
     [void]$body.Append((& $h3 'What you can do'))
     $steps = @(
-        '- If a setting was changed just before (named under "Why this mail"), and the change was not meant to do this, correct the setting.',
-        ('- Then open the Data quality panel (Details below) and use Re-run from here on the warning -- or on the step it names in Operations > Jobs -- so the numbers are measured again.'),
-        '- If the change is expected (for example assets were removed on purpose), nothing needs doing: the usual range follows the new numbers after three runs.'
+        '- If you added or removed devices, users or Azure resources on purpose, do nothing. SecurityInsight learns the new level after three runs.',
+        '- If a setting was changed just before (see "Why this can happen") and it was not meant to do this, correct the setting.',
+        ('- Then open the Data quality page (the Details button below) and choose Re-run from here -- or re-run the step it names in Operations > Jobs. The numbers are then measured again.')
     )
     [void]$body.Append((ConvertTo-SIMailParagraphHtml -Text ($steps -join "`n")))
-    [void]$body.Append((ConvertTo-SIMailParagraphHtml -Text 'Nothing was blocked: every step ran and delivered as usual. This is a warning only.'))
+    [void]$body.Append((ConvertTo-SIMailParagraphHtml -Text 'Nothing was blocked: every step ran and delivered as usual. This is a notice only.'))
     # the numbers, last: one line per key number, then the run summary
     # most significant changes -- ONE line per key number (#728: no table), its fields as bullets under it
-    [void]$nums.Append((& $h3 'The numbers'))
+    [void]$nums.Append((& $h3 'The numbers in detail'))
     [void]$nums.Append(('<div style="{0}margin:0 0 16px 0;" data-mail-changes>' -f $L.Font))
     foreach ($x in @($a | Select-Object -First $MaxRows)) {
-        $line = ConvertTo-SIMailLineHtml -Topic ([string]$x.Label) -Html ('<strong>{0}</strong> now, expected {1} (last 3 runs), change {2}' -f `
+        $line = ConvertTo-SIMailLineHtml -Topic ([string]$x.Label) -Html ('<strong>{0}</strong> now, usually {1} (last 3 runs), change {2}' -f `
             (& $enc (Format-SIDataQualityNumber $x.Now $x.Kind $Culture)), (& $enc (Format-SIDataQualityExpected $x $Culture)), (& $enc (Format-SIDataQualityChange $x $Culture)))
         [void]$nums.Append(($line -replace '^<p ', ('<p data-key="{0}" ' -f (& $enc $x.Key))))
         # ONE warning per source: its fields are listed under it, each with its 3 earlier values and now
@@ -1194,7 +1245,7 @@ function ConvertTo-SIDataQualityMail {
                 # #1053 a correlation suspect is a group, not a value per run: its line names the CIs, the evidence and the impact
                 if ([string]$x.Rule -eq 'correlation-suspect') { [void]$nums.Append(('<li data-field="{0}" style="margin:0 0 4px 0;">{1}</li>' -f (& $enc $f.Key), (& $enc $f.Label))); continue }
                 $name = Get-SIDataQualityFieldName ([string]$f.Key); if (-not $name) { $name = [string]$f.Label }
-                [void]$nums.Append(('<li data-field="{0}" style="margin:0 0 4px 0;">{1}: {2} now, expected {3}, change {4}</li>' -f `
+                [void]$nums.Append(('<li data-field="{0}" style="margin:0 0 4px 0;">{1}: {2} now, usually {3}, change {4}</li>' -f `
                     (& $enc $f.Key), (& $enc $name), (& $enc (Format-SIDataQualityNumber $f.Now $f.Kind $Culture)), (& $enc (Format-SIDataQualityExpected $f $Culture)), (& $enc (Format-SIDataQualityChange $f $Culture))))
             }
             [void]$nums.Append('</ul>')
@@ -1205,18 +1256,19 @@ function ConvertTo-SIDataQualityMail {
     # run summary
     $facts = [ordered]@{
         'Run'                         = $when
-        'Anomaly detected'            = 'Yes'
-        'Key numbers outside the range' = [string]$numbers
-        'Largest delta vs expected'   = $(if ($largest) { (Format-SIDataQualityChange $largest $Culture) + ' (' + [string]$largest.Label + ')' } else { '' })
-        'Compared with'               = 'The median of the last 3 runs'
+        'Unusual numbers found'       = 'Yes'
+        'Numbers outside the usual range' = [string]$numbers
+        'Biggest change'              = $(if ($largest) { (Format-SIDataQualityChange $largest $Culture) + ' (' + [string]$largest.Label + ')' } else { '' })
+        'Compared with'               = 'The middle value of the last 3 runs'
     }
     [void]$nums.Append((ConvertTo-SIMailFactsHtml -Facts $facts -Title 'Run summary'))
     [void]$body.Append($nums.ToString())
 
     $layout = New-SIMailLayout -Title $headline -Summary $sentence -BodyHtml $body.ToString() -ButtonUrl $panel -ButtonText 'Details' `
         -Footer ($script:SIDataQuality.MailFooter + $(if ($TenantTag) { ' ' + $TenantTag } else { '' }))
-    # MAIL-3 (#653): a data-quality alert carries the severity word Warning (the body keeps the headline as it is)
-    $subject = 'Warning: ' + $headline
+    # owner 2026-11-16 ("Customers dont understand this mail"): a NOTICE, not a warning -- no severity word; the subject says
+    # in plain words what changed and whether anyone has to act (the body keeps the headline as it is)
+    $subject = 'Notice: ' + $headline
     if ($TenantTag) { $subject += (' | {0}' -f $TenantTag) }
     [pscustomobject]@{ Subject = $subject; Html = $layout.Html; Text = $layout.Text }
 }

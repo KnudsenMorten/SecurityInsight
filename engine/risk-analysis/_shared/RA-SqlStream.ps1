@@ -42,6 +42,21 @@ $script:RAStreamNarrowCols = @('SI_AssetId', 'AssetId', 'ConfigurationId', 'Asse
 $script:RAStreamDedupCols = @('SecurityDomain','Category','Subcategory','ConfigurationName','<cfg>','CriticalityTier','SecuritySeverity','cmdbCriticality','cmdbDataSensitivity','AssetName','SI_AssetId','AssetId','AadDeviceId')
 # the finding's TARGET (#690 (3)): appended to the key only when the row carries one (RA-RiskScore.ps1 $targetKeyCols)
 $script:RAStreamDedupTargetCols = @('TargetAssetId','LinkedAzureResourceId')
+# STORED-ONLY columns: on the stored finding (sidata.Finding DetailJson -- where the web pages and a switched-on output column
+# read them), NEVER in Risk Analysis' own outputs (the workbook, the JSON file, Log Analytics, the AI summary, the KPIs,
+# SI_Finding_CL): those stay exactly as they were. Kept out of a report's columns (Get-RAOutputColumns) and dropped when a
+# stored row is read back as the report's row (ConvertFrom-RAStreamJson -Columns). Where the affected software is
+# (RA-SoftwareEvidence.ps1): si_evidence_paths / si_install_kind / si_bundled_by.
+$script:RAStreamStoredOnlyCols = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+foreach ($__c in @('si_evidence_paths', 'si_install_kind', 'si_bundled_by')) { [void]$script:RAStreamStoredOnlyCols.Add($__c) }
+Remove-Variable -Name __c -ErrorAction SilentlyContinue
+
+function Get-RAOutputColumns {
+    <# PURE. A report's columns without the stored-only ones ($script:RAStreamStoredOnlyCols), in their order. #>
+    param([AllowNull()][AllowEmptyCollection()][string[]]$Columns)
+    if ($null -eq $Columns) { return , @() }
+    , @(foreach ($c in $Columns) { if ($c -and -not $script:RAStreamStoredOnlyCols.Contains([string]$c)) { $c } })
+}
 
 function Get-RAStreamSchemaCheckSql {
     "SELECT CASE WHEN COL_LENGTH('sidata.Finding','RaSeq') IS NOT NULL AND COL_LENGTH('sidata.Finding','RaAssetTier') IS NOT NULL AND COL_LENGTH('sidata.SummaryRow','RowJson') IS NOT NULL AND COL_LENGTH('sidata.Collection','RaCompletedAt') IS NOT NULL AND OBJECT_ID('sidata.RaStage') IS NOT NULL AND OBJECT_ID('sidata.RaReportStatus') IS NOT NULL THEN 1 ELSE 0 END"
@@ -158,7 +173,9 @@ function ConvertFrom-RAStreamJson {
     <#
         PURE. A stored row -> the row: strings stay strings (no date guessing), the columns in -DateCols become [datetime]
         again, and -Columns (the report's columns, in order) puts every column on the row (absent = $null) -- the shape the
-        report's rows had before they were stored.
+        report's rows had before they were stored. With -Columns, a STORED-ONLY column ($script:RAStreamStoredOnlyCols) that
+        is not one of them is left off: it is on the stored finding for the web pages and the outputs that switch it on, never
+        on the report's row (the workbook, the JSON file, Log Analytics ... stay as they were).
     #>
     param([Parameter(Mandatory)][string]$Json, [string[]]$Columns, [System.Collections.Generic.HashSet[string]]$DateCols)
     $sr = New-Object System.IO.StringReader($Json)
@@ -180,6 +197,7 @@ function ConvertFrom-RAStreamJson {
     $o = [ordered]@{}
     if ($Columns -and @($Columns).Count -gt 0) {
         foreach ($c in $Columns) { if ($vals.ContainsKey($c)) { $o[$c] = $vals[$c]; $vals.Remove($c) } else { $o[$c] = $null } }
+        if ($null -ne $script:RAStreamStoredOnlyCols) { foreach ($c in $script:RAStreamStoredOnlyCols) { if ($vals.ContainsKey($c)) { $vals.Remove($c) } } }
     }
     foreach ($p in $tok.Properties()) { if ($vals.ContainsKey($p.Name)) { $o[$p.Name] = $vals[$p.Name] } }
     [pscustomobject]$o
@@ -2338,10 +2356,14 @@ function New-RARowPager {
            as stored text -- never decoded rows. $pager.Close() ends it (called by the delivery; also at the last page).
     #>
     param($Stream, [AllowNull()][AllowEmptyCollection()][object[]]$Rows, [ValidateSet('All', 'View', 'FindingKey')][string]$Source = 'All', [long]$TargetChars = 32MB,
-          [switch]$ReadAhead, [switch]$OneCore)
+          [switch]$ReadAhead, [switch]$OneCore, [AllowNull()][AllowEmptyCollection()][int[]]$Held = $null)
     # -OneCore (#744): every page decoded here, on this thread (never on the cores of RA-ParallelScore.ps1)
+    # -Held (#1275 (5)): the held-back reports as they were at a fixed point of the run (the JSON file: where it was written
+    # before it moved below the completion) -- $null = the stream's held set when each page is read, as before
     $st = @{ Stream = $Stream; Rows = $Rows; Source = $Source; Done = $false; First = $true; Sort = 0.0; Seq = 0L; FKey = ''; Take = 2000; Target = $TargetChars; Read = 0L; ByOrd = $null; OneCore = [bool]$OneCore
-             ReadAhead = $null; Ahead = $null; AheadPages = 0; AheadFallbacks = 0; FetchSec = 0.0; DecodeSec = 0.0 }
+             ReadAhead = $null; Ahead = $null; AheadPages = 0; AheadFallbacks = 0; FetchSec = 0.0; DecodeSec = 0.0; Held = $null }
+    # (assigned in a plain statement: an EMPTY held list inside $( ) would enumerate to $null and mean "the current set")
+    if ($PSBoundParameters.ContainsKey('Held') -and $null -ne $Held) { $st.Held = [int[]]@($Held) }
     if ($Stream) { $st.ByOrd = Get-RAStreamColumnsByOrdinal -Stream $Stream }
     if ($Stream -and $ReadAhead -and $Stream.Invoke -and $Stream.Invoke.PSObject.Properties['SIConnectionInfo']) { $st.ReadAhead = $Stream.Invoke.PSObject.Properties['SIConnectionInfo'].Value }
     $o = [pscustomobject]@{ State = $st }
@@ -2406,7 +2428,9 @@ function Get-RARowPagerQuery {
             Sort = $s.Sort.ToString('R', [System.Globalization.CultureInfo]::InvariantCulture); Seq = [string]$s.Seq; FKey = [string]$s.FKey }
     # #877: a report held back this run is never read as the result (the workbook, the JSON file, Log Analytics, the AI
     # summary, the KPIs, the findings)
-    @{ Sql = (Get-RAStreamPageSql -Grain $s.Stream.Grain -Source $s.Source -After:(-not $s.First) -Held @(Get-RAStreamHeldOrdinals -Stream $s.Stream)); Params = $p }
+    [int[]]$__held = @()
+    if ($s.ContainsKey('Held') -and $null -ne $s.Held) { $__held = [int[]]@($s.Held) } else { $__held = [int[]]@(Get-RAStreamHeldOrdinals -Stream $s.Stream) }
+    @{ Sql = (Get-RAStreamPageSql -Grain $s.Stream.Grain -Source $s.Source -After:(-not $s.First) -Held $__held); Params = $p }
 }
 
 function Get-RARowPagerReadAheadScript {

@@ -47,7 +47,7 @@
             <label for="d-match">Also matches (optional)</label>
             <input id="d-match" name="matchValues" value="@f.MatchValues" maxlength="1000" placeholder="tag values for this department, separated by ;" />
             <h3>People</h3>
-            <partial name="~/Pages/Admin/Departments/_PeopleTable.cshtml" model="new PeopleTableModel(Model.Rows, Array.Empty<DepartmentMemberRow>(), search, Model.DirectoryOn)" />
+            <partial name="~/Pages/Admin/Departments/_PeopleTable.cshtml" model="new PeopleTableModel(Model.Rows, Array.Empty<DepartmentMemberRow>(), search, Model.DirectoryOn, await Model.PickerNamesAsync())" />
             <button type="submit">Create department</button>
         </form>
     </section>

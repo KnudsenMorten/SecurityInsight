@@ -175,7 +175,16 @@ $script:SICiBuildVersion = 15
 # 2026-11-12 (any privileged logon counts): the rule kind privilegedLogonTier reads si_privileged_logon_tier (database only).
 # A CI comes out different only when its device record carries the new logon value -- that record changed, so the
 # incremental build rebuilds exactly that CI; every other CI is the same: re-baselined, version 15.
-$script:SICiBuildLogicHash = '2a5857cbb7fcb3de5bc9bbf0b040c98e50ba07f932b2c5b3149fc97c5c941f8f'
+# 2026-11-16 (where each software copy is + per-server software exceptions): a software rule with path / install-kind conditions
+# (none shipped) and a per-server exception that leaves one software out of one rule on one CI. With no exception in force and
+# no conditioned rule every CI is byte-identical (proven against the release before, SIv3-SoftwareException): re-baselined, version 15.
+# 2026-11-17 (the software-evidence CI fields named database only): a list of the post contract's left-out fields only --
+# nothing the build reads; every CI is the same: re-baselined, version 15.
+# 2026-11-17 (a failed read of the per-server software exceptions stops the build before it starts -- the stored CIs keep their
+# last good tier): no CI that is built comes out different; every CI is the same: re-baselined, version 15.
+# 2026-11-17 (owner): a failed read of the manual CI overrides or the per-server exceptions applies their LAST GOOD read (kept
+# after every good read) and the build goes on -- every CI comes out as with a good read: re-baselined, version 15.
+$script:SICiBuildLogicHash = '127a8d65deab98a497e58abc7c3ddde74dec23f095aad7c8b63713e38fbcd10f'
 # a CI's fields that change without the CI changing (left out of its content hash)
 # (#406 si_not_seen_days: the days since a not seen / retired CI was last seen -- it grows every day by itself)
 $script:SICiVolatileFields = @('si_collection_time', 'si_run_id', 'si_days_inactive', 'si_ci_action', 'si_last_seen', 'si_field_sources', 'si_not_seen_days')
@@ -318,6 +327,10 @@ $script:SICiPostDatabaseOnly = @(
     'si_mdc_high_count', 'si_mdc_medium_count', 'si_mdc_low_count', 'si_mdc_oldest_unhealthy', 'si_mdc_newest_change', 'si_mdc_top',
     # rc12 (#499): the software past (or near) end of support -- a list like si_installed_software (its count is posted)
     'si_software_eos',
+    # the software evidence of the device (where each copy is, how it is present, the application a bundled copy belongs
+    # to) and the software detections evaluated against it -- lists like si_installed_software, unbounded (every path),
+    # read from the CI in the database by the web app, the exports and the CI rules; the paths in full (owner 2026-11-17)
+    'si_software_evidence_paths', 'si_software_install_kind', 'si_software_bundled_by', 'si_software_rule_hits',
     # the lowest tier of an account that logged on to the device (a tier input: the tier it gives is posted in si_tier and
     # explained in si_tier_reason); database only so adding it does not post every CI's full row again
     'si_privileged_logon_tier')
@@ -1441,6 +1454,10 @@ DECLARE @oc TABLE (CiId NVARCHAR(64));
 IF @since IS NOT NULL AND OBJECT_ID('sidata.CiOverride') IS NOT NULL
     INSERT @oc EXEC sp_executesql N'SELECT DISTINCT CiId FROM sidata.CiOverride WHERE SetAt >= @s OR RemovedAt >= @s OR (ExpiresAt > @s AND ExpiresAt <= @n)',
         N'@s DATETIME2(3), @n DATETIME2(3)', @s = @since, @n = @now;
+-- 4b. per-server software exceptions set or removed since the last build (#1219; a database without the table has none)
+IF @since IS NOT NULL AND OBJECT_ID('sidata.CiSoftwareException') IS NOT NULL
+    INSERT @oc EXEC sp_executesql N'SELECT DISTINCT CiId FROM sidata.CiSoftwareException WHERE SetAt >= @s OR RemovedAt >= @s',
+        N'@s DATETIME2(3)', @s = @since;
 INSERT @g SELECT DISTINCT m.GroupKey COLLATE Latin1_General_BIN2 FROM sidata.CiGroupMember m JOIN sidata.CiRecord r ON r.RecordKey = m.RecordKey
 JOIN @oc o ON o.CiId = r.CiId
 WHERE NOT EXISTS (SELECT 1 FROM @g x WHERE x.GroupKey = m.GroupKey COLLATE Latin1_General_BIN2);

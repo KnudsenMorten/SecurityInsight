@@ -1,0 +1,109 @@
+@model SI.Management.Web.Pages.Cis.CiSoftwareRender
+@using SI.Management.Web.Changes
+@using SI.Management.Web.Pages.Cis
+@{
+    var v = Model.View;
+}
+@functions {
+    private static string Kind(string k) => SoftwareExceptionStore.KindText(k);
+}
+@* #1219 (4) the software behind the tier detections: each detection with its evidence; an Admin (Pro) marks one a false positive on this server *@
+<section class="card" aria-labelledby="h-software" data-ci-software>
+    <h2 id="h-software">Software behind the tier detections</h2>
+    <p class="hint" data-ci-software-evidence>@v.EvidenceText</p>
+    @if (v.Error is not null) { <div class="notice warn" role="status">@v.Error</div> }
+    @if (v.Shown.Count == 0 && v.Active.Count == 0)
+    {
+        <p class="hint" data-ci-software-none>No tier detection of this CI matched through installed software.</p>
+    }
+    @if (v.Shown.Count > 0)
+    {
+        <div class="table-wrap">
+            <table data-sortable data-sw-detections>
+                <thead><tr><th>Detection</th><th>Tier</th><th>Software</th><th>Where it is (newest run)</th>@if (Model.CanChange) { <th></th> }</tr></thead>
+                <tbody>
+                    @foreach (var d in v.Shown)
+                    {
+                        var ps = v.PathsOf(d.Software);
+                        var vp = SoftwareKey.Split(d.Software);
+                        <tr data-sw-detection="@d.RuleId|@d.Software">
+                            <td class="wrap">@d.Label<br /><span class="muted mono">@d.RuleId</span></td>
+                            <td>@DetailModel.TierText(d.Tier)@if (d.Winner) { <text> </text><span class="badge good">decided the tier</span> }</td>
+                            <td class="mono">@d.Software</td>
+                            <td class="wrap">
+                                @if (ps.Count == 0) { <span class="hint" data-sw-no-path>no path stored -- the evidence is unknown or Defender gave none</span> }
+                                else
+                                {
+                                    <ul class="plain" data-sw-paths>
+                                        @foreach (var p in ps)
+                                        {
+                                            <li data-sw-path data-kind="@p.InstallKind"><span class="mono">@p.FullPath</span> <span class="badge @(p.InstallKind is "user-profile" or "data-folder" or "bundled" ? "warn" : "info")">@Kind(p.InstallKind)</span>@if (!string.IsNullOrEmpty(p.ApplicationText)) { <text> </text><span class="muted">in @p.ApplicationText</span> } <span class="muted">@p.Version</span></li>
+                                        }
+                                    </ul>
+                                }
+                            </td>
+                            @if (Model.CanChange)
+                            {
+                                <td>
+                                    @if (vp is { } x && !v.TableMissing)
+                                    {
+                                        <form method="post" asp-page="/Cis/SoftwareExceptions" asp-page-handler="Set" class="stack" data-sw-except-form>
+                                            <input type="hidden" name="ci" value="@v.CiId" />
+                                            <input type="hidden" name="rule" value="@d.RuleId" />
+                                            <input type="hidden" name="vendor" value="@x.Vendor" />
+                                            <input type="hidden" name="product" value="@x.Product" />
+                                            <input type="hidden" name="back" value="@Model.Back" />
+                                            <input name="reason" maxlength="1000" minlength="3" placeholder="Why it is not this application" required />
+                                            <button type="submit" class="secondary" data-stage-sw-exception>False positive on this server</button>
+                                        </form>
+                                    }
+                                </td>
+                            }
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+    @if (v.Active.Count > 0)
+    {
+        <h3>Detections excepted on this server</h3>
+        <p class="hint">The rule does not use this software on this server: its other evidence, every other rule and every other server are unchanged. The findings of the software stay.</p>
+        <div class="table-wrap">
+            <table data-sortable data-sw-exceptions>
+                <thead><tr><th>Rule</th><th>Software</th><th>Why</th><th>Set by</th><th>Where it is (newest run)</th>@if (Model.CanChange) { <th></th> }</tr></thead>
+                <tbody>
+                    @foreach (var e in v.Active)
+                    {
+                        var ps = v.PathsOf(e.Software);
+                        <tr data-sw-exception="@e.Id" data-sw-excepted="@e.RuleId|@e.Software">
+                            <td class="wrap mono">@e.RuleId<br /><span class="badge warn" data-sw-excepted-mark>detection excepted on this server</span></td>
+                            <td class="mono">@e.Software</td>
+                            <td class="wrap">@e.Reason</td>
+                            <td>@e.SetBy<br /><span class="muted">@Fmt.Time(e.SetAt)</span></td>
+                            <td class="wrap">
+                                @if (ps.Count == 0) { <span class="hint">no path stored</span> }
+                                else { <ul class="plain">@foreach (var p in ps) { <li><span class="mono">@p.FullPath</span> <span class="badge info">@Kind(p.InstallKind)</span>@if (!string.IsNullOrEmpty(p.ApplicationText)) { <text> </text><span class="muted">in @p.ApplicationText</span> }</li> }</ul> }
+                            </td>
+                            @if (Model.CanChange)
+                            {
+                                <td>
+                                    <form method="post" asp-page="/Cis/SoftwareExceptions" asp-page-handler="Remove" class="stack">
+                                        <input type="hidden" name="id" value="@e.Id" />
+                                        <input type="hidden" name="ci" value="@v.CiId" />
+                                        <input type="hidden" name="back" value="@Model.Back" />
+                                        <input name="reason" maxlength="1000" minlength="3" placeholder="Why undo it" required />
+                                        <button type="submit" class="secondary" data-stage-sw-undo>Undo</button>
+                                    </form>
+                                </td>
+                            }
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+    @if (v.TableMissing) { <p class="hint" data-sw-preparing>@SoftwareExceptionStore.MissingTableMessage</p> }
+    else if (!Model.Pro) { <p class="hint" data-sw-pro-only>Marking a detection a false positive on one server is part of SecurityInsight Pro.</p> }
+    else if (!Model.CanChange && v.Shown.Count > 0) { <p class="hint">An Admin can mark a detection a false positive on this server.</p> }
+</section>

@@ -455,7 +455,9 @@ OPTION (RECOMPILE);
         if (s.Indexed is not { } ix || st.Anywhere) return null;
         var matched = new List<string>();
         var notSearched = new List<string>();
-        var searched = s.Columns.Where(c => c.Search && ix.Columns.ContainsKey(c.Key)).ToList();
+        // the columns the page shows first, then the hidden ones it also searches: the raw rows' hidden "Asset key" stands
+        // before "Asset" in the grid, and the note opened with the asset id instead of the device name a search is for
+        var searched = s.Columns.Where(c => c.Search && ix.Columns.ContainsKey(c.Key)).OrderBy(c => c.Hidden).ToList();
         if (st.Search is { } q && searched.Count > 0)
         {
             matched.Add($"the search “{q}”: findings " + string.Join(", or ", searched.Where(c => !c.Hidden || ix.Words.ContainsKey(c.Key)).Select(c => ix.Words.TryGetValue(c.Key, out var w) ? w : c.Label + " contains it").Distinct()));

@@ -602,7 +602,8 @@ Describe 'WIRING' {
         $script:Del = [IO.File]::ReadAllText((Join-Path $script:SIRoot 'engine\risk-analysis\_shared\RA-Delivery.ps1'))
     }
     It 'the JSON file: the read-ahead pager, the blocks sent while it is written (never on a dry run), the rows expected' {
-        $script:Ra | Should -Match ([regex]::Escape('Write-RAJsonArrayFile -Pager (New-RARowPager -Stream $script:RAStream -Source View -ReadAhead) -Path $global:OutputJson -Depth 20 -Upload $script:RAJsonStaged -Total $script:RAViewCount'))
+        # #1275 (5): read with the held set taken where the file used to be written (it is written after the completion now)
+        $script:Ra | Should -Match ([regex]::Escape('Write-RAJsonArrayFile -Pager (New-RARowPager -Stream $script:RAStream -Source View -ReadAhead -Held $script:RAJsonHeld) -Path $global:OutputJson -Depth 20 -Upload $script:RAJsonStaged -Total $script:RAJsonViewCount'))
         $script:Ra | Should -Match ([regex]::Escape('if (-not $script:SIWhatIf -and -not [string]::IsNullOrWhiteSpace([string]$global:ExportDestination)) {'))
         $script:Ra | Should -Match ([regex]::Escape('$null = Complete-SIExportStagedUpload -Upload $script:RAJsonStaged'))
         $script:Ra | Should -Match ([regex]::Escape('-Staged               $(if ($localPath -eq $global:OutputJson) { $script:RAJsonStaged } else { $null })'))

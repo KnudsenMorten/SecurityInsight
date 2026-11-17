@@ -1,0 +1,127 @@
+{
+  "$comment": "Output map: which columns an output receives, read from the item. Template kind: output-map. \"from\" is an SI field, record.<name> (a value of the item), or a system token ($run_id, $run_time, $row_hash, $changed_at, $const:<value>). \"op\" is from the closed output operation set. Customer overrides: outputs/<id>.custom.json (add, remove or rename columns; a column keeps its place unless moved).",
+  "kind": "output-map",
+  "id": "servicenow-remediation-task",
+  "version": "1.0.0",
+  "description": "ServiceNow remediation tasks (Import Set): one row per CI and task to perform -- the update, the software upgrade (per version; a library bundled in another product: per application, with its paths), the configuration change -- with its counts, highest severity and risk, the CI's owner and department, and its state run to run (open / closed and why). Raw lines, never summarised. The SQL hand-off view snowstage.vImportRemediationTask carries the same columns, the same row hash and source run. Every date UTC 'yyyy-MM-dd HH:mm:ss' (the vulnerable items' format); u_si_cleared names the columns now empty (a reopened task: u_close_reason, u_closed_at); u_source_run = 'si-<collection id>-<yyyyMMddHHmmss>', at most 28 characters. Key u_si_task_id. Column names are a contract; append only.",
+  "grain": "remediation_task",
+  "columns": [
+    {
+      "target": "u_si_task_id",
+      "from": "record.task_id"
+    },
+    {
+      "target": "u_si_correlation_id",
+      "from": "si_ci_id"
+    },
+    {
+      "target": "u_asset_name",
+      "from": "si_asset_name"
+    },
+    {
+      "target": "u_cmdb_ci",
+      "from": "si_cmdb_id"
+    },
+    {
+      "target": "u_task",
+      "from": "record.task_name"
+    },
+    {
+      "target": "u_task_kind",
+      "from": "record.task_kind"
+    },
+    {
+      "target": "u_product",
+      "from": "record.product"
+    },
+    {
+      "target": "u_product_version",
+      "from": "record.version"
+    },
+    {
+      "target": "u_application",
+      "from": "record.application"
+    },
+    {
+      "target": "u_application_paths",
+      "from": "record.application_paths"
+    },
+    {
+      "target": "u_findings",
+      "from": "record.findings"
+    },
+    {
+      "target": "u_cves",
+      "from": "record.cves"
+    },
+    {
+      "target": "u_severity",
+      "from": "record.highest_severity"
+    },
+    {
+      "target": "u_risk_score",
+      "from": "record.max_risk_score"
+    },
+    {
+      "target": "u_tier",
+      "from": "si_tier"
+    },
+    {
+      "target": "u_owner",
+      "from": "record.ci_owner"
+    },
+    {
+      "target": "u_department",
+      "from": "record.ci_department"
+    },
+    {
+      "target": "u_state",
+      "from": "record.state"
+    },
+    {
+      "target": "u_close_reason",
+      "from": "record.closed_why"
+    },
+    {
+      "target": "u_closed_at",
+      "from": "record.closed_at"
+    },
+    {
+      "target": "u_first_seen",
+      "from": "record.first_seen"
+    },
+    {
+      "target": "u_last_seen",
+      "from": "record.last_seen"
+    },
+    {
+      "target": "u_changed_at",
+      "from": "record.changed_at"
+    },
+    {
+      "target": "u_source",
+      "from": "$const:SecurityInsight"
+    },
+    {
+      "target": "u_row_hash",
+      "from": "record.row_hash"
+    },
+    {
+      "target": "u_source_run",
+      "from": "record.source_run"
+    },
+    {
+      "target": "u_action",
+      "from": "$action"
+    },
+    {
+      "target": "u_si_batch_id",
+      "from": "$batch_id"
+    },
+    {
+      "target": "u_si_cleared",
+      "from": "$cleared"
+    }
+  ],
+  "contract": "snowstage.vImportRemediationTask"
+}

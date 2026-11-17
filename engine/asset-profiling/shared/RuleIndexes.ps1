@@ -38,6 +38,9 @@ if (-not (Get-Variable -Name SIRuleIndexes -Scope Script -ErrorAction SilentlyCo
         parentChain = @{}
         kustoSets   = @{}
         BuildStats  = @{}
+        # #1219 the conditioned software detections: device -> the keys that matched (+ '-' = evaluated), device -> fallback reason
+        softwareRuleHits      = @{}
+        softwareRuleFallbacks = @{}
     }
 }
 
@@ -48,6 +51,9 @@ function Reset-SIRuleIndexes {
         parentChain = @{}
         kustoSets   = @{}
         BuildStats  = @{}
+        # #1219 the conditioned software detections: device -> the keys that matched (+ '-' = evaluated), device -> fallback reason
+        softwareRuleHits      = @{}
+        softwareRuleFallbacks = @{}
     }
 }
 

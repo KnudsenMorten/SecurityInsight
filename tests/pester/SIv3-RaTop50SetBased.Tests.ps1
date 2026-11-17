@@ -113,8 +113,8 @@ Describe '#1212: what the database form reads, and when it declines (pure)' {
         $sqlOff = Get-RATopRangeSql -CollectionId 7 -Lo 0 -Hi 10 -WithAi $false
         $sqlOn = Get-RATopRangeSql -CollectionId 7 -Lo 0 -Hi 10 -WithAi $true
         # the view rows of the run, held reports left out (the pager's own filter) -- never a changed view condition
-        $sqlOff | Should -Match 'AND f\.RaSeq IS NOT NULL AND f\.RaInView = 1;'
-        (Get-RATopRangeSql -CollectionId 7 -Lo 0 -Hi 10 -Held @(4, 2) -WithAi $false) | Should -Match 'AND f\.RaInView = 1 AND f\.RaReport NOT IN \(2, 4\);'
+        $sqlOff | Should -Match 'AND f\.RaSeq IS NOT NULL AND f\.RaInView = 1\s*\) x;'
+        (Get-RATopRangeSql -CollectionId 7 -Lo 0 -Hi 10 -Held @(4, 2) -WithAi $false) | Should -Match 'AND f\.RaInView = 1 AND f\.RaReport NOT IN \(2, 4\)\s*\) x;'
         $sqlOff | Should -Not -Match 'MoreDetails'
         # a chain of two names that differ only in case reads BOTH keys (OPENJSON paths are case-sensitive)
         $names = Get-RATopReadNames -WithAi $false
@@ -135,6 +135,35 @@ Describe '#1212: what the database form reads, and when it declines (pure)' {
         $md = [ordered]@{ R1 = @{ Columns = [System.Collections.Generic.List[string]]@('moredetails') } }
         Test-RATopListsColumns -Reports $md -WithAi $false | Should -Be ''
         Test-RATopListsColumns -Reports $md -WithAi $true | Should -Not -Be ''
+    }
+    It '#1275 (4) a column in another case is READ under that spelling, not declined -- the statement is unchanged without one' {
+        # live 2026-11-17 (1.56 M rows): one report's 'CVE' (the patch cycle reads 'Cve') declined the whole pass (~4.8 h row by row)
+        $rep = [ordered]@{
+            R1 = @{ Columns = [System.Collections.Generic.List[string]]@('AssetName', 'SecuritySeverity', 'SubCategory', 'Other') }
+            R2 = @{ Columns = [System.Collections.Generic.List[string]]@('AssetName', 'CVE', 'securityseverity', 'cmdbname') }
+        }
+        $v = Get-RATopCaseVariants -Reports $rep -WithAi $false
+        @($v['Cve']) | Should -Be @('CVE')
+        @($v['SecuritySeverity']) | Should -Be @('securityseverity')
+        # a spelling the run's reports use for BOTH read names of a twin (cmdbName / CmdbName) is read for both
+        @($v['cmdbName']) | Should -Be @('cmdbname'); @($v['CmdbName']) | Should -Be @('cmdbname')
+        # a spelling that is itself a read name is read on its own already -- never added as a variant
+        $v.ContainsKey('Subcategory') | Should -BeFalse
+        $v.ContainsKey('AssetName') | Should -BeFalse
+        # an AI-only column in another case is read only when the AI reads it
+        (Get-RATopCaseVariants -Reports ([ordered]@{ R = @{ Columns = [System.Collections.Generic.List[string]]@('moredetails') } }) -WithAi $false).Count | Should -Be 0
+        @((Get-RATopCaseVariants -Reports ([ordered]@{ R = @{ Columns = [System.Collections.Generic.List[string]]@('moredetails') } }) -WithAi $true)['MoreDetails']) | Should -Be @('moredetails')
+        # the statement reads the other spelling and takes the row's one
+        $names = Get-RATopReadNames -WithAi $false
+        $iCve = @(for ($q = 0; $q -lt $names.Count; $q++) { if ($names[$q] -ceq 'Cve') { $q } })[0]
+        $sql = Get-RATopRangeSql -CollectionId 7 -Lo 0 -Hi 10 -WithAi $false -Variants $v
+        $sql | Should -Match ([regex]::Escape(("s{0}v0 nvarchar(max) '$.""CVE""'" -f $iCve)))
+        $sql | Should -Match ([regex]::Escape(("ELSE COALESCE(j.s{0}, j.s{0}v0) END AS n{0}" -f $iCve)))
+        # NO variant: the statement is byte for byte what it was (no change for a run whose columns all match)
+        (Get-RATopRangeSql -CollectionId 7 -Lo 0 -Hi 10 -WithAi $false -Variants (Get-RATopCaseVariants -Reports ([ordered]@{ R1 = $rep.R1 }) -WithAi $false)) | Should -Be (Get-RATopRangeSql -CollectionId 7 -Lo 0 -Hi 10 -WithAi $false)
+        # the pass no longer declines on it (Test-RATopListsColumns stays as the pure check; the pass reads the variants)
+        $script:TopText | Should -Match ([regex]::Escape('$variants = Get-RATopCaseVariants -Reports $Stream.Reports -WithAi $WithAi'))
+        $script:TopText | Should -Not -Match ([regex]::Escape('$why = Test-RATopListsColumns -Reports $Stream.Reports'))
     }
     It 'NEVER THROWS and declines: no session seam, a Summary run, a Protection Score counted in the run' {
         $st = @{ Prot = $null; Patch = (New-SIPatchCycleTally) }
@@ -345,7 +374,8 @@ Describe '#1212: identical results -- the row-by-row rollup and the database for
                 $name = 'Top50Gen{0}_Detailed' -f $r
                 $null = Start-RAStreamReport -Stream $s -ReportName $name -Staged $false
                 $rows = @(New-Top50Rows -Report $r -Assets $Assets -PerAsset $PerAsset -Seed (1212 + $r))
-                if ($Mutate) { & $Mutate $rows }
+                # (#1275 (4): the report's number is handed too -- a mutation may change ONE report's columns)
+                if ($Mutate) { & $Mutate $rows $r }
                 foreach ($x in $rows) { Add-Member -InputObject $x -NotePropertyName CollectionTime -NotePropertyValue $script:CT -Force }
                 Set-RATraceIdentity -Rows $rows -IsDetailed $true
                 $cols = New-Object 'System.Collections.Generic.List[string]'; $seen = @{}
@@ -477,6 +507,41 @@ Describe '#1212: identical results -- the row-by-row rollup and the database for
         # a different row count than the run's own is declined too
         (Invoke-RATopListsInSql -Stream $s -ViewRows 1 -Collapse $true -WithAi $false -KpiState (New-RAKpiState)).Status | Should -Be 'declined'
     }
+    It '#1275 (4) a report naming read columns in ANOTHER CASE (CVE, securityseverity, cmdbname): the database form runs and gives the row loop''s lists and figures field by field' {
+        # the live case: ONE report of the run spells columns differently (Attack_Paths_..._CVE_Exploitation: 'CVE')
+        $script:CaseMutate = {
+            param($rows, $r)
+            if ($r -ne 2) { return }
+            foreach ($x in $rows) {
+                foreach ($pair in @(@('SecuritySeverity', 'securityseverity'), @('cmdbName', 'cmdbname'))) {
+                    $p = $x.PSObject.Properties[$pair[0]]
+                    if ($p) { $val = $p.Value; [void]$x.PSObject.Properties.Remove($pair[0]); $x | Add-Member -NotePropertyName $pair[1] -NotePropertyValue $val -Force }
+                }
+                if ([string]$x.ConfigurationId -like 'CVE-*') { $x | Add-Member -NotePropertyName CVE -NotePropertyValue ([string]$x.ConfigurationId).ToUpperInvariant() -Force }
+            }
+        }
+        $db = New-Db -Tag 'case'
+        $s = New-StoredRun -Db $db -Reports 3 -Assets 120 -PerAsset 4 -Mutate $script:CaseMutate
+        (@($s.Reports['Top50Gen2_Detailed'].Columns) -ccontains 'CVE') | Should -BeTrue -Because 'the fixture really carries the other spelling'
+        (@($s.Reports['Top50Gen2_Detailed'].Columns) -ccontains 'SecuritySeverity') | Should -BeFalse
+        $o = Invoke-OldRollup -Stream $s
+        foreach ($ai in $false, $true) {
+            $n = Invoke-NewRollup -Stream $s -Ai $ai
+            $n.R.Status | Should -Be 'ok' -Because ([string]$n.R.Why)
+            @($n.R.Variants) -join '; ' | Should -Match 'Cve = CVE'
+            Format-RATopListsLine -Result $n.R | Should -Match 'read under another spelling as well: .*Cve = CVE'
+            $n.Rows | Should -Be $o.Rows -Because 'every View row read, none lost'
+            $n.Total | Should -Be $o.Total
+            $oa = @($o.Assets | ForEach-Object { Get-AssetFace $_ $ai }); $na = @($n.Assets | ForEach-Object { Get-AssetFace $_ $ai })
+            $na.Count | Should -Be $oa.Count
+            for ($i = 0; $i -lt $oa.Count; $i++) { $a1 = ConvertTo-Canon $na[$i]; $b1 = ConvertTo-Canon $oa[$i]; $a1 | Should -Be $b1 -Because ("asset rank {0}: {1}" -f ($i + 1), (Get-CanonDiff $a1 $b1)) }
+            $of = @($o.Findings | ForEach-Object { Get-FindingFace $_ $ai }); $nf = @($n.Findings | ForEach-Object { Get-FindingFace $_ $ai })
+            $nf.Count | Should -Be $of.Count
+            for ($i = 0; $i -lt $of.Count; $i++) { $a1 = ConvertTo-Canon $nf[$i]; $b1 = ConvertTo-Canon $of[$i]; $a1 | Should -Be $b1 -Because ("finding rank {0}: {1}" -f ($i + 1), (Get-CanonDiff $a1 $b1)) }
+            (ConvertTo-Canon $n.Kpi) | Should -Be (ConvertTo-Canon $o.Kpi) -Because 'every key figure incl. the patch cycle (it reads Cve, here CVE)'
+        }
+        $o.Kpi.PatchCycle.Findings | Should -BeGreaterThan 0
+    }
     It 'THE TIMING: the row loop and the database form on the same larger fixture (printed; the database form is not slower)' {
         $db = New-Db -Tag 'time'
         $s = New-StoredRun -Db $db -Reports 4 -Assets 1500 -PerAsset 4
@@ -491,5 +556,105 @@ Describe '#1212: identical results -- the row-by-row rollup and the database for
             $o.Rows, $o.Seconds, $oRate, $n.Seconds, $nRate, $n.R.Ranges, ($o.Seconds / [Math]::Max(0.001, $n.Seconds)), (1350000 / [Math]::Max(1, $nRate))))
         Write-Host $line
         $n.Seconds | Should -BeLessThan $o.Seconds
+    }
+    It '#1275 (4) SCALE (on demand): 1.5 M rows with a column in another case -- the database form runs, reads every row, figures exact; time and memory printed' -Tag 'Scale' {
+        # the base: 4 reports, one spelling 'CVE' / 'securityseverity' / 'cmdbname' (the live decline), compared with the row loop
+        $db = New-Db -Tag 'scale'
+        $s = New-StoredRun -Db $db -Reports 4 -Assets 2000 -PerAsset 4 -Mutate $script:CaseMutate
+        $o = Invoke-OldRollup -Stream $s
+        $b = Invoke-NewRollup -Stream $s -Ai $false
+        $b.R.Status | Should -Be 'ok' -Because ([string]$b.R.Why)
+        (ConvertTo-Canon $b.Kpi) | Should -Be (ConvertTo-Canon $o.Kpi)
+        (ConvertTo-Canon @($b.Assets | ForEach-Object { Get-AssetFace $_ $false })) | Should -Be (ConvertTo-Canon @($o.Assets | ForEach-Object { Get-AssetFace $_ $false }))
+        (ConvertTo-Canon @($b.Findings | ForEach-Object { Get-FindingFace $_ $false })) | Should -Be (ConvertTo-Canon @($o.Findings | ForEach-Object { Get-FindingFace $_ $false }))
+        $baseRows = [long]$b.Rows
+        Write-Host ([string]::Format([Globalization.CultureInfo]::InvariantCulture, '[#1275 scale] base {0:N0} rows: row by row {1:N1} s, database {2:N1} s -- identical lists and figures', $baseRows, $o.Seconds, $b.Seconds, ($heapNoGc / 1MB)))
+        # x K: the same stored rows copied in SQL (each copy its own assets), to at least 1.5 M rows -- every column as written
+        $k = [int][Math]::Ceiling(1500000.0 / [double]$baseRows) - 1
+        $cs = "Server=$($env:SI_TEST_LOCALSQL);Database=$db;$($env:SI_TEST_SQL_AUTH);Connection Timeout=30;Pooling=false"
+        $cn = New-Object System.Data.SqlClient.SqlConnection $cs; $cn.Open()
+        try {
+            $sw = [Diagnostics.Stopwatch]::StartNew()
+            for ($c = 1; $c -le $k; $c++) {
+                $cmd = $cn.CreateCommand(); $cmd.CommandTimeout = 1800
+                $cmd.CommandText = @"
+DECLARE @cid int = $([int]$s.CollectionId), @c int = $c;
+DECLARE @cols nvarchar(max) = (SELECT STRING_AGG(CONVERT(nvarchar(max), QUOTENAME(name)), N',') WITHIN GROUP (ORDER BY column_id) FROM sys.columns WHERE object_id = OBJECT_ID('sidata.Finding') AND is_identity = 0 AND is_computed = 0);
+DECLARE @sel nvarchar(max) = (SELECT STRING_AGG(CONVERT(nvarchar(max), CASE name
+    WHEN 'RaSeq' THEN N'RaSeq + CONVERT(bigint, @c) * 1000000000'
+    WHEN 'DetailJson' THEN N'REPLACE(REPLACE(REPLACE(DetailJson, N''"AssetName":"'', N''"AssetName":"c'' + CONVERT(nvarchar(10), @c) + N''-''), N''"DeviceName":"'', N''"DeviceName":"c'' + CONVERT(nvarchar(10), @c) + N''-''), N''"AssetId":"'', N''"AssetId":"c'' + CONVERT(nvarchar(10), @c) + N''-'')'
+    ELSE QUOTENAME(name) END), N',') WITHIN GROUP (ORDER BY column_id) FROM sys.columns WHERE object_id = OBJECT_ID('sidata.Finding') AND is_identity = 0 AND is_computed = 0);
+DECLARE @sql nvarchar(max) = N'INSERT sidata.Finding (' + @cols + N') SELECT ' + @sel + N' FROM sidata.Finding WHERE CollectionId = @cid AND (RaSeq IS NULL OR RaSeq < 1000000000);';
+EXEC sp_executesql @sql, N'@cid int, @c int', @cid = @cid, @c = @c;
+"@
+                [void]$cmd.ExecuteNonQuery()
+                if ($c % 5 -eq 0 -or $c -eq $k) { Write-Host ([string]::Format([Globalization.CultureInfo]::InvariantCulture, '[#1275 scale] copy {0} of {1} in ({2:N0} s)', $c, $k, $sw.Elapsed.TotalSeconds)) }
+            }
+            Write-Host ([string]::Format([Globalization.CultureInfo]::InvariantCulture, '[#1275 scale] {0:N0} base rows copied {1} times in {2:N0} s', $baseRows, $k, $sw.Elapsed.TotalSeconds))
+        } finally { $cn.Dispose() }
+        $view = [long](Get-RAStreamCount -Stream $s -Source View)
+        $view | Should -Be ($baseRows * ($k + 1))
+        $view | Should -BeGreaterOrEqual 1500000
+        [GC]::Collect(); $heap0 = [GC]::GetTotalMemory($true)
+        $proc = [Diagnostics.Process]::GetCurrentProcess(); $proc.Refresh(); $ws0 = $proc.WorkingSet64
+        # a line a minute while the database pass works (it prints nothing of its own here)
+        # ... and tempdb's use measured every 5 s on its own connection (owner: the large installs run Azure SQL S3, 32 GB tempdb):
+        # the peak of the data allocated in tempdb (every session: the pass's #ra and its sorts / spills) and of its log
+        $tcs = "Server=$($env:SI_TEST_LOCALSQL);Database=tempdb;$($env:SI_TEST_SQL_AUTH);Connection Timeout=30;Pooling=false"
+        $beat = Start-ThreadJob -ArgumentList $tcs -ScriptBlock {
+            param($cs)
+            $t0 = [DateTime]::UtcNow; $last = $t0; $peakData = 0L; $peakLog = 0L
+            while ($true) {
+                try {
+                    $cn = New-Object System.Data.SqlClient.SqlConnection $cs; $cn.Open()
+                    try {
+                        $c = $cn.CreateCommand(); $c.CommandText = 'SELECT CONVERT(bigint, SUM(allocated_extent_page_count)) * 8192 FROM sys.dm_db_file_space_usage;'
+                        $d = [long]$c.ExecuteScalar(); if ($d -gt $peakData) { $peakData = $d }
+                        $c.CommandText = 'SELECT CONVERT(bigint, used_log_space_in_bytes) FROM sys.dm_db_log_space_usage;'
+                        $l = [long]$c.ExecuteScalar(); if ($l -gt $peakLog) { $peakLog = $l }
+                    } finally { $cn.Dispose() }
+                } catch { }
+                [Console]::Out.Flush()
+                if (([DateTime]::UtcNow - $last).TotalSeconds -ge 60) {
+                    $last = [DateTime]::UtcNow
+                    [Console]::WriteLine(('[#1275 scale] the database pass is working ({0:N0} s); tempdb peak so far: data {1:N0} MB, log {2:N0} MB' -f ([DateTime]::UtcNow - $t0).TotalSeconds, ($peakData / 1MB), ($peakLog / 1MB)))
+                }
+                [pscustomobject]@{ Data = $peakData; Log = $peakLog }
+                Start-Sleep -Seconds 5
+            }
+        }
+        try { $n = Invoke-NewRollup -Stream $s -Ai $false }
+        finally {
+            $tp = @(Receive-Job -Job $beat -ErrorAction SilentlyContinue) | Select-Object -Last 1
+            Stop-Job -Job $beat -ErrorAction SilentlyContinue; Remove-Job -Job $beat -Force -ErrorAction SilentlyContinue
+            if ($tp) {
+                $perRow = [double]$tp.Data / [double][Math]::Max(1L, $view)
+                Write-Host ([string]::Format([Globalization.CultureInfo]::InvariantCulture, '[#1275 scale] tempdb peak during the pass over {0:N0} rows: data {1:N0} MB, log {2:N0} MB -- {3:N0} bytes a row, at 1.5 M rows ~{4:N1} GB (status {5}{6})',
+                    $view, ($tp.Data / 1MB), ($tp.Log / 1MB), $perRow, ($perRow * 1500000 / 1GB), [string]$n.R.Status, $(if ($n.R.Why) { ': ' + [string]$n.R.Why } else { '' })))
+            }
+        }
+        $proc.Refresh(); $peak = $proc.PeakWorkingSet64; $heapNoGc = [GC]::GetTotalMemory($false); $heap1 = [GC]::GetTotalMemory($true)   # retained after the pass (a forced collection), and before it
+        $n.R.Status | Should -Be 'ok' -Because ([string]$n.R.Why)
+        $n.Rows | Should -Be $view -Because 'every View row read -- none lost'
+        $n.R.KpiState.Rows | Should -Be $view
+        # zero rows lost or changed: each copy is the base again, so every count of the key figures is (K + 1) x the base's
+        foreach ($sev in @($b.R.KpiState.SevCount.Keys)) { [long]$n.R.KpiState.SevCount[$sev] | Should -Be ([long]$b.R.KpiState.SevCount[$sev] * ($k + 1)) -Because "severity $sev" }
+        foreach ($dom in @($b.R.KpiState.DomainAcc.Keys)) { [long]$n.R.KpiState.DomainAcc[$dom].Rows | Should -Be ([long]$b.R.KpiState.DomainAcc[$dom].Rows * ($k + 1)) -Because "domain $dom" }
+        $n.R.KpiState.Patch.Findings | Should -Be ($b.R.KpiState.Patch.Findings * ($k + 1))
+        @($n.Assets).Count | Should -Be 50
+        @($n.Findings).Count | Should -Be 50
+        $inv = [Globalization.CultureInfo]::InvariantCulture
+        Write-Host ([string]::Format($inv, '[#1275 scale] {0:N0} rows: the database form {1:N1} s ({2:N0} rows/s, {3} range(s)); worker memory: working set {4:N0} MB before, peak {5:N0} MB, managed heap {6:N0} -> {7:N0} MB retained ({11:N0} MB before a collection); base {8:N0} rows: row by row {9:N1} s, database {10:N1} s',
+            $n.Rows, $n.Seconds, ($n.Rows / [Math]::Max(0.001, $n.Seconds)), $n.R.Ranges, ($ws0 / 1MB), ($peak / 1MB), ($heap0 / 1MB), ($heap1 / 1MB), $baseRows, $o.Seconds, $b.Seconds, ($heapNoGc / 1MB)))
+        # flat memory: the pass keeps the lists, never the rows -- what it RETAINS (the heap after a collection) is within 256 MB of before
+        ($heap1 - $heap0) | Should -BeLessThan 256MB
+        # the full row loop over 1.5 M rows only on request (it is the 4.8 h path): SI_TOP50_SCALE_OLD=1
+        if ($env:SI_TOP50_SCALE_OLD -eq '1') {
+            $o2 = Invoke-OldRollup -Stream $s
+            (ConvertTo-Canon $n.Kpi) | Should -Be (ConvertTo-Canon $o2.Kpi)
+            (ConvertTo-Canon @($n.Assets | ForEach-Object { Get-AssetFace $_ $false })) | Should -Be (ConvertTo-Canon @($o2.Assets | ForEach-Object { Get-AssetFace $_ $false }))
+            (ConvertTo-Canon @($n.Findings | ForEach-Object { Get-FindingFace $_ $false })) | Should -Be (ConvertTo-Canon @($o2.Findings | ForEach-Object { Get-FindingFace $_ $false }))
+            Write-Host ([string]::Format($inv, '[#1275 scale] the row loop over {0:N0} rows: {1:N1} s', $o2.Rows, $o2.Seconds))
+        }
     }
 }

@@ -2729,8 +2729,8 @@
       "effect": "When a source (for example Defender, Entra or Azure) returns more than this share more or fewer objects than in the previous run, the previous collection of that source is kept for the CMDB and vulnerability hand-off, and a guard event is raised (mail and Operations > Guards (safety checks)). The hold ends by itself on the next run that is back within the limit, or once when an Admin releases it.",
       "whenToChange": "Raise it if your estate legitimately changes a lot between runs; lower it to be warned of smaller changes.",
       "unit": "%",
-      "max": 100,
       "min": 1,
+      "max": 100,
       "card": "Asset properties",
       "info": {
         "what": "How much the full asset metadata collected from one source may change from one run to the next before the hand-off of that source is held.",
@@ -4291,8 +4291,8 @@
       "effect": "A lower value rebuilds every CI more often (a longer correlation run on those days); 0 rebuilds every CI on every run, as before. A full reconcile that finds a CI the daily builds should have changed says so in the run log.",
       "whenToChange": "Set 0 while support investigates a CI that looks out of date; otherwise keep the default.",
       "unit": "days",
-      "max": 365,
       "min": 0,
+      "max": 365,
       "card": "Daily pipeline",
       "info": {
         "what": "The CI build (correlation) rebuilds only the CIs whose input changed since their last build: a record new, changed, moved or gone, a link state, a time threshold, an identity anchor or a manual override. Every CI is rebuilt (a full reconcile) when the last full build is this many days old; also at once when the data model, rules, mappings or CMDB change, and after a build that failed.",
@@ -5116,6 +5116,56 @@
         "default": "u_si_staging_status. An install that sent to ServiceNow before the staging status table existed has it empty: the rows are sent without it, with a warning, until your ServiceNow team creates the table and you set its name here.",
         "recommended": "Keep the default. Change it when: After your ServiceNow team has created the staging status table (Connectors > the ServiceNow data-out connector > For your ServiceNow team), if it has another name than the default -- or, on an install that has it empty, to switch it on.",
         "docUrl": "https://invardia.com/docs/si/settings/SI_DataOut_ServiceNowStagingStatusTable/"
+      }
+    },
+    {
+      "name": "SI_DataOut_ServiceNowTaskFindingTable",
+      "label": "Data out: ServiceNow remediation task links Import Set table",
+      "group": "Connectors & CMDB",
+      "type": "text",
+      "engines": [],
+      "edition": "community",
+      "secret": false,
+      "advanced": true,
+      "default": null,
+      "defaultText": "Not set: the ServiceNow remediation task links output is not written, and its run says so",
+      "description": "the remediation task links output's Import Set table (not set = that output is not written, and says so)",
+      "purpose": "The ServiceNow Import Set table the remediation task links output (servicenow-remediation-task-finding) sends its rows to: one row per task and finding it resolves.",
+      "effect": "Rows are sent to this Import Set table, where your transform map links each task to its vulnerable items. Without it the output does nothing.",
+      "whenToChange": "When you switch the servicenow-remediation-task-finding output on.",
+      "info": {
+        "what": "The ServiceNow Import Set table the remediation task links output (servicenow-remediation-task-finding) sends its rows to: one row per task and finding it resolves.",
+        "whenChanged": "Rows are sent to this Import Set table, where your transform map links each task to its vulnerable items. Without it the output does nothing.",
+        "risk": "Rows go to the named ServiceNow Import Set table; a wrong table name means the rows land where no transform map reads them. Reversible at once.",
+        "requires": "The servicenow-remediation-task-finding output switched on (SI_DataOut_Outputs) and the ServiceNow connection.",
+        "default": "Not set: the ServiceNow remediation task links output is not written, and its run says so",
+        "recommended": "Keep the default. Change it when: When you switch the servicenow-remediation-task-finding output on.",
+        "docUrl": "https://invardia.com/docs/si/settings/SI_DataOut_ServiceNowTaskFindingTable/"
+      }
+    },
+    {
+      "name": "SI_DataOut_ServiceNowTaskTable",
+      "label": "Data out: ServiceNow remediation task Import Set table",
+      "group": "Connectors & CMDB",
+      "type": "text",
+      "engines": [],
+      "edition": "community",
+      "secret": false,
+      "advanced": true,
+      "default": null,
+      "defaultText": "Not set: the ServiceNow remediation task output is not written, and its run says so",
+      "description": "the remediation task output's Import Set table (not set = that output is not written, and says so)",
+      "purpose": "The ServiceNow Import Set table the remediation task output (servicenow-remediation-task) sends its rows to: one row per CI and task to perform, with its state.",
+      "effect": "Rows are sent to this Import Set table, where your transform map reads the tasks per CI. Without it the output does nothing.",
+      "whenToChange": "When you switch the servicenow-remediation-task output on.",
+      "info": {
+        "what": "The ServiceNow Import Set table the remediation task output (servicenow-remediation-task) sends its rows to: one row per CI and task to perform, with its state.",
+        "whenChanged": "Rows are sent to this Import Set table, where your transform map reads the tasks per CI. Without it the output does nothing.",
+        "risk": "Rows go to the named ServiceNow Import Set table; a wrong table name means the rows land where no transform map reads them. Reversible at once.",
+        "requires": "The servicenow-remediation-task output switched on (SI_DataOut_Outputs) and the ServiceNow connection.",
+        "default": "Not set: the ServiceNow remediation task output is not written, and its run says so",
+        "recommended": "Keep the default. Change it when: When you switch the servicenow-remediation-task output on.",
+        "docUrl": "https://invardia.com/docs/si/settings/SI_DataOut_ServiceNowTaskTable/"
       }
     },
     {
@@ -9117,8 +9167,8 @@
       "effect": "More minutes fill the detail sooner (about 250-300 users a minute, depending on how much Microsoft throttles); fewer leave more of the tick idle. A slice that is still running is never started twice.",
       "whenToChange": "Raise it to fill a large tenant faster the first time; lower it to keep the job's runs short.",
       "unit": "minutes",
-      "max": 25,
       "min": 1,
+      "max": 25,
       "card": "Users' sign-in methods in full",
       "needs": "SI_Identity_SignInMethodsPerUser",
       "info": {
@@ -9147,8 +9197,8 @@
       "effect": "Lower: details are fresher, and more of each 15-minute slice goes to reading users again (at 150,000 users and 90 days, about 1,700 users a day). Higher: fewer reads. A user whose registered methods changed is read again at once, whatever this is.",
       "whenToChange": "Lower it when you rely on the device names and app versions being recent; raise it on a very large tenant.",
       "unit": "days",
-      "max": 365,
       "min": 1,
+      "max": 365,
       "card": "Users' sign-in methods in full",
       "needs": "SI_Identity_SignInMethodsPerUser",
       "info": {
@@ -9518,8 +9568,8 @@
       "effect": "The next data sync averages the days from first detection to remediation of the CVE findings remediated in this window; the label says the number in force.",
       "whenToChange": "A longer window gives a steadier number, a shorter one shows a recent change sooner.",
       "unit": "days",
-      "max": 3650,
       "min": 1,
+      "max": 3650,
       "card": "Key figure windows",
       "info": {
         "what": "Which fixed vulnerabilities the key figure \"Mean time to fix\" averages: those remediated within this many days before the collection.",
@@ -9547,8 +9597,8 @@
       "effect": "The next data sync counts the CVE findings first detected, and the CVE findings remediated, within this many days before the collection; the labels say the number in force. Collections already figured keep the window they were worked out with; an update works the newest ones out again.",
       "whenToChange": "Your management reports per quarter or per sprint (for example 90 or 14).",
       "unit": "days",
-      "max": 3650,
       "min": 1,
+      "max": 3650,
       "card": "Key figure windows",
       "info": {
         "what": "The window of the key figures \"Vulnerabilities opened in the last N days\" and \"Vulnerabilities fixed in the last N days\" (the Executive overview, the Executive report and the management mail).",
@@ -9576,8 +9626,8 @@
       "effect": "The next data sync counts the privileged accounts whose last sign-in (Entra ID sign-in activity) is older than this many days before the collection; the label says the number in force.",
       "whenToChange": "Your access review calls an admin account stale sooner (for example 30 or 45 days).",
       "unit": "days",
-      "max": 3650,
       "min": 1,
+      "max": 3650,
       "card": "Key figure windows",
       "info": {
         "what": "When the key figure \"Privileged accounts without a sign-in for N days\" counts an enabled, active privileged account: its last sign-in is longer ago than this.",
@@ -10035,17 +10085,17 @@
       "purpose": "How SecurityInsight sends every mail: sharedMailbox = an Office 365 shared mailbox through Microsoft Graph as SecurityInsight's own identity (recommended); smtp = your own SMTP relay; none = no mail.",
       "effect": "Every mail (reports, safety-check alerts, close-loop, exemption, governance and digest mails, licence notices) goes this way. With sharedMailbox SecurityInsight sends only once it has verified that Mail.Send is restricted to the shared mailbox.",
       "whenToChange": "Set up with Settings > E-mail > Set up mail, or setup\\Set-SIMail.ps1.",
+      "values": [
+        "sharedMailbox",
+        "smtp",
+        "none"
+      ],
       "editor": "radio",
       "valueLabels": {
         "sharedMailbox": "Shared mailbox (Office 365) -- recommended",
         "smtp": "SMTP relay (your own mail server)",
         "none": "No mail"
       },
-      "values": [
-        "sharedMailbox",
-        "smtp",
-        "none"
-      ],
       "card": "Mail",
       "hint": "The shared mailbox is recommended: no password to keep, and Exchange lets SecurityInsight send only as that one mailbox.",
       "info": {
@@ -10407,8 +10457,8 @@
       "effect": "A lower value rebuilds (and sends the AI requests) more often; 0 rebuilds on every run, as before. A catalog that left items untiered is always rebuilt on the next run.",
       "whenToChange": "Set 0 to rebuild every run, for example while you test new tiering prompts; raise it to cut AI calls further.",
       "unit": "days",
-      "max": 365,
       "min": 0,
+      "max": 365,
       "card": "AI spending",
       "info": {
         "what": "How long the privilege tier classifier keeps its catalog while nothing it is made from changed. Every run reads the Entra role definitions, the API permission catalog and the Azure role definitions (seconds); when they, the engine and the AI settings are the same as for the last complete catalog and that catalog is younger than this, the AI pass is skipped and the catalog is kept.",
@@ -11006,8 +11056,8 @@
       "effect": "Lower warns about smaller drops; higher only about large ones. A warning never blocks anything.",
       "whenToChange": "Raise it when the number of assets moves a lot from day to day on purpose.",
       "unit": "%",
-      "max": 100,
       "min": 1,
+      "max": 100,
       "card": "Data-quality warnings",
       "info": {
         "what": "When the assets of a source (Defender for Endpoint, Entra ID, Azure, public IPs) or the active CIs fall this many percent or more below the median of the last 3 runs, it is shown as a data-quality warning.",
@@ -11035,8 +11085,8 @@
       "effect": "Lower warns about smaller drops in fill; higher only about large ones. A warning never blocks anything.",
       "whenToChange": "Lower it if you want to hear early about owners or factors going missing.",
       "unit": "points",
-      "max": 100,
       "min": 1,
+      "max": 100,
       "card": "Data-quality warnings",
       "info": {
         "what": "When the share of rows that carry a key value -- the probability and consequence risk factors, the tier, the SQL tag, and the CIs' asset type and owner -- falls this many percentage points or more below the median of the last 3 runs, it is shown as a data-quality warning.",
@@ -11120,8 +11170,8 @@
       "effect": "Lower warns about smaller drops; higher only about large ones. A report at 0 rows always warns. A warning never blocks anything.",
       "whenToChange": "Raise it when your reports shrink a lot on purpose (a large remediation round).",
       "unit": "%",
-      "max": 100,
       "min": 1,
+      "max": 100,
       "card": "Data-quality warnings",
       "info": {
         "what": "When a Risk Analysis report has 0 rows, or falls this many percent or more below the median of the last 3 runs, it is shown as a data-quality warning -- the sign of a query that suddenly returns nothing.",
@@ -11149,8 +11199,8 @@
       "effect": "Lower warns about smaller moves between tiers; higher only about large ones. A warning never blocks anything.",
       "whenToChange": "Raise it while you re-tier your estate on purpose.",
       "unit": "%",
-      "max": 100,
       "min": 1,
+      "max": 100,
       "card": "Data-quality warnings",
       "info": {
         "what": "When the active CIs in a tier (0 to 3) change by this share of all active CIs or more compared with the median of the last 3 runs -- or the CIs about to retire rise by it -- it is shown as a data-quality warning. The typical cause: a customised rule that moved all servers to one tier.",
@@ -11343,8 +11393,8 @@
       "effect": "Sets the due date of every critical finding. A finding past its due date is shown as overdue on the CI page, the service views and the trend. 0 = critical findings have no due date.",
       "whenToChange": "Set it to the deadline your security policy gives critical findings.",
       "unit": "days",
-      "max": 3650,
       "min": 0,
+      "max": 3650,
       "info": {
         "what": "How many days a critical finding has to be fixed, counted from when it was first found (or found again after it was fixed).",
         "whenChanged": "Sets the due date of every critical finding. A finding past its due date is shown as overdue on the CI page, the service views and the trend. 0 = critical findings have no due date.",
@@ -11371,8 +11421,8 @@
       "effect": "Sets the due date of every high finding. A finding past its due date is shown as overdue. 0 = high findings have no due date.",
       "whenToChange": "Set it to the deadline your security policy gives high findings.",
       "unit": "days",
-      "max": 3650,
       "min": 0,
+      "max": 3650,
       "info": {
         "what": "How many days a high finding has to be fixed, counted from when it was first found (or found again after it was fixed).",
         "whenChanged": "Sets the due date of every high finding. A finding past its due date is shown as overdue. 0 = high findings have no due date.",
@@ -11399,8 +11449,8 @@
       "effect": "Sets the due date of every low finding. A finding past its due date is shown as overdue. 0 = low findings have no due date.",
       "whenToChange": "Set it to the deadline your security policy gives low findings.",
       "unit": "days",
-      "max": 3650,
       "min": 0,
+      "max": 3650,
       "info": {
         "what": "How many days a low finding has to be fixed, counted from when it was first found (or found again after it was fixed).",
         "whenChanged": "Sets the due date of every low finding. A finding past its due date is shown as overdue. 0 = low findings have no due date.",
@@ -11427,8 +11477,8 @@
       "effect": "Sets the due date of every medium finding. A finding past its due date is shown as overdue. 0 = medium findings have no due date.",
       "whenToChange": "Set it to the deadline your security policy gives medium findings.",
       "unit": "days",
-      "max": 3650,
       "min": 0,
+      "max": 3650,
       "info": {
         "what": "How many days a medium finding has to be fixed, counted from when it was first found (or found again after it was fixed).",
         "whenChanged": "Sets the due date of every medium finding. A finding past its due date is shown as overdue. 0 = medium findings have no due date.",
@@ -11891,8 +11941,8 @@
       "effect": "Lower makes delivery wait sooner; higher lets mails and ticket updates go out longer on older data. 0 means delivery never waits for a source. The calculation always goes on, and nothing is closed or retired because a source is down.",
       "whenToChange": "Raise it when a source is known to be down for longer and the mails should keep going out meanwhile.",
       "unit": "days",
-      "max": 365,
       "min": 0,
+      "max": 365,
       "card": "Data-quality warnings",
       "info": {
         "what": "When the collection of one source (identities, Azure resources, endpoints, the public IP scan) fails, the run goes on with that source's last good collection and says how old it is. When a source has had no good collection for this many days or more, delivery waits: no mail is sent and no ticket is changed until that source collects again.",
@@ -12138,8 +12188,8 @@
       "effect": "0: such a finding is a risk from day one in both views. A higher number gives it a grace (its age: the source's first-seen, else SI's first detection); a finding with no date always counts.",
       "whenToChange": "Your cloud team has an agreed time to fix recommendations (for example 30 days).",
       "unit": "days",
-      "max": 3650,
       "min": 0,
+      "max": 3650,
       "card": "Protection score",
       "info": {
         "what": "How many days a Very High or High finding on a cloud resource that is not a patch (an Azure / Defender for Cloud recommendation, an attack path) may be open before it counts in the \"within Accepted Lifecycle\" view.",
@@ -12167,8 +12217,8 @@
       "effect": "0: such a finding is a risk from day one in both views. A higher number gives it a grace like a patch's (its age: the source's first-seen, else SI's first detection); a finding with no date always counts.",
       "whenToChange": "Your process accepts a time to fix configuration findings too (for example 14 days).",
       "unit": "days",
-      "max": 3650,
       "min": 0,
+      "max": 3650,
       "card": "Protection score",
       "info": {
         "what": "How many days a Very High or High device finding that is NOT a patch (a configuration, an attack path, a vulnerability with no vendor fix) may be open before it counts in the \"within Accepted Lifecycle\" view.",
@@ -12196,8 +12246,8 @@
       "effect": "0: such a finding is a risk from day one in both views. A higher number gives it a grace (its age: the source's first-seen, else SI's first detection); a finding with no date always counts.",
       "whenToChange": "Your identity team has an agreed time to fix (for example 7 days).",
       "unit": "days",
-      "max": 3650,
       "min": 0,
+      "max": 3650,
       "card": "Protection score",
       "info": {
         "what": "How many days a Very High or High identity finding (MFA, roles, sign-ins, attack paths -- anything that is not a patch) may be open before it counts in the \"within Accepted Lifecycle\" view.",
@@ -12225,8 +12275,8 @@
       "effect": "0: such a finding is a risk from day one in both views. A higher number gives it a grace (its age: the source's first-seen, else SI's first detection); a finding with no date always counts.",
       "whenToChange": "Your network team has an agreed time to close exposures.",
       "unit": "days",
-      "max": 3650,
       "min": 0,
+      "max": 3650,
       "card": "Protection score",
       "info": {
         "what": "How many days a Very High or High finding on a public IP that is not a patch (an open port, an exposed service) may be open before it counts in the \"within Accepted Lifecycle\" view.",
@@ -14464,8 +14514,8 @@
       "effect": "Lower: the writers make room for the web app sooner, and a full run takes longer on a busy database. Higher: the writers keep their pace until the database is closer to its limit. A value that is not a number from 1 to 100 uses 85.",
       "whenToChange": "Lower it if the web app is slow during the daily run; raise it if the run must finish sooner and nobody uses the web app then.",
       "unit": "percent",
-      "max": 100,
       "min": 1,
+      "max": 100,
       "card": "Database write pace",
       "needs": "SI_SqlPacing_Enabled",
       "info": {
@@ -14494,8 +14544,8 @@
       "effect": "Between this and the busy mark a writer keeps the pause it has. Must be below the busy mark; a value at or above it uses the busy mark minus 15.",
       "whenToChange": "Rarely. Lower it if the writers speed up and slow down again and again.",
       "unit": "percent",
-      "max": 99,
       "min": 0,
+      "max": 99,
       "card": "Database write pace",
       "needs": "SI_SqlPacing_Enabled",
       "info": {
@@ -15273,8 +15323,8 @@
       "purpose": "The update ring this installation belongs to: 0 = development, 1 = internal test, 2 = early release, 3 = broad. It is shown in the header (UPDATE RING) and recorded with the installation, so the ring is known from the day it is installed -- also before the updater job has run.",
       "effect": "The header shows this ring and setup records it as the installation's ring. Once the updater job has run, the header shows the ring the updater actually updated by -- which ring an installation receives releases on is decided by the update service, not by this setting.",
       "whenToChange": "Once, when the installation's ring is not shown, or was recorded wrongly at install time.",
-      "max": 3,
       "min": 0,
+      "max": 3,
       "card": "Licence and updates",
       "info": {
         "what": "The update ring this installation belongs to: 0 = development, 1 = internal test, 2 = early release, 3 = broad. It is shown in the header (UPDATE RING) and recorded with the installation, so the ring is known from the day it is installed -- also before the updater job has run.",
@@ -15356,8 +15406,8 @@
       "effect": "When fewer of the open records are still reported, the run looks like a partial collection and closes nothing. 0 switches this check off; 1 forbids every close.",
       "whenToChange": "Lower it if your estate legitimately shrinks a lot between runs.",
       "licensedFeature": "servicenow-connector",
-      "max": 1,
       "min": 0,
+      "max": 1,
       "card": "Vulnerability connector checks",
       "needs": "SI_Guard_VulnConnectorCollapse_Enabled",
       "info": {
@@ -15416,8 +15466,8 @@
       "whenToChange": "Raise it if your patch rounds regularly fix more than this share at once.",
       "licensedFeature": "servicenow-connector",
       "unit": "%",
-      "max": 100,
       "min": 0,
+      "max": 100,
       "card": "Vulnerability connector checks",
       "needs": "SI_Guard_VulnConnectorCloseCeiling_Enabled",
       "info": {

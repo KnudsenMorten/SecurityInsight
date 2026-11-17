@@ -16,6 +16,8 @@ public sealed record OutputColumnRow(string Key, OutputColumn? Shipped, OutputCo
     public bool Removed => OverrideState == ItemOverrideRepository.StateDisable;
     public bool Own => Shipped is null;
     public bool Changed => OverrideState is not null;
+    /// A column SHIPPED switched off ("off": true) that no admin switched on: not sent -- saved unchanged (Change) it is switched on.
+    public bool ShippedOff => Shipped?.Off == true && Override is null && !Removed;
 }
 
 /// One output with its columns in the order the engine puts them back (the shipped order, the customer's own after).
@@ -28,7 +30,9 @@ public sealed record OutputMapView(DataOutEntry Entry, string? Description, stri
     public int UpgradeAvailable => Columns.Count(c => c.State == TemplateConformance.UpgradeAvailable);
     public int ChangedCount => Columns.Count(c => c.Changed);
     /// The names of the columns the output sends, except one (a name is unique per output).
-    public IEnumerable<string> NamesExcept(string key) => Columns.Where(c => c.Key != key && !c.Removed).Select(c => c.InForce.Name);
+    public IEnumerable<string> NamesExcept(string key) => Columns.Where(c => c.Key != key && !c.Removed && !c.ShippedOff).Select(c => c.InForce.Name);
+    /// The columns shipped switched off that no admin switched on (the ServiceNow check shows them as "can be switched on").
+    public IReadOnlyList<string> ShippedOffNames => Columns.Where(c => c.ShippedOff).Select(c => c.InForce.Name).ToList();
 }
 
 /// <summary>

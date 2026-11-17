@@ -408,7 +408,8 @@ function Get-SIHeartbeatSnowOutputsOn {
     $vals = @()
     if ($txt.Trim()) { try { $vals = @(ConvertFrom-Json -InputObject $txt -ErrorAction Stop) } catch { $vals = @($txt) } }
     $chosen = @($vals | ForEach-Object { ([string]$_) -split '[,;]' } | ForEach-Object { $_.Trim().ToLowerInvariant() } | Where-Object { $_ })
-    , [string[]]@(@('servicenow-ci', 'servicenow-vulnerable-item') | Where-Object { $chosen -contains $_ })
+    # owner 2026-11-17: the remediation task outputs are checked too (SI-SnowVerify.ps1)
+    , [string[]]@(@('servicenow-ci', 'servicenow-vulnerable-item', 'servicenow-remediation-task', 'servicenow-remediation-task-finding') | Where-Object { $chosen -contains $_ })
 }
 
 function New-SIHeartbeatOrdered {

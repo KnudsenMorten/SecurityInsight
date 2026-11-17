@@ -524,6 +524,10 @@ function Add-SIRecordPartsFromRuleIndexes {
     foreach ($r in @($global:SIRecordCaptureState.Records.Values)) {
         try {
             if ($r.Provider -eq 'mde' -and $sw -and $sw.ContainsKey($r.Key)) { $r.Parts['software'] = @($sw[$r.Key]) }
+            # #1219 the conditioned software detections the profiler evaluated for this device ('-' = evaluated, then the keys
+            # that matched) -- si_software_rule_hits, which the CI rule of such a detection reads
+            $srh = $null; if ($Indexes -is [System.Collections.IDictionary] -and $Indexes.Contains('softwareRuleHits')) { $srh = $Indexes['softwareRuleHits'] }
+            if ($r.Provider -eq 'mde' -and $srh -and $srh.ContainsKey($r.Key)) { $r.Parts['softwareRuleHits'] = @(@($srh[$r.Key]) | ForEach-Object { [string]$_ }) }
             if ($r.Provider -eq 'azure' -and $pc -and $pc.Count -gt 0) {
                 $scoped = Get-SIParentTagScopes -Key ([string]$r.Key) -ParentChain $pc
                 if ($scoped.Count -gt 0) {

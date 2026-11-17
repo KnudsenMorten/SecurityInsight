@@ -16,6 +16,9 @@
     SI_Identity_SignInMethodsPerUser 'off' = the run ends at once, reading nobody. The identity collection takes what was
     saved at its next run. It signs in as the engine (collection) identity, which holds UserAuthenticationMethod.Read.All.
     It never fails: anything that goes wrong is said once and the job ends well (exit 0).
+    It also answers the web app's people picker: an Admin's "Search the tenant" request (sidata.DirectorySearchRequest) is
+    looked up in Microsoft Graph as the engine identity (reads only) and the names found are stored in
+    sidata.DirectoryName (engine\asset-profiling\shared\SI-DirectoryNames.ps1).
 #>
 [CmdletBinding()]
 param()
@@ -50,7 +53,24 @@ if ([string]$global:SI_ProSqlServer -and [string]$global:SI_ProSqlDatabase) {
     } catch { $dataInvoke = $null }
 }
 
-$r = Invoke-SISignInMethodsFillTick -DataInvoke $dataInvoke -ProInvoke $proInvoke -SIRoot $siRoot
+# THE PEOPLE PICKER'S "SEARCH THE TENANT" (owner 2026-11-16; framework GRAPH-PICKER under SECURE-WEB-1): an Admin's request
+# waiting in sidata.DirectorySearchRequest is looked up here, as the engine identity (User.Read.All / Group.Read.All, held
+# already; reads only), and what it finds is stored as names the web app's picker reads from SQL -- at the start of the run
+# and before every batch of the background read, so a request never waits behind a long slice. Never fails the run.
+$searchTick = $null
+try {
+    . (Join-Path $siRoot 'engine/asset-profiling/shared/SI-DirectoryNames.ps1')
+    if ($dataInvoke) {
+        if (-not (Get-Command -Name Get-SIGraphToken -ErrorAction SilentlyContinue)) { . (Join-Path $siRoot 'auth/Get-SIGraphToken.ps1') }
+        $searchTick = {
+            $s = Invoke-SIDirectorySearchRequests -Invoke $dataInvoke -TokenProvider { Get-SIGraphToken -Resource Graph }
+            foreach ($l in @($s.Lines)) { & $say 'INFO' $l }
+        }
+        & $searchTick
+    }
+} catch { & $say 'INFO' ('the people picker''s tenant searches were not looked at this run ({0})' -f $_.Exception.Message); $searchTick = $null }
+
+$r = Invoke-SISignInMethodsFillTick -DataInvoke $dataInvoke -ProInvoke $proInvoke -SIRoot $siRoot -Between $searchTick
 if ($r -and "$($r.Line)".Trim()) { & $say $(if ($r.Status -eq 'error') { 'WARN' } else { 'INFO' }) $r.Line }
 # never a failed execution: what was not read is read by a later run
 exit 0

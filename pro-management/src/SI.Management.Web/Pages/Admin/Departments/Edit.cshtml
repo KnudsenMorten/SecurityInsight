@@ -38,7 +38,7 @@
         else
         {
             <form method="post" asp-page-handler="People" asp-route-id="@Model.Id" data-people-form>
-                <partial name="~/Pages/Admin/Departments/_PeopleTable.cshtml" model="new SI.Management.Web.Pages.Admin.Departments.PeopleTableModel(Model.Rows, Model.People, search, Model.DirectoryOn)" />
+                <partial name="~/Pages/Admin/Departments/_PeopleTable.cshtml" model="new SI.Management.Web.Pages.Admin.Departments.PeopleTableModel(Model.Rows, Model.People, search, Model.DirectoryOn, await Model.PickerNamesAsync())" />
                 <button type="submit">Save people</button>
             </form>
         }

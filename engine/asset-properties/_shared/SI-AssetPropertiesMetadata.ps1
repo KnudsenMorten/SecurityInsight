@@ -302,12 +302,35 @@ function ConvertFrom-SIAdFileTime {
     try { [datetime]::FromFileTimeUtc($n) } catch { $null }
 }
 
+function ConvertFrom-SIAdSidBytes {
+    <#
+        PURE. A binary SID (objectSid as the directory returns it) -> its text form 'S-1-5-21-...', the same text
+        SecurityIdentifier.Value gives -- decoded here so the conversion runs on every platform (SecurityIdentifier's
+        constructor is Windows-only and throws on Linux). $null when the bytes are not a well-formed SID.
+        Layout: revision (1 byte), sub-authority count (1 byte), identifier authority (6 bytes, big-endian), then
+        one 32-bit little-endian value per sub-authority.
+    #>
+    param([AllowNull()][byte[]]$Bytes)
+    if ($null -eq $Bytes -or $Bytes.Length -lt 8) { return $null }
+    $count = [int]$Bytes[1]
+    if ($Bytes.Length -ne (8 + 4 * $count)) { return $null }
+    [uint64]$auth = 0
+    for ($i = 2; $i -lt 8; $i++) { $auth = ($auth -shl 8) -bor [uint64]$Bytes[$i] }
+    $authText = if ($auth -lt 4294967296) { [string]$auth } else { '0x' + $auth.ToString('X12') }
+    $sb = New-Object System.Text.StringBuilder
+    [void]$sb.Append('S-').Append([string][int]$Bytes[0]).Append('-').Append($authText)
+    for ($j = 0; $j -lt $count; $j++) { [void]$sb.Append('-').Append([string][BitConverter]::ToUInt32($Bytes, 8 + 4 * $j)) }
+    $sb.ToString()
+}
+
 function ConvertFrom-SIAdSearchResult {
     <#
         PURE. One LDAP search result's attributes (a dictionary: attribute name -> its values, as DirectorySearcher
         returns them) -> the object the module gave for the same computer: the attributes under the module's names, the
-        GUID as [guid], the SID as SecurityIdentifier, single values unwrapped, plus the extended properties the module
-        computed. ConvertTo-SIAdPlainObject then makes it a JSON-safe row, as before.
+        GUID as [guid], the SID as its text 'S-1-...' (ConvertFrom-SIAdSidBytes: the module's SecurityIdentifier became
+        exactly this text in the row; decoded without the Windows-only type so it runs on every platform), single values
+        unwrapped, plus the extended properties the module computed. ConvertTo-SIAdPlainObject then makes it a JSON-safe
+        row, as before.
     #>
     param([Parameter(Mandatory)][System.Collections.IDictionary]$Properties)
     $o = [ordered]@{}
@@ -320,7 +343,7 @@ function ConvertFrom-SIAdSearchResult {
         $name = if ($script:SIAdPropertyNames.ContainsKey($lk)) { $script:SIAdPropertyNames[$lk] } else { [string]$k }
         $v = $null
         if ($lk -eq 'objectguid' -and $vals.Count -ge 1 -and $vals[0] -is [byte[]] -and $vals[0].Length -eq 16) { $v = New-Object guid (, [byte[]]$vals[0]) }
-        elseif ($lk -eq 'objectsid' -and $vals.Count -ge 1 -and $vals[0] -is [byte[]]) { $v = New-Object System.Security.Principal.SecurityIdentifier ([byte[]]$vals[0]), 0 }
+        elseif ($lk -eq 'objectsid' -and $vals.Count -ge 1 -and $vals[0] -is [byte[]]) { $v = ConvertFrom-SIAdSidBytes ([byte[]]$vals[0]); if ($null -eq $v) { continue } }
         elseif ($script:SIAdMultiValued -contains $lk -or $vals.Count -gt 1) { $v = $vals }
         elseif ($vals.Count -eq 1) { $v = $vals[0] }
         else { continue }

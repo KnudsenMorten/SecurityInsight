@@ -24,6 +24,8 @@ public sealed class DepartmentScopePageFilter(IAccessScope access, SI.Management
         "/Findings/Index", "/Findings/Detail", "/Search", "/Chat", "/Records/Index", "/Summary/Index",
         "/Cis/Index", "/Cis/Detail", "/Cis/NotOnboarded", "/Cis/Findings", "/Cis/Summary",
         "/Exemptions/Request", "/Changes/Index", "/Admin/History", "/Columns",
+        // #1277 the remediation tasks per asset and their findings: limited at finding level (RemediationTaskSql.TasksFor / TaskFindingsFor)
+        "/Remediations/Tasks", "/Remediations/TaskFindings",
     };
 
     /// Whole folders whose every page applies the department scope itself (a collection view refuses, in its own words,

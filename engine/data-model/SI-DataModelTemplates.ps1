@@ -30,6 +30,8 @@
 . (Join-Path $PSScriptRoot 'SI-FindingTexts.ps1')
 # the Azure CI scope and the child resources that roll up into their parent (collection-scope rollUpInto, validated below)
 . (Join-Path $PSScriptRoot 'SI-AzureChildren.ps1')
+# the finding field map (finding-fields.locked.json): the generic fields a finding carries to an output, as configuration
+. (Join-Path $PSScriptRoot 'SI-FindingFieldMapper.ps1')
 
 function Get-SIDataModelRoot {
     param([string]$Root)
@@ -54,7 +56,8 @@ function Get-SIDataModelItemKey {
     param([string]$Kind, $Item)
     switch ($Kind) {
         'field-catalog' { return [string]$Item.name }
-        'field-mapping' {
+        { $_ -in 'field-mapping', 'finding-field-map' } {
+            # a finding field mapping is keyed as a provider mapping: field | finding types | (no resource types)
             $rt = @($Item.recordTypes) -join ','
             $res = @(Get-SIItemValue $Item 'resourceTypes') -join ','
             return ('{0}|{1}|{2}' -f $Item.field, $rt, $res)
@@ -69,7 +72,7 @@ function Get-SIDataModelItemArrayName {
     <# Which array of a template holds its items. #>
     param([string]$Kind)
     switch ($Kind) {
-        'field-catalog' { 'fields' } 'field-mapping' { 'mappings' } 'risk-factor' { 'factors' } 'list' { 'lists' }
+        'field-catalog' { 'fields' } 'field-mapping' { 'mappings' } 'finding-field-map' { 'mappings' } 'risk-factor' { 'factors' } 'list' { 'lists' }
         'output-map' { 'columns' } 'trust' { 'order' } 'coverage-check' { 'checks' } 'collection-scope' { 'azureResourceTypes' }
         # #462 a CI rule pack (one rule per id); #464 the recommendation equivalence (one group per id)
         'ci-rule-pack' { 'rules' } 'recommendation-equivalence' { 'groups' } 'report-scope' { 'reports' }
@@ -100,7 +103,7 @@ function Merge-SIDataModelItems {
     $keyOf = {
         param($item, $counts)
         $base = Get-SIDataModelItemKey $Kind $item
-        if ($Kind -ne 'field-mapping') { return $base }
+        if ($Kind -notin 'field-mapping', 'finding-field-map') { return $base }
         $n = 1; if ($counts.ContainsKey($base)) { $n = [int]$counts[$base] + 1 }
         $counts[$base] = $n
         if ($n -eq 1) { return $base }
@@ -212,6 +215,15 @@ function Get-SIDataModelTemplate {
             }
         }
     }
+    # A COLUMN SHIPPED SWITCHED OFF ("off": true) is not part of the output until the customer switches it on -- by overriding
+    # the column (Pro: the column builder / cfg.ItemOverride; Community: the column in <output>.custom.json, without "off").
+    # Left out HERE, so every reader of the map (the push, its row hash, the hand-off views, the checks) sees exactly the
+    # columns in force: a new column shipped off changes nothing at an install until its admin turns it on.
+    if ($kind -eq 'output-map') {
+        $cols = @($doc.columns)
+        $on = @($cols | Where-Object { $null -ne $_ -and (ConvertTo-SIBoolOrNull (Get-SIItemValue $_ 'off')) -ne $true })
+        if ($on.Count -ne $cols.Count) { $doc.columns = $on }
+    }
     return @{ Document = $doc; States = $states; Kind = $kind; Name = $Name }
 }
 
@@ -241,7 +253,7 @@ function Get-SIDataModel {
     }
     # #561 / #562 the classification dimensions and rows: optional -- a data-model folder without them (a test root, a model
     # materialised before they were published) classifies nothing, never an error
-    foreach ($n in 'dimensions', 'classification', 'finding-texts', 'severity-model') {
+    foreach ($n in 'dimensions', 'classification', 'finding-texts', 'severity-model', 'finding-fields') {
         if (-not (Test-Path -LiteralPath (Join-Path $Root ($n + '.locked.json')))) { continue }
         $t = Get-SIDataModelTemplate -Name $n -Root $Root -OverlayRoot $OverlayRoot
         $model[$n] = $t.Document
@@ -447,7 +459,7 @@ function Test-SIDataModel {
     $outOps = Get-SIOutputMapOps
     foreach ($oid in $Model.Outputs.Keys) {
         $o = $Model.Outputs[$oid]
-        if (@('ci', 'ci_finding', 'finding_summary', 'record') -notcontains [string]$o.grain) { $p.Add("outputs/${oid}: grain '$($o.grain)'") }
+        if (@('ci', 'ci_finding', 'finding_summary', 'record', 'remediation_task', 'remediation_task_finding') -notcontains [string]$o.grain) { $p.Add("outputs/${oid}: grain '$($o.grain)'") }
         $targets = @{}
         $names = @{}
         foreach ($c in @($o.columns)) {
@@ -463,7 +475,12 @@ function Test-SIDataModel {
             if ($names.ContainsKey($name.ToLowerInvariant())) { $p.Add("outputs/${oid}: two columns are named '$name'") }
             $names[$name.ToLowerInvariant()] = 1
             $from = [string]$c.from
-            if (-not ($from.StartsWith('$') -or $from -match '^(finding|summary|record)\.' -or $fields.ContainsKey($from))) { $p.Add("outputs/${oid}: column '$($c.target)' reads unknown field '$from'") }
+            # extra.<field>: a value of the finding field map's carrier (finding-fields.locked.json) -- a field the map fills
+            $xm = [regex]::Match($from, '^extra\.([A-Za-z_][A-Za-z0-9_]*)$')
+            if ($xm.Success) {
+                if ($null -eq $Model['finding-fields'] -or @(@($Model['finding-fields'].mappings) | Where-Object { $_ -and [string]$_.field -eq $xm.Groups[1].Value }).Count -eq 0) { $p.Add("outputs/${oid}: column '$($c.target)' reads '$from', a field the finding field map does not fill") }
+            }
+            elseif (-not ($from.StartsWith('$') -or $from -match '^(finding|summary|record)\.' -or $fields.ContainsKey($from))) { $p.Add("outputs/${oid}: column '$($c.target)' reads unknown field '$from'") }
             if ($c.op) {
                 $op = ([string]$c.op).Split(':')[0]
                 if ($outOps -notcontains $op) { $p.Add("outputs/${oid}: column '$($c.target)' uses unknown operation '$op'") }
@@ -534,6 +551,10 @@ function Test-SIDataModel {
     if ($null -ne $Model['finding-texts']) {
         $ff = [string[]]@($fields.Keys | Where-Object { [string]$fields[$_].level -eq 'finding' -or $null -ne (Get-SIItemValue $fields[$_] 'finding') })
         foreach ($x in (Test-SIFindingTexts -Document $Model['finding-texts'] -FindingFields $ff)) { $p.Add([string]$x) }
+    }
+    # the finding field map: known finding types, operations, conditions; a label / value source reads an earlier field
+    if ($null -ne $Model['finding-fields']) {
+        foreach ($x in (Test-SIFindingFieldMap -Map $Model['finding-fields'] -ValueMaps $vmaps)) { $p.Add([string]$x) }
     }
     # #690 (15) the severity model: five SI values, every report ends with its own severity
     if ($null -ne $Model['severity-model']) {

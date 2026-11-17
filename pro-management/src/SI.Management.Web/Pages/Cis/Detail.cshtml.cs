@@ -19,8 +19,18 @@ public sealed class DetailModel : PageModel
     private readonly SI.Management.Web.Changes.CorrelationSuspectStore? _suspects;
 
     public DetailModel(ICiViews cis, ILogger<DetailModel> log, SI.Management.Web.Changes.CiOverrideStore? overrides = null, ICiGraphViews? graph = null,
-        SI.Management.Web.Changes.CorrelationSuspectStore? suspects = null)
-    { _cis = cis; _log = log; _overrides = overrides; _graph = graph; _suspects = suspects; }
+        SI.Management.Web.Changes.CorrelationSuspectStore? suspects = null, SI.Management.Web.Changes.SoftwareExceptionStore? software = null,
+        SI.Management.Web.Licensing.IProLicence? licence = null)
+    { _cis = cis; _log = log; _overrides = overrides; _graph = graph; _suspects = suspects; _software = software; _licence = licence; }
+
+    private readonly SI.Management.Web.Changes.SoftwareExceptionStore? _software;
+    private readonly SI.Management.Web.Licensing.IProLicence? _licence;
+
+    /// #1219 (4) the software behind the tier detections: each detection with its evidence paths, install kind and
+    /// application, and the per-server exceptions (the evidence is shown in both editions; marking one is Pro).
+    public CiSoftwareView? Software { get; private set; }
+    /// The installation has a Pro licence (the exception forms are shown; their page refuses without it anyway).
+    public bool Pro { get; private set; }
 
     /// #1053 the correlation suspects this CI is part of (the gatekeeper's current set); empty = none, or not readable.
     public IReadOnlyList<SI.Management.Web.Changes.CorrelationSuspectGroup> Suspects { get; private set; } = Array.Empty<SI.Management.Web.Changes.CorrelationSuspectGroup>();
@@ -64,6 +74,8 @@ public sealed class DetailModel : PageModel
                 try { if (await _overrides.TableExistsAsync(ct)) Overrides = await _overrides.ListAsync(Ci.Ci.CiId, ct); }
                 catch (Exception ex) when (ex is not OperationCanceledException) { _log.LogWarning(ex, "the manual overrides of CI {Id} could not be read", Id); }
             }
+            Software = await CiSoftwareView.LoadAsync(_software, Ci.Ci.CiId, Ci.Doc, _log, ct);
+            try { Pro = _licence is not null && await _licence.IsProAsync(ct); } catch (Exception ex) when (ex is not OperationCanceledException) { Pro = false; }
             if (_suspects is not null)
             {
                 try { if (await _suspects.TableExistsAsync(ct)) Suspects = (await _suspects.ForCiAsync(Ci.Ci.CiId, ct)).Where(s => !s.Dismissed).ToList(); }

@@ -467,6 +467,7 @@ public sealed class CollectionViews : ICollectionViews
         }
     }
 
+
     public async Task<QueryResult<ServiceRow?>> ServiceAsync(ViewCollection collection, string serviceKey, CancellationToken ct)
     {
         var (rows, text) = await Run(new SqlQuery(CollectionViewSql.Service, new Dictionary<string, object?>

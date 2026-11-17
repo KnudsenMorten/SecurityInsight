@@ -51,6 +51,8 @@ public static class ProFeatures
         ["/Admin/Tasks"] = Governance,
         ["/Admin/Departments"] = Governance,
         ["/Admin/DomainRoles"] = Governance,
+        // #1219 (4) a per-server exception of a software detection and the suggestions to review (the evidence on the CI page is free)
+        ["/Cis/SoftwareExceptions"] = Governance,
         ["/Cmdb"] = CmdbConnectors,
         ["/Collection/Services"] = CmdbConnectors,
         ["/Collection/Connectors"] = CmdbConnectors,

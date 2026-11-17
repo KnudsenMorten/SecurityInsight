@@ -18,7 +18,31 @@
                                          SI's ONE setting writer (engine\pro-settings\SI-ProSettingWrite.ps1
                                          Set-SIProSetting: the row and its cfg.ChangeLog entry in one transaction), then
                                          read back.
-      SI_UPDATER_CONTROLPLANE_REASON     optional: the reason recorded with each change (else a standard one).
+      SI_UPDATER_OUTPUTS                 a compact JSON object switching what an OUTPUT sends (owner 2026-11-16: the new
+                                         ServiceNow columns / outputs are switched on per install through the updater):
+                                           { "<output id>": { "on": [ "<column>", ... ], "off": [ "<column>", ... ],
+                                                              "output": "on" | "off" }, ... }
+                                         every part optional. A <column> is the column's target (u_si_category) or the
+                                         field it reads (si_category). ALLOW-LIST, derived from what the release ships:
+                                         a column may be switched only when data-model\outputs\<output>.locked.json ships
+                                         it switched OFF ("off": true) -- every other column is always sent and is changed
+                                         in the web app; an output only when config\data-out.locked.json lists it for Pro
+                                         and not 'fixed'. A column is written through the web app's OWN statement
+                                         (engine\pro-settings\SI-OutputColumnWrite.ps1: the cfg.ItemOverride row an
+                                         Admin's change on Connectors > Fields sent writes -- on = the shipped column
+                                         without "off" as an override, off = back to the shipped column); an output through
+                                         Set-SIProSetting on SI_DataOut_Outputs, computed as the web app's output switch
+                                         computes it (every other output keeps what it does now). Each read back.
+                                         ONCE PER VALUE: the applied value's hash is kept (cfg.InstallState
+                                         'ControlPlaneOutputs'); the same value on a later update writes nothing, so a
+                                         column an Admin switches off in the web app stays off. "off" removes ONLY a column
+                                         row the update itself wrote (UpdatedBy = the update) -- never an Admin's own row.
+      SI_UPDATER_CONTROLPLANE_REASON     WHO asked and WHY -- Invardia sets it as '<person>: <why>'. REQUIRED for every
+                                         change of what is sent (an output column on OR off, "output": on OR off): without a
+                                         usable one (Test-SIControlPlaneReason: empty, one word, too short or a generic word
+                                         like 'update', 'n/a', 'test', 'none', '-') those changes are refused in one warning
+                                         line and nothing is written for them. Recorded in cfg.ChangeLog with each change; for the
+                                         other values it stays optional.
 
     ChangedBy = 'the update (control-plane value)'. NEVER a secret through this path: a setting the catalog marks secret is
     refused (a secret lives in Key Vault). Anything not on the allow-list, a value of the wrong type and JSON that does
@@ -37,6 +61,8 @@ function Get-SIControlPlaneNames {
     [pscustomobject]@{
         IdentityMoveMode = 'SI_UPDATER_STATE_IDENTITYMOVEMODE'
         Settings         = 'SI_UPDATER_SETTINGS'
+        Outputs          = 'SI_UPDATER_OUTPUTS'
+        OutputsSetting   = 'SI_DataOut_Outputs'
         Reason           = 'SI_UPDATER_CONTROLPLANE_REASON'
         ChangedBy        = 'the update (control-plane value)'
         Scope            = 'solution'
@@ -198,24 +224,449 @@ function Invoke-SIControlPlaneSettings {
     $res
 }
 
+# ---------------------------------------------------------------------------------------------------------------------
+#  SI_UPDATER_OUTPUTS -- what an output sends (owner 2026-11-16)
+# ---------------------------------------------------------------------------------------------------------------------
+
+function Get-SIControlPlaneOutputAllowList {
+    <#
+        What SI_UPDATER_OUTPUTS may switch -- DERIVED from what this release ships, never free text. -SIRoot: the release's
+        SecurityInsight folder. Returns @{ Outputs (ordered: output id -> @{ Id; Kind; Fixed; Pro; Default; Columns (ordered:
+        target -> the shipped column, ONLY the columns shipped "off": true); Targets (every target of the map); Fields (every
+        field a column reads -> its targets) }); Entries (config\data-out.locked.json's outputs) }.
+    #>
+    param([Parameter(Mandatory)][string]$SIRoot)
+    $read = { param($p) ConvertFrom-SIControlPlaneJson -Text ([IO.File]::ReadAllText($p).TrimStart([char]0xFEFF)) }
+    $cat = [IO.Path]::Combine($SIRoot, 'config', 'data-out.locked.json')
+    $entries = @()
+    if (Test-Path -LiteralPath $cat) { $entries = @((& $read $cat).outputs | Where-Object { $_ -and $_.output }) }
+    $outs = [ordered]@{}
+    foreach ($e in $entries) {
+        $id = [string]$e.output
+        $fixed = ([string]$e.kind -eq 'fixed')
+        $cols = [ordered]@{}; $targets = @{}; $fields = @{}
+        $mapFile = [IO.Path]::Combine($SIRoot, 'data-model', 'outputs', $id + '.locked.json')
+        if (Test-Path -LiteralPath $mapFile) {
+            foreach ($c in @((& $read $mapFile).columns)) {
+                if (-not $c -or -not $c.target) { continue }
+                $t = [string]$c.target
+                $targets[$t.ToLowerInvariant()] = $t
+                $f = [string]$c.from; if ($f.StartsWith('extra.')) { $f = $f.Substring(6) }
+                if ($f -and -not $f.StartsWith('$')) {
+                    $fk = $f.ToLowerInvariant()
+                    if (-not $fields.ContainsKey($fk)) { $fields[$fk] = New-Object System.Collections.Generic.List[string] }
+                    $fields[$fk].Add($t)
+                }
+                $offP = $c.PSObject.Properties['off']
+                $isOff = ($null -ne $offP) -and (($offP.Value -is [bool] -and $offP.Value) -or ([string]$offP.Value -ieq 'true'))
+                if ($isOff) { $cols[$t] = $c }
+            }
+        }
+        $outs[$id] = [pscustomobject]@{ Id = $id; Kind = [string]$e.kind; Fixed = $fixed; Pro = (@($e.editions) -contains 'pro'); Default = [bool]$e.default
+            Columns = $cols; Targets = $targets; Fields = $fields }
+    }
+    [pscustomobject]@{ Outputs = $outs; Entries = $entries }
+}
+
+function ConvertFrom-SIControlPlaneOutputs {
+    <#
+        PURE (over -Allow). SI_UPDATER_OUTPUTS -> @{ Columns (@{ Output; Target; On; Column } per accepted column switch);
+        Outputs (@{ Output; On } per accepted output switch); Refused (one line per refusal) }. Refused: JSON that does not
+        parse or is not ONE object (nothing from it is applied), an output this release does not list, a 'fixed' output, an
+        output not written in Pro, a part other than on / off / output, a column the map does not have, a column the map
+        always sends (only the columns shipped switched off are switched this way), a field two such columns read, a column
+        named both on and off. What is accepted still applies.
+    #>
+    param([AllowNull()][AllowEmptyString()][string]$Json, [Parameter(Mandatory)]$Allow)
+    $n = Get-SIControlPlaneNames
+    $cols = New-Object System.Collections.Generic.List[object]
+    $outs = New-Object System.Collections.Generic.List[object]
+    $refused = New-Object System.Collections.Generic.List[string]
+    $result = { [pscustomobject]@{ Columns = $cols.ToArray(); Outputs = $outs.ToArray(); Refused = $refused.ToArray() } }
+    $text = "$Json".Trim()
+    if (-not $text) { return (& $result) }
+    $shape = '{0} must be ONE JSON object {{ "<output>": {{ "on": [ "<column>" ], "off": [ "<column>" ], "output": "on" | "off" }} }} -- nothing from it is applied' -f $n.Outputs
+    if (-not $text.StartsWith('{')) { $refused.Add($shape); return (& $result) }
+    $obj = $null
+    try { $obj = ConvertFrom-SIControlPlaneJson -Text $text } catch { $refused.Add(('{0} is not valid JSON ({1}) -- nothing from it is applied' -f $n.Outputs, (([string]$_.Exception.Message) -split "`n")[0].Trim())); return (& $result) }
+    if ($null -eq $obj -or $obj -isnot [System.Management.Automation.PSCustomObject]) { $refused.Add($shape); return (& $result) }
+    $ids = @($Allow.Outputs.Keys)
+    foreach ($p in @($obj.PSObject.Properties)) {
+        $id = ([string]$p.Name).Trim().ToLowerInvariant()
+        if (-not $Allow.Outputs.Contains($id)) { $refused.Add(('{0}: {1} is not an output of this release (outputs: {2}); not applied' -f $n.Outputs, $p.Name, ($ids -join ', '))); continue }
+        $o = $Allow.Outputs[$id]
+        if ($o.Fixed) { $refused.Add(('{0}: {1} is written by another connector with fixed columns -- it is not switched this way; not applied' -f $n.Outputs, $id)); continue }
+        if (-not $o.Pro) { $refused.Add(('{0}: {1} is not written in SecurityInsight Pro -- not switched this way; not applied' -f $n.Outputs, $id)); continue }
+        $v = $p.Value
+        if ($null -eq $v -or $v -isnot [System.Management.Automation.PSCustomObject]) { $refused.Add(('{0}: {1} must be an object {{ "on": [...], "off": [...], "output": "on" | "off" }}; not applied' -f $n.Outputs, $id)); continue }
+        $want = @{}
+        foreach ($part in @($v.PSObject.Properties)) {
+            $pn = ([string]$part.Name).ToLowerInvariant()
+            if ($pn -eq 'output') {
+                $sw = $part.Value
+                $on = $null
+                if ($sw -is [bool]) { $on = [bool]$sw } elseif ("$sw".Trim() -match '^(?i)(on|true)$') { $on = $true } elseif ("$sw".Trim() -match '^(?i)(off|false)$') { $on = $false }
+                if ($null -eq $on) { $refused.Add(('{0}: {1} "output" must be "on" or "off"; not applied' -f $n.Outputs, $id)); continue }
+                $outs.Add([pscustomobject]@{ Output = $id; On = $on })
+                continue
+            }
+            if ($pn -notin 'on', 'off') { $refused.Add(('{0}: {1} has "{2}" -- only "on", "off" and "output" are read; that part is not applied' -f $n.Outputs, $id, $part.Name)); continue }
+            $names = @()
+            if ($null -ne $part.Value) {
+                if ($part.Value -is [string]) { $names = @($part.Value) }
+                elseif ($part.Value -is [System.Collections.IEnumerable]) { $names = @($part.Value) }
+                else { $names = @($part.Value) }
+            }
+            foreach ($nm in $names) {
+                if ($nm -isnot [string] -or -not $nm.Trim()) { $refused.Add(('{0}: {1} "{2}" names a column that is not text; not applied' -f $n.Outputs, $id, $pn)); continue }
+                $k = $nm.Trim().ToLowerInvariant(); if ($k.StartsWith('extra.')) { $k = $k.Substring(6) }
+                $target = $null
+                foreach ($t in $o.Columns.Keys) { if ($t.ToLowerInvariant() -eq $k) { $target = $t; break } }
+                if (-not $target) {
+                    $byField = @(foreach ($t in $o.Columns.Keys) { $f = [string]$o.Columns[$t].from; if ($f.StartsWith('extra.')) { $f = $f.Substring(6) }; if ($f.ToLowerInvariant() -eq $k) { $t } })
+                    if ($byField.Count -gt 1) { $refused.Add(('{0}: {1} {2} is read by more than one column ({3}) -- name the column; not applied' -f $n.Outputs, $id, $nm.Trim(), ($byField -join ', '))); continue }
+                    if ($byField.Count -eq 1) { $target = $byField[0] }
+                }
+                if (-not $target) {
+                    if ($o.Targets.ContainsKey($k) -or $o.Fields.ContainsKey($k)) { $refused.Add(('{0}: {1} {2} is a column that is always sent -- only the columns shipped switched off are switched this way (others are changed on Connectors > Fields sent); not applied' -f $n.Outputs, $id, $nm.Trim())) }
+                    else { $refused.Add(('{0}: {1} has no column {2} (switchable: {3}); not applied' -f $n.Outputs, $id, $nm.Trim(), $(if ($o.Columns.Count) { @($o.Columns.Keys) -join ', ' } else { 'none' }))) }
+                    continue
+                }
+                if (-not $want.ContainsKey($target)) { $want[$target] = New-Object System.Collections.Generic.List[string] }
+                if (-not $want[$target].Contains($pn)) { $want[$target].Add($pn) }
+            }
+        }
+        foreach ($t in $o.Columns.Keys) {
+            if (-not $want.ContainsKey($t)) { continue }
+            if ($want[$t].Count -gt 1) { $refused.Add(('{0}: {1} {2} is named both on and off; not applied' -f $n.Outputs, $id, $t)); continue }
+            $cols.Add([pscustomobject]@{ Output = $id; Target = $t; On = ($want[$t][0] -eq 'on'); Column = $o.Columns[$t] })
+        }
+    }
+    & $result
+}
+
+function Test-SIControlPlaneBodyOff {
+    <# PURE. Does a column body carry "off": true (a column switched off)? Unreadable = $false. #>
+    param([AllowNull()][AllowEmptyString()][string]$Body)
+    if ([string]::IsNullOrWhiteSpace($Body)) { return $false }
+    try { $o = ConvertFrom-SIControlPlaneJson -Text $Body } catch { return $false }
+    if ($o -isnot [System.Management.Automation.PSCustomObject]) { return $false }
+    $p = $o.PSObject.Properties['off']
+    ($null -ne $p) -and (($p.Value -is [bool] -and $p.Value) -or ([string]$p.Value -ieq 'true'))
+}
+
+function Get-SIControlPlaneOutputsOn {
+    <#
+        PURE. The outputs that run for SI_DataOut_Outputs -- the web app's OutputFieldsModel.OnOutputs: the setting's ids
+        (comma / semicolon separated) when it names any, else each output's default; never a 'fixed' output.
+    #>
+    param([AllowEmptyCollection()][object[]]$Entries = @(), [AllowNull()][AllowEmptyString()][string]$Setting)
+    $chosen = @("$Setting" -split '[,;]' | ForEach-Object { $_.Trim().ToLowerInvariant() } | Where-Object { $_ })
+    @(foreach ($e in $Entries) {
+        if ([string]$e.kind -eq 'fixed') { continue }
+        $on = $(if ($chosen.Count) { $chosen -contains [string]$e.output } else { [bool]$e.default })
+        if ($on) { [string]$e.output }
+    })
+}
+
+function Get-SIControlPlaneOutputsSwitched {
+    <#
+        PURE. SI_DataOut_Outputs after one output is switched -- the web app's OutputFieldsModel.Switched: every other output
+        keeps what it does now; a set that is exactly the defaults = $null (the setting is reset, so an output a later release
+        adds follows its own default); else the ids in the catalog's order, ';' separated.
+    #>
+    param([AllowEmptyCollection()][object[]]$Entries = @(), [AllowNull()][AllowEmptyString()][string]$Setting, [Parameter(Mandatory)][string]$Output, [bool]$On)
+    $set = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
+    foreach ($x in @(Get-SIControlPlaneOutputsOn -Entries $Entries -Setting $Setting)) { [void]$set.Add($x) }
+    if ($On) { [void]$set.Add($Output) } else { [void]$set.Remove($Output) }
+    $def = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
+    foreach ($x in @(Get-SIControlPlaneOutputsOn -Entries $Entries -Setting $null)) { [void]$def.Add($x) }
+    if ($set.SetEquals($def)) { return $null }
+    (@(foreach ($e in $Entries) { if ($set.Contains([string]$e.output)) { [string]$e.output } }) -join ';')
+}
+
+function ConvertFrom-SIControlPlaneSettingText {
+    <# PURE. A stored ValueJson as the form text the web app reads (a JSON text = itself, a list = comma joined); $null = $null. #>
+    param([AllowNull()][AllowEmptyString()][string]$ValueJson)
+    if ($null -eq $ValueJson) { return $null }
+    try { $v = ConvertFrom-SIControlPlaneJson -Text $ValueJson } catch { return $ValueJson }
+    if ($null -eq $v) { return $null }
+    if ($v -is [string]) { return $v }
+    if ($v -is [System.Collections.IEnumerable]) { return (@($v | ForEach-Object { [string]$_ }) -join ',') }
+    [string]$v
+}
+
+function Test-SIControlPlaneReason {
+    <#
+        PURE. Does SI_UPDATER_CONTROLPLANE_REASON name WHO asked and WHY? '' = yes, else the reason it does not. Invardia sets
+        it as '<person>: <why>'. THE RULE: after trimming, at least two words and at least 8 letters or digits, and not a
+        generic word (update, updater, the update, n/a, na, none, null, test, testing, tbd, todo, change, fix, ok, yes, no,
+        reason, default, auto, automatic, x, -, .) -- also not the standard text this path writes when no reason is set.
+        Needed for every change of what is sent: a column or an output switched on OR off.
+    #>
+    param([AllowNull()][AllowEmptyString()][string]$Reason)
+    $t = "$Reason".Trim()
+    if (-not $t) { return 'it is not set' }
+    $flat = (($t.ToLowerInvariant() -replace '[^\p{L}\p{N}/ ]', ' ') -replace '\s+', ' ').Trim()
+    $generic = @('update', 'updater', 'the update', 'n/a', 'na', 'none', 'null', 'test', 'testing', 'tbd', 'todo', 'change', 'changes', 'fix', 'ok', 'yes', 'no', 'reason', 'default', 'auto', 'automatic', 'x', '')
+    if ($generic -contains $flat) { return ("'{0}' is a generic word" -f $t) }
+    if ($t -match '^(?i)a control-plane value on the updater job') { return 'it is the standard text, not a person''s reason' }
+    if (([regex]::Matches($t, '[\p{L}\p{N}]')).Count -lt 8) { return ("'{0}' is too short" -f $t) }
+    if (@($flat -split ' ' | Where-Object { $_ }).Count -lt 2) { return ("'{0}' is one word -- it must say who asked and why" -f $t) }
+    ''
+}
+
+function Get-SIControlPlaneValueHash {
+    <# PURE. SHA-256 (hex) of a control-plane JSON value in the writer's own form (ConvertTo-SIControlPlaneJsonKey when it
+       parses, else the trimmed text) -- the same value written with other spacing has the same hash. #>
+    param([AllowNull()][AllowEmptyString()][string]$Json)
+    $t = "$Json".Trim()
+    $k = $t
+    if ($t -and (Get-Command -Name ConvertTo-SIJsonText -ErrorAction SilentlyContinue)) { $k = [string](ConvertTo-SIControlPlaneJsonKey $t) }
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try { ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($k))) -replace '-', '').ToLowerInvariant() } finally { $sha.Dispose() }
+}
+
+function Read-SIControlPlaneInstallState {
+    <# One cfg.InstallState value, or $null (no row, or no table). Throws on a SQL error. #>
+    param([Parameter(Mandatory)]$Store, [Parameter(Mandatory)][string]$Name)
+    $rows = @(& $Store.Invoke "SET NOCOUNT ON; IF OBJECT_ID(N'cfg.InstallState') IS NOT NULL SELECT Value FROM cfg.InstallState WHERE Name = @Name;" ([ordered]@{ Name = $Name }) 'reader' | ForEach-Object { $_ })
+    $r = $rows | Where-Object { $_ } | Select-Object -First 1
+    if (-not $r) { return $null }
+    $v = if ($r -is [System.Collections.IDictionary]) { $r['Value'] } else { $r.Value }
+    if ($null -eq $v -or $v -is [System.DBNull]) { $null } else { [string]$v }
+}
+
+function Write-SIControlPlaneInstallState {
+    <# One cfg.InstallState value (MERGE; UpdatedBy = the update). No table = nothing written. Throws on a SQL error. #>
+    param([Parameter(Mandatory)]$Store, [Parameter(Mandatory)][string]$Name, [Parameter(Mandatory)][string]$Value)
+    $n = Get-SIControlPlaneNames
+    $null = & $Store.Invoke @'
+SET NOCOUNT ON;
+IF OBJECT_ID(N'cfg.InstallState') IS NOT NULL
+MERGE cfg.InstallState AS t USING (SELECT @Name AS Name) AS s ON t.Name = s.Name
+WHEN MATCHED THEN UPDATE SET Value = @Value, UpdatedAt = SYSUTCDATETIME(), UpdatedBy = @By
+WHEN NOT MATCHED THEN INSERT (Name, Value, UpdatedBy) VALUES (@Name, @Value, @By);
+'@ ([ordered]@{ Name = $Name; Value = $Value; By = $n.ChangedBy }) 'nonquery'
+}
+
+function Invoke-SIControlPlaneOutputs {
+    <#
+        SI_UPDATER_OUTPUTS -> each accepted column switch written through the web app's own output-column statement
+        (Set-SIProOutputColumn: on = the shipped column without "off" as an 'override' row, off = the row removed, back to the
+        shipped column), each accepted output switch through Set-SIProSetting on SI_DataOut_Outputs (computed as the web app's
+        output switch computes it), ChangedBy 'the update (control-plane value)', -Reason; each READ BACK. Equal to what is in
+        force = nothing written: a column already sent (an Admin's own change of it included -- never overwritten), a column
+        already not sent, an output already on / off.
+        ONCE PER VALUE: the applied value's hash is kept in cfg.InstallState 'ControlPlaneOutputs'; the same value on a later
+        update does NOTHING -- an Admin who switches a column off in the web app is never switched back on by the next update.
+        The hash is written when nothing failed and nothing waited for a reason (those are tried again); a part refused for good
+        (not on the list) does not hold it back.
+        WHO ASKED: EVERY change -- a column on or off, an output on or off -- needs -Reason to name who asked and why
+        (Test-SIControlPlaneReason; Invardia sets '<person>: <why>') -- else nothing is written for it and it is refused in ONE
+        warning line; the reason is recorded in cfg.ChangeLog with each change. What is in force already needs no reason (nothing
+        is written).
+        "OFF" REMOVES ONLY WHAT THE UPDATE WROTE: a column row an Admin wrote (UpdatedBy is not the update) is KEPT.
+        Returns @{ Applied; Already; Kept; Refused; Failed; Lines }. Needs Set-SIProOutputColumn loaded, and Set-SIProSetting
+        for an output switch.
+    #>
+    param([Parameter(Mandatory)]$Store, [AllowEmptyString()][string]$Json, [Parameter(Mandatory)]$Allow, [AllowEmptyCollection()][object[]]$Catalog, [string]$Reason,
+          [string]$StandardReason = 'a control-plane value on the updater job')
+    $n = Get-SIControlPlaneNames
+    $lines = New-Object System.Collections.Generic.List[string]
+    $applied = New-Object System.Collections.Generic.List[string]; $already = New-Object System.Collections.Generic.List[string]; $failed = New-Object System.Collections.Generic.List[string]
+    $kept = New-Object System.Collections.Generic.List[string]; $needWho = New-Object System.Collections.Generic.List[string]
+    $err = { param($e) (([string]$e.Exception.Message) -split "`n")[0] }
+    # once per value: the same SI_UPDATER_OUTPUTS as the one applied = nothing to do
+    $hash = Get-SIControlPlaneValueHash -Json $Json
+    $stateName = 'ControlPlaneOutputs'
+    $prev = $null
+    try { $prev = Read-SIControlPlaneInstallState -Store $Store -Name $stateName } catch { $prev = $null; $lines.Add(('WARNING: control-plane value: whether {0} was applied before could not be read ({1}) -- it is applied now' -f $n.Outputs, (& $err $_))) }
+    if ($prev -and $prev -ceq $hash) {
+        $lines.Add(('control-plane value: {0} is the value already applied -- nothing written (a change made since in the web app is kept)' -f $n.Outputs))
+        return [pscustomobject]@{ Applied = @(); Already = @('outputs'); Kept = @(); Refused = @(); Failed = @(); Lines = $lines.ToArray() }
+    }
+    $whoWhy = Test-SIControlPlaneReason -Reason $Reason
+    $onReason = "$Reason".Trim(); if ($onReason.Length -gt 400) { $onReason = $onReason.Substring(0, 400) }
+    $offReason = $onReason
+    $plan = ConvertFrom-SIControlPlaneOutputs -Json $Json -Allow $Allow
+    $refusedAll = New-Object System.Collections.Generic.List[string]; foreach ($r in @($plan.Refused)) { $refusedAll.Add([string]$r) }
+    foreach ($r in @($plan.Refused)) { $lines.Add('WARNING: control-plane value: ' + $r) }
+    foreach ($c in @($plan.Columns)) {
+        $name = '{0}:{1}' -f $c.Output, $c.Target
+        try {
+            $key = Get-SIProOutputColumnKey -Output $c.Output -Target $c.Target
+            $cur = Read-SIProOutputColumn -Store $Store -Key $key
+            $rsn = $(if ($c.On) { $onReason } else { $offReason })
+            if ($c.On) {
+                if ($cur -and $cur.State -eq 'override' -and -not (Test-SIControlPlaneBodyOff $cur.BodyJson)) {
+                    $already.Add($name); $lines.Add(('control-plane value: {0} column {1} is sent already{2} -- nothing written' -f $c.Output, $c.Target, $(if ($cur.UpdatedBy) { ' (switched on by ' + $cur.UpdatedBy + ')' } else { '' }))); continue
+                }
+                if ($whoWhy) { $needWho.Add(('{0} column {1} on' -f $c.Output, $c.Target)); continue }
+                $body = Get-SIProOutputColumnBody -Column $c.Column
+                if ((Set-SIProOutputColumn -Store $Store -Key $key -State override -Body $body -ChangedBy $n.ChangedBy -Reason $rsn) -eq 'Missing') {
+                    $failed.Add($name); $lines.Add(('WARNING: control-plane value: {0} column {1} not switched on -- this database has no cfg.ItemOverride table yet; the next update tries again' -f $c.Output, $c.Target)); continue
+                }
+                $back = Read-SIProOutputColumn -Store $Store -Key $key
+                if ($back -and $back.State -eq 'override' -and $back.BodyJson -ceq $body) {
+                    $applied.Add($name); $lines.Add(('control-plane value: {0} column {1} switched ON (from {2}; read back, in the change log)' -f $c.Output, $c.Target, $n.Outputs))
+                } else { $failed.Add($name); $lines.Add(('WARNING: control-plane value: {0} column {1} was switched on but does not read back -- the next update tries again' -f $c.Output, $c.Target)) }
+            } else {
+                if (-not $cur -or $cur.State -eq 'disable') {
+                    $already.Add($name); $lines.Add(('control-plane value: {0} column {1} is not sent already -- nothing written' -f $c.Output, $c.Target)); continue
+                }
+                # "off" removes ONLY a row the update itself wrote -- an Admin's own row (Connectors > Fields sent) is kept
+                if ([string]$cur.UpdatedBy -cne $n.ChangedBy) {
+                    $kept.Add($name); $lines.Add(('control-plane value: {0} column {1} is kept -- it was switched on in the web app{2}, and "off" removes only a column the update switched on itself' -f $c.Output, $c.Target, $(if ($cur.UpdatedBy) { ' by ' + $cur.UpdatedBy } else { '' }))); continue
+                }
+                if ($whoWhy) { $needWho.Add(('{0} column {1} off' -f $c.Output, $c.Target)); continue }
+                if ((Set-SIProOutputColumn -Store $Store -Key $key -State inherit -ChangedBy $n.ChangedBy -Reason $rsn) -eq 'Missing') {
+                    $failed.Add($name); $lines.Add(('WARNING: control-plane value: {0} column {1} not switched off -- this database has no cfg.ItemOverride table yet; the next update tries again' -f $c.Output, $c.Target)); continue
+                }
+                $back = Read-SIProOutputColumn -Store $Store -Key $key
+                if ($null -eq $back) {
+                    $applied.Add($name); $lines.Add(('control-plane value: {0} column {1} switched OFF -- back to the shipped column, not sent (from {2}; read back, in the change log)' -f $c.Output, $c.Target, $n.Outputs))
+                } else { $failed.Add($name); $lines.Add(('WARNING: control-plane value: {0} column {1} was switched off but does not read back -- the next update tries again' -f $c.Output, $c.Target)) }
+            }
+        } catch { $failed.Add($name); $lines.Add(('WARNING: control-plane value: {0} column {1} not switched ({2}) -- the next update tries again' -f $c.Output, $c.Target, (& $err $_))) }
+    }
+    # an output switched ON starts a data flow: it needs who asked and why
+    $outPlan = @($plan.Outputs)
+    $outReason = $onReason
+    if ($outPlan.Count) {
+        $todo = @($outPlan | ForEach-Object { 'output:' + $_.Output })
+        try {
+            $entries = @($Allow.Entries)
+            $before = Read-SIControlPlaneSetting -Store $Store -Name $n.OutputsSetting -Scope $n.Scope
+            $text = ConvertFrom-SIControlPlaneSettingText $before
+            $on = @(Get-SIControlPlaneOutputsOn -Entries $entries -Setting $text)
+            $value = $text; $changing = New-Object System.Collections.Generic.List[object]
+            foreach ($o in $outPlan) {
+                if (($on -contains $o.Output) -eq $o.On) { $already.Add('output:' + $o.Output); $lines.Add(('control-plane value: the output {0} is {1} already -- nothing written' -f $o.Output, $(if ($o.On) { 'on' } else { 'off' }))); continue }
+                if ($whoWhy) { $needWho.Add(('the output {0} {1}' -f $o.Output, $(if ($o.On) { 'on' } else { 'off' }))); continue }
+                $value = Get-SIControlPlaneOutputsSwitched -Entries $entries -Setting $value -Output $o.Output -On $o.On
+                $on = @(Get-SIControlPlaneOutputsOn -Entries $entries -Setting $value)
+                $changing.Add($o)
+            }
+            if ($changing.Count) {
+                if ($null -eq $value) { $null = Set-SIProSetting -Store $Store -Catalog $Catalog -Name $n.OutputsSetting -Scope $n.Scope -Action Reset -ChangedBy $n.ChangedBy -Reason $outReason }
+                else { $null = Set-SIProSetting -Store $Store -Catalog $Catalog -Name $n.OutputsSetting -Scope $n.Scope -Action Set -Value $value -ChangedBy $n.ChangedBy -Reason $outReason }
+                $backOn = @(Get-SIControlPlaneOutputsOn -Entries $entries -Setting (ConvertFrom-SIControlPlaneSettingText (Read-SIControlPlaneSetting -Store $Store -Name $n.OutputsSetting -Scope $n.Scope)))
+                foreach ($o in $changing) {
+                    if (($backOn -contains $o.Output) -eq $o.On) {
+                        $applied.Add('output:' + $o.Output)
+                        $lines.Add(('control-plane value: the output {0} switched {1} ({2} {3}; from {4}; read back, in the change log)' -f $o.Output, $(if ($o.On) { 'ON' } else { 'OFF' }), $n.OutputsSetting, $(if ($null -eq $value) { 'back to the defaults' } else { '= ' + $value }), $n.Outputs))
+                    } else { $failed.Add('output:' + $o.Output); $lines.Add(('WARNING: control-plane value: the output {0} was switched but does not read back -- the next update tries again' -f $o.Output)) }
+                }
+            }
+        } catch {
+            foreach ($t in $todo) { if (-not $already.Contains($t)) { $failed.Add($t) } }
+            $lines.Add(('WARNING: control-plane value: the outputs not switched ({0}) -- the next update tries again' -f (& $err $_)))
+        }
+    }
+    if ($needWho.Count) {
+        $msg = ('{0}: {1} not switched -- every change of what is sent needs {2} to name who asked and why (''<person>: <why>''); {3}' -f $n.Outputs, ($needWho -join ', '), $n.Reason, $whoWhy)
+        $refusedAll.Add($msg); $lines.Add('WARNING: control-plane value: ' + $msg)
+    }
+    # once per value: recorded when every part that CAN apply was done -- a failure or a missing reason leaves it unrecorded (tried
+    # again next update); a part refused for good (not an output or a column of the list) is said once and the value is recorded,
+    # so an Admin's later change in the web app is never undone by the same value on the next update
+    if ($failed.Count -eq 0 -and $needWho.Count -eq 0) {
+        try { Write-SIControlPlaneInstallState -Store $Store -Name $stateName -Value $hash }
+        catch { $lines.Add(('WARNING: control-plane value: that {0} was applied could not be recorded ({1}) -- the next update compares again' -f $n.Outputs, (& $err $_))) }
+    }
+    [pscustomobject]@{ Applied = $applied.ToArray(); Already = $already.ToArray(); Kept = $kept.ToArray(); Refused = $refusedAll.ToArray(); Failed = $failed.ToArray(); Lines = $lines.ToArray() }
+}
+
+function Invoke-SIDefaultTaskOutputs {
+    <#
+        THE TASK OUTPUTS ON BY DEFAULT (owner 2026-11-17), for an install made before: at an install that sends to ServiceNow (its
+        SI_DataOut_Outputs switches on an output marked with the task outputs -- the CI hand-off or the vulnerable items), the outputs
+        the catalog marks "onWithServiceNow" (the remediation tasks and their links) are switched on -- as a new install's "Switch
+        on" of the data-out connector does -- through the one setting writer (ChangedBy the update, the reason in the change log)
+        and READ BACK. ONCE per install (cfg.InstallState 'TaskOutputsOnByDefault'): an Admin who switches them off afterwards is
+        never switched back on. An install that does not send to ServiceNow is left as it is (recorded, nothing written). A task
+        output whose Import Set table is not set is "not set up" in the engine: nothing is sent to it, never a failure.
+        Returns @{ Applied; Already; Failed; Lines }. NEVER throws.
+    #>
+    param([Parameter(Mandatory)]$Store, [Parameter(Mandatory)]$Allow, [AllowEmptyCollection()][object[]]$Catalog)
+    $n = Get-SIControlPlaneNames
+    $stateName = 'TaskOutputsOnByDefault'
+    $lines = New-Object System.Collections.Generic.List[string]
+    $res = [pscustomobject]@{ Applied = @(); Already = @(); Failed = @(); Lines = @() }
+    try {
+        $prev = Read-SIControlPlaneInstallState -Store $Store -Name $stateName
+        if ($prev) { $res.Already = @('task outputs'); return $res }
+        $entries = @($Allow.Entries)
+        $flag = { param($e) $v = $(if ($e -is [System.Collections.IDictionary]) { $e['onWithServiceNow'] } elseif ($e.PSObject.Properties['onWithServiceNow']) { $e.onWithServiceNow } else { $null }); ($v -eq $true -or [string]$v -ieq 'true') }
+        $with = @($entries | Where-Object { & $flag $_ } | ForEach-Object { [string]$_.output })
+        $snow = @($entries | Where-Object { [string]$_.kind -eq 'servicenow-importset' -and $with -notcontains [string]$_.output } | ForEach-Object { [string]$_.output })
+        $text = ConvertFrom-SIControlPlaneSettingText (Read-SIControlPlaneSetting -Store $Store -Name $n.OutputsSetting -Scope $n.Scope)
+        $on = @(Get-SIControlPlaneOutputsOn -Entries $entries -Setting $text)
+        if (@($on | Where-Object { $snow -contains $_ }).Count -eq 0) {
+            $lines.Add('task outputs on by default: this install does not send to ServiceNow -- nothing switched')
+            Write-SIControlPlaneInstallState -Store $Store -Name $stateName -Value 'not-servicenow'
+            $res.Lines = $lines.ToArray(); return $res
+        }
+        $todo = @($with | Where-Object { $on -notcontains $_ })
+        if ($todo.Count -eq 0) { $res.Already = $with; Write-SIControlPlaneInstallState -Store $Store -Name $stateName -Value 'on'; $res.Lines = $lines.ToArray(); return $res }
+        $value = $text
+        foreach ($o in $todo) { $value = Get-SIControlPlaneOutputsSwitched -Entries $entries -Setting $value -Output $o -On $true }
+        $why = 'the remediation task outputs are on by default (owner 2026-11-17) -- switched on once by the update; an Admin may switch them off'
+        if ($null -eq $value) { $null = Set-SIProSetting -Store $Store -Catalog $Catalog -Name $n.OutputsSetting -Scope $n.Scope -Action Reset -ChangedBy $n.ChangedBy -Reason $why }
+        else { $null = Set-SIProSetting -Store $Store -Catalog $Catalog -Name $n.OutputsSetting -Scope $n.Scope -Action Set -Value $value -ChangedBy $n.ChangedBy -Reason $why }
+        $backOn = @(Get-SIControlPlaneOutputsOn -Entries $entries -Setting (ConvertFrom-SIControlPlaneSettingText (Read-SIControlPlaneSetting -Store $Store -Name $n.OutputsSetting -Scope $n.Scope)))
+        $missing = @($todo | Where-Object { $backOn -notcontains $_ })
+        if ($missing.Count) {
+            $res.Failed = $missing
+            $lines.Add(('WARNING: task outputs on by default: {0} switched on but not read back -- the next update tries again' -f ($missing -join ', ')))
+        } else {
+            $res.Applied = $todo
+            $lines.Add(('task outputs on by default: {0} switched ON ({1}; read back, in the change log)' -f ($todo -join ', '), $n.OutputsSetting))
+            Write-SIControlPlaneInstallState -Store $Store -Name $stateName -Value 'on'
+        }
+    } catch { $res.Failed = @('task outputs'); $lines.Add(('WARNING: task outputs on by default: not applied ({0}) -- the next update tries again' -f (([string]$_.Exception.Message) -split "`n")[0])) }
+    $res.Lines = $lines.ToArray()
+    $res
+}
+
+function Invoke-SIDefaultTaskOutputsStep {
+    <#
+        THE UPDATER'S STEP (Start-SIUpdater, after the control-plane values): Invoke-SIDefaultTaskOutputs with the release's
+        catalog and the one setting writer, each line logged. -SIRoot: the SecurityInsight folder the update carries. NEVER throws.
+    #>
+    param([Parameter(Mandatory)]$Store, [Parameter(Mandatory)][string]$SIRoot, [scriptblock]$Log = { param($m) Write-Host $m })
+    try {
+        if (-not (Get-Command -Name Set-SIProSetting -ErrorAction SilentlyContinue)) {
+            $w = [IO.Path]::Combine($SIRoot, 'engine', 'pro-settings', 'SI-ProSettingWrite.ps1')
+            if (-not (Test-Path -LiteralPath $w)) { & $Log 'WARNING: task outputs on by default: this release carries no setting writer -- not applied'; return $null }
+            . $w
+        }
+        $cat = @(Get-SISettingsCatalog -SIRoot $SIRoot)
+        $r = Invoke-SIDefaultTaskOutputs -Store $Store -Allow (Get-SIControlPlaneOutputAllowList -SIRoot $SIRoot) -Catalog $cat
+        foreach ($l in @($r.Lines)) { & $Log $l }
+        $r
+    } catch { & $Log ('WARNING: task outputs on by default: not applied ({0}) -- the next update tries again' -f (([string]$_.Exception.Message) -split "`n")[0]); $null }
+}
 function Invoke-SIControlPlaneValues {
     <#
-        THE STEP: the identity move's mode first, then the settings. -Env: the job's environment (a hashtable; a name not in
+        THE STEP: the identity move's mode first, then the settings, then the outputs (SI_UPDATER_OUTPUTS). -Env: the job's environment (a hashtable; a name not in
         it is read from the process). -SIRoot: the SecurityInsight folder the update carries (/si in the updater image).
-        -UpdaterJob: the job's name, for the standard reason. Returns @{ Mode (the identity-mode result); Settings; Lines }.
+        -UpdaterJob: the job's name, for the standard reason. Returns @{ Mode (the identity-mode result); Settings; Outputs; Lines }.
         NEVER throws; never fails the update.
     #>
     param([hashtable]$Env = @{}, [Parameter(Mandatory)]$Store, [Parameter(Mandatory)][string]$SIRoot, [string]$UpdaterJob = 'caj-si-updater',
           [object[]]$Catalog, [scriptblock]$Log = { param($m) Write-Host $m })
     $n = Get-SIControlPlaneNames
-    $out = [pscustomobject]@{ Mode = $null; Settings = $null; Lines = @() }
+    $out = [pscustomobject]@{ Mode = $null; Settings = $null; Outputs = $null; Lines = @() }
     $siCpStepLines = New-Object System.Collections.Generic.List[string]
     $say = { param($m) if ($m) { $siCpStepLines.Add([string]$m); try { $null = & $Log ([string]$m) } catch { } } }
     try {
         $read = { param($k) if ($Env.ContainsKey($k)) { "$($Env[$k])".Trim() } else { "$([Environment]::GetEnvironmentVariable($k))".Trim() } }
         $modeVal = & $read $n.IdentityMoveMode
         $setVal = & $read $n.Settings
-        if (-not $modeVal -and -not $setVal) { $out.Lines = $siCpStepLines.ToArray(); return $out }
+        $outVal = & $read $n.Outputs
+        if (-not $modeVal -and -not $setVal -and -not $outVal) { $out.Lines = $siCpStepLines.ToArray(); return $out }
         $why = & $read $n.Reason
         $reason = if ($why) { $why } else { 'a control-plane value on the updater job {0}' -f $UpdaterJob }
         if ($reason.Length -gt 400) { $reason = $reason.Substring(0, 400) }
@@ -232,6 +683,22 @@ function Invoke-SIControlPlaneValues {
             if ($null -eq $Catalog) { $Catalog = @(Get-SISettingsCatalog -SIRoot $SIRoot) }
             $out.Settings = Invoke-SIControlPlaneSettings -Store $Store -Json $setVal -Catalog $Catalog -Reason $reason
             foreach ($l in @($out.Settings.Lines)) { & $say $l }
+        }
+        if ($outVal) {
+            # the output column writer (the web app's own statement) and, for an output switch, the one setting writer
+            $ready = $true
+            foreach ($w in @(@{ Fn = 'Set-SIProOutputColumn'; File = 'SI-OutputColumnWrite.ps1' }, @{ Fn = 'Set-SIProSetting'; File = 'SI-ProSettingWrite.ps1' })) {
+                if (Get-Command -Name $w.Fn -ErrorAction SilentlyContinue) { continue }
+                $f = [IO.Path]::Combine($SIRoot, 'engine', 'pro-settings', $w.File)
+                if (-not (Test-Path -LiteralPath $f)) { $ready = $false; break }
+                . $f
+            }
+            if (-not $ready) { & $say ('WARNING: control-plane value: {0} not applied -- this release carries no output column writer' -f $n.Outputs) }
+            else {
+                if ($null -eq $Catalog) { $Catalog = @(Get-SISettingsCatalog -SIRoot $SIRoot) }
+                $out.Outputs = Invoke-SIControlPlaneOutputs -Store $Store -Json $outVal -Allow (Get-SIControlPlaneOutputAllowList -SIRoot $SIRoot) -Catalog $Catalog -Reason $why -StandardReason ('a control-plane value on the updater job {0}' -f $UpdaterJob)
+                foreach ($l in @($out.Outputs.Lines)) { & $say $l }
+            }
         }
     } catch { & $say ('WARNING: control-plane values: not applied ({0}) -- the next update tries again' -f (([string]$_.Exception.Message) -split "`n")[0]) }
     $out.Lines = $siCpStepLines.ToArray()

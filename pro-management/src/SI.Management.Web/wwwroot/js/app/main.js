@@ -123,6 +123,9 @@ if (document.querySelector("[data-show-when]")) {
 }
 
 // #446: Admin > Access -- find the person or group by name
+if (document.querySelector("[data-picker-ask]")) {
+  import("./picker-ask.js").then(function (m) { document.querySelectorAll("[data-picker-ask]").forEach(m.initPickerAsk); });
+}
 if (document.querySelector("[data-access-picker]")) {
   import("./access-picker.js").then(function (m) { document.querySelectorAll("[data-access-picker]").forEach(m.initAccessPicker); });
 }

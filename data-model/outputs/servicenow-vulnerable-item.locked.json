@@ -1,8 +1,8 @@
 {
-  "$comment": "Output map: which columns an output receives, read from the CI document. Template kind: output-map. \"from\" is an SI field, a linked-object path, or a system token ($run_id, $run_time, $row_hash, $changed_at, $const:<value>). \"op\" is from the closed output operation set. Customer overrides: outputs/<id>.custom.json (add, remove or rename columns; a column keeps its place unless moved).",
+  "$comment": "Output map: which columns an output receives, read from the CI document. Template kind: output-map. \"from\" is an SI field, a linked-object path, extra.<field> (a value of the finding field map, finding-fields.locked.json), or a system token ($run_id, $run_time, $row_hash, $changed_at, $const:<value>). \"op\" is from the closed output operation set. A column with \"off\": true is shipped switched OFF: it is not sent until the customer switches it on by overriding the column. Customer overrides: outputs/<id>.custom.json (add, remove or rename columns; a column keeps its place unless moved).",
   "kind": "output-map",
   "id": "servicenow-vulnerable-item",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "ServiceNow vulnerable items (Vulnerability Response): the import-set view snowstage.vImportVulnerableItem and the data-out push (one contract: u_action, u_row_hash, u_si_batch_id on every row; key u_si_correlation_id + u_vulnerability; u_source_record_id = <CI key>|<finding>). Column names are a contract; append only.",
   "grain": "ci_finding",
   "columns": [
@@ -125,6 +125,76 @@
     {
       "target": "u_si_replaces",
       "from": "$replaces"
+    },
+    {
+      "target": "u_si_security_domain",
+      "from": "extra.si_security_domain",
+      "off": true
+    },
+    {
+      "target": "u_si_category",
+      "from": "extra.si_category",
+      "off": true
+    },
+    {
+      "target": "u_si_subcategory",
+      "from": "extra.si_subcategory",
+      "off": true
+    },
+    {
+      "target": "u_si_report",
+      "from": "extra.si_report",
+      "off": true
+    },
+    {
+      "target": "u_si_risk_score",
+      "from": "extra.si_risk_score",
+      "off": true
+    },
+    {
+      "target": "u_si_risk_rating",
+      "from": "extra.si_risk_rating",
+      "off": true
+    },
+    {
+      "target": "u_si_tier",
+      "from": "extra.si_tier",
+      "off": true
+    },
+    {
+      "target": "u_si_fix_update_kb",
+      "from": "extra.si_fix_update_kb",
+      "off": true
+    },
+    {
+      "target": "u_si_affected_vendor",
+      "from": "extra.si_affected_vendor",
+      "off": true
+    },
+    {
+      "target": "u_si_affected_product",
+      "from": "extra.si_affected_product",
+      "off": true
+    },
+    {
+      "target": "u_si_security_grouping_parent",
+      "from": "extra.si_security_grouping_parent",
+      "off": true
+    },
+    {
+      "target": "u_si_security_grouping_name",
+      "from": "extra.si_security_grouping_name",
+      "off": true
+    },
+    {
+      "target": "u_si_security_grouping_kind",
+      "from": "extra.si_security_grouping_kind",
+      "off": true
+    },
+    {
+      "target": "u_si_detection_excepted",
+      "from": "extra.si_detection_excepted",
+      "off": true
     }
   ],
   "contract": "snowstage.vImportVulnerableItem"

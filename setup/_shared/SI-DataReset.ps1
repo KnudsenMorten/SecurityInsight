@@ -99,7 +99,7 @@ function Get-SIDataResetContract {
         LedgerKeptWhy       = 'the identity ledger: stable ids; an object out of scope makes no CI'
         IdentityKeep        = [ordered]@{ 'si.SchemaVersion' = 'the recorded approval of the identity ledger''s schema' }
         # tables in a data schema that hold what a PERSON decided: emptied with the rest, but said when they hold rows
-        PersonEntered       = @('sidata.CiOverride', 'sidata.CiSuspectDecision', 'sidata.CiSuspectDecisionRecord', 'sidata.ContextProposal')
+        PersonEntered       = @('sidata.CiOverride', 'sidata.CiSuspectDecision', 'sidata.CiSuspectDecisionRecord', 'sidata.ContextProposal', 'sidata.CiSoftwareException')
         IdentitySettings    = @('SI_Identity_SkipNeverSyncedDisabledAd', 'SI_Identity_SkipDeletedGroups')
         RunEnded            = @('Succeeded', 'Failed', 'Stopped', 'Cancelled')
         InstallLock         = 'install'

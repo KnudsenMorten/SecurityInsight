@@ -2302,6 +2302,94 @@ no part (unknown, never "no software"). The FINDINGS -- one per device and CVE, 
 arrive through Risk Analysis (the Defender vulnerability and recommendation reports) and become findings on the CI with
 their lifecycle (`sidata.CiFindingState`).
 
+**Where each software copy is** (`Get-SIDefenderSoftwareEvidence.ps1`, the endpoint collection, after the software inventory;
+the derivation in `engine/_shared/SI-SoftwareEvidence.ps1`): Defender's software evidence (advanced hunting
+`DeviceTvmSoftwareEvidenceBeta`: per device x software x version its `DiskPaths`, `RegistryPaths`, `LastSeenTime`) -- EVERY
+path, every drive, the registry too, no cap -- read with the device's own inventory products and versions, one query per
+page of 200 devices (`Read-SIHuntingPages`: each page retried, a cut answer read whole). The table is probed first: missing,
+refused or empty = the evidence is UNKNOWN for the run (said once), never "no evidence"; a page that fails leaves its
+devices unknown. Per path SI derives:
+- **install kind** -- `installed` (an install root: `<drive>:\Program Files`, `Program Files (x86)`, `ProgramData`, `Windows`;
+  a web root: `inetpub\wwwroot`, `wwwroot`, `htdocs`, or `www` / `websites` / `web` / `sites` / `webroot` / `webapps` as a
+  drive's first folder; `/usr`, `/opt`, `/bin`, `/lib`, `/snap`, `/var/www`, `/srv/www`, `/Applications`, `/Library`),
+  `bundled` (a library -- openssl, curl, zlib, sqlite, log4j, jackson, python, .NET, Java, Electron, Chromium, Node.js,
+  libxml2, expat, libpng, libjpeg, libtiff, freetype, pcre, libssh2, nghttp2, libwebp -- in ANOTHER product's folder),
+  `user-profile` (`C:\Users\<user>`, `/home/<user>`, `/Users/<user>`, `/root`), `data-folder` (a share; a data / home /
+  users / shares / profiles folder of a non-system drive; any other path on a drive other than C: that is no install or web
+  root; `/srv`, `/data`, `/mnt`, `/media`), `registry-only` (a copy Defender found only in the registry) or `unknown`
+  (no rule decides -- never guessed). C: is taken as the system drive.
+- **application** -- the product folder of the path (`C:\Program Files\Adobe\Acrobat DC\...` -> "Adobe Acrobat DC"; one
+  level deeper for `WindowsApps` (the package), `Common Files` and the driver store; `/opt/<vendor>/<product>`,
+  `/usr/share/<product>`, the web root's site; a registry path has none), then matched to the device's own Defender
+  software inventory: every word of a product's name in the folder name (the vendor's words count extra) gives that
+  product's name and version (source `inventory`); a tie between products, or a product with several versions on the
+  device, is never guessed (no match / no version); unmatched = the folder name (source `folder`).
+
+ONLY THE NEWEST RUN IS KEPT: `sidata.SoftwareEvidence` holds one row per device x vendor x product x version x path
+(`PathType`, `FullPath`, `Drive`, `InstallKind`, `Application`, `ApplicationVendor`, `ApplicationVersion`,
+`ApplicationSource`, `LastSeen`, and `CollectionTime` = the run that wrote it; indexed for the device and for (vendor,
+product, version); `sidata.vSoftwareEvidence` adds the CI through `sidata.CiLink`), `sidata.SoftwareEvidenceDevice` one row
+per device: `read` (its rows are that run's; none = nothing found), `unknown` (its evidence could not be read that run -- it
+holds NO rows, so an older run's paths are never shown as current) or `writing`. A run REPLACES a device's rows
+(`Write-SISoftwareEvidence`): the first chunk of a page removes the page's devices' rows and sets the state (`writing` for a
+device read, `unknown` otherwise) in one transaction, every chunk adds its rows in one transaction, the last chunk sets
+`read` -- readers take the rows of `read` devices only, so a device is shown whole or not at all, also when a later chunk
+fails. A missing / refused / empty evidence table marks every device of the run `unknown` (`Write-SISoftwareEvidenceUnknown`).
+A device no run has read for more than `SI_ActiveStaleDays` (default 30) before the newest run is removed with its rows.
+`Get-SISoftwareEvidence` reads the evidence of devices or a CI (READ devices only). On the device: part `softwareEvidence` ->
+`si_software_evidence_paths`, `si_software_install_kind`, `si_software_bundled_by` (database only, not posted to the CI
+table; the paths IN FULL, a user name included -- owner 2026-11-17: the path is the evidence an Admin needs to fine-tune a wrong detection, and who sees it follows the department scoping). On every finding of the software
+(Risk Analysis, `RA-SoftwareEvidence.ps1`, joined by device + vendor + product + version): `si_evidence_paths` (every path),
+`si_install_kind`, `si_bundled_by` -- the finding count stays the source's, `si_affected_path` (the report's own first paths)
+is unchanged, and a copy without stored evidence leaves the three empty (unknown). The evidence is read ONE GROUP OF
+100 DEVICES AT A TIME (read, put on that group's findings, let go; each copy's paths joined once and reused by every
+finding of that copy), so the memory it takes does not grow with the number of
+findings; a failed read leaves the findings not yet read empty (unknown), says so once, and drops no row. The three are STORED ONLY: they are on
+the stored finding (`sidata.Finding` DetailJson -- the web pages and an output column an admin switched on read them) and
+never in Risk Analysis' own outputs -- the workbook, the JSON file, Log Analytics, the AI summary, the KPIs and
+`SI_Finding_CL` keep exactly their columns and bytes (`RA-SqlStream.ps1` `$script:RAStreamStoredOnlyCols`: kept out of a
+report's columns, left off when a stored row is read back as the report's row). One field holds at most 50 paths and
+32,000 characters (an Excel cell holds 32,767), then `+N more`; every path stays in `sidata.SoftwareEvidence`.
+
+**A software detection excepted on one server** (Pro; `engine/_shared/SI-SoftwareException.ps1`, the web app's CI page and
+Assets (CIs) > Software detection exceptions): a software tier rule matches by name, so files of a product on a data share (a
+user's WordPress copy on a file server) can tier a server as a CMS. An Admin marks THAT detection a false positive on THAT
+server with a mandatory reason: one row in `sidata.CiSoftwareException` (CI, rule id, vendor, product, reason, who, when;
+undone softly with who, when and why -- the same pattern as the manual CI overrides `sidata.CiOverride`), written through
+Review & commit in one transaction with its `cfg.ChangeLog` row (Scope `ci`, Kind `cisoftwareexception`). Only the web app writes the table;
+the engine role reads it and is denied INSERT, UPDATE and DELETE on it, like the manual CI overrides. Applied in both
+tier computations, before the MIN of the tier sources:
+- the CI build (`Invoke-SICiRules`): the rule the exception names is evaluated on the CI WITHOUT the excepted software in
+  `si_installed_software` -- its other evidence (a name pattern, a tag) still counts; every other rule sees the CI as it is.
+  The CI carries `si_software_exceptions` (each exception and what it did: `removed` the rule's claim / the rule still claims
+  through `other-evidence` / `not-matched`) and the tier explanation ends with "Detection excepted on this server: ...". A CI
+  whose exception was set or undone since the last build is rebuilt (the incremental build's dirty check).
+- the endpoint profiler (`Test-SIKind_hasSoftwareInstalled`): that rule does not look at the excepted software on the CI's
+  Defender devices (`sidata.CiLink`), so `SI_*_Profile_CL.Tier` agrees.
+
+A read of the exceptions that FAILS changes no tier (a database without the table is not a failure: it has none). The CI
+build builds no CI that run -- it stops before it marks itself running, so every CI keeps its last build and the dirty check
+starts from the same point next run -- and says so as a warning. The endpoint profile stops before it writes anything: the
+run publishes no profile rows, every device keeps its last good profile, and the run says why. The next run tries again.
+
+Scope is exactly (CI, rule, software): never another server, never another rule. The findings of the software are untouched
+(never hidden); the CI page marks them "detection excepted on this server", and the finding field `si_detection_excepted`
+(the rule id(s) excepted on the finding's CI for its software, empty otherwise; finding field map) feeds the ServiceNow
+vulnerable-item column `u_si_detection_excepted`, shipped OFF like the other new columns: nothing is read or sent until
+an admin switches it on; switched on, the exceptions in force are read once per output run, and a read that fails stops the
+output with the reason (never an unknown value sent). The suggestion list reads 200 candidate keys a page and shows those the
+CI's own tier claims made ("candidates after the exact check"); the next page continues after the last key read. No exception in force = both computations run
+exactly as before; a read of the exceptions that fails applies none that run and says so (the rule's tier stands).
+The CI page (both editions) shows, next to each software tier detection (rule + the software it matched, from the CI's tier
+claims), its evidence paths with install kind and application from the newest run, and whether each Defender device's
+evidence was read; an Admin with Pro gets the "False positive on this server" form there. Every path the web app shows or
+exports from the evidence (here, the suggestions' sample path, a task's bundled-copy paths) is the FULL path, a user name
+included (owner 2026-11-17: the evidence an Admin needs to fine-tune a wrong detection); who sees it follows the department
+scoping. The exception page lists every
+exception and the SUGGESTIONS to review -- a software tier detection whose every disk path is in a user profile or a data
+folder, or a copy bundled in another product, with no exception in force -- a page at a time, each opening its CI; nothing
+changes until an Admin acts.
+
 **Resources in AWS and GCP** (`Get-SIMulticloudResources.ps1`, in the Azure discover after the Defender for Cloud
 assessment summary): first Defender for Cloud's multicloud connectors (Resource Graph `microsoft.security/securityconnectors`,
 environment AWS / GCP) -- none: the source is not present. Then ONE paged Resource Graph query over the assessments whose
@@ -3068,7 +3156,7 @@ Straight from `RuleEval.ps1` `$script:SIKindRegistry`. These are the **only** ki
 3. **`hasMdeMachineGroupTag`** *(endpoint)* — regex against MDE machine-group string. `machineTagPatterns:` `[regex,...]` (aliased `patterns:`). Field scanned: `MDE_MachineGroup` (single string; can be comma/semicolon-separated when multi-group — regex sees the joined string).
 4. **`egDetectedRoles`** *(endpoint, identity)* — `egSignals:` `[string,...]` (aliased `roles:`). Two match modes: (1) substring against joined `EG_DetectedRoles` (sourced from EG `confidenceHigh`/`confidenceLow` arrays); (2) boolean property against `EG_RawData` (e.g. `egSignals: ['isDomainController']` matches when `EG_RawData.isDomainController: true`).
 5. **`hasEntraExtensionAttributeTag`** *(identity)* — `attribute:` (e.g. `extensionAttribute6`), `value:`, `match:` (`exact` default = case-sensitive full match `-ceq`; anything else = case-insensitive substring `-like '*value*'`). Reads in order: top-level `ENTRA_<attribute>`, then nested `ENTRA_ExtensionAttributes.<attribute>`, `ExtensionAttributes.<attribute>`, `extensionAttributes.<attribute>`.
-6. **`hasSoftwareInstalled`** *(endpoint)* — `tvmSoftwareNames:` `[glob,...]` (PowerShell `-like`; shape `vendor/name` OR `*/name`, e.g. `microsoft/windows server 2019`, `*/sql server*`, `apache/tomcat*`). Requires the `tvmSoftware` bulk index (built once per run by `Build-SIRuleIndexes`); without it the kind silently returns `$false`.
+6. **`hasSoftwareInstalled`** *(endpoint)* — `tvmSoftwareNames:` `[glob,...]` (PowerShell `-like`; shape `vendor/name` OR `*/name`, e.g. `microsoft/windows server 2019`, `*/sql server*`, `apache/tomcat*`). Requires the `tvmSoftware` bulk index (built once per run by `Build-SIRuleIndexes`); without it the kind silently returns `$false`. OPTIONAL (checked only after the name matched, against the device's software evidence): `installKinds:` (`installed` / `bundled` / `user-profile` / `data-folder` / `registry-only`), `pathPatterns:` / `notPathPatterns:` (regex on the full path), `versionRange:` (`'>=6.0 <6.4.3'`). A detection without them answers exactly as before. With them, a copy counts when one of its paths has a listed kind (or `unknown`), matches a pathPattern and no notPathPattern (a copy with disk paths is decided by its disk paths), and its version is in the range. **Fallback -- missing data never drops a tier:** evidence unknown for the device, a copy without any evidence path, an `unknown` kind or a version that cannot be compared = matched by name as before, counted on the Profile log line. The endpoint profiler records each conditioned detection that matched (`si_software_rule_hits`: `-` = evaluated, then the detection's key); the CI rule of such a detection reads it, and a device never evaluated matches by name as before. **No shipped rule uses these conditions** (owner 2026-11-16: no generic path rules -- a path like `D:\home\users\` is right on one server and wrong on another): every shipped rule matches by name, and a wrong detection on one server is fixed by a **per-server exception** (see "A software detection excepted on one server"). The capability stays for a customer's own rule. Per-server exceptions in force: the excepted software is not looked at for that rule on that CI's Defender devices.
 7. **`groupMembership`** *(identity)* — `group:` (single name; no list — repeat under `any:` for OR-of-groups). Exact CI match against Entra direct+transitive memberships from `ENTRA_Groups`. Short-circuits to `false` for non-user assets (SP/MI). Requires the `GroupMembership` bulk index.
 8. **`hasAzureTagDirectOrParent`** *(azure; also endpoint when EndpointAzureCorrelation has linked the row)* — `tag:` (KEY, exact CI), `value:` (string/list; omit = presence-only), `match:` (default `equal`). Walks parent chain: resource → RG → subscription → MG; matches if any level carries the tag. Requires the `parentChain` bulk index; looks up id from `AZ_ResourceId` (or `PrimaryEntityId` fallback).
 9. **`egKustoQuery`** *(endpoint, identity, azure — escape hatch)* — `kql:` (raw KQL run against the EG endpoint; must return a column of asset IDs: NodeId/DeviceId/AccountObjectId). The engine submits the KQL once at run start and caches the resulting node IDs into `$script:SIRuleIndexes.kustoSets[<RuleId>]`; per-asset evaluation does NOT submit KQL — it's a hashtable lookup against `PrimaryEntityId`/`EG_NodeId`/`MDE_DeviceId`/`AccountObjectId`. Cost paid once per rule per run.
@@ -3981,6 +4069,39 @@ before. The bucketing gate is unchanged: a report is bucketed when its configure
     slice key, so a hash cut would lose the target's CI (proved on a fixture in `SIv3-RaBucketSplit`). The safe trim is the
     existing needed-key cut (`LookupNeededKeys`, used above the planning budget), but it asks each slice's key query first,
     which runs the same graph walk, so it would double the heavy call for a slice that already times out. It is left as is.
+  - **#1275 stage 1 (owner 2026-11-17; "no data loss", "it can be millions of rows").**
+    - *The key query's 504 counts.* A slice whose lookup is cut to its needed keys first asks its KEY query
+      (`Invoke-RALookupKeyDiscovery`), one attempt, before the hunting call's own retry loop. Its 504 used to pass the
+      call's 504 count by (reset to 0 at the call's start, handed back only from the retry loop), so the slice never
+      reached the halving and was asked again until the recovery budget ended it unread. `Invoke-RAKeyQueryCounted` now
+      counts it (the call's count + 1) before the error goes on: a key query answered 504 twice splits the slice exactly
+      as two 504s on its rows do.
+    - *Slices sized to the back end's documented time limit.* The time need of a slice is measured against HALF the
+      documented limit per request of the back end that answers it (`RA-BucketStore.ps1` `$script:SIRaBackendLimits`:
+      advanced hunting 180 s -- "a request times out after 3 minutes" --, Log Analytics 600 s -- SI asks `Prefer:
+      wait=600` --, the Sentinel data lake 240 s interactive), not half the 900 s client ceiling (which only ends a request
+      nobody answers). The back end is known per slice (`$script:_RALastQueryBackend`, set where the hunting call returns;
+      the measure keeps the tightest when a report was answered by more than one) and, before a report's first slice,
+      from what the run already knows (`Get-RAQueryBackend`: no request is made; unknown = advanced hunting, the
+      tightest). The rows: the 30,000-row planning target and the cut check (an answer AT the back end's row limit --
+      100,000 advanced hunting, 500,000 Log Analytics / lake -- is taken as cut) read the same table; the target is never
+      above any cut limit and is not raised here. Only slice counts change (more for a slow advanced-hunting report, fewer
+      for a slow Log Analytics one); the rows of the slices are the same at any count.
+      **Only the time slicing divides is sized** (measured 2026-11-17 at the large installs: reports of ~170 rows ran in
+      117-122 slices of 110-227 s each -- their slice time is a fixed cost per slice, more slices only repeat it). A
+      slice at M slices takes about F + W / M, F the fixed part (`FixedSeconds`: where the line of the run's slice times against their rows meets 0 rows -- told only when the slices' rows spread widely -- the smallest at most half the largest AND at least 1,000 rows apart (second review: a flat line over a few rows cannot tell a fixed scan from scan work that divides); otherwise today's rule, so the few-row identity reports keep their count for now), W =
+      (longest - F) x count: need = W / (half the limit - F), the room being what is left of the whole limit when F is
+      over half of it, and no time need at all when F is over the whole limit (no count helps; the rows decide)
+      (`Get-SIRaSliceTimeNeed`). "Far below every limit" (`Test-RABucketRunFarBelow`) halves a report whose longest slice,
+      with its divisible part doubled, still fits half the limit -- or whose divisible part is at most a quarter of its
+      slice (fewer slices do not make it longer). A HISTORY row has no fixed part stored (cfg.RaBucketHistory has no
+      column for it), so the history-based sizing (start plan, shrink, "ran complete at fewer") keeps today's rule, half
+      the 900 s client ceiling -- never more slices from a row that cannot tell what slicing removes. The new rule acts
+      on the run's own measure: the split slices' need and the halving after a run.
+    - *The count taken from the slices is said.* (Review F1: the count just after the read is ALWAYS asked -- skipping it after
+      a 504 on the count before the read would let a report whose slices answered short be stored Complete.) Only when BOTH
+      counts failed, no slice was lost and the lake did not answer do the slices' rows stand for the count, exactly as before
+      stage 1; the reason now says "count taken from the slices".
 - **The log says what the state keeps** (#833). Live 2026-10-20, the log said "16 bucket(s) kept for the next run" while
   the state and the history held 8. The early save (#713) writes a count as soon as a slice has succeeded at it, so a run
   stopped part-way does not lose it, and its line said "for the next run". The end of the same report then halved the count
@@ -7171,7 +7292,13 @@ holds it ONCE: nothing of a part outlives its post. Summary and Detailed run thr
   The rows posted are counted against the rows given, and a shortfall fails the run. The key columns are checked on the
   whole result before the first part goes out (as before) and on every prepared part; a key column the preparation left
   empty on every row fails the run after the posts.
-- **The JSON file** is written row by row, never as one string.
+- **The JSON file** is written row by row, never as one string. #1275 (5) (owner 2026-11-17, "no data loss"): with the
+  database it is written AFTER the run's result is completed there (`Complete-RAStream`) -- the collection no longer waits
+  for a file of every row -- and before the upload step. Its content is exactly what it was: the view's rows in the final
+  order, with the reports held back AT THE POINT WHERE IT USED TO BE WRITTEN left out (the held set is taken there,
+  `$script:RAJsonHeld`, and the pager reads with it: `New-RARowPager -Held`). A report the end guards judge NOT COMPLETE
+  is in the file, as it always was (the guards set a verdict; they never take rows out of the view). Byte-identical proof
+  on the same collection: `SIv3-RaStage1`. Without the database the file is written where it was.
 - **The 'Risk factors' sheet**: adding a sheet to the workbook reads the workbook's existing shared-string table as a
   stream (once to count it, once to copy it), never whole.
 - **The storage upload** goes from the file one 4 MB block at a time, and the backup of the previous workbook is copied
@@ -7573,6 +7700,24 @@ A vulnerability is closed as fixed only when it has been missing for several com
 
 **The work done once per finding runs as compiled code.** Each page pass handles every finding of its CIs: it copies the row into the CI key's space, turns it into the finding the plan compares (its key, type, title, report, component, sub-CI, OS family, patch cycle, affected software), keys it on the CI's current id, and sorts the page's findings into those to plan and those set aside (retired, not seen, frozen, another page's). On a large install that is close to a million findings, twice per run, and most of the time went into the scripting language's own cost per step, not into the database. These steps now run in a small helper written in C# and compiled once when the run starts (`engine/asset-cmdb/_shared/SI-VulnFast.ps1`; plain .NET, nothing installed). Every decision about a value stays where it was: the finding key, the type, the fields taken from a row's multi-value columns, the affected software and the CI key are still worked out by the same functions as before, once for each distinct value (the run already remembered them per page); the helper only reads the fields, builds the same entries in the same order and filters the same lists. Where the helper meets a shape it does not handle exactly (a list where one value is expected, an empty slot in a list, a set of another kind), that one call runs the previous code; where the helper cannot be built at all, the whole run does. Nothing it produces differs: each function was run old against new on the same varied input with every value, type, key order and dictionary compared, and the whole paged block old against new on real SQL, run after run, with every record, event and item change identical (`SIv3-VulnFastSame`, `SIv3-VulnFastPagesSame`).
 
+**The compare in the database does each record's work once (2026-11-16).** Measured statement by statement (Query Store,
+the scale bench `tests/fixtures/vuln-sqlphases/bench.ps1`), the compare's time was spread over its per-row work, not one
+read: telling a finding's field values apart counted the distinct values of seven fields (seven sorts of the range's rows),
+the check "can this record be rebuilt exactly" was worked out twice per record with its look-ups in the run's exclusions each
+time, and the reason a finding stays on the plan path looked its record up twice. Every reader of a distinct count asks only
+"none, one, or several", so it is now told by the lowest and the highest value of the group in one pass (the same binary
+value the count counted); the rebuild check is worked out once and stored, and "its CI is kept on the plan path" applied to
+it after; the reason looks the record up once (none: new; closed or counted absent: reopen; else changed). Nothing else
+changed: the same records refreshed set-based, the same keys and rows left to the plan, the same reasons, every record,
+event and item change identical (proved against the release before on real SQL: `SIv3-VulnSqlPhasesSame`). Measured (306,000
+findings, SQL memory held to 1 GB): the compare 132 s -> 94 s (the grouping 13.9 -> 4.4 s, the rebuild check 17.4 -> 9.9 s,
+the reason 28.1 -> 15.0 s). **The row value fill is unchanged on purpose:** its time is reading each finding's document once
+from its own pages (out of the row) and writing the row values into the row and their index -- per row about 31 logical
+reads, ~10 KB of document read and ~2.4 KB of log -- and checking each document once instead of twice measured no faster.
+What would remove that read is outside this step: parsing the row values where Risk Analysis writes the row, or the fill
+writing the data sync's typed columns too so the data sync does not read the documents a second time (see #1273).
+The seen write is the records' own update and its two indexes (no change).
+
 ### 6. Pro web app
 
 The Pro web app runs in the customer's own container environment and signs users in with Entra ID. Who may do what
@@ -7836,6 +7981,121 @@ findings closed, risk removed = the weighted risk of its open findings, best tie
 (the 100 most important assets -- tier first, then the most open weighted risk -- and their fixes). `Collection.RemediationAt`
 says when; until then the pages say the remediations are being prepared. Reporting only: buttons and agents come later in
 the same place.
+
+**Remediation tasks per asset** (`engine/pro-data/_shared/SI-DataRemediationTask.ps1`, additive -- the Remediations above are
+unchanged): ONE TASK = ONE THING TO DO ON ONE ASSET, the findings it resolves are information on it. Built by the data sync for
+the newest complete collection, after the findings per CI and their lifecycle (`sidata.CiFindingState`), over the newest
+collection built before it (the base); the task rows of older collections are removed.
+- *The task key* is the finding field map's grouping rule (`data-model/finding-fields.locked.json`, `si_security_grouping_parent`
+  and its kind -- the same rule the ServiceNow grouping column uses), worked out once per distinct finding signature (the
+  fields the rule reads): a CVE on the OS = its update ("(Last updated at ...)" cut), else "Security update KB<id>"; another
+  CVE = "Update <product> <version> (<vendor>)" -- a finding naming several versions is split, one task per version (several
+  products of one version: one per product; several of both cannot be paired and stay one task with the rule's own text); a
+  configuration, Azure recommendation, attack path or identity rule = its title; an identity object = "Identity risk review:
+  <category>"; no known fix = no task. A name equal to the finding's asset or CMDB name is never a task. An EXEMPTED finding never
+  opens or keeps open a task (it stays visible on the asset).
+- *A library bundled in another product*: the software evidence (`Get-SISoftwareEvidence`, the CI's Defender devices) of the
+  product and version on the CI; every copy whose install kind is bundled gives ONE TASK PER APPLICATION that bundles it --
+  "Update <application> (bundles <product> <version>)", with every path of that copy -- the fix comes from that product's
+  vendor. The product's own task stays only when a copy is not bundled (or only the registry knows it); no evidence = the
+  product's own task -- except where the base already has that copy as a bundled task: then no plain task is guessed (where the
+  copy is is not known this run; the bundled task is kept). The task's identity is the application's NAME, never its version (an
+  application updated from 1.2 to 1.3 that still bundles the library keeps the same task; the name shows the version), and a folder
+  named after its version (jdk-17.0.1 -> jdk-17.0.2) keeps the same task (the key leaves versions out of the application name). A page
+  of the evidence read that fails does not stop the build: the CIs of that page are unknown this run and every task of theirs
+  is kept exactly as it was; the other CIs are built.
+- *Paths in full*: evidence paths are kept in full, user names included (owner 2026-11-17) -- on a task, the pages, the
+  exports, the hand-off view and the outputs; who sees them follows the department scoping.
+- *The lifecycle, run to run (absence is not remediation)*: a task worked out from this collection is open (reopened when the
+  base had it closed). A task of the base that is not worked out now is CLOSED as FIXED only on positive evidence: every one of
+  its findings is gone and the finding lifecycle closed it as remediated (complete runs only); or -- a bundled task -- the finding
+  is still there but the evidence of that copy on the CI was read this run WITH its paths on disk and none of the task's paths
+  holds that library version any more. A retired CI -> asset retired (never fixed); every finding still there exempted ->
+  exempted (the exemption undone = the task reopens); a report that asks something else now -> report changed; a finding still
+  there (in a complete report) whose task no longer comes out -- its version moved or went blank, the grouping rule now names
+  another task or none, the name is now the asset's own, a bundled copy's paths still holding the library under another
+  application's name -> task changed (never fixed). Anything else -- absent but not closed yet, seen only in an incomplete
+  report or carried, a CI not seen or frozen, a bundled copy whose evidence was not read or was read with a registry row only,
+  a CI whose evidence page failed -- keeps the task exactly as it was. Closed tasks are carried for
+  `SI_Pro_FindingStateRetentionDays` (365).
+- *Tables*: `sidata.RemediationTask` (per collection x CI x task: key, name, kind, product / version / application and its
+  paths, findings, CVEs, highest severity and risk, tier, the CI's owner / department / CMDB id, the CI's own department id (a task belongs to ONE CI: scoped like the CI's views), the security
+  domain when every finding has the same one, first / last seen, state, closed at, closed because, reopened, whether it was
+  worked out from this collection, a row hash and when its values last changed), `sidata.RemediationTaskFinding` (task <->
+  finding, many-to-many; the finding keeps its own key), the build's working rows `RemediationTaskSig` / `RemediationTaskSplit`,
+  `Collection.RemediationTasksAt`; `SentInScope` on a task and a link (the scope decision when it was last sent).
+- *One build at a time, written in ranges*: the whole build runs under an exclusive database lock held on a connection of its
+  own; a second data sync that finds it held skips the tasks with one line and changes nothing, and a connection that cannot hold
+  the lock builds nothing. The build proves the lock is still held before it writes and before every range (a lost lock stops
+  it; the collection stays unmarked). A build clears only its own working rows (rows a build left when it ended abnormally are
+  removed only while the lock is held, and only once they are a day old). The tasks and links are
+  replaced a range of CIs at a time -- each range one short transaction, sized by measuring (about two seconds of work) -- so
+  locks stay at row / page level and the log stays bounded; every CI shows either its old set or its new one, and the collection
+  is marked built only after the last range (a write that stops part-way is written again on the next run).
+- *Size and time (measured 2026-11-17 on the test runner's SQL Server, 4 CPUs)*: the build says where its time goes in its
+  result and its log line (`Phases`: signatures, evidence, build, retention in seconds; inside the build in ms: findings,
+  owners+units, tasks+links, base-states, out+hash, write). A first build: 150,000 findings 159 s, 300,000 366 s, 600,000 976 s;
+  tempdb at most 1.0 / 2.0 / 4.0 GB (about 9.5 GB at 1,400,000 -- Azure SQL S3 allows 32 GB). The base's tasks are found by an
+  index by CI (a build with a base once compared every finding with every base task: 1,278 s instead of 9 at 150,000). The work
+  out of the tasks (before the ranged write) still runs over the whole collection and grows faster than the findings (tasks +
+  links 37 s at 300,000, 236 s at 600,000): until it also runs a range of CIs at a time, the tasks stay OFF at the very large
+  installs (decision 2026-11-17).
+- *Web app*: Remediations > Tasks per asset (`/Remediations/Tasks`; an asset opens its own tasks, a task its findings) and Task
+  findings (`/Remediations/TaskFindings`, opened from a task, with the paths of a bundled copy); CSV / Excel exports; department-limited readers see
+  a task only when they may see at least one of its findings, and then only those findings: its counts, highest severity,
+  risk, tier and security domain are worked out over them (a finding can belong to another department than its CI, through a
+  recommendation override). A finding carried with a task kept as it was is not in this collection, so its department is not
+  known: a limited reader does not see it. A person of a department without a role reaches the department pages only, as on
+  every collection view, and the menu does not offer them Tasks per asset. A bundled copy's paths -- like every
+  evidence path in the web app (the CI page's software evidence, the exception suggestions' sample path) -- are kept IN
+  FULL, a person's folder name included (owner 2026-11-17: an Admin needs the whole path as evidence to correct a wrong
+  conclusion); they are shown, filtered, searched, sorted and exported as stored. Who sees them follows the department
+  scoping above.
+  The task pages show the NEWEST collection MARKED built (`RemediationTasksAt`) at or before the one picked -- never a
+  collection whose tasks are still being written range by range (until the picked one is marked, the one before it; none =
+  no rows). A department-limited reader sees the task's CI owner and CI department, as the findings views show a CI's
+  owner and department on every finding of that CI the person may see (CI context, not finding data).
+- *On by default (owner 2026-11-17)*: the two task outputs are switched on with the ServiceNow data-out connector, and once by the
+  update at an install that already sends to ServiceNow (read back; an Admin's later off stays). A task output whose Import Set
+  table is not set is not set up: nothing is sent to it, never a failure. The vulnerable items' new columns stay off in 3.1.30
+  (switched on per install through the updater); a column shipped ON BY DEFAULT ("soft") that the Import Set table does not
+  have is left out of the send with one warning per run, never a hold of the push.
+- *ServiceNow*: two new outputs, OFF until an admin switches them on (`SI_DataOut_Outputs`): `servicenow-remediation-task` (one
+  raw row per task, key `u_si_task_id`; table `SI_DataOut_ServiceNowTaskTable`) and `servicenow-remediation-task-finding` (one
+  row per task and finding, `u_source_record_id` = the vulnerable item's own record id; table
+  `SI_DataOut_ServiceNowTaskFindingTable`), each through its output map. They get the VULNERABLE-ITEM OUTPUT'S SCOPE (`vuln-servicenow`,
+  and the CI output's while it is on): a task is sent only when at least one of its findings is one that output sends, a link only
+  for such a finding -- ServiceNow never gets a task for findings it does not get. A task that has CLOSED since keeps the scope
+  decision it was last sent with (stored on the task and its links): one that was in scope when last sent is sent again, as
+  closed -- never just gone because its findings can no longer be read; an OPEN task once sent that leaves the scope is sent as
+  CLOSED "out of scope" (as a vulnerable item that leaves the scope). A task owned by an asset no CI holds is never sent (the
+  vulnerable-item output sends no finding without a CI). They are a plain row-hash push (a row when its
+  values change), NOT the `u_action` contract of the CI and vulnerable-item outputs. The SQL hand-off views `snowstage.vImportRemediationTask`
+  / `vImportRemediationTaskFinding` carry the same columns for the newest built collection, in the same (Pro) database as
+  `snowstage.vImportVulnerableItem`, limited the same way (a task / link of a vulnerable item the close-loop keeps, not one closed
+  as out of scope; a task once sent stays, an open one whose every vulnerable item was closed as out of scope shown CLOSED "out of
+  scope") -- and they return rows ONLY while their output is switched on: the views read SI_DataOut_Outputs from the settings
+  table itself (no settings table = no rows). The vulnerable-item output is
+  unchanged.
+- *ServiceNow task outputs, push = hand-off (review 3.1.30, data quality first)*. The two task outputs now go out as the
+  vulnerable items do, on both routes, with the same columns (append only: `u_action`, `u_si_batch_id`, `u_si_cleared` on both,
+  `u_changed_at` on the link push, `u_source_run` and the envelope on both views):
+  - **one date format**: the push sends every date through the vulnerable items' step (`ConvertTo-SIDataOutWireValue`: UTC
+    `yyyy-MM-dd HH:mm:ss`; the stored times are marked UTC first, so the host's zone never moves them); the views give
+    `datetime2(0)`, cut to the second the same way (never rounded) -- the vulnerable-item view's type.
+  - **the clear marker**: `u_si_cleared` names the clearable columns that are empty (`$script:SIDataOutClearable`: a task's CMDB
+    CI, paths, severity, risk, tier, owner, department, close reason, close time; a link's title, severity, version). A REOPENED
+    task therefore tells ServiceNow to clear `u_close_reason` and `u_closed_at` -- the Import Set API cannot tell an empty value
+    from one not sent. `u_action` on the push: new / update / close / reopen / out_of_scope (from the row last sent); the views
+    have no delivery state and no batch: `u_action` is the task's state (out_of_scope / close / update), `u_si_batch_id` NULL.
+  - **one row hash, one source run**: the push reads both from the SAME SQL the views state (`Get-SIDataOutTaskHashSql`,
+    `Get-SIDataOutTaskSourceRunSql`): a task's hash = SHA-256 of the build's content hash + the asset name (the last-seen time is
+    not content); closed "out of scope" = SHA-256 of that + 0x01 on both routes; a link's = the view's CONCAT hash.
+    `u_source_run` = the collection the rows were built from, `si-<CollectionId>-<yyyyMMddHHmmss>` (UTC), at most 28
+    characters -- one format on both routes (it was the push's run GUID, which the view could never give). Both are run values:
+    never part of what the push compares or stores.
+  - Not the same, on purpose: the link view keeps `u_changed_at` before `u_source_run` (append only); the push's map has them the
+    other way round. Import sets map by name.
 
 **The key figures' windows are settings (#859, owner 2026-10-21: "do we have static values in the code ?").** Every window a
 figure counts over is a setting of the install with today's value as its default -- `SI_KeyFigures_RecentDays` (30: opened /
@@ -8600,6 +8860,28 @@ with the SuperAdmin's name and a reason in the change history, and applies at th
 Someone in more groups than a token can list gets only their own mappings, unless the web app's identity may read group
 membership from Microsoft Graph (the setting `Access:GraphLookup`, with the application permissions GroupMember.Read.All
 and User.ReadBasic.All granted to the web app's identity by an administrator; setup does not grant them).
+
+**Finding people and groups by name -- from SecurityInsight's own data.** Without `Access:GraphLookup` the people picker
+(Access, Get started, a department's people) searches the names SecurityInsight's **engine** saves, never Microsoft Graph:
+the web app is reachable from the internet, so its identity holds no directory-read permission and makes no directory
+call; it reads the names from the Pro database with its ordinary read right.
+- **The names.** One narrow row per Entra user and group: object id, name, sign-in name, mail, whether the account is
+  enabled, guest, and for a group whether it is a security / mail-enabled group and its group types -- nothing else. The
+  identity collection records each page of users as it reads them (no extra read; the user records themselves are not
+  changed) and then makes one light read of the groups (no members), page by page, for at most 15 minutes. Both use
+  permissions the engine already has (User.Read.All, Group.Read.All).
+- **Unknown is not gone.** A complete read replaces that kind's names, so someone removed from Entra leaves the list; a
+  read that failed or stopped part-way removes nothing, and the picker says that the last read did not complete.
+- **The picker.** It shows the names whose name, sign-in name or mail starts with what was typed -- enabled accounts first,
+  at most ten -- and a guest by their home address too. Under the box it says *Names from SecurityInsight's last run
+  (time)*. Pasting an object id always works.
+- **Search the tenant.** Someone newer than the last run is not in the list yet. An Admin can then ask SecurityInsight to
+  search the tenant: the text and a reason go into the audit trail and become one request (no limit on how many, owner 2026-11-17; every request audited). The engine's small background job (every 15 minutes, and between its batches while it runs) looks the name up
+  in Microsoft Entra -- names starting with the text, at most 20 people and 20 groups, reads only -- and saves what it
+  finds; the picker then finds them. The web app starts no job for it.
+- **What needs the directory lookup.** Who holds a role on the sign-in application (shown on Access and Get started) and
+  the group membership of someone in more groups than a token lists still need `Access:GraphLookup`; without it Access
+  shows SecurityInsight's own table and Get started the people added there.
 
 **The first SuperAdmin** is whoever holds the SuperAdmin app role. Setup assigns it to the person who runs it, and the
 administrators named in the install get Admin. From there, a SuperAdmin assigns everyone else. A SuperAdmin who holds
@@ -9983,6 +10265,43 @@ Support app may do.
   updater image carries with `SI-Settings.ps1` and the catalog), `cfg.ChangeLog` ChangedBy `the update (control-plane
   value)` + the reason (`SI_UPDATER_CONTROLPLANE_REASON`, else a standard one), each read back. Equal = nothing written;
   a refusal is a warning.
+- **`SI_UPDATER_OUTPUTS` -- what an output sends, switched per install** (owner 2026-11-16: the new ServiceNow columns and
+  outputs are switched on per install through the updater). The exact value Invardia sets on the updater job (compact JSON,
+  one object; every part optional):
+  ```
+  SI_UPDATER_OUTPUTS={"servicenow-vulnerable-item":{"on":["si_security_domain","si_category"],"off":[]},"<another output>":{"output":"on"}}
+  ```
+  - `"<output id>"`: an output of `config/data-out.locked.json` that runs in Pro and is not `fixed`.
+  - `"on"` / `"off"`: columns, each named by its target (`u_si_category`) or by the field it reads (`si_category`,
+    `extra.si_category`; any case). ONLY the columns the release's output map ships switched off (`"off": true` in
+    `data-model/outputs/<output>.locked.json`) may be switched this way -- the allow-list is derived from the map, never free
+    text; every other column is always sent and is changed on Connectors > Fields sent.
+  - `"output"`: `"on"` | `"off"` (or `true` | `false`) -- the output itself (an output a release ships switched off).
+  - **A column** is written through the web app's OWN statement (`engine/pro-settings/SI-OutputColumnWrite.ps1` =
+    `ItemOverrideRepository.WriteSql`, the same parameters; a test holds the texts equal): ON = a `cfg.ItemOverride` row
+    (kind `datamodel`, key `outputs/<output>:<target>`, state `override`, the body `OutputMapRules.Body` of the shipped column
+    -- `target`, `from`, `op` -- without `off`, the base version and hash of the live template), so the result is the row an
+    Admin's change writes and the run's data model sends the column (the push row, the hand-off view's column); OFF = the row
+    removed (back to the shipped column, not sent). A column that is already sent -- an Admin's own change of it included --
+    is never overwritten; a column already not sent is left alone. **OFF removes ONLY a row the update itself wrote**
+    (`UpdatedBy` = `the update (control-plane value)`): a column an Admin switched on in the web app is KEPT (one line says so).
+  - **Once per value**: the applied value's SHA-256 (of its normalised JSON) is kept in `cfg.InstallState
+    'ControlPlaneOutputs'`; the same value on a later update writes NOTHING -- so a column an Admin switches off in the web
+    app is not switched back on by the next update. A new value applies once. The hash is recorded only when every part
+    was done (a failed part, or a change that waited for a reason, is tried again on the next update).
+  - **Who asked**: EVERY change of what is sent -- a column on or off, an output on or off -- needs
+    `SI_UPDATER_CONTROLPLANE_REASON`, which Invardia sets as `'<person>: <why>'`. Without a usable one those changes are
+    refused in ONE warning line (the rest still applies). The rule (`Test-SIControlPlaneReason`): after trimming, at least two
+    words and 8 letters or digits, and not a generic word (`update`, `the update`, `n/a`, `none`, `test`, `tbd`, `fix`, `ok`,
+    `-` ...) nor the standard text. The reason is recorded in `cfg.ChangeLog` with each change (ChangedBy `the update
+    (control-plane value)`). What is in force already needs no reason (nothing is written).
+  - **An output** is written through `Set-SIProSetting` on `SI_DataOut_Outputs`, computed as the web app's output switch
+    computes it (every other output keeps what it does now; exactly the defaults again = the row reset).
+  - Each change: its `cfg.ChangeLog` row (ChangedBy `the update (control-plane value)`, the reason), read back, one line.
+    Equal = nothing written. An unknown output, an unknown column, a column always sent, a `fixed` output, a column named
+    both on and off, an unknown part and JSON that does not parse are REFUSED, each in one warning line; the rest still
+    applies; never a failed update. Runs after `SI_UPDATER_SETTINGS`. The updater image carries the writer, the output maps
+    and the data-out catalog -- not the rest of the data model.
 #### Support-app cut-overs -- the shared pattern
 
 `setup/_shared/SI-SupportCutover.ps1`, used by `Set-SISecurityBaseline.ps1` and `Move-SIEngineToLeastPrivilege.ps1` (the
@@ -11312,6 +11631,70 @@ by the parity test.
 - **One rule for every reader:** act only on rows whose batch is `complete` -- `snowstage.vImportBatch` in SecurityInsight's
   own database lists both (`u_si_batch_id`, `u_output`, `u_state`, the counts).
 
+### The finding field mapper: a new ServiceNow column is configuration, not code
+
+The generic fields a finding carries to an output -- its classification (security domain, category, subcategory, report),
+its risk (score, rating, tier), its fix (KB, affected vendor and product) and the remediation it belongs to (the grouping
+parent, its name and its kind) -- are worked out by ONE mapper from ONE template, and an output column reads them by name.
+Adding the next field is a mapping item and an output column; no table column, no view text, no code.
+
+- **The template** (`data-model/finding-fields.locked.json`, kind `finding-field-map`) uses the provider mapping format,
+  keyed by FINDING TYPE instead of record type: each item is `{ field, recordTypes: [finding types or "*"], when?, label?,
+  sources: [...], normalize: [...] }`. For one field the items are tried in order and the first that yields a value wins;
+  within an item the first source with a value wins. A source is a path into the finding (an SI field), a template
+  `$template:Update {si_affected_product} {si_affected_version} ({si_affected_vendor})` (every placeholder must have a value,
+  a list placeholder is its distinct values sorted and joined), `$label:<field>` (the label of the item that gave an earlier
+  field its value) or `$value:<field>`. `when` is a condition (the condition engine of the rules). The normalisation is the
+  provider mapper's closed operation set plus `strip:<pattern>`, `prefix:`, `suffix:` and `sorted_join:<separator>`.
+  **Empty stays empty** (no item with a value = the field is left out, never a guessed value), and **a value equal to the
+  asset's name** (`si_asset_name`, `si_cmdb_name`) is never taken -- the next source is tried.
+- **The remediation key** (`si_security_grouping_parent` / `_name` / `_kind`): a CVE on the operating system = the update
+  name with its "(Last updated at ...)" suffix cut, else "Security update KB<id>" (kind `security-update`); any other CVE =
+  "Update <product> <version> (<vendor>)" -- several versions in one row are the sorted joined list (kind
+  `software-upgrade`); a configuration, Azure, attack-path or identity-rule finding = its title (`configuration`,
+  `cloud-recommendation`, `attack-path`, `identity-rule`); an identity finding without a rule title = "Identity risk review:
+  <category>" (`identity-review`). No known fix = empty. `_name` is the parent's value; `_kind` is the label of the rule
+  that gave it.
+- **Customer changes**: per item, like every data-model template -- Pro `cfg.ItemOverride` (kind `datamodel`, key
+  `finding-fields:<field>|<finding types>|`, a repeat `#<n>`), Community `data-model/finding-fields.custom.json`.
+- **THE CARRIER**: a finding's values are ONE object. An output column reads one with `"from": "extra.<field>"`; the output
+  mapper works the object out once per finding, only the fields its columns read, and only when the map has such a
+  column (`engine/data-model/SI-FindingFieldMapper.ps1`, `SI-OutputMapper.ps1`). On the SQL hand-off the object is ONE JSON
+  column, `vuln.VulnerabilityItem.Extra` (added in place, nullable).
+- **Shipped switched OFF**: the 13 new columns of the vulnerable-item output (`u_si_security_domain`, `u_si_category`,
+  `u_si_subcategory`, `u_si_report`, `u_si_risk_score`, `u_si_risk_rating`, `u_si_tier`, `u_si_fix_update_kb`,
+  `u_si_affected_vendor`, `u_si_affected_product`, `u_si_security_grouping_parent`, `u_si_security_grouping_name`,
+  `u_si_security_grouping_kind`) carry `"off": true` in `data-model/outputs/servicenow-vulnerable-item.locked.json`. The
+  data-model loader leaves an off column out of the map in force, so every reader -- the push, its row hash, the hand-off
+  view, the checks -- sees exactly the columns sent before: **no ServiceNow install changes until its admin switches a
+  column on** by overriding it (Pro: saving the column in the column builder; Community: the column in
+  `outputs/servicenow-vulnerable-item.custom.json` without `off`). A switched-on column is part of the row hash, so the
+  grouping parent moves the hash (and ServiceNow's delta) only while its column is on.
+- **The push** (the data-out connector) was already built from the output map: a switched-on column appears in its rows
+  with no other change. **The SQL hand-off view** `snowstage.vImportVulnerableItem` keeps today's text EXACTLY as the
+  schema file states it (read from the file, never retyped) and gets, after its last column, one column per switched-on
+  `extra.<field>` column of the same map, read WHOLE: `(SELECT x.val FROM OPENJSON(v.Extra) WITH (val nvarchar(max)
+  '$.<field>') AS x) AS <column name>` (`engine/asset-cmdb/_shared/SI-VulnItemExtra.ps1`). Never `JSON_VALUE` (review 3.1.30):
+  it returns `nvarchar(4000)` and, in lax mode, NULL for a longer value -- a long multi-value field went to ServiceNow EMPTY on
+  the SQL route while the push sent it whole. A view stated with `JSON_VALUE` does not match (its definition is read) and the
+  updater re-states it once. **The view is re-stated by the UPDATER, never by the engine** (a view
+  definition is a schema change, and the engine's database identity holds no schema right): the updater reads the output
+  map in force (the release's map with the install's data-model templates and an Admin's column switches, merged exactly as
+  the engine's settings layer merges them) and re-states the view only when its columns differ -- after the control-plane
+  values, in an apply-settings run and after a roll. The vulnerability close-loop's SQL target runs the engine's step after
+  its records are written, and only on a run whose results were COMPLETE and that did not HALT (otherwise it says so and
+  writes nothing): nothing switched on = one metadata read and nothing else; switched on and the view carries the column =
+  every OPEN record of the source gets its carrier from its finding (`sidata.CiFinding`: the same document and CI values
+  the push reads) and a record whose carrier changed gets `UpdatedAt` = now; switched on but the update has not re-stated
+  the view yet = no record is written that run (said), so `UpdatedAt` never moves for a column ServiceNow cannot see yet;
+  switched off again = the next update puts today's view back. A record whose finding is not in that database keeps what it
+  had. `Get-SIHandoffColumnContract -Map` gives the view's columns with the switched-on ones. The updater re-states the view
+  in the Pro database only (it holds no right on another database): a SQL vulnerability connector that writes to ANOTHER
+  database gets no switched-on column -- the engine's step refuses with one warning line naming the columns (point the
+  connector at the Pro database, or switch the columns off) and changes no record; nothing switched on is unaffected.
+- **Not yet**: an emptied value of a switched-on column is sent empty but is not listed in `u_si_cleared` (the clear marker
+  lists stay the push's and the database route's equal lists of today's columns).
+
 ### The top lists without the AI summary, a fix's findings, and SI's own SQL target always on (#863, #864, #865)
 - **The Top 50 lists never depend on the AI summary (#863).** Risk Analysis builds the Top 50 risky assets and Top 50
   critical findings rollup on EVERY run with rows (`engine/risk-analysis/Invoke-RiskAnalysis.ps1`, `$script:_RATopListsOnly`
@@ -11348,10 +11731,21 @@ by the parity test.
   the patch cycle's catch-up fixes equal in months and findings by their id. Sums are exact for whole numbers and binary
   fractions (every shipped score); other decimals may differ in the last binary digit (the order of adding). **Declined**
   (one plain line, nothing used, the row loop runs as before): a row with an asset LIST (ImpactedAssetsList & co,
-  ImpactedAssetIds) or a list / object where one value is read, a report whose column is a read column in another case,
-  a Protection Score counted in the run, a row count other than the run's, any error. A Summary run (few rows) and a run
-  in memory keep the row loop. The pass says one line with its time ("Top 50 lists and key figures: worked out in the
-  database in N s (...)") and its phase row.
+  ImpactedAssetIds) or a list / object where one value is read, a Protection Score counted in the run, a row count other
+  than the run's, any error. A Summary run (few rows) and a run in memory keep the row loop. The pass says one line with
+  its time ("Top 50 lists and key figures: worked out in the database in N s (...)") and its phase row; a decline writes
+  its reason as a phase row too ("after the reports: the Top 50 lists declined: <why>", #1275, measurement only).
+  **#1275 (4): a report whose column is a read column in ANOTHER CASE is no longer declined** (live 2026-11-17: one report's
+  'CVE' -- the patch cycle reads 'Cve' -- sent 1.56 M rows of a large install to the row loop, ~4.8 h). PowerShell reads
+  'CVE' as 'Cve' (PSObject properties ignore case); OPENJSON reads exact names, so the range statement now reads every
+  spelling the run's reports use for a read name (`Get-RATopCaseVariants`) and takes the one the row has (a row is one
+  object: it carries one spelling of a name). A spelling that is itself a read name (Subcategory / SubCategory) is read on
+  its own already. The line names the columns read under another spelling. Without any such column the statement is
+  byte-identical to before. **At millions of rows** (#1275 scale bench, 1.5 M rows on the test runner's SQL Server): one
+  UPDATE over the whole work table filled tempdb's log ("ACTIVE_TRANSACTION"), so the key-figure / patch keys are made as
+  each range is read, and the scores and the collapse are written in FindingId chunks of 100,000 (one short transaction
+  each; the collapse's chosen rows first into `#keep`). A pass that still fails declines as before (the row loop runs)
+  and its line and phase row name the step it failed in.
 - **A remediation's link opens exactly its findings (#864).** `/Collection/Rows?c=..&fix=<key>` swaps in
   `CollectionViewSql.RowsOfFix` (`f.RemediationKey = @Fix`). It inherited `Rows`' #812 keyset (the opening view paged off
   the collection's risk index, whose "applies" test only looks for an AssetKey the fix plan removes): the page read the

@@ -329,15 +329,16 @@ function Get-SISourceHoldDays {
 }
 
 function Get-SISourceAgeText {
-    <# PURE. One plain line per source that is on its last good collection, with how old that collection is:
-       "endpoint has had no good collection for 3 days -- its data is from 2026-10-09 14:05 UTC". #>
+    <# PURE. One plain line per source that is on its last good collection, with how old that collection is (owner
+       2026-11-16, plain words): "Endpoint data is 3 day(s) old (from 2026-10-09 14:05 UTC): the last read did not finish,
+       so SecurityInsight keeps the last good data". #>
     param([AllowEmptyCollection()][object[]]$Sources = @(), [datetime]$NowUtc = [datetime]::UtcNow)
     $inv = [Globalization.CultureInfo]::InvariantCulture
     foreach ($s in @($Sources | Where-Object { $_ -and -not $_.Ok })) {
         $d = Get-SISourceAgeDays -Source $s -NowUtc $NowUtc
         $age = if ($d -lt 1) { '{0} hour(s)' -f [int][math]::Floor($d * 24) } else { '{0} day(s)' -f [int][math]::Floor($d) }
-        if ($s.LastGoodUtc) { '{0} has had no good collection for {1} -- its data is from {2} UTC' -f $s.Source, $age, ([datetime]$s.LastGoodUtc).ToUniversalTime().ToString('yyyy-MM-dd HH:mm', $inv) }
-        else { '{0} has had no good collection for {1}' -f $s.Source, $age }
+        if ($s.LastGoodUtc) { '{0} data is {1} old (from {2} UTC): the last read did not finish, so SecurityInsight keeps the last good data' -f (Get-SISourceLabel $s.Source), $age, ([datetime]$s.LastGoodUtc).ToUniversalTime().ToString('yyyy-MM-dd HH:mm', $inv) }
+        else { '{0} data has not been read in full for {1}: SecurityInsight keeps what it had' -f (Get-SISourceLabel $s.Source), $age }
     }
 }
 
@@ -368,11 +369,12 @@ function Get-SISourceLabel {
 }
 
 function Get-SISourceNoteText {
-    <# PURE. "Endpoint data is from 2026-10-10 14:05 UTC -- the last collection from that source did not complete." #>
+    <# PURE. "Endpoint data is from 2026-10-10 14:05 UTC. The last read did not finish, so SecurityInsight keeps the last good
+       data." -- plain words (owner 2026-11-16: "Customers dont understand this mail"); the web app says the same. #>
     param([AllowEmptyString()][AllowNull()][string]$Source, $LastGoodUtc)
-    $when = 'its last good collection'
+    $when = 'the last good read'
     if ($LastGoodUtc) { $when = ([datetime]$LastGoodUtc).ToUniversalTime().ToString('yyyy-MM-dd HH:mm', [Globalization.CultureInfo]::InvariantCulture) + ' UTC' }
-    '{0} data is from {1} -- the last collection from that source did not complete.' -f (Get-SISourceLabel $Source), $when
+    '{0} data is from {1}. The last read did not finish, so SecurityInsight keeps the last good data.' -f (Get-SISourceLabel $Source), $when
 }
 
 function Get-SISourceCollectionMarkSql {

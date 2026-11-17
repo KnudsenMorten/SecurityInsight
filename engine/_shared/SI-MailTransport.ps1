@@ -277,7 +277,7 @@ function Add-SIMailFooter {
 }
 
 function Add-SIMailSourceNote {
-    <# PURE. The source note(s) -- "Endpoint data is from ... -- the last collection from that source did not complete." --
+    <# PURE. The source note(s) -- "Endpoint data is from ... The last read did not finish, so SecurityInsight keeps the last good data." --
        as one paragraph at the end of the mail's body (inside </body> when it is a full HTML document; the footer follows).
        Added once; no notes = the body unchanged. The text is encoded here. #>
     param([Parameter(Mandatory)][AllowEmptyString()][string]$BodyHtml, [AllowEmptyCollection()][string[]]$Notes = @())

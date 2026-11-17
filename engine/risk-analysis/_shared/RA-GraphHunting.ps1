@@ -214,6 +214,56 @@ function Invoke-RAResolveLookups {
 # #1216: the bucket loop's stop for 504 answers on the next query (0 = none) and the last call's count of 504 answers
 $script:RAGatewayTimeoutStopAt = 0
 $script:_LastGraphHuntingGatewayTimeouts = 0
+# #1275 (2): the back end that answered the last report query ('hunting' | 'loganalytics' | 'lake'), for the slice sizing
+$script:_RALastQueryBackend = 'hunting'
+
+function Get-RAQueryBackend {
+    <#
+        #1275 (2) The back end a report's query is answered by, as far as the run KNOWS it before the report is sent (no
+        request is made here): a query without an SI table goes to advanced hunting; one that needs advanced hunting (the
+        exposure graph, a Defender-only table) goes to the data lake once the lake answered in this run, else advanced
+        hunting; one over SI tables only goes to Log Analytics when an SI table it reads is known NOT to be in advanced
+        hunting (the run's cached probe), to advanced hunting when every one is known to be there. Not known = 'hunting':
+        the tightest documented limit (180 s), so a slice is never sized for more time than it can have. The slice's own
+        answer then says which back end it really was ($script:_RALastQueryBackend).
+    #>
+    param([AllowEmptyString()][string]$Query)
+    $cl = '\bSI_[A-Za-z][A-Za-z0-9]*(?:_[A-Za-z][A-Za-z0-9]*)*_CL\b'
+    if ([string]::IsNullOrWhiteSpace($Query) -or $Query -notmatch $cl) { return 'hunting' }
+    if (($Query -match '\bExposureGraph(?:Nodes|Edges)\b') -or (Test-RAQueryNeedsAdvancedHunting -Query $Query)) {
+        if (-not $script:_SentinelLakeUnavailable -and [bool]$script:RALakeAnswered) { return 'lake' }
+        return 'hunting'
+    }
+    $known = $script:_TableInAdvHunting
+    if ($null -eq $known) { return 'hunting' }
+    $all = $true
+    foreach ($t in @([regex]::Matches($Query, $cl) | ForEach-Object { $_.Value } | Sort-Object -Unique)) {
+        if (-not $known.ContainsKey($t)) { $all = $false; continue }
+        if (-not [bool]$known[$t]) { return 'loganalytics' }
+    }
+    'hunting'
+}
+
+function Invoke-RAKeyQueryCounted {
+    <#
+        #1275 (1) A 504 ON A SLICE'S KEY QUERY COUNTS TOWARDS THE SPLIT EXACTLY LIKE A 504 ON ITS ROW QUERY. The key query
+        (Invoke-RALookupKeyDiscovery: "which keys can this slice match") runs BEFORE the hunting call's own retry loop, and
+        its error goes straight to the bucket loop -- past the hand-back of the call's 504 count. The count stayed 0, the
+        slice never reached the split and was asked again round after round until the report's recovery budget was spent
+        ("not read"). Here the key query's 504 is counted (-Counted: the call's 504s so far) and handed back in
+        $script:_LastGraphHuntingGatewayTimeouts before the error goes on, unchanged. Any other error is not counted.
+        Splitting is lossless: the halves together are exactly the slice (the same hash, twice the count).
+    #>
+    param([Parameter(Mandatory)][scriptblock]$Ask, [int]$Counted = 0)
+    try { & $Ask }
+    catch {
+        $keyErr = $_
+        if ((Get-Command -Name Test-RABucketGatewayTimeout -ErrorAction SilentlyContinue) -and (Test-RABucketGatewayTimeout -Err $keyErr)) {
+            $script:_LastGraphHuntingGatewayTimeouts = [int]$Counted + 1
+        }
+        throw
+    }
+}
 
 function Invoke-GraphHuntingQuery {
     [CmdletBinding()]
@@ -351,6 +401,7 @@ function Invoke-GraphHuntingQuery {
                         # the lake's answer is not checked for a cut at its row limit: a report it answers is counted, never
                         # taken from its slices (Get-RAReportExpectedRows)
                         $script:RALakeAnswered = $true
+                        $script:_RALastQueryBackend = 'lake'   # #1275 (2)
                         return [pscustomobject]@{ _SIDirectRows = @($lakeRows) }
                     }
                 } catch {
@@ -481,7 +532,8 @@ function Invoke-GraphHuntingQuery {
                 if (-not $script:_RALookupReductionOn) { $script:_RALookupReductionOn = @{} }
                 $__reduce = @($__keyDecl | Where-Object { $script:_RALookupReductionOn.ContainsKey((Get-RALookupReductionId -Declaration $_)) })
                 if ($__reduce.Count -gt 0) {
-                    Invoke-RALookupKeyDiscovery -Query $__queryBeforeInlining -WorkspaceResourceId $wsForCL -BucketCount $_bk -BucketIndex $_bi -Declarations $__reduce -ReconnectMaxAgeMinutes $ReconnectMaxAgeMinutes
+                    # #1275 (1): its 504 counts towards the slice's split like a 504 of the rows
+                    Invoke-RAKeyQueryCounted -Counted $__gwHere -Ask { Invoke-RALookupKeyDiscovery -Query $__queryBeforeInlining -WorkspaceResourceId $wsForCL -BucketCount $_bk -BucketIndex $_bi -Declarations $__reduce -ReconnectMaxAgeMinutes $ReconnectMaxAgeMinutes }
                 }
                 # #674 FAIL CLOSED: a lookup that cannot be read ends THIS report as not complete (Invoke-RAResolveLookups);
                 # it is never left for a fallback that turns it empty. A table that does not exist is passed on as before.
@@ -506,7 +558,7 @@ function Invoke-GraphHuntingQuery {
                             }
                         }
                         $__reduce = @($__keyDecl | Where-Object { $script:_RALookupReductionOn.ContainsKey((Get-RALookupReductionId -Declaration $_)) })
-                        Invoke-RALookupKeyDiscovery -Query $__queryBeforeInlining -WorkspaceResourceId $wsForCL -BucketCount $_bk -BucketIndex $_bi -Declarations $__reduce -ReconnectMaxAgeMinutes $ReconnectMaxAgeMinutes
+                        Invoke-RAKeyQueryCounted -Counted $__gwHere -Ask { Invoke-RALookupKeyDiscovery -Query $__queryBeforeInlining -WorkspaceResourceId $wsForCL -BucketCount $_bk -BucketIndex $_bi -Declarations $__reduce -ReconnectMaxAgeMinutes $ReconnectMaxAgeMinutes }
                         $Query = $__queryBeforeInlining
                         $Query = Invoke-RAResolveLookups -Query $Query -WorkspaceResourceId $wsForCL -BucketCount $_bk -BucketIndex $_bi
                     }
@@ -779,6 +831,7 @@ function Invoke-GraphHuntingQuery {
                 [void]$cleanRows.Add([pscustomobject]$h)
             }
             Resolve-SupersededOnSuccess -WinningPath 'LA-direct'
+            $script:_RALastQueryBackend = 'loganalytics'   # #1275 (2)
             return [pscustomobject]@{ _SIDirectRows = $cleanRows.ToArray() }
         }
     }
@@ -849,7 +902,8 @@ function Invoke-GraphHuntingQuery {
             Write-Info ("advanced hunting returned in {0:F1}s" -f $_ahSw.Elapsed.TotalSeconds)
             # #641: advanced hunting returns at most 100,000 rows and says nothing when it cuts there (its answer carries only
             # the schema and the rows). An answer AT the cap is taken as cut: refused, worded so the slice is made smaller.
-            $__ahCap = if ([int]$global:SI_RA_HuntingRowCap -gt 0) { [int]$global:SI_RA_HuntingRowCap } else { 100000 }
+            # #1275 (2): the cut limit and the sizing's row target read ONE table (RA-BucketStore.ps1 $script:SIRaBackendLimits)
+            $__ahCap = if ([int]$global:SI_RA_HuntingRowCap -gt 0) { [int]$global:SI_RA_HuntingRowCap } elseif (Get-Command -Name Get-SIRaRowCutLimit -ErrorAction SilentlyContinue) { [int](Get-SIRaRowCutLimit -Backend 'hunting') } else { 100000 }
             if ($null -ne $ahResp -and $null -ne $ahResp.Results -and @($ahResp.Results).Count -ge $__ahCap) {
                 throw ("advanced hunting returned {0} rows -- its row limit, so the answer may be cut: Query execution has exceeded the allowed limits" -f @($ahResp.Results).Count)
             }
@@ -875,10 +929,12 @@ function Invoke-GraphHuntingQuery {
                 }
                 $augmented = Invoke-ProfileAugment -Rows $cleanRows.ToArray() -Plans $augmentPlans -WorkspaceResourceId $augmentWsForCL
                 Resolve-SupersededOnSuccess -WinningPath 'advanced-hunting'
+                $script:_RALastQueryBackend = 'hunting'   # #1275 (2)
                 return [pscustomobject]@{ _SIDirectRows = @($augmented) }
             }
 
             Resolve-SupersededOnSuccess -WinningPath 'advanced-hunting'
+            $script:_RALastQueryBackend = 'hunting'   # #1275 (2)
             return $ahResp
         } catch {
             # a part asked AHEAD (RA-PartsInParallel.ps1): its request is on its way (or it is not asked ahead) -- nothing

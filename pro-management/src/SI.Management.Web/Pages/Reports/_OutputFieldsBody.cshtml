@@ -97,7 +97,7 @@
                         var f = c.InForce;
                         <tr data-column="@f.Target" data-state="@c.State">
                             <td><code>@f.Target</code></td>
-                            <td>@(c.Removed ? "(not sent)" : f.Name)</td>
+                            <td>@(c.Removed || c.ShippedOff ? "(not sent)" : f.Name)</td>
                             <td><code>@f.From</code>@if (c.Override is not null && c.Shipped is not null && c.Override.From != c.Shipped.From) { <span class="hint"> (shipped: @c.Shipped.From)</span> }</td>
                             <td>@f.Op</td>
                             @{ var ft = ServiceNowSchema.TypeOf(f); }
@@ -116,8 +116,8 @@
                                             <label>Operation <input name="Op" value="@f.Op" placeholder="none" /></label>
                                             <label>Sent as <input name="Name" value="@f.As" placeholder="@f.Target" maxlength="128" /></label>
                                             <label>Reason <input name="Reason" required minlength="3" maxlength="400" /></label>
-                                            <button type="submit" name="Action" value="change">Stage the change</button>
-                                            @if (!c.Removed) { <button type="submit" name="Action" value="remove" class="secondary">@(c.Own ? "Delete this column" : "Stop sending it")</button> }
+                                            <button type="submit" name="Action" value="change">@(c.ShippedOff ? "Switch it on" : "Stage the change")</button>
+                                            @if (!c.Removed && !c.ShippedOff) { <button type="submit" name="Action" value="remove" class="secondary">@(c.Own ? "Delete this column" : "Stop sending it")</button> }
                                             @if (c.Changed && !c.Own) { <button type="submit" name="Action" value="restore" class="secondary">Put the shipped column back</button> }
                                         </form>
                                     </details>

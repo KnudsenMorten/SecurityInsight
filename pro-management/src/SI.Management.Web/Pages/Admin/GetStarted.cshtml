@@ -145,6 +145,7 @@
                                        role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="a-find-list" data-picker-input />
                                 <ul id="a-find-list" class="picker-list" role="listbox" hidden data-picker-list></ul>
                                 <p class="hint" data-picker-chosen hidden></p>
+                                <partial name="~/Pages/Admin/_PickerNames.cshtml" model="SI.Management.Web.Pages.Admin.PickerNamesModel.Of(Model.Names, Model.NamesFrom)" />
                             </div>
                         }
                         else

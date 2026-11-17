@@ -27,7 +27,9 @@ public sealed record PersonSuggestion(string Value, string Label, string Type);
 /// </summary>
 public sealed class DepartmentPeopleResolver(IDirectoryNames directory, DepartmentRepository repo)
 {
-    public bool DirectoryOn => directory.Enabled;
+    /// The picker searches: the directory, or SecurityInsight's own names from its last run (framework GRAPH-PICKER).
+    public bool DirectoryOn => directory.CanSearch;
+    public IDirectoryNames Directory => directory;
 
     /// <summary>
     /// The PEOPLE TABLE's rows (#335) turned into the department's wanted list: a row kept from before keeps its person
@@ -81,7 +83,7 @@ public sealed class DepartmentPeopleResolver(IDirectoryNames directory, Departme
         var t = (text ?? "").Trim();
         if (t.Length < 2) return Array.Empty<PersonSuggestion>();
         var list = new List<PersonSuggestion>();
-        if (directory.Enabled)
+        if (directory.CanSearch)
         {
             try
             {
@@ -107,7 +109,7 @@ public sealed class DepartmentPeopleResolver(IDirectoryNames directory, Departme
     public async Task<MemberInput> ResolveOneAsync(int departmentId, string role, string entry, CancellationToken ct)
     {
         DirectoryPerson? p = null;
-        if (directory.Enabled)
+        if (directory.CanSearch)
         {
             try { p = await directory.FindAsync(entry, ct); }
             catch (Exception ex) when (ex is not OperationCanceledException) { p = null; }

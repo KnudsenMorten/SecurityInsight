@@ -60,8 +60,11 @@ if (-not (Get-Command -Name New-SIDataOutProgress -ErrorAction SilentlyContinue)
 # job's data health check (Invoke-SIVerification.ps1, 2026-10-15).
 . ([IO.Path]::Combine((Split-Path -Parent $PSScriptRoot), '_shared', 'SI-OutputScope.ps1'))
 $script:SIDataOutKinds = @('excel', 'servicenow-importset', 'fixed')
-$script:SIDataOutGrains = @('ci', 'ci_finding', 'finding_summary', 'record')
-$script:SIDataOutVolatile = @('$row_hash', '$run_time', '$run_id', '$changed_at', '$action', '$batch_id', '$cleared', '$reason', '$replaces')
+$script:SIDataOutGrains = @('ci', 'ci_finding', 'finding_summary', 'record', 'remediation_task', 'remediation_task_finding')
+$script:SIDataOutVolatile = @('$row_hash', '$run_time', '$run_id', '$changed_at', '$action', '$batch_id', '$cleared', '$reason', '$replaces',
+    # the remediation task outputs read their row hash and source run from the task row (the same SQL the hand-off views use:
+    # Get-SIDataOutTaskHashSql / Get-SIDataOutTaskSourceRunSql) -- the run's values, never part of what is compared
+    'record.row_hash', 'record.source_run')
 
 # =====================================================================================================================
 #  THE CATALOG
@@ -135,6 +138,7 @@ function Get-SIDataOutEnabled {
     return [pscustomobject]@{ Outputs = $out.ToArray(); Unknown = $unknown }
 }
 
+function ConvertTo-SIDataOutTruthy { <# PURE. $true for a JSON true / "true". #> param($Value) ($Value -eq $true -or [string]$Value -ieq 'true') }
 function Test-SIDataOutSwitchedOn {
     <#
         Whether ONE output is switched on for this install: the setting SI_DataOut_Outputs when it names any output, else the
@@ -181,6 +185,9 @@ function Get-SIDataOutItemKeyFull {
             return (@('si_report_name', 'si_finding_key', 'si_tier', 'si_severity', 'si_cmdb_id') | ForEach-Object { [string](Get-SIItemValue $Item $_) }) -join '|'
         }
         'record' { return [string](Get-SIItemValue $Item 'si_record_key') }
+        # #1277 the remediation tasks per CI and their links to the findings (sidata.RemediationTask / RemediationTaskFinding)
+        'remediation_task' { return [string](Get-SIItemValue $Item 'task_id') }
+        'remediation_task_finding' { return ('{0}|{1}' -f [string](Get-SIItemValue $Item 'task_id'), [string](Get-SIItemValue $Item 'si_finding_key')) }
         default { throw "unknown output grain '$Grain'" }
     }
 }
@@ -399,6 +406,7 @@ function Get-SIDataOutNextPage {
                         $c.Phase = 'open'
                     }
                     'finding_summary' { $c.Phase = 'summary-build' }
+                    { $_ -in 'remediation_task', 'remediation_task_finding' } { $c.Phase = 'task'; $c['TaskCollection'] = '' }
                     default { throw "unknown output grain '$($c.Grain)'" }
                 }
                 continue
@@ -411,6 +419,27 @@ function Get-SIDataOutNextPage {
                 $items = @(foreach ($r in $rows) { if ($c.Grain -eq 'ci') { ConvertFrom-SIDataOutCiRow $r } else { ConvertFrom-SIDataOutRecordRow $r } })
                 $c.Rows += $rows.Count
                 $c.After = [string]$rows[$rows.Count - 1][$keyCol]
+                if ($rows.Count -lt $take) { $c.Phase = 'done' }
+                $rows = $null
+                return (Select-SIDataOutCursorPage -Cursor $c -Items $items)
+            }
+            'task' {
+                # #1277 the remediation tasks (or their links) of the newest collection whose tasks are built -- the collection
+                # chosen on the first page and kept for every later one (a build that lands meanwhile is the next run's)
+                $links = ($c.Grain -eq 'remediation_task_finding')
+                $a = & $c.Invoke (Get-SIDataOutTaskPageSql -Links:$links) @{ Take = $take; CollectionId = [string]$c.TaskCollection; AfterId = [string]$c.After; AfterKey = [string]$c.AfterKey } 'reader'
+                $rows = @(@($a) | ForEach-Object { $_ } | Where-Object { $_ -is [System.Collections.IDictionary] }); $a = $null
+                if ($rows.Count -eq 0) { $c.Phase = 'done'; continue }
+                $items = @(foreach ($r in $rows) { ConvertFrom-SIDataOutTaskRow -Row $r -Links:$links })
+                $c.Rows += $rows.Count
+                $last = $rows[$rows.Count - 1]
+                $c.TaskCollection = [string]$last['CollectionId']; $c.After = [string]$last['TaskHex']
+                # the vulnerable-item output's scope (Invoke-SIDataOut sets TaskScope): a task of findings it does not send is not sent
+                if ($c.ContainsKey('TaskScope') -and $null -ne $c.TaskScope) {
+                    $sel = Select-SIDataOutTaskScoped -Invoke $c.Invoke -CollectionId ([string]$c.TaskCollection) -Items $items -Links:$links -Scope $c.TaskScope.Scope -CiScope $c.TaskScope.CiScope -Record:([bool]($c.TaskScope.ContainsKey('Record') -and $c.TaskScope.Record))
+                    $items = @($sel.Kept); $c.TaskScope.LeftOut = [long]$c.TaskScope.LeftOut + [long]$sel.LeftOut
+                }
+                if ($links) { $c.AfterKey = [string]$last['FindingKey'] }
                 if ($rows.Count -lt $take) { $c.Phase = 'done' }
                 $rows = $null
                 return (Select-SIDataOutCursorPage -Cursor $c -Items $items)
@@ -795,6 +824,328 @@ FROM sidata.CiRecord AS r
 WHERE r.RecordKey > @After
 ORDER BY r.RecordKey;
 '@
+}
+
+function Get-SIDataOutTaskPageSql {
+    <#
+        #1277 One page of the remediation tasks (-Links: of their links to the findings) of ONE collection: @CollectionId, or
+        ('') the newest collection whose tasks are built (sidata.Collection.RemediationTasksAt); @Take after @AfterId (the task
+        id as hex) [and @AfterKey, the finding key]. Every row says its CollectionId and TaskHex (the cursor's place). A
+        database without the task tables answers none.
+    #>
+    param([switch]$Links)
+    $head = @'
+SET NOCOUNT ON;
+IF OBJECT_ID('sidata.RemediationTask') IS NULL OR OBJECT_ID('sidata.RemediationTaskFinding') IS NULL OR COL_LENGTH('sidata.Collection', 'RemediationTasksAt') IS NULL
+BEGIN SELECT CAST(NULL AS INT) AS CollectionId, CAST(NULL AS VARCHAR(64)) AS TaskHex WHERE 1 = 0; RETURN; END
+DECLARE @c INT = TRY_CONVERT(int, NULLIF(@CollectionId, N''));
+IF @c IS NULL SET @c = (SELECT TOP (1) x.CollectionId FROM sidata.Collection AS x WHERE x.RemediationTasksAt IS NOT NULL ORDER BY x.CollectionTime DESC);
+DECLARE @a BINARY(32) = CASE WHEN NULLIF(@AfterId, N'') IS NULL THEN NULL ELSE CONVERT(binary(32), @AfterId, 2) END;
+'@
+    # the source run of the rows (u_source_run): the collection they were built from, the SAME text the hand-off views give
+    $head += ('DECLARE @run NVARCHAR(32) = (SELECT {0} FROM sidata.Collection AS c WHERE c.CollectionId = @c);' -f (Get-SIDataOutTaskSourceRunSql)) + "`n"
+    if (-not $Links) {
+        return $head + @'
+SELECT TOP (CONVERT(int, @Take)) t.CollectionId, CONVERT(varchar(64), t.TaskId, 2) AS TaskHex, t.OwnerKey, t.CiId, t.AssetKey, t.AssetName, t.CmdbId, t.Tier,
+       t.TaskName, t.Kind, t.Product, t.Vendor, t.Version, t.Application, t.ApplicationPaths, t.Findings, t.Cves, t.HighestSeverity, t.MaxRiskScore,
+       t.CiOwner, t.CiDepartment, t.State, t.ClosedWhy, t.ClosedAt, t.FirstSeen, t.LastSeen, t.ChangedAt, t.InThisCollection,
+       CONVERT(varchar(64), {HASH}, 2) AS RowHashHex, @run AS SourceRun
+FROM sidata.RemediationTask AS t
+WHERE t.CollectionId = @c AND (@a IS NULL OR t.TaskId > @a)
+ORDER BY t.TaskId;
+'@.Replace('{HASH}', (Get-SIDataOutTaskHashSql))
+    }
+    $head + @'
+SELECT TOP (CONVERT(int, @Take)) l.CollectionId, CONVERT(varchar(64), l.TaskId, 2) AS TaskHex, l.FindingKey, l.OwnerKey, t.CiId, t.AssetName, l.Cve, l.Title,
+       l.Severity, l.Version, l.InThisCollection, t.ChangedAt, CONVERT(varchar(64), {HASH}, 2) AS RowHashHex, @run AS SourceRun
+FROM sidata.RemediationTaskFinding AS l
+JOIN sidata.RemediationTask AS t ON t.CollectionId = l.CollectionId AND t.TaskId = l.TaskId
+WHERE l.CollectionId = @c AND (@a IS NULL OR l.TaskId > @a OR (l.TaskId = @a AND l.FindingKey > @AfterKey))
+ORDER BY l.TaskId, l.FindingKey;
+'@.Replace('{HASH}', (Get-SIDataOutTaskHashSql -Links))
+}
+
+# =====================================================================================================================
+#  THE REMEDIATION TASK OUTPUTS: ONE ROW HASH, ONE SOURCE RUN, ONE DATE FORMAT, ONE CLEAR MARKER FOR THE PUSH AND THE
+#  SQL HAND-OFF VIEWS (review 3.1.30). The SQL texts below are the hand-off views' own (sql\si-data-schema.sql states them
+#  with the quotes doubled; SIv3-RemediationTasks holds the two to the same text and the same values on a real SQL Server).
+# =====================================================================================================================
+
+function Get-SIDataOutTaskHashSql {
+    <#
+        PURE. The SQL of a task's (-Links: a link's) row hash, binary(32) -- u_row_hash is its lower-case hex. A TASK: the build's
+        content hash (sidata.RemediationTask.RowHash: name, kind, product, vendor, version, application and paths, counts,
+        severity, risk, tier, owner, department, CMDB CI, state, close reason and time, first seen, reopen count) with the asset's
+        name folded in (the build's hash leaves it out; ServiceNow gets it). Not in it, on purpose: the last seen time (it moves
+        every run without the task changing) and the run's own values. A task the vulnerable items' scope left is CLOSED "out of
+        scope" -- its hash is then SHA-256 over this hash + 0x01 (Get-SIDataOutTaskOutOfScopeHash). A LINK: SHA-256 of its
+        task, finding, owner, CVE, title, severity, version and whether it is in the newest collection.
+    #>
+    param([switch]$Links)
+    if ($Links) { return "HASHBYTES('SHA2_256', CONCAT(CONVERT(nvarchar(64), l.TaskId, 2), NCHAR(31), l.FindingKey, NCHAR(31), l.OwnerKey, NCHAR(31), l.Cve, NCHAR(31), l.Title, NCHAR(31), l.Severity, NCHAR(31), l.Version, NCHAR(31), l.InThisCollection))" }
+    "HASHBYTES('SHA2_256', t.RowHash + CONVERT(varbinary(max), ISNULL(t.AssetName, N'')))"
+}
+
+function Get-SIDataOutTaskSourceRunSql {
+    <#
+        PURE. The SQL of u_source_run on the two remediation task outputs (alias c = sidata.Collection): the collection the task
+        rows were built from, as 'si-<CollectionId>-<yyyyMMddHHmmss>' (the collection's time, UTC) -- one format on the push and
+        on the SQL hand-off views, at most 28 characters (si- + up to 10 digits + - + 14 digits), never a value of one push only.
+    #>
+    "CONCAT(N'si-', c.CollectionId, N'-', CONVERT(nchar(8), c.CollectionTime, 112), REPLACE(CONVERT(nchar(8), c.CollectionTime, 108), N':', N''))"
+}
+
+function Get-SIDataOutTaskOutOfScopeHash {
+    <# PURE. The row hash of a task shown CLOSED "out of scope": SHA-256 over its row hash's 32 bytes + 0x01 (the view's
+       HASHBYTES('SHA2_256', <hash> + 0x01)), lower-case hex. Not a 64-character hex hash = returned as it is. #>
+    param([AllowEmptyString()][string]$Hash)
+    if ($Hash -notmatch '^[0-9a-fA-F]{64}$') { return $Hash }
+    $b = New-Object byte[] 33
+    for ($i = 0; $i -lt 32; $i++) { $b[$i] = [Convert]::ToByte($Hash.Substring($i * 2, 2), 16) }
+    $b[32] = 1
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try { ([BitConverter]::ToString($sha.ComputeHash($b)) -replace '-', '').ToLowerInvariant() } finally { $sha.Dispose() }
+}
+
+function Get-SIDataOutTaskAction {
+    <#
+        PURE. u_action of a task row on the push (the vulnerable items' words, Get-SIDataOutContractAction): out_of_scope (closed
+        because the scope left it), close (closed), new (open, never sent), reopen (open, sent last as closed), update (open, sent
+        last as open). A LINK: new (never sent) or update. -Before: the row as last sent ($null = never sent).
+    #>
+    param([switch]$Links, $Row, [System.Collections.IDictionary]$Before)
+    if ($Links) { if ($null -eq $Before) { return 'new' }; return 'update' }
+    $st = ([string](Get-SIItemValue $Row 'u_state')).Trim().ToLowerInvariant()
+    if ($st -eq 'closed') {
+        if (([string](Get-SIItemValue $Row 'u_close_reason')).Trim() -ieq 'out of scope') { return 'out_of_scope' }
+        return 'close'
+    }
+    if ($null -eq $Before) { return 'new' }
+    $was = ''; if ($Before.Contains('u_state')) { $was = ([string]$Before['u_state']).Trim().ToLowerInvariant() }
+    if ($was -eq 'closed') { return 'reopen' }
+    'update'
+}
+
+function Set-SIDataOutTaskWire {
+    <#
+        (into -Row) ONE remediation task / link row as it goes out (review 3.1.30): every date in the vulnerable items' format
+        (ConvertTo-SIDataOutWireValue: UTC 'yyyy-MM-dd HH:mm:ss'), and the vulnerable items' envelope -- u_action
+        (Get-SIDataOutTaskAction), u_si_batch_id (the push's batch) and the clear marker u_si_cleared (the clearable columns of
+        the output that are empty: a reopened task clears its close reason and close time in ServiceNow). A column the map does
+        not carry (a customer removed it) is not added. Returns the row.
+    #>
+    param([Parameter(Mandatory)]$Row, [Parameter(Mandatory)][string]$Output, [switch]$Links, [System.Collections.IDictionary]$Before, [string]$BatchId = '')
+    $props = $Row.PSObject.Properties
+    foreach ($p in @($props)) { if ($null -ne $p.Value) { $p.Value = ConvertTo-SIDataOutWireValue $p.Value } }
+    if ($props['u_action']) { $props['u_action'].Value = (Get-SIDataOutTaskAction -Links:$Links -Row $Row -Before $Before) }
+    if ($props['u_si_batch_id']) { $props['u_si_batch_id'].Value = $BatchId }
+    if ($props['u_si_cleared']) {
+        $cells = [ordered]@{}; foreach ($p in @($props)) { $cells[$p.Name] = $p.Value }
+        $props['u_si_cleared'].Value = (Get-SIDataOutClearedList -Output $Output -Cells $cells)
+    }
+    $Row
+}
+
+function Get-SIDataOutTaskScopeSql {
+    <#
+        #1277 The findings of a page of tasks (@tasks: their ids as hex, JSON) in ONE collection (@CollectionId), each as the
+        vulnerable-item output reads it: the newest stored finding of its CI (sidata.CiFinding: its document and its CI's
+        values) -- or, when that finding is not stored any more (a closed task's), the values the link and its task kept.
+    #>
+    @'
+SET NOCOUNT ON;
+DECLARE @t TABLE (TaskId BINARY(32) NOT NULL PRIMARY KEY);
+INSERT @t (TaskId) SELECT DISTINCT CONVERT(binary(32), j.[value], 2) FROM OPENJSON(ISNULL(@tasks, N'[]')) AS j WHERE j.[value] IS NOT NULL;
+SELECT CONVERT(varchar(64), l.TaskId, 2) AS TaskHex, l.FindingKey AS LinkKey, l.OwnerKey AS LinkOwner, l.Severity AS LinkSeverity, t.Tier AS TaskTier, t.SecurityDomain AS TaskDomain,
+       t.State AS TaskState, t.SentInScope AS TaskSent, l.SentInScope AS LinkSent,
+       cf.CiFindingId, COALESCE(cf.CiId, t.CiId) AS CiId, cf.AssetId, COALESCE(cf.FindingKey, l.FindingKey) AS FindingKey, cf.RiskScore, cf.WeightedRiskScore, cf.Tier, cf.DocJson,
+       c.Name AS CiName, c.Class AS CiClass, c.AssetType AS CiAssetType, c.Tier AS CiTier, JSON_VALUE(c.DocJson, '$.si_os_family') AS CiOsFamily, c.CmdbId, c.CmdbName,
+       c.CmdbCriticality, JSON_VALUE(c.DocJson, '$.si_cmdb_data_sensitivity') AS CmdbDataSensitivity,
+       CAST(NULL AS nvarchar(16)) AS State, CAST(NULL AS datetime2(3)) AS FirstDetected, CAST(NULL AS datetime2(3)) AS LastSeen,
+       CAST(NULL AS datetime2(3)) AS ClosedAt, CAST(NULL AS nvarchar(32)) AS CloseReason, CAST(NULL AS int) AS AbsentRuns
+FROM sidata.RemediationTaskFinding AS l
+JOIN @t AS x ON x.TaskId = l.TaskId
+JOIN sidata.RemediationTask AS t ON t.CollectionId = l.CollectionId AND t.TaskId = l.TaskId
+OUTER APPLY (SELECT TOP (1) a.CiFindingId, a.CiId, a.AssetId, a.FindingKey, a.RiskScore, a.WeightedRiskScore, a.Tier, a.DocJson FROM sidata.CiFinding AS a
+             WHERE a.CiId = l.OwnerKey AND a.FindingKey = l.FindingKey ORDER BY a.CiFindingId DESC) AS c1
+OUTER APPLY (SELECT TOP (1) b.CiFindingId, b.CiId, b.AssetId, b.FindingKey, b.RiskScore, b.WeightedRiskScore, b.Tier, b.DocJson FROM sidata.CiFinding AS b
+             WHERE c1.CiFindingId IS NULL AND l.OwnerKey LIKE N'asset:%' AND b.AssetId = SUBSTRING(l.OwnerKey, 7, 400) AND b.FindingKey = l.FindingKey ORDER BY b.CiFindingId DESC) AS c2
+CROSS APPLY (SELECT COALESCE(c1.CiFindingId, c2.CiFindingId) AS CiFindingId, COALESCE(c1.CiId, c2.CiId) AS CiId, COALESCE(c1.AssetId, c2.AssetId) AS AssetId,
+                    COALESCE(c1.FindingKey, c2.FindingKey) AS FindingKey, COALESCE(c1.RiskScore, c2.RiskScore) AS RiskScore,
+                    COALESCE(c1.WeightedRiskScore, c2.WeightedRiskScore) AS WeightedRiskScore, COALESCE(c1.Tier, c2.Tier) AS Tier, COALESCE(c1.DocJson, c2.DocJson) AS DocJson) AS cf
+LEFT JOIN sidata.Ci AS c ON c.CiId = COALESCE(cf.CiId, t.CiId)
+WHERE l.CollectionId = CONVERT(int, @CollectionId);
+'@
+}
+
+function Get-SIDataOutTaskOutAtSql {
+    <#
+        When each task of @tasks (hex ids, JSON) in @CollectionId LEFT the scope: the newest time a vulnerable item of one of its
+        findings was closed as out of scope (vuln.VulnerabilityItem) -- the same time the SQL hand-off view gives it. No table
+        or no such item = no row.
+    #>
+    @'
+SET NOCOUNT ON;
+IF OBJECT_ID('vuln.VulnerabilityItem') IS NULL BEGIN SELECT CAST(NULL AS varchar(64)) AS TaskHex, CAST(NULL AS datetime2(3)) AS OutAt WHERE 1 = 0; RETURN; END
+DECLARE @t TABLE (TaskId BINARY(32) NOT NULL PRIMARY KEY);
+INSERT @t (TaskId) SELECT DISTINCT CONVERT(binary(32), j.[value], 2) FROM OPENJSON(ISNULL(@tasks, N'[]')) AS j WHERE j.[value] IS NOT NULL;
+SELECT CONVERT(varchar(64), l.TaskId, 2) AS TaskHex, MAX(v.ClosedAt) AS OutAt
+FROM sidata.RemediationTaskFinding AS l
+JOIN @t AS x ON x.TaskId = l.TaskId
+JOIN sidata.RemediationTask AS t ON t.CollectionId = l.CollectionId AND t.TaskId = l.TaskId
+CROSS APPLY (SELECT CASE WHEN UPPER(l.FindingKey) LIKE N'CVE-%' AND LEN(l.FindingKey) <= 100 THEN UPPER(l.FindingKey) WHEN LEN(l.FindingKey) <= 100 THEN l.FindingKey
+                    ELSE LEFT(l.FindingKey, 59) + N'~' + LOWER(CONVERT(varchar(40), HASHBYTES('SHA1', CONVERT(varchar(8000), UPPER(l.FindingKey))), 2)) END AS Vk) AS k
+JOIN vuln.VulnerabilityItem AS v ON v.CorrelationId = t.CiId AND v.Cve = k.Vk AND v.State = N'Closed' AND v.CloseReason = N'Out of scope'
+WHERE l.CollectionId = CONVERT(int, @CollectionId)
+GROUP BY l.TaskId;
+'@
+}
+
+function Select-SIDataOutTaskScoped {
+    <#
+        #1277 THE VULNERABLE-ITEM OUTPUT'S SCOPE ON THE TASK OUTPUTS (owner 2026-11-17: ServiceNow never gets a task for
+        findings it does not get). A finding of a task counts when the vulnerable-item output would send it: it passes that
+        output's scope ('vuln-servicenow', Test-SIDataOutInScope -- the same rule), it has a CI, and -- while the CI output is
+        on -- its CI passes the CI output's scope. A TASK is kept when at least one of its findings counts; a LINK when its
+        own finding counts. -Scope / -CiScope: the two scopes ($null = everything passes). Returns @{ Kept; LeftOut }.
+        A TASK ONCE SENT (sidata.RemediationTask / RemediationTaskFinding .SentInScope) is always sent again in its final state,
+        whatever its findings are now: a CLOSED one as it closed, an OPEN one that left the scope as CLOSED 'out of scope' (as a
+        vulnerable item that leaves the scope) -- ServiceNow never sees a task just vanish. -Record (a run that sends): each
+        task / link sent is marked sent (never unmarked).
+        A task OWNED BY 'asset:' (no CI holds its findings) is never sent: the vulnerable-item output sends no finding without a
+        CI (ServiceNow's vulnerable item needs its CI), so it never gets the task for them either.
+    #>
+    param([Parameter(Mandatory)][scriptblock]$Invoke, [Parameter(Mandatory)][string]$CollectionId, [AllowEmptyCollection()][object[]]$Items = @(), [switch]$Links, $Scope, $CiScope,
+          [switch]$Record)
+    $items = @($Items | Where-Object { $null -ne $_ })
+    if ($items.Count -eq 0) { return [pscustomobject]@{ Kept = $items; LeftOut = 0 } }
+    if ($null -eq $Scope -and $null -eq $CiScope) {
+        # nothing scoped: every task with a CI (an 'asset:' task has none -- never sent, as its findings are not)
+        $withCi = @($items | Where-Object { [string](Get-SIItemValue $_ 'si_ci_id') })
+        if ($Record) { Write-SIDataOutTaskSentScope -Invoke $Invoke -CollectionId $CollectionId -Items $items -Kept $withCi -Links:$Links }
+        return [pscustomobject]@{ Kept = $withCi; LeftOut = ($items.Count - $withCi.Count) }
+    }
+    $ids = @($items | ForEach-Object { ([string]$_.task_id).ToUpperInvariant() } | Select-Object -Unique)
+    $rows = @(@(& $Invoke (Get-SIDataOutTaskScopeSql) @{ CollectionId = $CollectionId; tasks = (ConvertTo-Json -InputObject @($ids) -Compress) } 'reader') | ForEach-Object { $_ } | Where-Object { $_ -is [System.Collections.IDictionary] })
+    $taskIn = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    $linkIn = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    $wasSent = @{}; $linkSent = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    $sv = { param($r, $n) if (-not $r.Contains($n)) { return $null }; $x = $r[$n]; if ($x -is [System.DBNull]) { $null } else { $x } }
+    foreach ($r in $rows) {
+        $hex = ([string]$r['TaskHex']).ToLowerInvariant()
+        # what was SENT before (SentInScope): never just dropped (below)
+        $ts = & $sv $r 'TaskSent'; $ls = & $sv $r 'LinkSent'
+        if ($null -ne $ts -and [bool]$ts) { $wasSent[$hex] = [string](& $sv $r 'TaskState') }
+        if ($null -ne $ls -and [bool]$ls) { [void]$linkSent.Add($hex + '|' + [string]$r['LinkKey']) }
+        $it = ConvertFrom-SIDataOutFindingRow $r
+        # a finding no longer stored: what its link and its task kept (a closed task's)
+        Set-SIDataOutValue $it 'si_severity' $r['LinkSeverity'] -IfMissing
+        Set-SIDataOutValue $it 'si_tier' $r['TaskTier'] -IfMissing
+        Set-SIDataOutValue $it 'si_security_domain' $r['TaskDomain'] -IfMissing
+        $ok = [bool]([string](Get-SIItemValue $it 'si_ci_id')) -and (Test-SIDataOutInScope -Grain 'ci_finding' -Item $it -Scope $Scope)
+        if ($ok -and $null -ne $CiScope) { $ok = Test-SIDataOutCiOfItemInScope -Item $it -CiScope $CiScope }
+        if (-not $ok) { continue }
+        [void]$taskIn.Add($hex); [void]$linkIn.Add($hex + '|' + [string]$r['LinkKey'])
+    }
+    # A TASK ONCE SENT NEVER JUST VANISHES: one that is out of scope now is still sent -- a closed one as it closed, an OPEN one
+    # as CLOSED, "out of scope" (as a vulnerable item that leaves the scope); a link once sent stays with it
+    $outOfScope = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    foreach ($h in @($wasSent.Keys)) {
+        if ($taskIn.Contains($h)) { continue }
+        [void]$taskIn.Add($h)
+        if ($wasSent[$h] -ne 'closed') { [void]$outOfScope.Add($h) }
+    }
+    foreach ($k in $linkSent) { [void]$linkIn.Add($k) }
+    # when each of them left the scope: the time its vulnerable item was closed as out of scope (the SQL hand-off view's time)
+    $outAt = @{}
+    if ($outOfScope.Count -and -not $Links) {
+        foreach ($x in @(@(& $Invoke (Get-SIDataOutTaskOutAtSql) @{ CollectionId = $CollectionId; tasks = (ConvertTo-Json -InputObject @(@($outOfScope) | ForEach-Object { $_.ToUpperInvariant() }) -Compress) } 'reader') | ForEach-Object { $_ } | Where-Object { $_ -is [System.Collections.IDictionary] })) {
+            $v = $x['OutAt']; if ($null -ne $v -and -not ($v -is [System.DBNull])) { if ($v -is [datetime]) { $v = [datetime]::SpecifyKind($v, [DateTimeKind]::Utc) }; $outAt[([string]$x['TaskHex']).ToLowerInvariant()] = $v }
+        }
+    }
+    $kept = @(foreach ($it in $items) {
+        $hex = ([string]$it.task_id).ToLowerInvariant()
+        if ($Links) { if ($linkIn.Contains($hex + '|' + [string]$it.si_finding_key)) { $it } }
+        elseif ($taskIn.Contains($hex)) {
+            if ($outOfScope.Contains($hex)) {
+                $it = $it.PSObject.Copy()
+                $it.state = 'closed'; $it.closed_why = 'out of scope'
+                # closed when it left the scope (as the SQL hand-off view says); changed then too, so ServiceNow's delta moves
+                $it.closed_at = $(if ($outAt.ContainsKey($hex)) { $outAt[$hex] } else { $it.last_seen })
+                if ($null -ne $it.closed_at -and ($null -eq $it.changed_at -or [datetime]$it.closed_at -gt [datetime]$it.changed_at)) { $it.changed_at = $it.closed_at }
+                # its row hash moves as the view's does (SHA-256 over the hash + 0x01): ServiceNow sees the changed state
+                if ($it.PSObject.Properties['row_hash'] -and $it.row_hash) { $it.row_hash = Get-SIDataOutTaskOutOfScopeHash -Hash ([string]$it.row_hash) }
+            }
+            $it
+        }
+    })
+    if ($Record) { Write-SIDataOutTaskSentScope -Invoke $Invoke -CollectionId $CollectionId -Items $items -Kept $kept -Links:$Links }
+    [pscustomobject]@{ Kept = $kept; LeftOut = ($items.Count - $kept.Count) }
+}
+
+function Write-SIDataOutTaskSentScope {
+    <#
+        The scope decision of a page of task items (or -Links: link items) stored on them: SentInScope = 1 for each one sent
+        (-Kept). Never taken away: a task or link once sent stays marked sent (it is then sent in its final state -- closed,
+        or closed "out of scope" -- never dropped). Only rows whose value changes are written. A failed write throws.
+    #>
+    param([Parameter(Mandatory)][scriptblock]$Invoke, [Parameter(Mandatory)][string]$CollectionId, [AllowEmptyCollection()][object[]]$Items = @(),
+          [AllowEmptyCollection()][object[]]$Kept = @(), [switch]$Links)
+    $rows = @(foreach ($it in @($Kept)) {
+        if ($null -eq $it) { continue }
+        $o = [ordered]@{ h = ([string]$it.task_id).ToUpperInvariant() }
+        if ($Links) { $o['f'] = [string]$it.si_finding_key }
+        $o
+    })
+    if ($rows.Count -eq 0) { return }
+    $json = ConvertTo-Json -InputObject @($rows) -Compress -Depth 3
+    if ($Links) {
+        $sql = @'
+SET NOCOUNT ON;
+UPDATE l SET SentInScope = 1
+FROM sidata.RemediationTaskFinding AS l
+JOIN OPENJSON(@rows) WITH (h varchar(64) '$.h', f nvarchar(256) '$.f') AS j ON l.TaskId = CONVERT(binary(32), j.h, 2) AND l.FindingKey = j.f
+WHERE l.CollectionId = CONVERT(int, @CollectionId) AND (l.SentInScope IS NULL OR l.SentInScope = 0);
+'@
+    } else {
+        $sql = @'
+SET NOCOUNT ON;
+UPDATE t SET SentInScope = 1
+FROM sidata.RemediationTask AS t
+JOIN OPENJSON(@rows) WITH (h varchar(64) '$.h') AS j ON t.TaskId = CONVERT(binary(32), j.h, 2)
+WHERE t.CollectionId = CONVERT(int, @CollectionId) AND (t.SentInScope IS NULL OR t.SentInScope = 0);
+'@
+    }
+    $null = & $Invoke $sql @{ CollectionId = $CollectionId; rows = $json } 'nonquery'
+}
+
+function ConvertFrom-SIDataOutTaskRow {
+    <#
+        PURE. #1277 One task row (or -Links: one link row) -> its item: the CI's fields as every output reads them (si_ci_id,
+        si_asset_name, si_cmdb_id, si_tier; a link: si_finding_key, si_title) and the task's own values, read by its output map
+        as record.<name>. task_id = the task's id as lower-case hex (the SQL hand-off's u_si_task_id).
+    #>
+    param([Parameter(Mandatory)]$Row, [switch]$Links)
+    # every stored time is UTC (datetime2 without a zone): marked so, so its one wire format never depends on the host's zone
+    $g = { param($n) if (-not $Row.Contains($n)) { return $null }; $x = $Row[$n]; if ($x -is [System.DBNull]) { $null } elseif ($x -is [datetime]) { [datetime]::SpecifyKind($x, [DateTimeKind]::Utc) } else { $x } }
+    $h = [ordered]@{ task_id = ([string](& $g 'TaskHex')).ToLowerInvariant(); si_ci_id = (& $g 'CiId'); si_asset_name = (& $g 'AssetName'); owner_key = (& $g 'OwnerKey') }
+    # the row hash and the source run: the SQL the hand-off views use (Get-SIDataOutTaskHashSql / Get-SIDataOutTaskSourceRunSql)
+    $rh = & $g 'RowHashHex'; $h['row_hash'] = $(if ($null -ne $rh) { ([string]$rh).ToLowerInvariant() } else { $null }); $h['source_run'] = (& $g 'SourceRun')
+    if ($Links) {
+        $fk = [string](& $g 'FindingKey')
+        $h['si_finding_key'] = $fk; $h['item_key'] = ('{0}|{1}' -f [string](& $g 'OwnerKey'), $fk); $h['cve'] = (& $g 'Cve'); $h['si_title'] = (& $g 'Title')
+        $h['severity'] = (& $g 'Severity'); $h['version'] = (& $g 'Version'); $h['in_collection'] = [bool](& $g 'InThisCollection')
+        # when its task last changed (the link view's u_changed_at)
+        $h['changed_at'] = (& $g 'ChangedAt')
+        return [pscustomobject]$h
+    }
+    foreach ($p in @(@('si_cmdb_id', 'CmdbId'), @('si_tier', 'Tier'), @('asset_key', 'AssetKey'), @('task_name', 'TaskName'), @('task_kind', 'Kind'), @('product', 'Product'),
+                     @('vendor', 'Vendor'), @('version', 'Version'), @('application', 'Application'), @('application_paths', 'ApplicationPaths'), @('findings', 'Findings'),
+                     @('cves', 'Cves'), @('highest_severity', 'HighestSeverity'), @('max_risk_score', 'MaxRiskScore'), @('ci_owner', 'CiOwner'), @('ci_department', 'CiDepartment'),
+                     @('state', 'State'), @('closed_why', 'ClosedWhy'), @('closed_at', 'ClosedAt'), @('first_seen', 'FirstSeen'), @('last_seen', 'LastSeen'),
+                     @('changed_at', 'ChangedAt'))) { $h[$p[0]] = (& $g $p[1]) }
+    $h['in_collection'] = [bool](& $g 'InThisCollection')
+    [pscustomobject]$h
 }
 
 function ConvertFrom-SIDataOutJson {
@@ -1263,10 +1614,28 @@ function Invoke-SIDataOutWriterPage {
     $W.Res.Written += $nW; $W.Res.Updated += $nU; $W.Res.Unchanged += [int]$cmp.Unchanged
     $ds = [ordered]@{}
     $dr = New-Object System.Collections.Generic.List[object]
+    # the remediation task outputs (review 3.1.30): each row sent goes out as the vulnerable items' do -- one date format, the
+    # envelope (u_action from what was sent last, u_si_batch_id, the clear marker). After the compare: what is compared and
+    # stored (the state) stays the item's own values.
+    $taskWire = ($W.KeepDelta -and $W.Grain -in 'remediation_task', 'remediation_task_finding')
+    $isNew = @{}; if ($taskWire) { foreach ($k in @($cmp.Written)) { if ($k) { $isNew[[string]$k] = $true } } }
     foreach ($k in @($cmp.Written) + @($cmp.Updated | ForEach-Object { $_.Key })) {
         if (-not $k) { continue }
         $ds[$k] = [pscustomobject]@{ Hash = $new[$k].Hash; Json = $new[$k].Json }
-        if ($W.KeepDelta) { $dr.Add($mapped[$new[$k].Index]) }
+        if ($W.KeepDelta) {
+            $m = $mapped[$new[$k].Index]
+            if ($taskWire) {
+                $before = $null
+                if (-not $isNew.ContainsKey([string]$k)) {
+                    # sent before: the row as last sent (its cells, read with the compare), or -- not readable -- a row that was open
+                    $before = [ordered]@{}
+                    if ($prev.Contains($k) -and $prev[$k].Json) { try { $bo = [string]$prev[$k].Json | ConvertFrom-Json; foreach ($bp in $bo.PSObject.Properties) { $before[$bp.Name] = [string]$bp.Value } } catch { } }
+                }
+                $bid = ''; if ($W.ContainsKey('BatchId') -and $W.BatchId) { $bid = [string]$W.BatchId }
+                $null = Set-SIDataOutTaskWire -Row $m -Output ([string]$W.OutputId) -Links:($W.Grain -eq 'remediation_task_finding') -Before $before -BatchId $bid
+            }
+            $dr.Add($m)
+        }
     }
     # one list (return , ...): assigned, then enumerated -- @(<the call>) would be ONE item, the list
     $chs = ConvertTo-SIDataOutChanges -Compare $cmp -Current $new -Previous $prev -NameColumn $W.NameCol -Reason $W.Label
@@ -1596,12 +1965,15 @@ function Open-SIDataOutSnowSession {
           # #914: the batch's mode (live | resync | test) and the request it carries out; -NoBatch = the check only (the caller
           # opens the batch); -Prelude { param($Session) } runs after the check and before the writing row (the stale batches
           # are ended and the last batch's import result is read back there)
-          [ValidateSet('live', 'resync', 'test')][string]$Mode = 'live', [string]$RequestToken = '', [switch]$NoBatch, [scriptblock]$Prelude)
+          [ValidateSet('live', 'resync', 'test')][string]$Mode = 'live', [string]$RequestToken = '', [switch]$NoBatch, [scriptblock]$Prelude,
+          # the columns ON BY DEFAULT (Get-SIOutputSoftColumns): one the table does not have is left out of the send, said -- never a hold
+          [AllowEmptyCollection()][string[]]$Soft = @())
     if (-not $Here) { $Here = $PSScriptRoot }
     $s = @{ Entry = $Entry; Header = @($Header); Table = ''; Connection = $null; Check = $null; Held = $false; Reason = ''; Unavailable = $false; Failed = ''
             Sent = 0L; Errors = (New-Object System.Collections.Generic.List[string]); Store = $Store; Connector = ''; PushReason = ''; Delta = 0L
             RunId = $RunId; StatusTable = ''; BatchId = ''; BatchState = ''; StatusWarning = ''; StatusProblem = ''
-            Mode = $Mode; RequestToken = $RequestToken; Counts = (New-SIDataOutActionCounts); StatusOk = $false; EndReason = '' }
+            Mode = $Mode; RequestToken = $RequestToken; Counts = (New-SIDataOutActionCounts); StatusOk = $false; EndReason = ''
+            Soft = [string[]]@($Soft); SoftMissing = [string[]]@() }
     $s.Table = [string](Get-Variable -Name ([string]$Entry.tableSetting) -Scope Global -ValueOnly -ErrorAction SilentlyContinue)
     if ([string]::IsNullOrWhiteSpace($s.Table)) { $s.Failed = ('no Import Set table is set ({0})' -f $Entry.tableSetting); return $s }
     $cmdbShared = [IO.Path]::Combine((Split-Path -Parent $Here), 'asset-cmdb', '_shared')
@@ -1638,10 +2010,12 @@ function Open-SIDataOutSnowSession {
     # #914: every data row carries u_si_batch_id from the output map (the contract's envelope), with or without the table
     if (-not $s.StatusTable) { $s.StatusWarning = Get-SISnowNoStatusTableWarning -Output ([string]$Entry.output) }
     $ckp = @{ Output = ([string]$Entry.output); Table = $s.Table; Connection = $s.Connection; ConnectionProblem = $s.ConnProblem; Source = $s.Source; Header = @($s.Header); Rows = @()
-              CheckStatusTable = $true; StatusTable = $s.StatusTable }
+              CheckStatusTable = $true; StatusTable = $s.StatusTable; Soft = [string[]]@($s.Soft) }
     if ($cn.PSObject.Properties['Warning'] -and $cn.Warning) { $ckp['CredentialWarning'] = [string]$cn.Warning }
     $chk = Invoke-SISnowOutputCheck @ckp
     $s.Check = $chk
+    # the columns on by default that the table does not have: left out of every row this run (the check said which)
+    if ($chk.Compare) { $s.SoftMissing = [string[]]@(@($chk.Compare.Warnings) | Where-Object { $_.Kind -eq 'soft-missing' } | ForEach-Object { [string]$_.Column }) }
     # recorded (cfg.ServiceNowCheck -> Data health, the heartbeat, the daily mail) when there is a connector to check, or two
     # are switched on (a real failure: nothing is sent). No data-out connector switched on is the install's choice: the run
     # holds and says so, and no failed check is recorded (owner: no unnecessary alerts)
@@ -1721,6 +2095,8 @@ function Send-SIDataOutSnowPage {
             if ($r -is [System.Collections.IDictionary]) { foreach ($k in @($r.Keys)) { if (-not (Test-SIValueEmpty $r[$k])) { $h[[string]$k] = $r[$k] } } }
             else { foreach ($p in $r.PSObject.Properties) { if (-not (Test-SIValueEmpty $p.Value)) { $h[$p.Name] = $p.Value } } }
             $h })
+    # a column on by default that the table does not have is not sent (never its value into a column that is not there)
+    if ($s.ContainsKey('SoftMissing') -and @($s.SoftMissing).Count) { foreach ($h in $rows) { foreach ($k in @($s.SoftMissing)) { foreach ($hk in @($h.Keys)) { if ([string]$hk -ieq $k) { $h.Remove($hk) } } } } }
     $s.Delta += $rows.Count
     if ($rows.Count -eq 0) { return [pscustomobject]@{ Ok = $true; Held = $false; Reason = ''; Errors = @(); HeldIndex = @() } }
     if ($s.Held) { return [pscustomobject]@{ Ok = $false; Held = $true; Reason = $s.Reason; Errors = @(); HeldIndex = @() } }
@@ -1728,7 +2104,7 @@ function Send-SIDataOutSnowPage {
     $cols = $null; if ($s.Check -and $s.Check.Columns) { $cols = $s.Check.Columns }
     if ($cols -and $cols.Read) {
         $mapState = 'unknown'; if ($s.Check.Mapping) { $mapState = [string]$s.Check.Mapping.State }
-        $cmp = Compare-SISnowSendColumns -Header $s.Header -Rows $rows -Columns @($cols.Columns) -Mapping $mapState -Table $s.Table
+        $cmp = Compare-SISnowSendColumns -Header $s.Header -Rows $rows -Columns @($cols.Columns) -Mapping $mapState -Table $s.Table -Soft $(if ($s.ContainsKey('Soft')) { [string[]]@($s.Soft) } else { [string[]]@() })
         $cutOnly = $HoldCutRows -and $cmp.Hold -and $cmp.PSObject.Properties['Cut'] -and @($cmp.Cut).Count -gt 0 -and
                    @($cmp.Problems).Count -gt 0 -and @(@($cmp.Problems) | Where-Object { [string]$_.Kind -ne 'cut' }).Count -eq 0
         if ($cutOnly) {
@@ -2395,7 +2771,7 @@ function Invoke-SIDataOutSnowContract {
         if ($fb -and $fb.Errors -gt 0) { $__siContractRes['ImportErrors'] = [long]$fb.Errors; $__siContractRes['ImportErrorBatch'] = [string]$fb.BatchId }
     }
     $mode = $(if ($W.Resync) { 'resync' } else { 'live' })
-    $sn = Open-SIDataOutSnowSession -Entry $e -Header $W.Header -Store $W.Store -SnowConnect $SnowConnect -Here $PSScriptRoot -RunId $W.RunId -Mode $mode `
+    $sn = Open-SIDataOutSnowSession -Entry $e -Header $W.Header -Soft ([string[]]@(Get-SIOutputSoftColumns -Map $W.Map)) -Store $W.Store -SnowConnect $SnowConnect -Here $PSScriptRoot -RunId $W.RunId -Mode $mode `
             -RequestToken $(if ($W.Resync) { $req.Token } else { '' }) -Prelude $prelude -NoBatch:$wantTest
     $W.Target = [string]$sn.Table; $W.Snow = $sn; $W.BatchId = [string]$sn.BatchId
     if ($W.Resync) { & $W.Log 'INFO' ('{0}: a full resync was asked for ({1}) -- every record in scope is sent as new' -f $W.Label, $req.Token) }
@@ -2594,6 +2970,16 @@ function Invoke-SIDataOutWriter {
         }
         return [pscustomobject]@{ Output = $id; Connector = [string]$Entry.connector; Outcome = 'off'; Rows = 0; Written = 0; Updated = 0; Removed = 0; Unchanged = 0; Errors = 0; Why = 'switched off'; Target = ''; Carried = 0 }
     }
+    # AN OUTPUT ON BY DEFAULT THAT IS NOT SET UP (the catalog's "notSetUpIsQuiet": its Import Set table setting is empty): not
+    # written, said once as INFO -- never a failure and never a warning (the remediation task outputs are on by default at every
+    # ServiceNow install; an install that has not made their tables yet simply sends nothing to them)
+    if ([string]$Entry.kind -eq 'servicenow-importset' -and (ConvertTo-SIDataOutTruthy (Get-SIItemValue $Entry 'notSetUpIsQuiet')) -and $null -eq $MeasureInto) {
+        $tbl = [string](Get-Variable -Name ([string]$Entry.tableSetting) -Scope Global -ValueOnly -ErrorAction SilentlyContinue)
+        if ([string]::IsNullOrWhiteSpace($tbl)) {
+            & $Log 'INFO' ('{0}: not set up (no Import Set table is set: {1}) -- nothing is sent to it; every row is in the database and the web app' -f $Entry.label, $Entry.tableSetting)
+            return [pscustomobject]@{ Output = $id; Connector = [string]$Entry.connector; Outcome = 'off'; Rows = 0; Written = 0; Updated = 0; Removed = 0; Unchanged = 0; Errors = 0; Why = 'not set up'; Target = ''; Carried = 0 }
+        }
+    }
     $started = [datetime]::UtcNow
     $res = [ordered]@{ Output = $id; Connector = [string]$Entry.connector; Outcome = 'success'; Rows = 0; Written = 0; Updated = 0; Removed = 0; Unchanged = 0; Errors = 0; Why = ''; Target = '' }
     $kind = 'file'; if ([string]$Entry.kind -eq 'servicenow-importset') { $kind = 'servicenow' }
@@ -2687,6 +3073,8 @@ function Invoke-SIDataOutWriter {
             $sn = Open-SIDataOutSnowSession -Entry $Entry -Header $header -Store $Store -SnowConnect $SnowConnect -Here $PSScriptRoot -RunId $RunId
             $W.Target = [string]$sn.Table
             $W.Snow = $sn
+            # the batch every data row names (u_si_batch_id, the remediation task outputs: Set-SIDataOutTaskWire)
+            $W.BatchId = [string]$sn.BatchId
             # #912: a run that stopped mid-push never wrote its end row -- what it recorded as sent goes again in THIS batch
             if ($sn.BatchState -eq 'writing' -and $Store) {
                 $no = Reset-SIDataOutOrphanState -Store $Store -OutputId $id -RunId $RunId -Connector ([string]$Entry.connector)
@@ -3222,12 +3610,31 @@ function Invoke-SIDataOut {
             }
             # the grain is PULLED a page at a time by the writer, when its destination is ready for the next page
             $doCursor = New-SIDataOutItemCursor -Invoke $Invoke -Grain $doGrain -Disabled $doDisabled -Stage $stage
+            # #1277 the remediation task outputs get the vulnerable-item output's scope (and, while the CI output is on, the CI
+            # output's): a task of findings ServiceNow does not get is not sent. A scope that cannot be read FAILS this output.
+            if ($doGrain -in 'remediation_task', 'remediation_task_finding') {
+                try {
+                    $ts = @{ Scope = (Get-SIOutputScope -Destination 'vuln-servicenow'); CiScope = $null; LeftOut = 0L; Record = (-not $WhatIf) }
+                    $ciE = @($Catalog | Where-Object { [string]$_.output -eq 'servicenow-ci' }) | Select-Object -First 1
+                    if ($ciE -and (Test-SIDataOutSwitchedOn -Entry $ciE -Edition $Edition -Setting $Setting)) { $ts.CiScope = Get-SIOutputScope -Destination 'cmdb-servicenow' }
+                    $doCursor['TaskScope'] = $ts
+                    & $Log 'INFO' ("data out  : {0} -- the vulnerable items' scope applies: {1}" -f [string]$e.output, $(if ($null -eq $ts.Scope) { 'everything' } else { Get-SIOutputScopeText $ts.Scope }))
+                } catch {
+                    $why = ('its scope could not be read -- {0}' -f $_.Exception.Message)
+                    & $Log 'WARN' ("data out  : {0} not written -- {1}" -f [string]$e.output, $why)
+                    $results.Add([pscustomobject]@{ Output = [string]$e.output; Connector = [string]$e.connector; Outcome = 'failed'; Rows = 0; Written = 0; Updated = 0; Removed = 0; Unchanged = 0; Errors = 0; Why = $why; Target = '' })
+                    continue
+                }
+            }
             $ck = @(); $cp = @()
             if ($doGrain -eq 'ci_finding') { $ck = $carryKeys } elseif ($doGrain -eq 'finding_summary') { $cp = $carryPre }
             $owClock = [Diagnostics.Stopwatch]::StartNew()
             $owRes = Invoke-SIDataOutWriter -Entry $e -Map $map -Cursor $doCursor -ValueMaps $vm -Store $Store -Write $Write -RunId $RunId -OutputDir $OutputDir -WhatIf:$WhatIf -Log $Log `
                 -CarrySet $(if ($ck -is [hashtable]) { $ck } else { $null }) -CarryPrefixes $cp -Stage $stage -Selected
             $results.Add($owRes)
+            if ($doCursor.ContainsKey('TaskScope') -and $doCursor.TaskScope -and [long]$doCursor.TaskScope.LeftOut -gt 0) {
+                & $Log 'INFO' ("data out  : {0} -- {1} row(s) left out: their findings are outside the vulnerable items' scope" -f [string]$e.output, $doCursor.TaskScope.LeftOut)
+            }
             # 2026-10-25 each output's time and rows: the log line and cfg.StepPhaseTime (the settings database; never fails the output)
             $owSec = $owClock.Elapsed.TotalSeconds
             $owRows = -1L; try { if ($owRes -and $owRes.PSObject.Properties['Rows']) { $owRows = [long]$owRes.Rows } } catch { $owRows = -1L }

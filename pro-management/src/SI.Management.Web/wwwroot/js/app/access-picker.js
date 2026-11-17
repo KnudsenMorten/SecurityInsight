@@ -53,7 +53,7 @@ export function initAccessPicker(root) {
       li.setAttribute("role", "option");
       li.setAttribute("aria-selected", "false");
       var b = document.createElement("strong"); b.textContent = p.name; li.appendChild(b);
-      var s = document.createElement("span"); s.className = "picker-meta"; s.textContent = (p.type === "Group" ? "group" : p.guest ? "guest" : "person") + (p.mail ? " · " + p.mail : ""); li.appendChild(s);
+      var s = document.createElement("span"); s.className = "picker-meta"; s.textContent = (p.type === "Group" ? "group" : p.guest ? "guest" : "person") + (p.disabled ? " · account disabled" : "") + (p.mail ? " · " + p.mail : ""); li.appendChild(s);
       li.addEventListener("mousedown", function (ev) { ev.preventDefault(); pick(p); });
       list.appendChild(li);
     });

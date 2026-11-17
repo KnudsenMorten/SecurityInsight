@@ -37,6 +37,10 @@ if (-not (Get-Command -Name New-SICollectManifest -ErrorAction SilentlyContinue)
 if (-not (Get-Command -Name Get-SINextWorkItem -ErrorAction SilentlyContinue)) { . ([System.IO.Path]::Combine($PSScriptRoot, '..', '..', 'asset-profiling', 'storage', 'WorkerQueue.ps1')) }
 if (-not (Get-Command -Name Get-RAHandoffContradiction -ErrorAction SilentlyContinue)) { . ([System.IO.Path]::Combine($PSScriptRoot, 'RA-ProfileAugment.ps1')) }
 if (-not (Get-Command -Name Get-RAReportSuccessorMap -ErrorAction SilentlyContinue)) { . ([System.IO.Path]::Combine($PSScriptRoot, 'RA-ReportHandoff.ps1')) }
+# #1275 (2): the slice sizing's back-end limits and fixed part (Merge-RAScaleOutMeasure) -- loaded here when the engine has not;
+# never left out: a part's measure merged without them would size the report differently
+if (-not (Get-Command -Name Get-SIRaFixedSliceSeconds -ErrorAction SilentlyContinue)) { . ([System.IO.Path]::Combine($PSScriptRoot, 'RA-BucketStore.ps1')) }
+if (-not (Get-Command -Name Get-SIRaFixedSliceSeconds -ErrorAction SilentlyContinue) -or -not (Get-Command -Name Get-SIRaSliceSecondsLimit -ErrorAction SilentlyContinue)) { throw ('RA-ScaleOut.ps1 needs RA-BucketStore.ps1 (Get-SIRaFixedSliceSeconds, Get-SIRaSliceSecondsLimit) next to it: {0}' -f [System.IO.Path]::Combine($PSScriptRoot, 'RA-BucketStore.ps1')) }
 
 $script:RAScaleOut = @{
     MaxDequeue        = 3          # an item that ended its worker this many times is parked (the report NOT COMPLETE)
@@ -822,7 +826,22 @@ function Merge-RAScaleOutMeasure {
         $m['Slices'] = [int]$m['Slices'] + [int](& $g 'Slices')
         foreach ($k in 'MaxBucketRows', 'MaxBucketBytes', 'MaxRequestBytes', 'MaxFixedBytes') { $v = [long](& $g $k); if ($v -gt [long]$m[$k]) { $m[$k] = $v } }
         $s = [double](& $g 'MaxBucketSeconds'); if ($s -gt [double]$m['MaxBucketSeconds']) { $m['MaxBucketSeconds'] = $s }
+        # #1275 (2): the shortest slice over the parts (the fixed part per slice), and the back end that answered the parts
+        # (the tightest time limit when they differ)
+        $mn = [double]('0' + [string](& $g 'MinBucketSeconds'))
+        if ($mn -gt 0 -and (-not $m.Contains('MinBucketSeconds') -or [double]$m['MinBucketSeconds'] -le 0 -or $mn -lt [double]$m['MinBucketSeconds'])) { $m['MinBucketSeconds'] = $mn }
+        # review F2: the parts' slice-time-against-rows sums, so the fixed part is told from every slice of the report
+        foreach ($fk in 'FitN', 'FitSx', 'FitSy', 'FitSxx', 'FitSxy') { $fv = [double]('0' + [string](& $g $fk)); if ($fv -ne 0) { $m[$fk] = [double]$(if ($m.Contains($fk)) { $m[$fk] } else { 0.0 }) + $fv } }
+        $r0 = & $g 'MinRows'; $r1 = & $g 'MaxRows'
+        if ($null -ne $r0 -and [double]$r0 -ge 0 -and (-not $m.Contains('MinRows') -or [double]$r0 -lt [double]$m['MinRows'])) { $m['MinRows'] = [double]$r0 }
+        if ($null -ne $r1 -and [double]$r1 -ge 0 -and (-not $m.Contains('MaxRows') -or [double]$r1 -gt [double]$m['MaxRows'])) { $m['MaxRows'] = [double]$r1 }
+        $be = [string](& $g 'Backend')
+        if ($be) {
+            if (-not $m.Contains('Backend') -or -not $m['Backend']) { $m['Backend'] = $be }
+            elseif ((Get-SIRaSliceSecondsLimit -Backend $be) -lt (Get-SIRaSliceSecondsLimit -Backend ([string]$m['Backend']))) { $m['Backend'] = $be }
+        }
     }
+    if ($m.Contains('FitN')) { $m['FixedSeconds'] = [double](Get-SIRaFixedSliceSeconds -Measure ([pscustomobject]$m)) }
     [pscustomobject]$m
 }
 

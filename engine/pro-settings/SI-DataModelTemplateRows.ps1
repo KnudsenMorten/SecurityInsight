@@ -15,7 +15,8 @@
                                'field|recordTypes|resourceTypes', a repeat '#<n>', a field's name, a factor's id ...).
                                A key that would pass 128 characters keeps its first part and ends '~<12 hex of SHA-256>'.
       <template> = field-catalog | value-maps | risk-factors | lists | trust | criticality-mapping | collection-scope |
-                   coverage-checks | relations | dimensions | classification | finding-texts | mappings/<provider> | outputs/<id>
+                   coverage-checks | relations | dimensions | classification | finding-texts | finding-fields |
+                   mappings/<provider> | outputs/<id>
 
     RUN START (Export-SIDataModelProRoot): the effective items (template, override or own; disabled ones are left out)
     are put back together per template, in the shipped order (SortOrder) with the customer's own items after, and written
@@ -34,7 +35,7 @@ if (-not (Get-Command -Name Get-SIDataModelItemKey -ErrorAction SilentlyContinue
 
 $script:SIDataModelProKeyMax = 128
 $script:SIDataModelProKeyPattern = '^[a-z][a-z0-9\-]{0,40}(/[a-z0-9][a-z0-9_\-]{0,60})?(:[^\r\n]{1,126})?$'
-$script:SIDataModelProTopNames = @('field-catalog', 'value-maps', 'risk-factors', 'lists', 'trust', 'criticality-mapping', 'collection-scope', 'coverage-checks', 'recommendation-equivalence', 'report-scope', 'relations', 'recommendation-exclusions', 'dimensions', 'classification', 'finding-texts', 'severity-model')
+$script:SIDataModelProTopNames = @('field-catalog', 'value-maps', 'risk-factors', 'lists', 'trust', 'criticality-mapping', 'collection-scope', 'coverage-checks', 'recommendation-equivalence', 'report-scope', 'relations', 'recommendation-exclusions', 'dimensions', 'classification', 'finding-texts', 'severity-model', 'finding-fields')
 
 function Get-SIDataModelProKeyPattern { $script:SIDataModelProKeyPattern }
 
@@ -54,6 +55,8 @@ function Get-SIDataModelProTemplateKind {
     if ($Name -eq 'finding-texts') { return 'finding-text' }
     # #690 (15) the severity model (one item per report)
     if ($Name -eq 'severity-model') { return 'severity-model' }
+    # the finding field map: the generic fields a finding carries to an output (one item per field and finding types)
+    if ($Name -eq 'finding-fields') { return 'finding-field-map' }
     switch ($Name) {
         'field-catalog' { 'field-catalog' } 'value-maps' { 'value-map' } 'risk-factors' { 'risk-factor' } 'lists' { 'list' }
         'trust' { 'trust' } 'criticality-mapping' { 'criticality-mapping' } 'collection-scope' { 'collection-scope' }
@@ -118,7 +121,7 @@ function Get-SIDataModelProItems {
             $i++
             $base = Get-SIDataModelItemKey $kind $it
             $k = $base
-            if ($kind -eq 'field-mapping') {
+            if ($kind -in 'field-mapping', 'finding-field-map') {
                 $n = 1; if ($occ.ContainsKey($base)) { $n = [int]$occ[$base] + 1 }
                 $occ[$base] = $n
                 if ($n -gt 1) { $k = '{0}#{1}' -f $base, $n }
@@ -215,7 +218,7 @@ function Test-SIDataModelProItem {
     if (-not $own) { $why.Add('the item has no key (field / name / id / target / type)'); return $why.ToArray() }
     $expect = Get-SIDataModelProItemKey -Name $s.Name -ItemKey $own
     $ok = ($Key -ceq $expect)
-    if (-not $ok -and $kind -eq 'field-mapping') {
+    if (-not $ok -and $kind -in 'field-mapping', 'finding-field-map') {
         # a repeated mapping key ('#<n>'; inside the hashed part when the key was shortened)
         for ($n = 2; $n -le 64 -and -not $ok; $n++) { $ok = ($Key -ceq (Get-SIDataModelProItemKey -Name $s.Name -ItemKey ('{0}#{1}' -f $own, $n))) }
     }
@@ -238,6 +241,12 @@ function Test-SIDataModelProItem {
     if ($kind -eq 'finding-text') {
         if (-not (Get-Command -Name Test-SIFindingTextItem -ErrorAction SilentlyContinue)) { . ([System.IO.Path]::Combine((Split-Path -Parent $PSScriptRoot), 'data-model', 'SI-FindingTexts.ps1')) }
         foreach ($x in (Test-SIFindingTextItem -Item $Value)) { $why.Add([string]$x) }
+    }
+    # one item of the finding field map, on its own (a label / value source is checked against the fields before it when the
+    # run's whole model is validated -- Test-SIDataModel)
+    if ($kind -eq 'finding-field-map') {
+        if (-not (Get-Command -Name Test-SIFindingFieldMap -ErrorAction SilentlyContinue)) { . ([System.IO.Path]::Combine((Split-Path -Parent $PSScriptRoot), 'data-model', 'SI-FindingFieldMapper.ps1')) }
+        foreach ($x in (Test-SIFindingFieldMap -Map ([pscustomobject]@{ mappings = @($Value) }))) { if ([string]$x -notmatch 'is not a field defined before it') { $why.Add([string]$x) } }
     }
     # #690 (15): one report of the severity model -- its order ends with owner_defined, its own severity is one of the five
     if ($kind -eq 'severity-model') { foreach ($x in (Test-SISeverityModelReportItem -Item $Value)) { $why.Add([string]$x) } }

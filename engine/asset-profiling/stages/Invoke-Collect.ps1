@@ -887,6 +887,24 @@ function Invoke-SICollect {
             $swRes = Add-SIDefenderSoftwareInventoryParts -DeviceIds $defenderCtxIds.ToArray()
             Write-SIInfo ('Defender software inventory: {0} of {1} device(s){2}' -f $swRes.Devices, @($defenderCtxIds | Select-Object -Unique).Count, $(if ($swRes.Failed -gt 0) { (' -- {0} page(s) not read' -f $swRes.Failed) } else { '' }))
         } catch { Write-Warning ('Defender software inventory: ' + $_.Exception.Message) }
+        # WHERE each software copy is (Get-SIDefenderSoftwareEvidence.ps1): DeviceTvmSoftwareEvidenceBeta, every path, one
+        # query per page of devices; stored per collection (sidata.SoftwareEvidence), part 'softwareEvidence' of the device's
+        # record, and the device's compact evidence on its Metadata for the software rules' path conditions (Profile). A
+        # missing table or a failed page = the evidence is UNKNOWN (said once), never "no evidence".
+        try {
+            if (-not (Get-Command -Name Read-SIDefenderSoftwareEvidence -ErrorAction SilentlyContinue)) { . (Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) 'discovery') 'Get-SIDefenderSoftwareEvidence.ps1') }
+            $evCt = [datetime]::UtcNow; if ($RunContext.CollectionTime) { $evCt = [datetime]$RunContext.CollectionTime }
+            $evRes = Read-SIDefenderSoftwareEvidence -DeviceIds $defenderCtxIds.ToArray() -CollectionTime $evCt
+            $evLine = Format-SIDefenderSoftwareEvidenceLine -Result $evRes -Asked (@($defenderCtxIds | Select-Object -Unique).Count)
+            if ([string]$evRes.State -eq 'read' -and -not $evRes.Reason -and -not $evRes.StoreNote) { Write-SIInfo $evLine } else { Write-SIWarn $evLine }
+            foreach ($pr in $proceedRecords) {
+                $md = $pr.Metadata
+                if ($null -eq $md -or -not ($md -is [System.Collections.IDictionary])) { continue }
+                $did = ([string]$md['MDE_DeviceId']).Trim().ToLowerInvariant(); if (-not $did) { continue }
+                if ($evRes.ByDevice.ContainsKey($did)) { $md['SoftwareEvidence'] = $evRes.ByDevice[$did] }
+                else { $md['SoftwareEvidence'] = [ordered]@{ State = 'unknown'; Items = @() } }
+            }
+        } catch { Write-SIWarn ('Defender software evidence: UNKNOWN this run (not "no evidence") -- {0}' -f $_.Exception.Message) }
     }
 
     if ($proceedRecords.Count -gt 0) {

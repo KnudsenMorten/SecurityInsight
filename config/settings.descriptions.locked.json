@@ -2934,6 +2934,24 @@
       "advanced": true,
       "group": "Connectors & CMDB"
     },
+    "SI_DataOut_ServiceNowTaskTable": {
+      "label": "Data out: ServiceNow remediation task Import Set table",
+      "purpose": "The ServiceNow Import Set table the remediation task output (servicenow-remediation-task) sends its rows to: one row per CI and task to perform, with its state.",
+      "defaultText": "Not set: the ServiceNow remediation task output is not written, and its run says so",
+      "effect": "Rows are sent to this Import Set table, where your transform map reads the tasks per CI. Without it the output does nothing.",
+      "whenToChange": "When you switch the servicenow-remediation-task output on.",
+      "advanced": true,
+      "group": "Connectors & CMDB"
+    },
+    "SI_DataOut_ServiceNowTaskFindingTable": {
+      "label": "Data out: ServiceNow remediation task links Import Set table",
+      "purpose": "The ServiceNow Import Set table the remediation task links output (servicenow-remediation-task-finding) sends its rows to: one row per task and finding it resolves.",
+      "defaultText": "Not set: the ServiceNow remediation task links output is not written, and its run says so",
+      "effect": "Rows are sent to this Import Set table, where your transform map links each task to its vulnerable items. Without it the output does nothing.",
+      "whenToChange": "When you switch the servicenow-remediation-task-finding output on.",
+      "advanced": true,
+      "group": "Connectors & CMDB"
+    },
     "SI_DataOut_ServiceNowRequest": {
       "label": "Data out: ServiceNow resync or test batch",
       "purpose": "A one-time request for the ServiceNow outputs, carried out on the next sync: a full resync (every record in scope sent again as new, in one batch) or a test batch (at most 5 rows per output, which your importer never imports).",

@@ -28,6 +28,9 @@ function Get-DiscoveryFromEntraUsers {
     . (Join-Path (Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))) "auth/Get-SIGraphToken.ps1")
     . (Join-Path (Split-Path -Parent $PSScriptRoot) "shared/IdentityRoleFetcher.ps1")
     . (Join-Path (Split-Path -Parent $PSScriptRoot) "shared/SI-AuthMethodsRead.ps1")
+    # the names of the people and groups for the web app's people picker (shared\SI-DirectoryNames.ps1): the user pages below
+    # are recorded as they come (no extra read, the user objects are never changed), then ONE light read of the groups
+    . (Join-Path (Split-Path -Parent $PSScriptRoot) "shared/SI-DirectoryNames.ps1")
 
     try {
         $token = Get-SIGraphToken -Resource Graph
@@ -219,6 +222,10 @@ function Get-DiscoveryFromEntraUsers {
     # far more here than on the five-source endpoint engine.
     . (Join-Path (Split-Path -Parent $PSScriptRoot) 'shared/Invoke-SIPagedRest.ps1')
 
+    # the people picker's names: the install's database (none = nothing is saved, said once); the read's start dates every row
+    $dirStore = $null; $dirStart = [datetime]::UtcNow
+    try { $dirStore = New-SIDirectoryNameStore } catch { $dirStore = $null }
+
     # The record of ONE user -- shared by the whole-set loop below and the streaming pages (#475). Reads the tenant-wide
     # lookups built above (roles, PIM, MFA, Azure, IdentityInfo, Exposure Graph).
     $buildUser = {
@@ -389,6 +396,8 @@ function Get-DiscoveryFromEntraUsers {
         $onUsers = {
             param($PageRows)
             if (-not $streamState.Deleted) { Add-SIIdDuplicateWatch -Watch $userDupWatch -Rows @($PageRows) }
+            # the people picker's names (active users only; reads the page, changes nothing)
+            if (-not $streamState.Deleted -and $dirStore) { try { $null = Add-SIDirectoryNamePage -Store $dirStore -Objects @($PageRows) -Kind 'user' -Now $dirStart } catch { } }
             $batch = New-Object System.Collections.Generic.List[object]
             foreach ($su in $PageRows) {
                 Add-SIFullSourceObject -SourceSystem 'entra-user' -Object $su -AnchorColumn 'EntraAccountObjectId' -AnchorValue ([string]$su.id)
@@ -411,6 +420,7 @@ function Get-DiscoveryFromEntraUsers {
             Write-Warning ('EntraUsers: {0} -- continuing with {1} user(s) from {2} page(s); the run is NOT blocked.' -f $page.Error, $page.Count, $page.Pages)
         }
         $streamState.Deleted = $true
+        Complete-SIDirectoryNamesOfCollection -Store $dirStore -Start $dirStart -UsersComplete ([bool]$page.Complete) -UsersCount ([int]$page.Count) -Token $token
         # LIST KEPT: the same properties as the active users (above), plus when the user was deleted
         $streamDeletedUrl = 'https://graph.microsoft.com/v1.0/directory/deletedItems/microsoft.graph.user?$select=id,displayName,userPrincipalName,accountEnabled,createdDateTime,deletedDateTime,jobTitle,department,onPremisesSyncEnabled,mail,userType&$top=999'
         $delPage = Invoke-SIPagedRest -Url $streamDeletedUrl -Token $token -SourceLabel 'EntraUsers /directory/deletedItems' -OnPage $onUsers
@@ -434,6 +444,11 @@ function Get-DiscoveryFromEntraUsers {
         $page = Invoke-SIPagedRest -Url $url -Token $token -SourceLabel 'EntraUsers /users'
     }
     Add-SIIdDuplicateWatch -Watch $userDupWatch -Rows @($page.Rows); $null = Write-SIIdDuplicateWarning $userDupWatch
+    # the people picker's names (the active users as Graph returned them; reads them, changes nothing), then the groups
+    if ($dirStore) {
+        try { $null = Add-SIDirectoryNamePage -Store $dirStore -Objects @($page.Rows) -Kind 'user' -Now $dirStart } catch { }
+        Complete-SIDirectoryNamesOfCollection -Store $dirStore -Start $dirStart -UsersComplete ([bool]$page.Complete) -UsersCount (@($page.Rows).Count) -Token $token
+    }
     foreach ($u in $page.Rows) {
         # the source's object, BEFORE SecurityInsight stamps its own ENTRA_IsDeleted on it (a no-op at the security level)
         Add-SIFullSourceObject -SourceSystem 'entra-user' -Object $u -AnchorColumn 'EntraAccountObjectId' -AnchorValue ([string]$u.id)

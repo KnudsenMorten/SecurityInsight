@@ -31,6 +31,10 @@
 . (Join-Path $PSScriptRoot 'SI-RiskFactorCatalog.ps1')   # factor groups + provider links, network ranges, per-CI factor columns (#458 / #464)
 . (Join-Path $PSScriptRoot 'SI-CiRules.ps1')
 . (Join-Path $PSScriptRoot 'SI-CiGraph.ps1')       # #496 the business services that own a CI and what it inherits (Set-SICiServices)
+# #1219 the software evidence: the key of a hasSoftwareInstalled detection with path / install-kind / version conditions
+. (Join-Path (Split-Path -Parent $PSScriptRoot) '_shared\SI-SoftwareEvidence.ps1')
+# #1219 (4) a per-server exception of one rule's software match (sidata.CiSoftwareException): applied in Invoke-SICiRules
+. (Join-Path (Split-Path -Parent $PSScriptRoot) '_shared\SI-SoftwareException.ps1')
 
 function Get-SICiRuleClassMap {
     return @{ endpoint = @('device'); identity = @('identity'); azure = @('cloud_resource'); publicip = @('public_ip'); any = @('device', 'identity', 'cloud_resource', 'public_ip') }
@@ -91,7 +95,16 @@ function ConvertTo-SICiKindCondition {
         'hasSoftwareInstalled' {
             $pats = New-Object System.Collections.Generic.List[string]
             foreach ($p in @(& $g 'tvmSoftwareNames')) { if ($p) { $pats.Add(([string]$p).ToLowerInvariant()); $pats.Add('*/' + ([string]$p).ToLowerInvariant()) } }
-            return [ordered]@{ field = 'si_installed_software'; op = 'like'; value = $pats.ToArray() }
+            $byName = [ordered]@{ field = 'si_installed_software'; op = 'like'; value = $pats.ToArray() }
+            # #1219 a detection with path / install-kind / version conditions: the endpoint profiler evaluated them against the
+            # device's software evidence and recorded the detection's key when it matched (si_software_rule_hits, '-' = evaluated).
+            # A device the profiler did not evaluate (no hits field) matches by name as before -- never a silent tier drop.
+            if ($RuleId -and (Get-Command -Name Test-SISoftwareSpecHasConditions -ErrorAction SilentlyContinue) -and (Test-SISoftwareSpecHasConditions -Spec $Spec)) {
+                $key = Get-SISoftwareSpecKey -RuleId $RuleId -Spec $Spec
+                return [ordered]@{ any = @([ordered]@{ field = 'si_software_rule_hits'; op = 'in'; value = @($key) },
+                                           [ordered]@{ all = @([ordered]@{ field = 'si_software_rule_hits'; op = 'is_empty' }, $byName) }) }
+            }
+            return $byName
         }
         'nameMatches' {
             $pats = @(& $g 'namePatterns'); if (-not $pats -or -not $pats[0]) { $pats = @(& $g 'patterns') }
@@ -475,6 +488,17 @@ function Get-SICiTierExplanation {
     # administrative unit or one object only -- the scope's name AND id. Said once (a Tier 0 claim may already carry it).
     $lvl = ([string](Get-SIItemValue $Ci 'si_privilege_tier_level_text')).Trim()
     if ($lvl -and [string](Get-SIItemValue $Ci 'si_class') -eq 'identity' -and $s.IndexOf($lvl, [System.StringComparison]::Ordinal) -lt 0) { $s += (' Entra roles: {0}.' -f $lvl.TrimEnd('.')) }
+    # #1219 (4) a detection an Admin excepted on this server: said, with who and why (only on a CI that has one)
+    $swx = @(@(Get-SIItemValue $Ci 'si_software_exceptions') | Where-Object { $null -ne $_ -and (Get-SIItemValue $_ 'software') })
+    if ($swx.Count -gt 0) {
+        $parts2 = @(foreach ($x in $swx) {
+                $t = 'rule {0} for {1} ({2}' -f [string](Get-SIItemValue $x 'rule'), [string](Get-SIItemValue $x 'software'), (Get-SISoftwareExceptionEffectText ([string](Get-SIItemValue $x 'effect')))
+                $by = [string](Get-SIItemValue $x 'set_by'); if ($by) { $t += ('; by {0}' -f $by) }
+                $why = ([string](Get-SIItemValue $x 'reason')).Trim().TrimEnd('.'); if ($why) { $t += (': {0}' -f $why) }
+                $t + ')'
+            })
+        $s += (' Detection excepted on this server: {0}.' -f ($parts2 -join '; '))
+    }
     return $s
 }
 
@@ -511,8 +535,18 @@ function Invoke-SICiRules {
         # the rules not yet tried are left out for this run and the CI is marked (si_ci_rules_cut = the seconds used). The
         # build takes the mark off and keeps the CI OUT of what it writes -- a tier from part of the rules is a wrong tier --,
         # names it in its log and builds it again in the next run (SI-CiBuildRun.ps1, Get-SICiHeld). 0 = no limit.
-        [double]$BudgetSeconds = 0)
+        [double]$BudgetSeconds = 0,
+        # #1219 (4) the per-server software exceptions in force (ConvertTo-SICiSoftwareExceptionIndex: CiId -> exceptions). A
+        # rule an exception names is evaluated on this CI without the excepted software; nothing else changes. None = as before.
+        [hashtable]$SoftwareExceptions)
     $class = [string]$Ci['si_class']
+    # this CI's exceptions ($null for every CI without one: the loop below is then exactly what it was)
+    $swExc = $null
+    if ($SoftwareExceptions -and $SoftwareExceptions.Count -gt 0) {
+        $swCiId = [string]$Ci['si_ci_id']
+        if ($swCiId -and $SoftwareExceptions.ContainsKey($swCiId)) { $swExc = @($SoftwareExceptions[$swCiId]) }
+    }
+    $swEffect = @{}
     # every tag of the CI in one list before the rules run, so a rule can match si_tags_all like si_tags
     Set-SICiTagsAll -Ci $Ci
     $budgetWatch = $null; if ($BudgetSeconds -gt 0) { $budgetWatch = [System.Diagnostics.Stopwatch]::StartNew() }
@@ -528,8 +562,28 @@ function Invoke-SICiRules {
         $excluded = $false
         foreach ($x in @($r.exclude)) { if ($x -and ([string]$Ci['si_asset_name']) -like [string]$x) { $excluded = $true } }
         if ($excluded) { continue }
+        # the CI as THIS rule sees it: without the software an exception takes away from this rule on this CI
+        $item = $Ci
+        if ($null -ne $swExc) {
+            $rid = Get-SICiRuleIdOf ([string]$r.id)
+            $mine = @($swExc | Where-Object { [string]::Equals([string]$_.rule, $rid, [StringComparison]::OrdinalIgnoreCase) })
+            if ($mine.Count -gt 0) {
+                $item = Get-SICiSoftwareExceptedItem -Ci $Ci -Exceptions $mine
+                if (-not [object]::ReferenceEquals($item, $Ci)) {
+                    $was = $false; try { $was = Test-SICondition -Condition $r.when -Item $Ci -Context $Context } catch { $was = $false }
+                    $still = $false; try { $still = Test-SICondition -Condition $r.when -Item $item -Context $Context } catch { $still = $false }
+                    # per exception over every detection of the rule: did one lose its match, does one still match
+                    foreach ($e in $mine) {
+                        $ek = '{0}|{1}' -f $e.rule, $e.software
+                        if (-not $swEffect.ContainsKey($ek)) { $swEffect[$ek] = @{ Lost = $false; Kept = $false } }
+                        if ($was -and -not $still) { $swEffect[$ek].Lost = $true }
+                        if ($still) { $swEffect[$ek].Kept = $true }
+                    }
+                }
+            }
+        }
         $hit = $false
-        try { $hit = Test-SICondition -Condition $r.when -Item $Ci -Context $Context } catch { $hit = $false }
+        try { $hit = Test-SICondition -Condition $r.when -Item $item -Context $Context } catch { $hit = $false }
         if (-not $hit) { continue }
         $fields = $null
         if ($FieldCache -and $FieldCache.ContainsKey([string]$r.id)) { $fields = $FieldCache[[string]$r.id] }
@@ -548,7 +602,7 @@ function Invoke-SICiRules {
                 for ($i = 0; $i -lt $grp.Count; $i++) {
                     $p = 999; if ($null -ne $Trust[[string]$ms[$i]]) { $p = $Trust[[string]$ms[$i]].Position }
                     if ($p -ge $bestPos) { continue }
-                    $ok = $false; try { $ok = Test-SICondition -Condition $grp[$i] -Item $Ci -Context $Context } catch { $ok = $false }
+                    $ok = $false; try { $ok = Test-SICondition -Condition $grp[$i] -Item $item -Context $Context } catch { $ok = $false }
                     if ($ok) { $bestPos = $p; $best = [string]$ms[$i] }
                 }
                 if ($best) { $mech = $best }
@@ -571,7 +625,7 @@ function Invoke-SICiRules {
         $claims.Add([pscustomobject][ordered]@{
                 rule = $r.id; key = $ruleKey; name = $r.name; stage = $r.stage; mechanism = $mech; trust_position = $pos; order = $r.order; priority = $prio; pack = $pack
                 fallback = [bool]$r.fallback; asserted = $asserted; tier = $(if ($r.set.Contains('si_tier')) { [int]$r.set['si_tier'] } else { $null })
-                set = $r.set; evidence = $fields; admissible = $admissible; reason = $reason; winner = $false; when = $r.when
+                set = $r.set; evidence = $fields; admissible = $admissible; reason = $reason; winner = $false; when = $r.when; item = $item
             })
     }
     $deciding = @($claims | Where-Object { $_.admissible -and -not $_.fallback })
@@ -646,7 +700,7 @@ function Invoke-SICiRules {
             $matched = @()
             if ($null -ne $c.tier -and $kind -ne 'default') {
                 if ($null -ne $c.when) {
-                    $matched = @(foreach ($m in @(Get-SICiConditionMatches -Condition $c.when -Item $Ci -Context $Context)) {
+                    $matched = @(foreach ($m in @(Get-SICiConditionMatches -Condition $c.when -Item $c.item -Context $Context)) {
                             foreach ($mv in @($m.values)) {
                                 # a tag as written: its name, or name=value when the tier is in the value (an Azure / Entra tag)
                                 if ($kind -eq 'tag') { $n = Get-SIItemValue $mv 'name'; if ($null -ne $n -and $mv -isnot [string]) { $tv = [string](Get-SIItemValue $mv 'value'); if ($tv) { '{0}={1}' -f $n, $tv } else { [string]$n } } else { [string]$mv } }
@@ -666,6 +720,15 @@ function Invoke-SICiRules {
             if (-not $c.admissible) { $e['would_set'] = $c.set }
             $e
         })
+    # #1219 (4) the per-server exceptions of this CI and what each did (only on a CI that has one: every other CI is as before)
+    if ($null -ne $swExc) {
+        $Ci['si_software_exceptions'] = @(foreach ($e in $swExc) {
+                $ek = '{0}|{1}' -f $e.rule, $e.software
+                $ef = 'not-matched'
+                if ($swEffect.ContainsKey($ek)) { if ($swEffect[$ek].Kept) { $ef = 'other-evidence' } elseif ($swEffect[$ek].Lost) { $ef = 'removed' } }
+                [ordered]@{ rule = $e.rule; software = $e.software; vendor = $e.vendor; product = $e.product; reason = $e.reason; set_by = $e.set_by; set_at = $e.set_at; effect = $ef }
+            })
+    } elseif ($Ci.Contains('si_software_exceptions')) { $Ci.Remove('si_software_exceptions') }
     $Ci['si_tier_explanation'] = Get-SICiTierExplanation -Ci $Ci
     # #462 testing-stage (and untrusted / stale) claims never change a value; what they WOULD change is a proposal shown
     # beside it ("testing rule X would set Tier 1")
@@ -1074,6 +1137,8 @@ function Invoke-SICiEnrichment {
         [hashtable]$Overrides,
         # #496 the business services (New-SICiServiceIndex): which services own each CI and what it inherits; none = not set
         [hashtable]$ServiceIndex,
+        # #1219 (4) the per-server software exceptions in force (ConvertTo-SICiSoftwareExceptionIndex); none = as before
+        [hashtable]$SoftwareExceptions,
         # the build's watch (Start-SICiWatch): where the step stands, so a step that takes long says which CI it is working on
         $Watch
     )
@@ -1096,7 +1161,7 @@ function Invoke-SICiEnrichment {
         for ($i = 0; $i -lt $Cis.Count; $i += $size) { $chunks.Add(@($Cis[$i..([Math]::Min($i + $size, $Cis.Count) - 1)])) }
         $dir = $PSScriptRoot
         # every object the threads share has its property list made here, on this thread (Initialize-SICiSharedObjects)
-        $null = Initialize-SICiSharedObjects -Roots @($Rules, $Model, $ctx, $trust, $byClass, $Overrides, $CmdbIndex, $ServiceIndex, $envOrder)
+        $null = Initialize-SICiSharedObjects -Roots @($Rules, $Model, $ctx, $trust, $byClass, $Overrides, $CmdbIndex, $ServiceIndex, $envOrder, $SoftwareExceptions)
         # the watch is shared too (its own thread is already running: only the two tables the threads write are prepared)
         if ($Watch) { try { $null = $Watch.PSObject.Properties['__si_shared__']; $null = $Watch.Slots.PSObject.Properties['__si_shared__'] } catch { } }
         # built from text: PowerShell 5.1 never parses a using-variable block it cannot run
@@ -1110,7 +1175,7 @@ try {
     foreach ($ci in $_) {
         if ($w) { $w.Slots[$slot] = @((Get-SICiWatchLabel $ci), [datetime]::UtcNow.Ticks, $n) }
         $null = Set-SICiBreakGlass -Ci $ci -Context $using:ctx
-        $null = Invoke-SICiRules -Ci $ci -Rules $using:Rules -Trust $using:trust -Context $using:ctx -Now $using:Now -RulesByClass $using:byClass -FieldCache $fc -BudgetSeconds $using:budget
+        $null = Invoke-SICiRules -Ci $ci -Rules $using:Rules -Trust $using:trust -Context $using:ctx -Now $using:Now -RulesByClass $using:byClass -FieldCache $fc -BudgetSeconds $using:budget -SoftwareExceptions $using:SoftwareExceptions
         if ($using:Overrides) { $null = Set-SICiOverrides -Ci $ci -Index $using:Overrides }
         if ($using:CmdbIndex) { $null = Set-SICiCmdb -Ci $ci -Index $using:CmdbIndex -CmdbOwner $using:CmdbOwner }
         if ($using:ServiceIndex) { $null = Set-SICiServices -Ci $ci -Index $using:ServiceIndex -Mapping ($using:Model)['criticality-mapping'] -EnvironmentOrder $using:envOrder -CmdbOwner $using:CmdbOwner }
@@ -1132,7 +1197,7 @@ try {
         if ($Watch) { $Watch.Slots['main'] = @((Get-SICiWatchLabel $ci), [datetime]::UtcNow.Ticks, $n) }
         $n++
         $null = Set-SICiBreakGlass -Ci $ci -Context $ctx
-        $null = Invoke-SICiRules -Ci $ci -Rules $Rules -Trust $trust -Context $ctx -Now $Now -RulesByClass $byClass -FieldCache $fieldCache -BudgetSeconds $budget
+        $null = Invoke-SICiRules -Ci $ci -Rules $Rules -Trust $trust -Context $ctx -Now $Now -RulesByClass $byClass -FieldCache $fieldCache -BudgetSeconds $budget -SoftwareExceptions $SoftwareExceptions
         if ($Overrides) { $null = Set-SICiOverrides -Ci $ci -Index $Overrides }
         if ($CmdbIndex) { $null = Set-SICiCmdb -Ci $ci -Index $CmdbIndex -CmdbOwner $CmdbOwner }
         if ($ServiceIndex) { $null = Set-SICiServices -Ci $ci -Index $ServiceIndex -Mapping $Model['criticality-mapping'] -EnvironmentOrder $envOrder -CmdbOwner $CmdbOwner }

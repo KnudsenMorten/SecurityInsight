@@ -28,8 +28,9 @@
                 <dt>@DepartmentRoles.Label(r)</dt><dd>@DepartmentRoles.Purpose(r)</dd>
             }
         </dl>
-        <p>@(Model.DirectoryOn ? "People are looked up in your organisation's directory as you type." : "Type an e-mail address, or pick someone already on a department. (Looking people up in the directory is off: Access:GraphLookup.)") A business owner needs an e-mail address -- the monthly report goes there.</p>
+        <p>@(Model.DirectoryOn ? (Model.PickerNames?.FromSecurityInsight == true ? "People and groups are looked up in the names from SecurityInsight's last run as you type." : "People are looked up in your organisation's directory as you type.") : "Type an e-mail address, or pick someone already on a department. (Looking people up in the directory is off: Access:GraphLookup.)") A business owner needs an e-mail address -- the monthly report goes there.</p>
     </details>
+    @if (Model.PickerNames is { } pn) { <partial name="~/Pages/Admin/_PickerNames.cshtml" model="pn" /> }
     <table data-people-rows data-static="a form: one row per person and role, in the order they were added">
         <thead><tr><th>Person</th><th>Role</th><th><span class="sr-only">Remove</span></th></tr></thead>
         <tbody>

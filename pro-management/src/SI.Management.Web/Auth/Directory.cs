@@ -25,7 +25,16 @@ public interface IGroupMembershipSource
 /// The display name of a user or group, for the Access page. Null = unknown (lookup off or failed).
 public interface IDirectoryNames
 {
+    /// The web app's OWN Microsoft Graph lookup (Access:GraphLookup on). Group membership, the Entra role holders, the auto
+    /// Reader and the sign-in carry-over need it; the people picker does not (CanSearch).
     bool Enabled { get; }
+    /// The people picker can search: the live directory (Enabled), or SecurityInsight's own names from its last run
+    /// (SqlDirectoryNames, when the Graph lookup is off -- framework GRAPH-PICKER: no Graph call from the web app).
+    bool CanSearch => Enabled;
+    /// "Search the tenant" is offered: SecurityInsight's engine looks a name up that the picker did not find (SQL names only).
+    bool CanAskTenant => false;
+    /// When the picker's names were read by SecurityInsight's engine; null = a live directory (or unknown).
+    Task<DirectoryFreshness?> FreshnessAsync(CancellationToken ct) => Task.FromResult<DirectoryFreshness?>(null);
     Task<(string Type, string Name)?> NameOfAsync(string objectId, CancellationToken ct);
     /// #335: a person typed into a department's people field -- a mail address (a user's mail or sign-in name) or an
     /// object id (a user or group) -- as the directory knows them. Null = unknown (lookup off, not found, or failed).
@@ -43,7 +52,11 @@ public interface IDirectoryNames
 
 /// A user or group found in the directory: Type "user" | "group", its object id, name and mail (null when it has none);
 /// Guest = a B2B guest user (#765: guests are found and added like members).
-public sealed record DirectoryPerson(string Type, string ObjectId, string Name, string? Mail, bool Guest = false);
+public sealed record DirectoryPerson(string Type, string ObjectId, string Name, string? Mail, bool Guest = false)
+{
+    /// A user whose account is disabled (known from SecurityInsight's own names only; shown after the enabled ones).
+    public bool Disabled { get; init; }
+}
 
 /// #446: one app role assignment on the web app's enterprise application: who (User | Group | ServicePrincipal), and the
 /// role's value (SuperAdmin, Admin, Viewer, Wallboard, Department).

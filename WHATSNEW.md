@@ -1,5 +1,24 @@
 # What's new in SecurityInsight
 
+## 3.1.30 · 2026-11-17 · Feature update
+
+Remediation tasks per asset, ready for ServiceNow, and more reliable attack-path reports.
+
+### New features
+
+- **Remediation tasks per asset** - Findings are grouped into tasks to do on each asset: an update, a software upgrade per version, a library bundled in another program (with all its paths), or a configuration change. See Remediations > Tasks and Task findings, with export.
+- **Tasks to ServiceNow** - Two new ServiceNow outputs send the tasks and their findings once their Import Set table names are entered on the ServiceNow data-out connector page.
+- **Verify table schema checks every table** - The ServiceNow connector page checks each table's columns: present, missing, too short or the wrong type, and which new columns can be switched on.
+- **More ServiceNow fields for vulnerable items** - 14 more fields, such as security domain, category, risk score, tier and the fix KB, can be switched on per column under Connectors > Fields sent.
+- **False positive on this server** - An Admin can mark a software detection as a false positive for one server, with a reason, audited and reversible.
+
+### Fixes
+
+- **Attack-path reports are more reliable** - Each part of the query is sized to the back end's own time limit, and a report is marked complete only when its row count is confirmed.
+- **Where software was found is kept in full** - Every software finding keeps its full path on every drive and the application it belongs to.
+- **Plainer warning mails** - Data-quality notices say what happened, whether anything was lost and whether you need to do anything.
+- **Leaner at large installations** - The task build, the vulnerability step and the software evidence use a fixed amount of memory at any size, with the same results.
+
 ## 3.1.29 · 2026-11-16 · Fix-only
 
 Faster nightly runs at large installations.

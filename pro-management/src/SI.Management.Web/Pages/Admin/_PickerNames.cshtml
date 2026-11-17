@@ -1,0 +1,28 @@
+@model SI.Management.Web.Pages.Admin.PickerNamesModel
+@* The people picker's note (framework GRAPH-PICKER): where its names come from and how fresh they are, and "Search the tenant"
+   -- SecurityInsight's engine looks a missing name up (the web app never reads the directory itself). *@
+@if (Model.FromSecurityInsight)
+{
+    var f = Model.NamesFrom;
+    if (f?.At is { } at)
+    {
+        <p class="hint" data-picker-names-from="@(f.Complete ? "complete" : "partial")">Names from SecurityInsight's last run (@Fmt.Time(at))@(f.Complete ? "" : " -- that read did not complete, so some people or groups may be missing"). Someone newer is not in the list yet: search the tenant below, or paste the object id.</p>
+    }
+    else
+    {
+        <p class="hint" data-picker-names-from="none">No names from a SecurityInsight run yet -- the next identity collection saves them. Until then, search the tenant below or paste the object id.</p>
+    }
+}
+@if (Model.TenantAsk)
+{
+    <details class="picker-ask" data-picker-ask data-ask-url="/Admin/DirectorySearch">
+        <summary>Not in the list? Search the tenant</summary>
+        <div class="filterbar">
+            <div class="wide"><label for="pa-text">Start of the name, sign-in name or mail</label><input id="pa-text" type="text" maxlength="100" autocomplete="off" spellcheck="false" data-ask-text /></div>
+            <div class="wide"><label for="pa-reason">Reason</label><input id="pa-reason" type="text" maxlength="400" autocomplete="off" placeholder="e.g. new team member needs access" data-ask-reason /></div>
+        </div>
+        <button type="button" class="secondary" data-ask-go>Search the tenant</button>
+        <p class="hint" role="status" aria-live="polite" data-ask-state></p>
+        <p class="hint">SecurityInsight's engine looks the name up in Microsoft Entra (reads only, with the rights it already has) and saves the people and groups it finds for this list, usually within 15 minutes. Your request and its reason are in the audit trail.</p>
+    </details>
+}

@@ -37,9 +37,132 @@ $script:SIRaBucketHistoryKeep   = 30
 #    run no longer proves N and the count does not come down to it.
 $script:SIRaBucketGrewFactor        = 2
 $script:SIRaBucketRequestSameFactor = 1.15
-# #833: the client ceiling of one advanced-hunting request -- a slice's TIME is measured against half of it like its rows
-# and bytes (the same value as RA-AutoBucketing.ps1's $script:RASliceCeilingSeconds; this file loads standalone too).
+# #833: the client ceiling of one advanced-hunting request (the same value as RA-AutoBucketing.ps1's
+# $script:RASliceCeilingSeconds; this file loads standalone too). #1275 (2): NO LONGER the time a slice is sized against --
+# that is the back end's own documented limit per request (below); the client ceiling only ends a request nobody answers.
 $script:SIRaBucketSliceSeconds  = 900
+# #1275 (2) (owner 2026-11-17, stage 1) THE BACK END'S DOCUMENTED LIMITS PER REQUEST -- the slices are sized at HALF of the
+# time limit of the back end that answers them, measured from the run's own slice times (Microsoft Learn, read 2026-11-17,
+# .ops\query-backend-limits-msdocs.md):
+#   hunting       Defender XDR advanced hunting API: a request ends after 3 minutes; at most 100,000 rows per answer
+#   loganalytics  Log Analytics query API: 3 minutes by default, up to 10 with "Prefer: wait=600" -- SI asks 600 (Invoke-
+#                 LogAnalyticsKqlQuery -TimeoutSec 600); 500,000 rows per answer
+#   lake          Sentinel data lake, interactive KQL: 4 minutes; 500,000 rows per answer
+# Sizing against 900 s aimed a slice at 450 s while the Defender API ends a request at 180 s: a slow slice ran into the
+# gateway (504) instead of being sized smaller. Rows: SIRaBucketRowLimit (30,000) is SecurityInsight's PLANNING target per
+# slice, never above the tightest back end's cut limit (Get-SIRaPlanningRowLimit); the cut check (an answer AT the limit is
+# taken as cut) reads the cut limit of the same table. The planning target is NOT raised here (a separate owner decision).
+$script:SIRaBackendLimits = @{
+    hunting      = @{ Seconds = 180; Rows = 100000 }
+    loganalytics = @{ Seconds = 600; Rows = 500000 }
+    lake         = @{ Seconds = 240; Rows = 500000 }
+}
+# the back end the CURRENT report's slices are answered by (set by the engine per report); unknown = the tightest
+$script:SIRaSliceBackend = 'hunting'
+
+function Get-SIRaBackendName {
+    <# PURE. A known back end name ('hunting' | 'loganalytics' | 'lake'); anything else = 'hunting' (the tightest limit). #>
+    param([AllowNull()][AllowEmptyString()][string]$Backend)
+    $b = ([string]$Backend).Trim().ToLowerInvariant()
+    if ($script:SIRaBackendLimits.ContainsKey($b)) { return $b }
+    'hunting'
+}
+
+function Get-SIRaSliceSecondsLimit {
+    <# PURE. #1275 (2): the documented time limit of ONE request at the back end (-Backend; else -Measure's Backend; else
+       the current report's $script:SIRaSliceBackend). A slice is sized at half of it. #>
+    param([AllowNull()][AllowEmptyString()][string]$Backend = '', $Measure = $null)
+    if (-not $Backend -and $null -ne $Measure) { $Backend = [string](Get-SIRaBucketValue $Measure 'Backend') }
+    if (-not $Backend) { $Backend = [string]$script:SIRaSliceBackend }
+    [double]$script:SIRaBackendLimits[(Get-SIRaBackendName -Backend $Backend)].Seconds
+}
+
+function Get-SIRaSliceTimeNeed {
+    <#
+        PURE. #1275 (2) HOW MANY SLICES THE TIME NEEDS -- only for the part of a slice's time that slicing CAN divide.
+        -Seconds: the longest slice's seconds; -Count: the slice count it ran at (1 for one split slice's own time).
+        -Measure: its Backend (the documented limit, Get-SIRaSliceSecondsLimit) and FixedSeconds (what a slice costs whatever it
+        holds -- the graph build, a table scan -- as the run's slices show it: Get-SIRaFixedSliceSeconds; 0 = not known).
+        Measured 2026-11-17 at the large installs (cfg.RaBucketHistory): reports with ~170 rows ran 117-122 slices of
+        110-227 s each -- their slice time is the fixed part, more slices only repeat it. A slice at M slices takes about
+        fixed + W / M, W = (longest - fixed) x Count the work slicing divides (the room never below a quarter of half the limit). So:
+          * fixed part known (a run's own measure): need = W / (half the limit - fixed); when the fixed part is at or over
+            half the limit, the room is what is left of the WHOLE limit; none left -> 0 (no count helps: the time says
+            nothing, the rows decide);
+          * fixed part NOT known (a history row -- the table has no column for it): today's rule exactly, the longest slice
+            x its count against half the 900 s client ceiling ($script:SIRaBucketSliceSeconds) -- never more slices than
+            before from a row that cannot tell how much of its time slicing removes.
+    #>
+    # review F2: the fixed part is the run's FixedSeconds (Get-SIRaFixedSliceSeconds: separated by the slices' rows), never
+    # the shortest slice alone -- evenly hashed slices are all about as long whatever their divisible work.
+    # review F3: the room is never below a quarter of the target (a fixed part just under it made the room ~1 s).
+    param([double]$Seconds, [double]$Count = 1, $Measure = $null)
+    if ($Count -lt 1) { $Count = 1 }
+    $fixed = 0.0
+    if ($null -ne $Measure) { $fixed = [double]('0' + [string](Get-SIRaBucketValue $Measure 'FixedSeconds')) }
+    if ($fixed -le 0) { return (($Seconds * $Count) / ([double]$script:SIRaBucketSliceSeconds / 2.0)) }
+    $limit = Get-SIRaSliceSecondsLimit -Measure $Measure
+    if ($fixed -ge $limit) { return 0.0 }
+    $half = $limit / 2.0
+    $room = [Math]::Max($half - $fixed, 0.25 * $half)
+    [Math]::Max(0.0, ([Math]::Max(0.0, $Seconds - $fixed) * $Count) / $room)
+}
+
+# #1275 (2), second review: the row spread the line of slice time against slice rows needs before it tells a fixed part at
+# all (a flat line: the shortest slice all fixed; a rising one: its value at 0 rows). 1,000 rows: at the large installs' measured pace (Device_Missing_CVEs, 1.42 M rows in 136 slices of at
+# most 26 s: about 400 rows a second in a slice) 1,000 rows are ~2.5 s of divisible work -- a difference a slice's time shows
+# above its own noise; a few rows (the identity reports' 0-5) are not. Below it the fixed part is 'not known' (today's rule).
+$script:SIRaFixedFlatMinRowSpread = 1000
+
+function Get-SIRaFixedSliceSeconds {
+    <#
+        PURE. #1275 (2), review F2: the part of a slice's time that slicing does NOT divide -- only where the run's slices
+        SHOW it: the slice time against the slice's rows over the run's slices (-Measure: FitN / FitSx / FitSy / FitSxx /
+        FitSxy, MinRows / MaxRows, MinBucketSeconds), a straight line whose value at 0 rows is the fixed part. Told only when
+        there are at least 4 timed slices and their rows spread widely (the smallest at most half the largest, at least
+        $script:SIRaFixedFlatMinRowSpread = 1,000 apart): evenly hashed slices (all about the same rows) cannot tell a fixed cost from divisible work -> 0 = not known
+        (the caller keeps today's rule). A line that does not rise with the rows -> the shortest slice is all fixed; else its value at 0 rows, never below 0 nor above the shortest slice.
+    #>
+    param($Measure)
+    if ($null -eq $Measure) { return 0.0 }
+    $g = { param($n) [double]('0' + [string](Get-SIRaBucketValue $Measure $n)) }
+    $n = & $g 'FitN'; $sx = & $g 'FitSx'; $sy = & $g 'FitSy'; $sxx = & $g 'FitSxx'; $sxy = & $g 'FitSxy'
+    $minS = & $g 'MinBucketSeconds'
+    $minR = [double](Get-SIRaBucketValue $Measure 'MinRows'); $maxR = [double](Get-SIRaBucketValue $Measure 'MaxRows')
+    if ($n -lt 4 -or $minS -le 0 -or $maxR -lt 0 -or $minR -lt 0) { return 0.0 }
+    if (($maxR - $minR) -lt [double]$script:SIRaFixedFlatMinRowSpread -or $minR -gt (0.5 * $maxR)) { return 0.0 }
+    $den = ($n * $sxx) - ($sx * $sx)
+    if ($den -le 0) { return 0.0 }
+    $b = (($n * $sxy) - ($sx * $sy)) / $den
+    # (the rows differ by at least $script:SIRaFixedFlatMinRowSpread here: a flat line then says the time does not follow them)
+    if ($b -le 0) { return $minS }
+    $a = ($sy - ($b * $sx)) / $n
+    [Math]::Min($minS, [Math]::Max(0.0, $a))
+}
+
+function Get-SIRaSliceTimeTarget {
+    <# PURE. #1275 (2): the longest a slice may take for a run to count as "within the time": half the back end's documented
+       limit when the run's measure tells its fixed part (FixedSeconds), else half the 900 s client ceiling as before. #>
+    param($Measure = $null)
+    $fixed = 0.0
+    if ($null -ne $Measure) { $fixed = [double]('0' + [string](Get-SIRaBucketValue $Measure 'FixedSeconds')) }
+    if ($fixed -le 0) { return ([double]$script:SIRaBucketSliceSeconds / 2.0) }
+    (Get-SIRaSliceSecondsLimit -Measure $Measure) / 2.0
+}
+
+function Get-SIRaRowCutLimit {
+    <# PURE. #1275 (2): the documented row limit of ONE answer at the back end -- an answer AT it is taken as cut. #>
+    param([AllowNull()][AllowEmptyString()][string]$Backend = 'hunting')
+    [long]$script:SIRaBackendLimits[(Get-SIRaBackendName -Backend $Backend)].Rows
+}
+
+function Get-SIRaPlanningRowLimit {
+    <# PURE. #1275 (2): the rows a slice is planned for (SIRaBucketRowLimit), never above the back end's cut limit -- the
+       sizing and the cut check read the same table. 30,000 today on every back end (unchanged). #>
+    param([AllowNull()][AllowEmptyString()][string]$Backend = '')
+    if (-not $Backend) { $Backend = [string]$script:SIRaSliceBackend }
+    [double][Math]::Min([double]$script:SIRaBucketRowLimit, [double](Get-SIRaRowCutLimit -Backend $Backend))
+}
 # #833: the bucket state of the report certification's own test template (ops\report-certification, default
 # 'Test688_Detailed') -- 'Test' + digits + '_' -- is removed by a run of ANOTHER template once no run of the test template
 # has left a history row for a week (the certification is weekly). Only state rows, only that name shape, never the run's
@@ -464,7 +587,9 @@ function Get-SIRaBucketCountFromMeasure {
         widest row and the longest query text of the whole run up to then), while every request they sent was a few KB.
         #833 THE SLICE TIME is a need like the rows and the bytes: the longest slice of the run (MaxBucketSeconds) at the count
         its slices ran at (RanCount) did at most MaxBucketSeconds x RanCount of work, so at M slices the longest takes at most
-        MaxBucketSeconds x RanCount / M -- against HALF the 900 s ceiling:
+        MaxBucketSeconds x RanCount / M -- #1275 (2) Get-SIRaSliceTimeNeed: with the run's own fixed part per slice known
+        (FixedSeconds, as the run's slices show it) against HALF the back end's documented limit (180 s advanced hunting, 600 s Log Analytics, 240 s
+        the data lake) for the part slicing divides; for a history row (no fixed part stored) as before:
                    need_time  = MaxBucketSeconds x RanCount / (900 / 2)
         A run that measured its slices and found NO rows (a report that returns nothing) is a measurement too: it needs 1,
         unless its time says more. RanCount (the count the slices ran at) is also the count the largest request was sent at;
@@ -486,9 +611,11 @@ function Get-SIRaBucketCountFromMeasure {
     $hasTime = ($secs -gt 0 -and $sentAt -ge 1)
     if ($rows -le 0 -and $reqRows -le 0 -and -not $hasSent -and -not $hasTime) { return $null }
     $need = 0.0
-    if ($hasTime) { $need = [Math]::Max($need, ($secs * $sentAt) / ($script:SIRaBucketSliceSeconds / 2.0)) }
+    # #1275 (2): the time against half the documented limit of the back end that answers the slices, the rows against half
+    # the planning target (Get-SIRaPlanningRowLimit) -- one table for both
+    if ($hasTime) { $need = [Math]::Max($need, (Get-SIRaSliceTimeNeed -Seconds $secs -Count $sentAt -Measure $Measure)) }
     if ($rows -gt 0) {
-        $need = [Math]::Max($need, $rows / ($script:SIRaBucketRowLimit / 2.0))
+        $need = [Math]::Max($need, $rows / ((Get-SIRaPlanningRowLimit) / 2.0))
         if ($maxRows -gt 0 -and $maxBytes -gt 0) {
             $bpr = $maxBytes / $maxRows
             $need = [Math]::Max($need, ($rows * $bpr) / ($script:SIRaBucketAnswerBytes / 2.0))
@@ -609,7 +736,7 @@ function Get-SIRaBucketCompleteLowerCount {
         $ran = if ($x.PSObject.Properties['RanCount']) { [int]('0' + [string]$x.RanCount) } else { 0 }
         if ($ran -ne $c) { continue }
         $secs = if ($x.PSObject.Properties['MaxBucketSeconds']) { [double]('0' + [string]$x.MaxBucketSeconds) } else { 0.0 }
-        if ($secs -le 0 -or $secs -ge ($script:SIRaBucketSliceSeconds / 2.0)) { continue }
+        if ($secs -le 0 -or $secs -ge (Get-SIRaSliceTimeTarget -Measure $x)) { continue }   # #1275 (2): a history row -> as before
         if ($best -eq 0 -or $c -lt $best) { $best = $c }
     }
     return [int]$best
@@ -622,7 +749,7 @@ function Test-SIRaBucketRunFarBelow {
     if ($null -eq $Run) { return $false }
     $maxRows = [double]('0' + [string]$Run.MaxBucketRows); $maxBytes = [double]('0' + [string]$Run.MaxBucketBytes)
     if ($maxRows -le 0 -and $maxBytes -le 0) { return $false }
-    if ($maxRows -ge ($script:SIRaBucketDownFraction * $script:SIRaBucketRowLimit)) { return $false }
+    if ($maxRows -ge ($script:SIRaBucketDownFraction * (Get-SIRaPlanningRowLimit))) { return $false }
     if ($maxBytes -ge ($script:SIRaBucketDownFraction * $script:SIRaBucketAnswerBytes)) { return $false }
     $req = [double]('0' + [string]$Run.MaxRequestBytes); $over = [double]('0' + [string]$Run.RequestOverheadBytes)
     if ($req -gt 0) {

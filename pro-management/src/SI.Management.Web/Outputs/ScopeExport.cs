@@ -68,7 +68,7 @@ public sealed class ScopeExport(OutputRowPreview items, OutputMapStore maps, ILo
         OutputMapView? map = null;
         try { map = await maps.LoadAsync(output, ct); }
         catch (Exception ex) when (ex is not OperationCanceledException) { log.LogWarning(ex, "the output map {Output} could not be read; the export carries the finding's own fields", output); }
-        var columns = map is null ? Fallback : map.Columns.Where(c => !c.Removed).Select(c => c.InForce).ToList();
+        var columns = map is null ? Fallback : map.Columns.Where(c => !c.Removed && !c.ShippedOff).Select(c => c.InForce).ToList();
         JsonObject? mapFilter = null;
         try { if (map?.FilterJson is { } fj) mapFilter = JsonNode.Parse(fj) as JsonObject; } catch (System.Text.Json.JsonException) { mapFilter = null; }
         var header = columns.Select(c => c.Name).ToList();
@@ -153,7 +153,7 @@ public sealed class ScopeExport(OutputRowPreview items, OutputMapStore maps, ILo
         OutputMapView? map = null;
         try { map = await maps.LoadAsync(e.Output, ct); }
         catch (Exception ex) when (ex is not OperationCanceledException) { log.LogWarning(ex, "the output map {Output} could not be read; the export carries the item's own fields", e.Output); }
-        var columns = map is null ? Fallback : map.Columns.Where(c => !c.Removed).Select(c => c.InForce).ToList();
+        var columns = map is null ? Fallback : map.Columns.Where(c => !c.Removed && !c.ShippedOff).Select(c => c.InForce).ToList();
         JsonObject? mapFilter = null;
         try { if (map?.FilterJson is { } fj) mapFilter = JsonNode.Parse(fj) as JsonObject; } catch (System.Text.Json.JsonException) { mapFilter = null; }
         var header = columns.Select(c => c.Name).ToList();

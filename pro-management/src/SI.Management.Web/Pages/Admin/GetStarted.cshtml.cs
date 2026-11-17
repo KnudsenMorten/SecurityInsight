@@ -76,7 +76,11 @@ public sealed class GetStartedModel : PageModel
     public string? Problem { get; private set; }
     /// The access step: who has a role through this page today, and whether names can be searched.
     public IReadOnlyList<AccessAssignment> Managers { get; private set; } = Array.Empty<AccessAssignment>();
-    public bool NameLookup => _names.Enabled;
+    /// The people picker searches: the directory, or SecurityInsight's own names from its last run (framework GRAPH-PICKER).
+    public bool NameLookup => _names.CanSearch;
+    /// When SecurityInsight's engine read the picker's names (null = a live directory, or not known).
+    public DirectoryFreshness? NamesFrom { get; private set; }
+    public IDirectoryNames Names => _names;
     /// The mail step: the address the test mail goes to (the signed-in person).
     public string? TestTo => User.FindFirst("preferred_username")?.Value ?? User.Identity?.Name;
     /// The connectors step: the connectors (cfg.Connector, read fresh), the form's values (what is set up now, or what a
@@ -139,6 +143,8 @@ public sealed class GetStartedModel : PageModel
         {
             try { Managers = (await _access.TableExistsAsync(ct)) ? (await _access.ListAsync(ct)).Where(a => a.Role is SiRole.Admin or SiRole.SuperAdmin).ToList() : Array.Empty<AccessAssignment>(); }
             catch (Exception ex) when (ex is not OperationCanceledException) { _log.LogWarning(ex, "the access assignments could not be read"); }
+            try { NamesFrom = await _names.FreshnessAsync(ct); }
+            catch (Exception ex) when (ex is not OperationCanceledException) { _log.LogWarning(ex, "the time of the picker's names could not be read"); }
         }
         if (step.Form == "connectors")
         {
@@ -293,7 +299,7 @@ public sealed class GetStartedModel : PageModel
         var role = AccessClaims.ParseRole(form["Role"].ToString()) is SiRole r && r is SiRole.Admin or SiRole.SuperAdmin ? r : SiRole.Admin;
         var type = string.Equals(form["PrincipalType"], AccessAssignment.Group, StringComparison.OrdinalIgnoreCase) ? AccessAssignment.Group : AccessAssignment.User;
         var name = form["DisplayName"].ToString().Trim();
-        if (name.Length == 0 && _names.Enabled && await _names.NameOfAsync(id, ct) is { } found) { name = found.Name; type = found.Type; }
+        if (name.Length == 0 && _names.CanSearch && await _names.NameOfAsync(id, ct) is { } found) { name = found.Name; type = found.Type; }
         if (name.Length == 0) return (false, "Give the person or group a name.");
         var w = await _access.WriteAsync(new AccessAssignment(id, type, name, role, new AccessScope()), null, User.ChangeName(), "Get Started: who can manage SecurityInsight", ct);
         return w.Status == WriteStatus.Saved ? (true, $"{name} can now manage SecurityInsight ({AccessClaims.Label(role)}).") : (false, "Not saved: " + w.Message);

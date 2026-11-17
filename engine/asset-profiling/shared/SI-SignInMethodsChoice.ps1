@@ -543,7 +543,10 @@ function Invoke-SISignInMethodsFill {
         [int]$BatchSize = $script:SISignInMethodsFill.BatchSize,
         [scriptblock]$Clock,
         [string]$By = ('{0}-{1}' -f [Environment]::MachineName, [guid]::NewGuid().ToString('N').Substring(0, 8)),
-        [scriptblock]$IsRefused
+        [scriptblock]$IsRefused,
+        # called before every batch (the people picker's "Search the tenant" requests are answered here too, so an Admin
+        # never waits behind a long slice); its failure is ignored
+        [scriptblock]$Between
     )
     if (-not $Clock) { $Clock = { [datetime]::UtcNow } }
     if ($BudgetSeconds -le 0) { $BudgetSeconds = 60 * [int]$Choice.FillMinutes }
@@ -573,6 +576,7 @@ function Invoke-SISignInMethodsFill {
         while ($true) {
             $now = [datetime](& $Clock)
             if (($now - $start).TotalSeconds -ge $BudgetSeconds) { $stop = 'budget'; break }
+            if ($Between) { try { $null = & $Between } catch { } }
             $pick = @(& $DataInvoke (Get-SISignInMethodsFillPickSql) @{ n = [string]$BatchSize; maxAge = [string]$Choice.MaxAgeDays; all = $(if ($Choice.Mode -eq 'all') { '1' } else { '0' }); now = $now.ToString('yyyy-MM-ddTHH:mm:ss.fffZ', $inv) } 'rows')
             $pick = @($pick | Where-Object { $null -ne $_ -and [string](Get-SISqlRowValue $_ 'UserId') })
             if ($pick.Count -eq 0) { $stop = 'done'; break }
@@ -636,7 +640,7 @@ function Invoke-SISignInMethodsFillTick {
         The job's call (engine\signin-methods\Invoke-SISignInMethods.ps1): loads the read, takes the install's choice (cfg.Setting over the shipped defaults), a Microsoft
         Graph token, and runs one tick (Invoke-SISignInMethodsFill). Never throws; answers the tick's outcome.
     #>
-    param([scriptblock]$DataInvoke, [scriptblock]$ProInvoke, [string]$SIRoot)
+    param([scriptblock]$DataInvoke, [scriptblock]$ProInvoke, [string]$SIRoot, [scriptblock]$Between)
     try {
         if (-not (Get-Command -Name Get-SIEntraPasswordlessByUser -ErrorAction SilentlyContinue)) { . ([IO.Path]::Combine($PSScriptRoot, 'SI-AuthMethodsRead.ps1')) }
         $choice = Read-SISignInMethodsStoredChoice -ProInvoke $ProInvoke
@@ -645,8 +649,11 @@ function Invoke-SISignInMethodsFillTick {
         if (-not (Get-Command -Name Get-SIGraphToken -ErrorAction SilentlyContinue)) { . ([IO.Path]::Combine($SIRoot, 'auth', 'Get-SIGraphToken.ps1')) }
         $tok = Get-SIGraphToken -Resource Graph
         Reset-SIEntraAuthMethodsState
-        $read = [scriptblock]::Create('param($Users) Get-SIEntraPasswordlessByUser -Token ''{0}'' -Users $Users -ReadDevices -MaxRounds 3 -MaxDelaySeconds 30' -f ([string]$tok).Replace("'", "''"))
-        Invoke-SISignInMethodsFill -Choice $choice -DataInvoke $DataInvoke -ProInvoke $ProInvoke -ReadUsers $read
+        # the token is never built into script text: the read finds it in this function's scope when the tick calls it (the tick
+        # runs inside this call), as it finds the read function
+        $siSignInGraphToken = [string]$tok
+        $read = { param($Users) Get-SIEntraPasswordlessByUser -Token $siSignInGraphToken -Users $Users -ReadDevices -MaxRounds 3 -MaxDelaySeconds 30 }
+        Invoke-SISignInMethodsFill -Choice $choice -DataInvoke $DataInvoke -ProInvoke $ProInvoke -ReadUsers $read -Between $Between
     } catch {
         [pscustomobject]@{ Status = 'error'; Picked = 0; Read = 0; Unread = 0; Line = ('sign-in methods (background read): not run this tick ({0})' -f $_.Exception.Message) }
     }

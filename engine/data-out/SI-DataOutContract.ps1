@@ -48,6 +48,11 @@ $script:SIDataOutClearable = @{
                                      'u_si_asset_subtype')
     'servicenow-vulnerable-item' = @('u_cmdb_ci', 'u_severity', 'u_closed_at', 'u_close_reason', 'u_title', 'u_si_component', 'u_si_servicenow_subci', 'u_si_os_family',
                                      'u_si_patch_cycle')
+    # the remediation task outputs (#1277, review 3.1.30): the values a task or a link can LOSE run to run -- a reopened task's
+    # close reason and close time first (ServiceNow must clear them; the Import Set API cannot tell empty from not sent). The
+    # SQL hand-off views list the same columns, in this order (sql\si-data-schema.sql).
+    'servicenow-remediation-task'         = @('u_cmdb_ci', 'u_application_paths', 'u_severity', 'u_risk_score', 'u_tier', 'u_owner', 'u_department', 'u_close_reason', 'u_closed_at')
+    'servicenow-remediation-task-finding' = @('u_title', 'u_severity', 'u_product_version')
 }
 # the fixed columns of a vulnerable item an out_of_scope row carries (the hand-off database's values, #279 decision 3)
 $script:SIDataOutOutOfScopeState = 'Closed'

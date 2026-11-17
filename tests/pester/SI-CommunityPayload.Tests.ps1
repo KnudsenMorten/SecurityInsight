@@ -447,6 +447,9 @@ Describe 'no free file loads a Pro file' {
         }
         # ...the Community updater suite proves the Community path never loads the Pro Invardia hook (named, Test-Path only)
         $guarded += 'tests\pester\SIv3-UpdaterCommunity.Tests.ps1|SI-UpdaterInvardia.ps1'
+        # ...and the updater re-states the Pro vulnerable-item hand-off view only where Test-Path finds the Pro file (a
+        # Community install has neither the file nor the view's output: the step returns at once)
+        foreach ($e in 'asset-cmdb', 'SI-VulnItemExtra.ps1') { $guarded += "container\updater\Start-SIUpdater.ps1|$e" }
         # ...and the Community edition suite runs its licence-record cases only where Test-Path finds the Pro install file
         $guarded += 'tests\pester\SIv3-CommunityEdition.Tests.ps1|SI-GuidedInstallPro.ps1'
         # ...and asserts the retired 2.2 hand-over folder (release\handover-2.2.x) is GONE -- named, never loaded

@@ -26,6 +26,7 @@ pro-management/src/SI.Management.Web/Licensing/ProFeatures.cs.
   /Admin/Tasks
   /Admin/Departments
   /Admin/DomainRoles
+  /Cis/SoftwareExceptions
   /Cmdb
   /Collection/Services
   /Collection/Connectors

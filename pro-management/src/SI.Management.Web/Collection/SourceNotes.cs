@@ -19,10 +19,11 @@ public sealed record SourceNote(string Source, DateTime? LastGoodUtc)
         _ => Source,
     };
 
-    /// "Endpoint data is from 10 Oct 2026 14:05 -- the last collection from that source did not complete."
+    /// "Endpoint data is from 10 Oct 2026 14:05. The last read did not finish, so SecurityInsight keeps the last good data."
+    /// Plain words, the same as the mails (owner 2026-11-16: "Customers dont understand this mail").
     /// <paramref name="when"/> formats the time (a page: the viewer's regional format; an export: UTC).
     public string Text(Func<DateTime?, string> when) =>
-        Label + " data is from " + (LastGoodUtc is null ? "its last good collection" : when(LastGoodUtc)) + " -- the last collection from that source did not complete.";
+        Label + " data is from " + (LastGoodUtc is null ? "the last good read" : when(LastGoodUtc)) + ". The last read did not finish, so SecurityInsight keeps the last good data.";
 
     /// The sentence with the time in UTC (an export's info sheet).
     public string TextUtc => Text(t => DateTime.SpecifyKind(t!.Value, DateTimeKind.Utc).ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture) + " UTC");

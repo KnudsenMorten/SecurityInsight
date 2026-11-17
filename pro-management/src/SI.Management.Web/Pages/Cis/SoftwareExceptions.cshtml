@@ -1,0 +1,92 @@
+@page
+@model SI.Management.Web.Pages.Cis.SoftwareExceptionsModel
+@using SI.Management.Web.Changes
+@using SI.Management.Web.Pages.Cis
+@{
+    ViewData["Title"] = "Software detection exceptions";
+    var isAdmin = User.IsAdmin();
+}
+<div class="split"><h1>Software detection exceptions</h1></div>
+<p class="lede">A software detection an Admin marked a false positive on ONE server -- e.g. WordPress files on a data share that make a file server look like a CMS.</p>
+<details class="help" data-sw-help>
+    <summary>How the exceptions work</summary>
+    <p><strong>Scope.</strong> Exactly one CI, one rule and one software: that rule does not use that software on that server. Its other evidence (a name, a tag), every other rule and every other server are unchanged.</p>
+    <p><strong>The findings stay.</strong> The software's vulnerabilities are still findings on the server; the CI says the detection is excepted.</p>
+    <p><strong>Suggestions are never applied.</strong> The list below names detections whose every path is in a user profile or a data folder, or a copy bundled inside another product. Nothing changes until an Admin opens the CI and marks the detection, with a reason.</p>
+    <p><strong>Changing.</strong> @(isAdmin ? "Each set and undo goes on Review & commit and is written in your name with its reason in the change log. An undo keeps the history." : "An Admin sets and undoes exceptions.")</p>
+</details>
+@if (Model.Error is not null) { <div class="notice error" role="alert">@Model.Error</div> }
+@if (Model.TableMissing) { <div class="notice warn" role="status" data-preparing>@SoftwareExceptionStore.MissingTableMessage</div> }
+
+<form method="get" class="filters" data-sw-filter>
+    <label>CI<input name="ci" value="@Model.Ci" maxlength="64" placeholder="CI id" /></label>
+    <button type="submit" class="secondary">Show</button>
+    @if (!string.IsNullOrEmpty(Model.Ci)) { <a class="button secondary" href="/Cis/SoftwareExceptions">Suggestions and every exception</a> <a class="button secondary" href="/Cis/Detail?id=@Uri.EscapeDataString(Model.Ci)">Open the CI</a> }
+</form>
+
+@if (Model.View is { } view)
+{
+    <h2>@(string.IsNullOrWhiteSpace(Model.CiName) ? view.CiId : Model.CiName)</h2>
+    <partial name="_CiSoftware" model="new CiSoftwareRender(view, isAdmin, true, string.Empty)" />
+}
+else if (!Model.TableMissing)
+{
+    <section class="card" aria-labelledby="h-sw-suggest" data-sw-suggestions>
+        <h2 id="h-sw-suggest">Suggestions to review</h2>
+        <p class="hint" data-sw-exact-check>Candidates after the exact check: each page reads @SoftwareExceptionStore.SuggestionPage candidate keys and shows those the CI's own tier claims made, so a page can show fewer. The next page goes on after the last key read.</p>
+        @if (Model.Suggestions.Count == 0) { <p class="hint" data-sw-suggestions-none>No software tier detection on this page has its every path in a user profile, a data folder or another product.</p> }
+        else
+        {
+            <div class="table-wrap">
+                <table data-sortable>
+                    <thead><tr><th>CI</th><th>Detection</th><th>Tier</th><th>Software</th><th>Why it is listed</th><th>A path</th></tr></thead>
+                    <tbody>
+                        @foreach (var s in Model.Suggestions)
+                        {
+                            <tr data-sw-suggestion="@s.CiId|@s.Detection.RuleId|@s.Detection.Software">
+                                <td><a href="/Cis/SoftwareExceptions?ci=@Uri.EscapeDataString(s.CiId)" data-sw-open>@(string.IsNullOrWhiteSpace(s.CiName) ? s.CiId : s.CiName)</a></td>
+                                <td class="wrap">@s.Detection.Label<br /><span class="muted mono">@s.Detection.RuleId</span></td>
+                                <td>@DetailModel.TierText(s.Detection.Tier)</td>
+                                <td class="mono">@s.Detection.Software</td>
+                                <td class="wrap">@SoftwareExceptionStore.WhyText(s.Why) (@Fmt.Int(s.Paths) path(s))</td>
+                                <td class="wrap mono">@s.SamplePath</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+        <p class="actions">
+            @if (!Model.FirstSuggestionPage) { <a class="button secondary" href="/Cis/SoftwareExceptions" data-sw-first>First page</a> }
+            @if (Model.NextSuggestions is { } nk) { <a class="button secondary" href="/Cis/SoftwareExceptions?ac=@Uri.EscapeDataString(nk.CiId)&amp;av=@Uri.EscapeDataString(nk.Vendor)&amp;ap=@Uri.EscapeDataString(nk.Product)" data-sw-next>Next</a> }
+        </p>
+    </section>
+}
+
+@if (!Model.TableMissing)
+{
+    <h2>Exceptions</h2>
+    @if (Model.Rows.Count == 0) { <p data-sw-exceptions-none>No exception@(string.IsNullOrEmpty(Model.Ci) ? "" : " on this CI"): every rule uses the software it finds.</p> }
+    else
+    {
+        <div class="table-wrap">
+            <table class="grid" data-sw-all data-sortable>
+                <thead><tr><th>CI</th><th>Rule</th><th>Software</th><th>Why</th><th>Set by</th><th>Set</th><th>State</th></tr></thead>
+                <tbody>
+                    @foreach (var r in Model.Rows)
+                    {
+                        <tr data-sw-row="@r.Id" data-state="@(r.Removed ? "undone" : "active")">
+                            <td><a href="/Cis/Detail?id=@Uri.EscapeDataString(r.CiId)">@r.CiId</a></td>
+                            <td class="mono">@r.RuleId</td>
+                            <td class="mono">@r.Software</td>
+                            <td class="wrap">@r.Reason</td>
+                            <td>@r.SetBy</td>
+                            <td data-value="@LocalTime.Iso(r.SetAt)">@Fmt.Time(r.SetAt)</td>
+                            <td><span class="badge @(r.Removed ? "bad" : "good")">@r.StateText</span>@if (r.Removed) { <div class="hint">by @r.RemovedBy, @Fmt.Time(r.RemovedAt): @r.RemovedReason</div> }</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+}

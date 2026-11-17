@@ -74,6 +74,10 @@ BeforeAll {
                 return [pscustomobject]@{ StatusCode = $answer.Code; Content = '{"error":{"code":"Refused","message":"refused by the test"}}'; RetryAfter = $answer.RetryAfter }
             }
             if ($f.LatencyMs -gt 0) { Start-Sleep -Milliseconds $f.LatencyMs }
+            # the overlap made deterministic: the FIRST post stays open until a second post is in flight (or the hold runs out) --
+            # posts that are really sent side by side always show the overlap, however slow a busy runner prepares the next one;
+            # posts sent one after another never do (the hold runs out and MaxInFlight stays 1)
+            if ($no -eq 1 -and $f.HoldFirstMs -gt 0) { $until = [datetime]::UtcNow.AddMilliseconds($f.HoldFirstMs); while ($f.InFlight -lt 2 -and [datetime]::UtcNow -lt $until) { Start-Sleep -Milliseconds 20 } }
             $doc = [System.Text.Json.JsonDocument]::Parse([System.ReadOnlyMemory[byte]]::new($raw))
             $rows = [System.Collections.Generic.List[string]]::new()
             try { foreach ($e in $doc.RootElement.EnumerateArray()) { $rows.Add($e.GetRawText()) } } finally { $doc.Dispose() }
@@ -85,9 +89,9 @@ BeforeAll {
     }
     function script:Get-SIManagedIdentityToken { param([string]$Resource, [string]$ClientId, [switch]$ForceRefresh) 'fake-token' }
     function script:Reset-Fake {
-        param([int]$LatencyMs = 0, [hashtable]$Answers = @{}, [int]$Over413 = 0)
+        param([int]$LatencyMs = 0, [hashtable]$Answers = @{}, [int]$Over413 = 0, [int]$HoldFirstMs = 0)
         $global:SI_LogIngestRunCache = $null
-        $global:SILogSeam = [hashtable]::Synchronized(@{ Dce = $script:DceJson; Dcr = $script:DcrJson; No = 0; InFlight = 0; MaxInFlight = 0; LatencyMs = $LatencyMs
+        $global:SILogSeam = [hashtable]::Synchronized(@{ Dce = $script:DceJson; Dcr = $script:DcrJson; No = 0; InFlight = 0; MaxInFlight = 0; LatencyMs = $LatencyMs; HoldFirstMs = $HoldFirstMs
             Answers = $Answers; Over413 = $Over413; Calls = [System.Collections.Concurrent.ConcurrentQueue[object]]::new() })
         (Get-SILogIngestRunCache).DcrIds['dcr-si-ra'] = $script:DcrId
         $global:SI_AzSubscriptionId = $script:Sub; $global:SI_DcrResourceGroup = 'rg-si'; $global:SI_DceResourceGroup = 'rg-si'
@@ -136,7 +140,8 @@ Describe 'EQUIVALENCE -- the same rows, the same JSON per row, nothing lost or d
         $null = Send-SILogDataRest -Data $rows -DcrName 'dcr-si-ra' -DceName 'dce-si' -TableName 'SI_RA_T' -UseManagedIdentity $true -MaxPayloadBytes 32KB 6>$null
         $sync = @(Get-ReceivedRows)
         $sync.Count | Should -Be 6000
-        Reset-Fake -LatencyMs 400
+        # (the first post is held open until a second one is in flight: the overlap does not depend on the runner's load)
+        Reset-Fake -LatencyMs 400 -HoldFirstMs 30000
         $c = Send-Rows -Rows $rows -Degree 4 -MaxPayloadBytes 32KB -Per 777
         $par = @(Get-ReceivedRows)
         $c.RowsPosted | Should -Be 6000

@@ -12,8 +12,10 @@ public static class ServiceNowDataOut
 {
     public const string Direction = "data-out";
 
-    /// The two outputs a data-out connector feeds -- "Switch on" stages them on with it (SI_DataOut_Outputs).
-    public static readonly IReadOnlyList<string> Outputs = ["servicenow-ci", "servicenow-vulnerable-item"];
+    /// The outputs a data-out connector feeds -- "Switch on" stages them on with it (SI_DataOut_Outputs): the CI hand-off, the
+    /// vulnerable items and (owner 2026-11-17: on by default) the remediation tasks and their links -- a task output whose Import
+    /// Set table is not set is "not set up" in the engine (nothing sent, never a failure).
+    public static readonly IReadOnlyList<string> Outputs = ["servicenow-ci", "servicenow-vulnerable-item", "servicenow-remediation-task", "servicenow-remediation-task-finding"];
 
     public static bool Is(string? kind, string? direction) =>
         string.Equals((kind ?? "").Trim(), "servicenow", StringComparison.OrdinalIgnoreCase) && string.Equals((direction ?? "").Trim(), Direction, StringComparison.OrdinalIgnoreCase);

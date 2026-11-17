@@ -610,6 +610,8 @@ function Invoke-SICiCore {
           [hashtable]$Overrides,
           # #496 the business services (New-SICiServiceIndex): which services own each CI, what it inherits; none = not set
           [hashtable]$ServiceIndex,
+          # #1219 (4) the per-server software exceptions in force (ConvertTo-SICiSoftwareExceptionIndex); none = as before
+          [hashtable]$SoftwareExceptions,
           # the build's watch (Start-SICiWatch, SI-CiEnrich.ps1): a step that takes long says which CI it is working on
           $Watch,
           # #406 the lifecycle settings (Get-SICiLifecycleSettings), read once per build; not given = the settings in force
@@ -679,7 +681,7 @@ function Invoke-SICiCore {
     if ($docs.Count -gt 0) {
         if ($CmdbLookup) { Set-SICiWatchPhase -Watch $Watch -Phase 'looking up the CMDB items of its CIs'; $CmdbIndex = & $CmdbLookup $docs.ToArray() }
         if ($null -eq $CmdbIndex) { $CmdbIndex = New-SICiCmdbIndex }
-        $null = Invoke-SICiEnrichment -Cis $docs.ToArray() -Model $Model -Rules @($Rules) -CmdbOwner $owner -CmdbIndex $CmdbIndex -Now $Now -Overrides $Overrides -ServiceIndex $ServiceIndex -Watch $Watch
+        $null = Invoke-SICiEnrichment -Cis $docs.ToArray() -Model $Model -Rules @($Rules) -CmdbOwner $owner -CmdbIndex $CmdbIndex -Now $Now -Overrides $Overrides -ServiceIndex $ServiceIndex -Watch $Watch -SoftwareExceptions $SoftwareExceptions
         Set-SICiWatchPhase -Watch $Watch -Phase 'setting the asset type and the components of its CIs'
         # #561 / #562 the one classification mechanism (SI-Classification.ps1): asset type, asset subtype and the components
         # (SQL, OS, ...) of every CI of the set, from the classification rows; never throws
@@ -865,6 +867,8 @@ function Invoke-SICiBuild {
         [hashtable]$CmdbIndex,
         # test seam: the manual CI override rows (sidata.CiOverride shape) -- else read from the database (SQL path)
         [object[]]$OverrideRows,
+        # test seam: the per-server software exception rows (sidata.CiSoftwareException shape) -- else read from the database
+        [object[]]$SoftwareExceptionRows,
         [scriptblock]$SqlInvoke,
         # test seam: the ledger provider (@{ Kind = sql|blob; Connection|Store }) -- else Get-SIObjectLedgerProvider
         $LedgerProvider,
@@ -965,11 +969,12 @@ function Invoke-SICiBuild {
             $read = Read-SIObjectLedger -Provider $prov
             if ($null -eq $Rules) { $Rules = @(Get-SICiBuildRules -Log $Log) }
             $ovIdx = ConvertTo-SICiOverrideIndex -Rows @($OverrideRows) -Now $now
+            $swxIdx = ConvertTo-SICiSoftwareExceptionIndex -Rows @($SoftwareExceptionRows)
             if ($null -eq $CmdbIndex) { $CmdbIndex = Get-SICiCmdbIndexForOwner -Log $Log }
             # #496 the business services without a database: the service model's rules and the CIs' own CMDB values -- the
             # same CI fields the SQL build sets
             if ($null -eq $ServiceIndex) { $ServiceIndex = Get-SICiServiceIndex -Log $Log }
-            $core = Invoke-SICiCore -Groups @($g.Groups) -FeedLatest $feeds -Ledger $read.Ledger -Model $model -Rules @($Rules) -CmdbIndex $CmdbIndex -Now $now -RunId $RunId -Overrides $ovIdx -ServiceIndex $ServiceIndex `
+            $core = Invoke-SICiCore -Groups @($g.Groups) -FeedLatest $feeds -Ledger $read.Ledger -Model $model -Rules @($Rules) -CmdbIndex $CmdbIndex -Now $now -RunId $RunId -Overrides $ovIdx -ServiceIndex $ServiceIndex -SoftwareExceptions $swxIdx `
                 -Lifecycle $lifeSettings -PreviousLifecycle $PreviousLifecycle -AmbiguousIdKeys $memDec.Ambiguous -PinnedIdKeys $decs.Plan.Pinned
             # a CI whose rules took too long is kept out until it is fully evaluated (nothing is stored here: it is left out)
             $held = Get-SICiHeld -Docs $core.Docs -Incomplete $core.Incomplete
@@ -1093,10 +1098,48 @@ function Invoke-SICiBuild {
             if ($supMap.Count -gt 0) { & $Log 'INFO' ("CIs: {0} id(s) were merged into another CI -- a record that still names one resolves to the CI it was merged into, never to the old id" -f $supMap.Count) }
         } catch { & $Log 'WARN' ("CIs: the merged-away ids could not be read ({0}) -- this build resolves ids from the identity ledger alone." -f $_.Exception.Message); $supMap = @{} }
         if ($null -eq $Rules) { $Rules = @(Get-SICiBuildRules -Log $Log) }
-        # #462 the manual CI overrides in force (sidata.CiOverride; a database without the table has none)
-        if ($null -eq $OverrideRows) { try { $OverrideRows = @(& $sql (Get-SICiOverrideReadSql) @{} 'rows') } catch { & $Log 'WARN' ("CIs: the manual CI overrides could not be read ({0}) -- the rules decide this run." -f $_.Exception.Message); $OverrideRows = @() } }
+        # #462 the manual CI overrides in force (sidata.CiOverride; a database without the table has none) and #1219 (4) the
+        # per-server software exceptions (sidata.CiSoftwareException; likewise). THE LAST GOOD READ (owner 2026-11-17): a FAILED
+        # read never stops the build and never lets the rules decide without them -- the last good read (sidata.CiBuildInputCache,
+        # kept after every good read) is applied, so every CI keeps the Admin's overrides and exceptions it had, and the build's
+        # report carries a warning naming the read that failed. Only when there is no last good copy either is the build held
+        # (before it marks itself running: every CI keeps its last build).
+        $lastGood = {
+            param([string]$What, [string]$Name, [string]$Err)
+            $c = Read-SIBuildInputCache -Invoke $sql -Name $Name
+            if ($null -eq $c) { return $null }
+            $at = $(if ($c.SavedAt) { ' (read ' + ([string]$c.SavedAt) + ' UTC)' } else { '' })
+            $msg = ('the {0} could not be read ({1}) -- the last good read{2} is applied, so no CI loses them' -f $What, $Err, $at)
+            & $Log 'WARN' ('CIs: ' + $msg)
+            $buildIssues.Add([pscustomobject]@{ Level = 'WARNING'; Text = $msg })
+            , @($c.Rows)
+        }
+        if ($null -eq $OverrideRows) {
+            try { $OverrideRows = @(& $sql (Get-SICiOverrideReadSql) @{} 'rows'); $null = Save-SIBuildInputCache -Invoke $sql -Name 'ci-overrides' -Rows $OverrideRows }
+            catch {
+                $e = $_.Exception.Message
+                $OverrideRows = & $lastGood 'manual CI overrides' 'ci-overrides' $e
+                if ($null -eq $OverrideRows) {
+                    & $Log 'WARN' ("CIs were NOT built this run: the manual CI overrides could not be read ({0}) and there is no last good read of them. Building without them would replace an Admin's override with the rules' value; every CI keeps its last build and the next run tries again." -f $e)
+                    return [pscustomobject]@{ Failed = $true; Reason = 'the manual CI overrides could not be read'; CiCount = 0; Cis = @() }
+                }
+            }
+        }
         $ovIdx = ConvertTo-SICiOverrideIndex -Rows @($OverrideRows) -Now $now
         if ($ovIdx.Count -gt 0) { & $Log 'INFO' ("CIs: {0} CI(s) carry a manual override" -f $ovIdx.Count) }
+        if ($null -eq $SoftwareExceptionRows) {
+            try { $SoftwareExceptionRows = @(& $sql (Get-SICiSoftwareExceptionReadSql) @{} 'rows'); $null = Save-SIBuildInputCache -Invoke $sql -Name 'ci-software-exceptions' -Rows $SoftwareExceptionRows }
+            catch {
+                $e = $_.Exception.Message
+                $SoftwareExceptionRows = & $lastGood 'per-server software exceptions' 'ci-software-exceptions' $e
+                if ($null -eq $SoftwareExceptionRows) {
+                    & $Log 'WARN' ("CIs were NOT built this run: the per-server software exceptions could not be read ({0}) and there is no last good read of them. Building without them would change the tier of a server an Admin excepted a detection on; every CI keeps its last build and the next run tries again." -f $e)
+                    return [pscustomobject]@{ Failed = $true; Reason = 'the per-server software exceptions could not be read'; CiCount = 0; Cis = @() }
+                }
+            }
+        }
+        $swxIdx = ConvertTo-SICiSoftwareExceptionIndex -Rows @($SoftwareExceptionRows)
+        if ($swxIdx.Count -gt 0) { & $Log 'INFO' ("CIs: {0} CI(s) carry a per-server software exception" -f $swxIdx.Count) }
         # #639 the build's stage (sidata.CiBuildStage): an updated database stages the CMDB keys, the clean CIs and the identity
         # values in SQL in chunks and reads them back per batch / per page. Without it (a database the updater has not updated
         # yet) the build holds them whole as before -- said once, as a warning of the build.
@@ -1357,7 +1400,7 @@ function Invoke-SICiBuild {
             # always said: this step works in memory only -- no database and no Azure call shows that it is running
             & $Log 'INFO' ("CIs: batch {0} of {1} -- building {2} CI(s) from {3} record(s)" -f $b, $nBatches, @($bg.Groups).Count, [int]$bg.Records); $said.At = [datetime]::UtcNow
             if ($ciWatch) { $ciWatch.What = ('batch {0} of {1} -- ' -f $b, $nBatches) }
-            $core = Invoke-SICiCore -Groups $bg.Groups -FeedLatest $feeds -Ledger $ledger -Model $model -Rules @($Rules) -CmdbIndex $CmdbIndex -Now $now -RunId $RunId -Overrides $ovIdx -ServiceIndex $ServiceIndex -Watch $ciWatch `
+            $core = Invoke-SICiCore -Groups $bg.Groups -FeedLatest $feeds -Ledger $ledger -Model $model -Rules @($Rules) -CmdbIndex $CmdbIndex -Now $now -RunId $RunId -Overrides $ovIdx -ServiceIndex $ServiceIndex -SoftwareExceptions $swxIdx -Watch $ciWatch `
                 -Lifecycle $lifeSettings -PreviousLifecycle $stored.Lifecycle -ScopeChangedAt $scope.ChangedAt -CmdbLookup $cmdbLookup -DeletionProof $deletionProof -Superseded $supMap -AmbiguousIdKeys $gr.DecisionAmbiguous -PinnedIdKeys $decs.Plan.Pinned
             foreach ($pd in @($core.Decisions)) { if ($pd -and $pd.PSObject.Properties['PinConflict'] -and $pd.PinConflict) { & $Log 'WARN' ("CIs: correlation decision not applied -- pin-id: the asset CI {0} carries two different pinned ids; none applied." -f [string]$pd.CorrelationId) } }
             Set-SICiWatchPhase -Watch $ciWatch -Phase 'linking its CIs to their owners and users, and preparing them for the database'

@@ -80,12 +80,20 @@ public abstract class DepartmentAdminModel : PageModel
 
 /// What the people table partial renders: its rows (kept and new), the role choices, whether people are looked up in
 /// the directory, the URL the picker asks for suggestions.
-public sealed record PeopleTableModel(IReadOnlyList<PeopleRow> Rows, IReadOnlyList<DepartmentMemberRow> Existing, string SearchUrl, bool DirectoryOn);
+public sealed record PeopleTableModel(IReadOnlyList<PeopleRow> Rows, IReadOnlyList<DepartmentMemberRow> Existing, string SearchUrl, bool DirectoryOn, SI.Management.Web.Pages.Admin.PickerNamesModel? PickerNames = null);
 
 public abstract class DepartmentPeopleModel(DepartmentRepository repo, DepartmentPeopleResolver resolver, ILogger log) : DepartmentAdminModel(repo, log)
 {
     protected DepartmentPeopleResolver Resolver => resolver;
     public bool DirectoryOn => resolver.DirectoryOn;
+    /// The picker's note: SecurityInsight's own names and their time, and "Search the tenant" (framework GRAPH-PICKER).
+    public async Task<SI.Management.Web.Pages.Admin.PickerNamesModel> PickerNamesAsync()
+    {
+        SI.Management.Web.Auth.DirectoryFreshness? f = null;
+        try { f = await resolver.Directory.FreshnessAsync(HttpContext?.RequestAborted ?? default); }
+        catch (Exception ex) when (ex is not OperationCanceledException) { f = null; }
+        return SI.Management.Web.Pages.Admin.PickerNamesModel.Of(resolver.Directory, f);
+    }
 
     /// The rows the people table shows: as posted when a save was refused (nothing has to be typed again).
     public List<PeopleRow> Rows { get; protected set; } = new();

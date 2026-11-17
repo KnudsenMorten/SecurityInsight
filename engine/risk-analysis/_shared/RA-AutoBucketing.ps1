@@ -550,9 +550,41 @@ function Get-RABucketOverflowStep {
   return [pscustomobject]@{ Action = 'Split'; PauseSeconds = 0 }
 }
 
-# #737: the client ceiling of one advanced-hunting request (Invoke-SIHuntingQueryRest -TimeoutSec 900). A slice's TIME is
-# measured against it the same way its rows and bytes are measured against the answer limits (RA-BucketStore.ps1).
+# #737: the client ceiling of one advanced-hunting request (Invoke-SIHuntingQueryRest -TimeoutSec 900). #1275 (2): a slice's
+# TIME is no longer measured against it but against the documented limit of the back end that answers it
+# (Get-RASliceSecondsLimit -> RA-BucketStore.ps1 Get-SIRaSliceSecondsLimit: 180 s advanced hunting, 600 s Log Analytics,
+# 240 s the data lake); this ceiling only ends a request nobody answers.
 $script:RASliceCeilingSeconds = 900
+
+function Get-RASliceSecondsLimit {
+  <# #1275 (2) PURE. The documented time limit per request of the back end of -Measure (its Backend; else the current
+     report's). RA-BucketStore.ps1 holds the table; loaded alone (a test), the advanced-hunting limit, 180 s. #>
+  param($Measure = $null)
+  if (Get-Command -Name Get-SIRaSliceSecondsLimit -ErrorAction SilentlyContinue) { return [double](Get-SIRaSliceSecondsLimit -Measure $Measure) }
+  180.0
+}
+
+function Get-RASliceTimeNeed {
+  <# #1275 (2) PURE. The slices one split slice's TIME needs (-Seconds: its measured time), from the slice's own fixed part /
+     back end, else the running report's measure ($script:AutoBucketMeasure: FixedSeconds, Backend) -- RA-BucketStore.ps1
+     Get-SIRaSliceTimeNeed. Without any measure (or that file): the slice's time against half the 900 s ceiling, as before. #>
+  param([double]$Seconds, $Slice = $null)
+  $m = $null
+  if ($null -ne $Slice -and $Slice.PSObject.Properties['FixedSeconds'] -and [double]('0' + [string]$Slice.FixedSeconds) -gt 0) { $m = $Slice }
+  elseif ((Get-Variable -Name AutoBucketMeasure -Scope Script -ErrorAction SilentlyContinue) -and $null -ne $script:AutoBucketMeasure) {
+    $m = [pscustomobject]@{ FixedSeconds = $(if ($script:AutoBucketMeasure.PSObject.Properties['FixedSeconds']) { $script:AutoBucketMeasure.FixedSeconds } else { 0 })
+                            Backend = $(if ($null -ne $Slice -and $Slice.PSObject.Properties['Backend'] -and $Slice.Backend) { $Slice.Backend } elseif ($script:AutoBucketMeasure.PSObject.Properties['Backend']) { $script:AutoBucketMeasure.Backend } else { '' }) }
+  }
+  if (Get-Command -Name Get-SIRaSliceTimeNeed -ErrorAction SilentlyContinue) { return [double](Get-SIRaSliceTimeNeed -Seconds $Seconds -Count 1 -Measure $m) }
+  $Seconds / (([double]$(if ($script:RASliceCeilingSeconds) { $script:RASliceCeilingSeconds } else { 900 })) / 2.0)
+}
+
+function Get-RASlicePlanningRows {
+  <# #1275 (2) PURE. The rows a slice is planned for (RA-BucketStore.ps1 Get-SIRaPlanningRowLimit; 30,000). #>
+  if (Get-Command -Name Get-SIRaPlanningRowLimit -ErrorAction SilentlyContinue) { return [double](Get-SIRaPlanningRowLimit) }
+  if ($script:SIRaBucketRowLimit) { return [double]$script:SIRaBucketRowLimit }
+  30000.0
+}
 
 function Test-RABucketGatewayTimeout {
   <# #1155 PURE. The hunting gateway's OWN time limit answered the slice: 504 / Gateway Timeout / GatewayTimeout (about 60 s
@@ -694,13 +726,14 @@ function Get-RASliceNeed {
   $prop = { param($n) if ($Slice.PSObject.Properties[$n]) { $Slice.$n } else { $null } }
   $busyOnly = ([int]('0' + [string](& $prop 'Busy')) -gt 0 -and [int]('0' + [string](& $prop 'SizeFails')) -eq 0 -and
                -not [bool](& $prop 'TooLarge') -and -not [bool](& $prop 'OutOfMemory') -and -not [bool](& $prop 'Lost'))
-  $rowLimit = if ($script:SIRaBucketRowLimit) { [double]$script:SIRaBucketRowLimit } else { 30000.0 }
+  $rowLimit = Get-RASlicePlanningRows
   $byteLimit = if ($script:SIRaBucketAnswerBytes) { [double]$script:SIRaBucketAnswerBytes } else { [double]64MB }
-  $ceiling = if ($script:RASliceCeilingSeconds) { [double]$script:RASliceCeilingSeconds } else { 900.0 }
   $f = 0.0
   $f = [Math]::Max($f, [double]('0' + [string]$Slice.Rows) / ($rowLimit / 2.0))
   $f = [Math]::Max($f, [double]('0' + [string]$Slice.Bytes) / ($byteLimit / 2.0))
-  if (-not $busyOnly) { $f = [Math]::Max($f, [double]('0' + [string]$Slice.Seconds) / ($ceiling / 2.0)) }
+  # #1275 (2): the time against half the back end's documented limit, only for the part slicing divides (the fixed part the
+  # run's slices show: Get-RASliceTimeNeed); without the run's measure, against half the 900 s ceiling as before
+  if (-not $busyOnly) { $f = [Math]::Max($f, (Get-RASliceTimeNeed -Seconds ([double]('0' + [string]$Slice.Seconds)) -Slice $Slice)) }
   $need = [int][Math]::Max(1, [Math]::Ceiling($f))
   if ($busyOnly) {
     if ($Bound -lt 2) { $Bound = 2 }
@@ -812,13 +845,25 @@ function Test-RABucketRunFarBelow {
   if ($null -eq $Measure) { return $false }
   if (-not $Measure.PSObject.Properties['Slices'] -or [int]$Measure.Slices -lt 1) { return $false }
   $frac = if ($script:SIRaBucketDownFraction) { [double]$script:SIRaBucketDownFraction } else { 0.25 }
-  $rowLimit = if ($script:SIRaBucketRowLimit) { [double]$script:SIRaBucketRowLimit } else { 30000.0 }
+  $rowLimit = Get-RASlicePlanningRows
   $byteLimit = if ($script:SIRaBucketAnswerBytes) { [double]$script:SIRaBucketAnswerBytes } else { [double]64MB }
   $reqLimit = if ($script:SIRaBucketRequestBytes) { [double]$script:SIRaBucketRequestBytes } else { [double]1MB }
-  $ceiling = if ($script:RASliceCeilingSeconds) { [double]$script:RASliceCeilingSeconds } else { 900.0 }
   if ([double]$Measure.MaxBucketRows -ge ($frac * $rowLimit)) { return $false }
   if ([double]$Measure.MaxBucketBytes -ge ($frac * $byteLimit)) { return $false }
-  if ([double]$Measure.MaxBucketSeconds -ge ($frac * $ceiling)) { return $false }
+  # #1275 (2) the TIME: with the run's fixed part per slice known (FixedSeconds, from the slices' time against their rows), only what slicing
+  # divides counts -- half the count doubles the divisible part of the longest slice; the slice must then stay within half
+  # the back end's documented limit (the sizing target), or the divisible part be no more than a quarter of the slice (a slice that is mostly its fixed part: fewer
+  # slices do not make it longer -- live 2026-11-17, ~170 rows in 117 slices of 227 s). Without it: as before (900 s).
+  $max = [double]$Measure.MaxBucketSeconds
+  $min = if ($Measure.PSObject.Properties['FixedSeconds']) { [double]('0' + [string]$Measure.FixedSeconds) } else { 0.0 }   # review F2: the fixed part the slices SHOW (Get-SIRaFixedSliceSeconds)
+  if ($min -gt 0) {
+    $limit = Get-RASliceSecondsLimit -Measure $Measure
+    $var = [Math]::Max(0.0, $max - $min)
+    if (($min + 2.0 * $var) -ge ($frac * 2.0 * $limit) -and $var -gt ($frac * $max)) { return $false }
+  } else {
+    $ceiling = if ($script:RASliceCeilingSeconds) { [double]$script:RASliceCeilingSeconds } else { 900.0 }
+    if ($max -ge ($frac * $ceiling)) { return $false }
+  }
   $req = [double]$Measure.MaxRequestBytes
   if ($req -gt 0) {
     $over = if ($Measure.PSObject.Properties['MaxFixedBytes']) { [double]$Measure.MaxFixedBytes } else { 0.0 }
@@ -1701,7 +1746,8 @@ function Reset-AutoBucketMeasure {
   # (what more buckets divide); MaxFixedBytes: the largest part of one request that more buckets do not shrink. All three
   # are THIS report's own (#697 (2)) -- never the run-wide largest values of the hybrid inlining.
   # #737: Slices / MaxBucketSeconds -- how many slices were measured and the longest one took (Test-RABucketRunFarBelow).
-  $script:AutoBucketMeasure = [pscustomobject]@{ ResultRows = 0L; MaxBucketRows = 0L; MaxBucketBytes = 0L; MaxRequestBytes = 0L; SplitRows = 0L; SplitBytes = 0L; MaxFixedBytes = 0L; Slices = 0; MaxBucketSeconds = 0.0 }
+  # #1275 (2): Backend -- the back end that answered the report's slices (the tightest time limit when more than one did)
+  $script:AutoBucketMeasure = [pscustomobject]@{ ResultRows = 0L; MaxBucketRows = 0L; MaxBucketBytes = 0L; MaxRequestBytes = 0L; SplitRows = 0L; SplitBytes = 0L; MaxFixedBytes = 0L; Slices = 0; MaxBucketSeconds = 0.0; Backend = ''; MinBucketSeconds = 0.0 }
 }
 
 function Get-AutoBucketRowBytes {
@@ -1719,14 +1765,37 @@ function Add-AutoBucketMeasure {
   <# One bucket's answer: its rows, the estimated bytes of its answer and the bytes of its request (0 = not known).
      -RequestShape (#697 (2)): the shape of the request this bucket really sent (Get-RAHybridRequestShape: BodyBytes,
      FixedBytes, Lookups with Rows / WireBytes / Whole). When given, the request is measured from it, not from -RequestBytes. #>
-  param([long]$Rows, [object[]]$Sample = @(), [long]$RequestBytes = 0, $RequestShape = $null, [double]$Seconds = 0)
+  # #1275 (2) -Backend: the back end that answered this slice ('' = the last report query's, $script:_RALastQueryBackend)
+  param([long]$Rows, [object[]]$Sample = @(), [long]$RequestBytes = 0, $RequestShape = $null, [double]$Seconds = 0, [string]$Backend = '')
   if (-not (Get-Variable -Name AutoBucketMeasure -Scope Script -ErrorAction SilentlyContinue) -or $null -eq $script:AutoBucketMeasure) { Reset-AutoBucketMeasure }
   $m = $script:AutoBucketMeasure
   foreach ($n in 'SplitRows', 'SplitBytes', 'MaxFixedBytes') { if (-not $m.PSObject.Properties[$n]) { $m | Add-Member -NotePropertyName $n -NotePropertyValue 0L } }
   if (-not $m.PSObject.Properties['Slices']) { $m | Add-Member -NotePropertyName Slices -NotePropertyValue 0 }
   if (-not $m.PSObject.Properties['MaxBucketSeconds']) { $m | Add-Member -NotePropertyName MaxBucketSeconds -NotePropertyValue 0.0 }
+  if (-not $m.PSObject.Properties['Backend']) { $m | Add-Member -NotePropertyName Backend -NotePropertyValue '' }
+  if (-not $Backend -and (Get-Variable -Name _RALastQueryBackend -Scope Script -ErrorAction SilentlyContinue)) { $Backend = [string]$script:_RALastQueryBackend }
+  if ($Backend) {
+    if (-not $m.Backend) { $m.Backend = $Backend }
+    elseif ((Get-RASliceSecondsLimit -Measure ([pscustomobject]@{ Backend = $Backend })) -lt (Get-RASliceSecondsLimit -Measure $m)) { $m.Backend = $Backend }
+  }
   $m.Slices = [int]$m.Slices + 1
   if ($Seconds -gt [double]$m.MaxBucketSeconds) { $m.MaxBucketSeconds = [double]$Seconds }
+  # #1275 (2): the shortest slice -- what a slice costs whatever it holds (the fixed part the sizing does not divide)
+  if (-not $m.PSObject.Properties['MinBucketSeconds']) { $m | Add-Member -NotePropertyName MinBucketSeconds -NotePropertyValue 0.0 }
+  if ($Seconds -gt 0 -and ([double]$m.MinBucketSeconds -le 0 -or $Seconds -lt [double]$m.MinBucketSeconds)) { $m.MinBucketSeconds = [double]$Seconds }
+  # #1275 (2) review F2: the slice time against the slice's rows over the run's slices (a straight line: the fixed part is
+  # where it meets 0 rows) -- the only evidence that separates the fixed part from the divisible work. FixedSeconds = 0
+  # (not known: today's rule) unless the slices' rows spread widely enough to tell (Get-SIRaFixedSliceSeconds).
+  if ($Seconds -gt 0) {
+    foreach ($n in 'FitN', 'FitSx', 'FitSy', 'FitSxx', 'FitSxy', 'FixedSeconds') { if (-not $m.PSObject.Properties[$n]) { $m | Add-Member -NotePropertyName $n -NotePropertyValue 0.0 } }
+    foreach ($n in 'MinRows', 'MaxRows') { if (-not $m.PSObject.Properties[$n]) { $m | Add-Member -NotePropertyName $n -NotePropertyValue -1.0 } }
+    $x = [double]$Rows; $y = [double]$Seconds
+    $m.FitN = [double]$m.FitN + 1; $m.FitSx = [double]$m.FitSx + $x; $m.FitSy = [double]$m.FitSy + $y; $m.FitSxx = [double]$m.FitSxx + $x * $x; $m.FitSxy = [double]$m.FitSxy + $x * $y
+    if ([double]$m.MinRows -lt 0 -or $x -lt [double]$m.MinRows) { $m.MinRows = $x }
+    if ($x -gt [double]$m.MaxRows) { $m.MaxRows = $x }
+    $m.FixedSeconds = 0.0
+    if (Get-Command -Name Get-SIRaFixedSliceSeconds -ErrorAction SilentlyContinue) { $m.FixedSeconds = [double](Get-SIRaFixedSliceSeconds -Measure $m) }
+  }
   $m.ResultRows += [long]$Rows
   if ($Rows -gt $m.MaxBucketRows) { $m.MaxBucketRows = [long]$Rows }
   $b = Get-AutoBucketRowBytes -Rows $Rows -Sample $Sample

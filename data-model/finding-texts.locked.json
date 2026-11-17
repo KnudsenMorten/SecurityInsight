@@ -64,6 +64,15 @@
     "si_affected_path": [
       "si_affected_path"
     ],
+    "si_evidence_paths": [
+      "si_evidence_paths"
+    ],
+    "si_install_kind": [
+      "si_install_kind"
+    ],
+    "si_bundled_by": [
+      "si_bundled_by"
+    ],
     "si_evidence": [
       "si_evidence"
     ],

@@ -29,11 +29,15 @@ public static class ServiceNowOutputs
     /// One ServiceNow output: its connector's direction, the setting that names its Import Set table, its scope destination.
     public sealed record Info(string Output, string Direction, string TableSetting, string Destination, string Label);
 
-    /// #903: both outputs are fed by the ONE ServiceNow data-out connector (direction 'data-out'); each keeps its own table setting.
+    /// #903: every output is fed by the ONE ServiceNow data-out connector (direction 'data-out'); each keeps its own table setting.
     public static readonly IReadOnlyList<Info> All =
     [
         new("servicenow-ci", SI.Management.Web.Changes.ServiceNowDataOut.Direction, "SI_DataOut_ServiceNowCiTable", "cmdb-servicenow", "ServiceNow CI hand-off"),
         new("servicenow-vulnerable-item", SI.Management.Web.Changes.ServiceNowDataOut.Direction, "SI_DataOut_ServiceNowVulnTable", "vuln-servicenow", "ServiceNow vulnerable items"),
+        // owner 2026-11-17: the remediation task outputs -- their Import Set tables typed next to the vulnerable items' one, and
+        // Verify checks all of them (they follow the vulnerable items' scope)
+        new("servicenow-remediation-task", SI.Management.Web.Changes.ServiceNowDataOut.Direction, "SI_DataOut_ServiceNowTaskTable", "vuln-servicenow", "ServiceNow remediation tasks"),
+        new("servicenow-remediation-task-finding", SI.Management.Web.Changes.ServiceNowDataOut.Direction, "SI_DataOut_ServiceNowTaskFindingTable", "vuln-servicenow", "ServiceNow remediation task links"),
     ];
 
     public static Info? Of(string? output) => All.FirstOrDefault(i => i.Output == output);
@@ -210,7 +214,9 @@ public static class ServiceNowSchemaCompare
             f["maxLength"] is JsonValue v && v.TryGetValue<int>(out var n) ? n : 0)).Where(e => e.Name.Length > 0).ToList();
 
     /// PURE. Every expected column, then the table's own columns SecurityInsight does not send, then the column mapping.
-    public static IReadOnlyList<SchemaLine> Compare(IReadOnlyList<Expected> expected, IReadOnlyList<SnowColumn> actual, string? mapping, bool batchIdSent = true)
+    /// <paramref name="canSwitchOn"/>: the output's columns SHIPPED switched off (not sent): present in the table = "can be switched
+    /// on" (Configuration &gt; Connectors &gt; Fields sent), absent = to add before it is switched on -- never a problem.
+    public static IReadOnlyList<SchemaLine> Compare(IReadOnlyList<Expected> expected, IReadOnlyList<SnowColumn> actual, string? mapping, bool batchIdSent = true, IReadOnlyCollection<string>? canSwitchOn = null)
     {
         var lines = new List<SchemaLine>();
         var byName = actual.GroupBy(a => a.Name, StringComparer.OrdinalIgnoreCase).ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
@@ -231,7 +237,12 @@ public static class ServiceNowSchemaCompare
             else lines.AddRange(problems);
         }
         var sent = expected.Select(e => e.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        foreach (var a in actual.Where(a => !sent.Contains(a.Name) && !a.Name.StartsWith("sys_", StringComparison.OrdinalIgnoreCase)).OrderBy(a => a.Name, StringComparer.Ordinal))
+        var off = new HashSet<string>(canSwitchOn ?? Array.Empty<string>(), StringComparer.OrdinalIgnoreCase);
+        foreach (var n in off.Where(n => !sent.Contains(n)).OrderBy(n => n, StringComparer.Ordinal))
+            lines.Add(byName.TryGetValue(n, out var have)
+                ? new(n, "can-switch-on", "info", "present in the table" + (have.MaxLength > 0 ? ", length " + have.MaxLength.ToString(CultureInfo.InvariantCulture) : "") + " -- shipped switched off: it can be switched on (Configuration > Connectors > Fields sent)")
+                : new(n, "off-absent", "info", "shipped switched off, not in the table -- add it to the table before it is switched on"));
+        foreach (var a in actual.Where(a => !sent.Contains(a.Name) && !off.Contains(a.Name) && !a.Name.StartsWith("sys_", StringComparison.OrdinalIgnoreCase)).OrderBy(a => a.Name, StringComparer.Ordinal))
             lines.Add(new(a.Name, "extra", "info", "a column of the table SecurityInsight does not send (fine)"));
         lines.Add((mapping ?? "").Trim().ToLowerInvariant() switch
         {

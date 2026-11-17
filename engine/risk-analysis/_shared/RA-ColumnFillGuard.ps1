@@ -82,7 +82,8 @@ function Get-RAColumnFillSnapshot {
       one another.
     #>
     [CmdletBinding()]
-    param([Parameter()][AllowNull()][object[]]$Rows)
+    # -Exclude: fields that are not report columns (the stored-only evidence fields): never in the snapshot
+    param([Parameter()][AllowNull()][object[]]$Rows, [string[]]$Exclude = @())
 
     $snap   = @{}
     $rowArr = @($Rows)
@@ -94,6 +95,7 @@ function Get-RAColumnFillSnapshot {
         foreach ($p in $row.PSObject.Properties) {
             $name = [string]$p.Name
             if ($name -eq '__rows') { continue }              # reserved for the denominator
+            if ($Exclude.Count -and $Exclude -contains $name) { continue }
             if (-not $snap.ContainsKey($name)) { $snap[$name] = 0 }
 
             $v = $p.Value

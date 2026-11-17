@@ -664,12 +664,20 @@ public abstract class CollectionPageModel : PageModel
     {
         if (plan is not null && ShowsExempted && plan.Spec.KeyColumn == "FindingId") plan = plan with { Spec = Exempted.WithMark(plan.Spec) };
         if (plan is null || Visibility is null) return plan;
-        if (!DepartmentScope.CanRestrict(plan.Spec)) { Error = "This view cannot be limited to your departments, so it is not shown."; return null; }
+        var restricted = RestrictToVisibility(plan.Spec, Visibility);
+        if (restricted is null) { Error = "This view cannot be limited to your departments, so it is not shown."; return null; }
         FacetRows = Array.Empty<FacetRow>();
         var p = new Dictionary<string, object?>(plan.Parameters);
         foreach (var kv in Visibility.Parameters) p[kv.Key] = kv.Value;
-        return plan with { Spec = DepartmentScope.Restrict(plan.Spec, Visibility), Parameters = p, Scope = plan.Scope + "|" + Visibility.Key };
+        return plan with { Spec = restricted, Parameters = p, Scope = plan.Scope + "|" + Visibility.Key };
     }
+
+    /// The grid limited to what a limited person may see (null = it cannot be limited: the view is not shown). By default the
+    /// visibility predicate on the source's finding rows (f); a view whose rows are NOT findings (the remediation tasks: one
+    /// row stands for several findings) builds its own limited grid. Only called for a limited person -- everyone else gets
+    /// the plan unchanged.
+    protected virtual GridSpec? RestrictToVisibility(GridSpec spec, RowVisibility visibility) =>
+        DepartmentScope.CanRestrict(spec) ? DepartmentScope.Restrict(spec, visibility) : null;
 
     /// What to do about a missing table or column: which setup step adds it.
     public static string SchemaHint(string message)

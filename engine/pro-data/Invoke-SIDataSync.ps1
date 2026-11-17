@@ -82,6 +82,8 @@ $siRoot = Split-Path -Parent (Split-Path -Parent $here)
 . (Join-Path $here '_shared\SI-DataSummaryGroups.ps1')
 # #636: the remediations (one fix, many assets) and the key figures of the Executive overview and report
 . (Join-Path $here '_shared\SI-DataRemediation.ps1')
+# #1277: the remediation tasks per CI (one task per thing to do on one CI, with its own lifecycle)
+. (Join-Path $here '_shared\SI-DataRemediationTask.ps1')
 . (Join-Path $here '_shared\SI-DataFindingNarrow.ps1')
 . (Join-Path $here '_shared\SI-DataKeyFigures.ps1')
 # what two pages open with, written by the data sync: the column chooser's lists and the open vulnerabilities by severity and tier

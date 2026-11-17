@@ -36,8 +36,9 @@
         binary digit (the order of adding), never in a shown or rounded figure in practice;
       * ONLY where the stored rows are of the shape this form mirrors -- otherwise the row-by-row pass runs as before
         ("declined", one plain line): a row with an asset LIST (ImpactedAssetsList & co, ImpactedAssetIds), a value that is
-        a list / object where the lists read a single value, a report whose column differs only in case from a read column,
-        a Protection Score counted in the run (not the stored one), a row count different from the run's, or any error.
+        a list / object where the lists read a single value, a Protection Score counted in the run (not the stored one), a
+        row count different from the run's, or any error. #1275 (4): a report whose column differs only in case from a read
+        column is no longer declined -- that spelling is read as well (Get-RATopCaseVariants), as PowerShell reads it.
     No module, PS 5.1 and 7. NO EMOJI IN THIS FILE.
 #>
 
@@ -118,6 +119,43 @@ function Test-RATopListsColumns {
     ''
 }
 
+function Get-RATopCaseVariants {
+    <#
+        PURE. #1275 (4) A COLUMN IN ANOTHER CASE IS READ UNDER ITS OWN SPELLING, NOT DECLINED. Live 2026-11-17 (a large
+        install, 1.56 M rows): the report 'Attack_Paths_Detailed_Public_IP_to_VM_with_CVE_Exploitation' names its column
+        'CVE' where the patch cycle reads 'Cve' -- the whole database pass was declined for it and the row loop read every
+        row (~4.8 h). PowerShell finds a column whatever its case (Get-RowValue, the key figures: PSObject.Properties), so
+        on a row 'CVE' IS 'Cve'; OPENJSON reads exact names only. Here every read column gets the OTHER spellings the run's
+        reports use for it (ordinal-different, equal ignoring case), and the range statement reads each of them and takes
+        the one the row has (a row is one object: it carries at most one spelling of a name). A spelling that is itself a
+        read name (Subcategory / SubCategory, cmdbName / CmdbName) is already read on its own and is not added.
+        -Reports: the stream's report entries (their Columns). Returns name -> string[] (only names that have variants).
+    #>
+    param($Reports, [bool]$WithAi)
+    $names = Get-RATopReadNames -WithAi $WithAi
+    $exact = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
+    foreach ($n in $names) { [void]$exact.Add($n) }
+    # ORDINAL dictionaries: 'Subcategory' and 'SubCategory' are two read names (a PowerShell @{} would make them one)
+    $out = New-Object 'System.Collections.Generic.Dictionary[string,System.Collections.Generic.List[string]]' ([StringComparer]::Ordinal)
+    $res = New-Object 'System.Collections.Generic.Dictionary[string,string[]]' ([StringComparer]::Ordinal)
+    if ($null -eq $Reports) { return , $res }
+    $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
+    foreach ($k in @($Reports.Keys)) {
+        foreach ($c in @($Reports[$k].Columns)) {
+            $c = [string]$c
+            if (-not $c -or $exact.Contains($c) -or -not $seen.Add($c)) { continue }
+            foreach ($n in $names) {
+                if ([string]::Equals($n, $c, [StringComparison]::OrdinalIgnoreCase)) {
+                    if (-not $out.ContainsKey($n)) { $out[$n] = New-Object 'System.Collections.Generic.List[string]' }
+                    $out[$n].Add($c)
+                }
+            }
+        }
+    }
+    foreach ($n in @($out.Keys)) { $res[$n] = [string[]]@($out[$n] | Sort-Object -CaseSensitive) }
+    , $res
+}
+
 # ------------------------------------------------------------------------------------------------------------------
 #  THE STATEMENTS (PURE text; every value in them is a whole number the caller made -- a session batch has no parameters)
 # ------------------------------------------------------------------------------------------------------------------
@@ -163,28 +201,48 @@ function Get-RATopRangeSql {
         keys as binary hashes (exact text; the case-insensitive ones over UPPER). Answers N (rows) and Odd (rows not of the
         mirrored shape). -Collapse: the *_Detailed (asset x ConfigBucket) collapse key. -WithAi: the AI-only values too.
     #>
-    param([Parameter(Mandatory)][int]$CollectionId, [long]$Lo, [long]$Hi, [int[]]$Held = @(), [bool]$WithAi)
+    # -Variants (#1275 (4), Get-RATopCaseVariants): per read name the other spellings the run's reports use -- each read too,
+    # the row's one spelling taken (COALESCE: a row carries at most one of them). None = the statement as before.
+    param([Parameter(Mandatory)][int]$CollectionId, [long]$Lo, [long]$Hi, [int[]]$Held = @(), [bool]$WithAi, $Variants = $null)
     $names = Get-RATopReadNames -WithAi $WithAi
     # ORDINAL: 'Subcategory' and 'SubCategory' are two JSON keys (a PowerShell @{} would make them one)
     $idx = New-Object 'System.Collections.Generic.Dictionary[string,int]' ([StringComparer]::Ordinal)
     for ($i = 0; $i -lt $names.Count; $i++) { $idx[$names[$i]] = $i }
     $with = New-Object 'System.Collections.Generic.List[string]'
     $blank = New-Object 'System.Collections.Generic.List[string]'
+    # the value (S) and the JSON value (Q) of read name i: its own key, or COALESCE with its other spellings
+    $sx = New-Object 'System.Collections.Generic.List[string]'; $qx = New-Object 'System.Collections.Generic.List[string]'
     for ($i = 0; $i -lt $names.Count; $i++) {
         $path = '$."' + $names[$i] + '"'
         $with.Add(("s{0} nvarchar(max) '{1}'" -f $i, $path))
         $with.Add(("q{0} nvarchar(max) '{1}' AS JSON" -f $i, $path))
-        $blank.Add(("CASE WHEN TRIM(@ws FROM j.s{0}) = N'' THEN NULL ELSE j.s{0} END AS n{0}" -f $i))
+        $vs = @(); if ($null -ne $Variants -and $Variants.ContainsKey($names[$i])) { $vs = @($Variants[$names[$i]]) }
+        if ($vs.Count -eq 0) { $sx.Add(('j.s{0}' -f $i)); $qx.Add(('j.q{0}' -f $i)) }
+        else {
+            $se = New-Object 'System.Collections.Generic.List[string]'; $qe = New-Object 'System.Collections.Generic.List[string]'
+            $se.Add(('j.s{0}' -f $i)); $qe.Add(('j.q{0}' -f $i))
+            for ($v = 0; $v -lt $vs.Count; $v++) {
+                $vp = '$."' + ([string]$vs[$v]).Replace("'", "''").Replace('"', '\"') + '"'
+                $with.Add(("s{0}v{1} nvarchar(max) '{2}'" -f $i, $v, $vp))
+                $with.Add(("q{0}v{1} nvarchar(max) '{2}' AS JSON" -f $i, $v, $vp))
+                $se.Add(('j.s{0}v{1}' -f $i, $v)); $qe.Add(('j.q{0}v{1}' -f $i, $v))
+            }
+            $sx.Add('COALESCE(' + ($se -join ', ') + ')'); $qx.Add('COALESCE(' + ($qe -join ', ') + ')')
+        }
+        $blank.Add(("CASE WHEN TRIM(@ws FROM {1}) = N'' THEN NULL ELSE {1} END AS n{0}" -f $i, $sx[$i]))
     }
     $chain = { param([string[]]$Ns) $e = @($Ns | ForEach-Object { 'b.n{0}' -f $idx[$_] }); if ($e.Count -eq 1) { $e[0] } else { 'COALESCE(' + ($e -join ', ') + ')' } }
     $c = New-Object 'System.Collections.Generic.List[string]'
     foreach ($k in $script:RATopChains.Keys) { $c.Add(('{0} AS {1}' -f (& $chain $script:RATopChains[$k]), $k)) }
     foreach ($k in $script:RATopAiChains.Keys) { if ($WithAi) { $c.Add(('{0} AS {1}' -f (& $chain $script:RATopAiChains[$k]), $k)) } else { $c.Add(('CONVERT(nvarchar(max), NULL) AS {0}' -f $k)) } }
     foreach ($k in $script:RATopPatchChains.Keys) { $c.Add(('TRIM(@ws FROM {0}) AS {1}' -f (& $chain $script:RATopPatchChains[$k]), $k)) }
-    $listAny = 'COALESCE(' + ((@($script:RATopListCols | ForEach-Object { 'b.n{0}, j.q{0}' -f $idx[$_] })) -join ', ') + ')'
-    $anyJson = 'COALESCE(' + ((@(0..($names.Count - 1) | ForEach-Object { 'j.q{0}' -f $_ })) -join ', ') + ')'
+    $listAny = 'COALESCE(' + ((@($script:RATopListCols | ForEach-Object { 'b.n{0}, {1}' -f $idx[$_], $qx[$idx[$_]] })) -join ', ') + ')'
+    $anyJson = 'COALESCE(' + ((@(0..($names.Count - 1) | ForEach-Object { $qx[$_] })) -join ', ') + ')'
     $k = $script:RATopKpiCols
-    $iacS = 'j.s{0}' -f $idx[$k.KIac]
+    $iacS = $sx[$idx[$k.KIac]]
+    # a text ImpactedAssetCount (its spellings: the key figures read the raw value of whichever the row has)
+    $iacNames = @($k.KIac); if ($null -ne $Variants -and $Variants.ContainsKey($k.KIac)) { $iacNames += @($Variants[$k.KIac]) }
+    $iacStr = (@($iacNames | ForEach-Object { "CHARINDEX(N'""{0}"":""', f.DetailJson) > 0" -f ([string]$_).Replace("'", "''") })) -join ' OR '
     # (its own name: $held IS the [int[]] -Held parameter -- PowerShell names are case-insensitive)
     $heldWhere = [string](Get-RAStreamHeldFilter -Held $Held) -replace 'RaReport', 'f.RaReport'
     $bucket = @"
@@ -199,15 +257,23 @@ SET NOCOUNT ON; SET XACT_ABORT ON;
 $(Get-RATopWsDeclare)
 INSERT #ra (FindingId, RaSort, RaSeq, WT, UT, Sev, Tier, Dom, Cat, Sub, CName, CId, CmName, CmCrit, CmId, CmSens, MD,
             AName, AKey, AKeyH, ANH, ANUH, CKeyH, BucketH, KSev, KDom, KRep, KKpi, KTier, KIac, KIacStr,
-            PCve, PGiven, PUid, PUpd, PDev, Odd)
+            PCve, PGiven, PUid, PUpd, PDev, Odd, KH, PTripleH, PUidUH, PDevUH)
+SELECT x.FindingId, x.RaSort, x.RaSeq, x.WT, x.UT, x.Sev, x.Tier, x.Dom, x.Cat, x.Sub, x.CName, x.CId, x.CmName, x.CmCrit, x.CmId, x.CmSens, x.MD,
+       x.AName, x.AKey, x.AKeyH, x.ANH, x.ANUH, x.CKeyH, x.BucketH, x.KSev, x.KDom, x.KRep, x.KKpi, x.KTier, x.KIac, x.KIacStr,
+       x.PCve, x.PGiven, x.PUid, x.PUpd, x.PDev, x.Odd,
+       $(Get-RATopKeyExpr -Cols @('x.KSev', 'x.KDom', 'x.KRep', 'x.KKpi', 'x.KTier', 'x.KIac', 'CONVERT(nvarchar(1), x.KIacStr)')),
+       CASE WHEN x.PCve = 1 THEN $(Get-RATopKeyExpr -Cols @('x.PGiven', 'x.PUid', 'x.PUpd')) END,
+       CASE WHEN x.PCve = 1 AND x.PUid <> N'' THEN HASHBYTES('SHA2_256', UPPER(x.PUid)) END,
+       CASE WHEN x.PCve = 1 AND x.PDev <> N'' THEN HASHBYTES('SHA2_256', UPPER(x.PDev)) END
+FROM (
 SELECT f.FindingId, f.RaSort, f.RaSeq, c.WT, c.UT, c.Sev, c.Tier, c.Dom, c.Cat, c.Sub, c.CName, c.CId, c.CmName, c.CmCrit, c.CmId, c.CmSens, c.MD,
-       d.AName, d.AKey, HASHBYTES('SHA2_256', d.AKey), HASHBYTES('SHA2_256', d.AName), HASHBYTES('SHA2_256', UPPER(d.AName)),
-       HASHBYTES('SHA2_256', UPPER(c.CId)), HASHBYTES('SHA2_256', $bucket),
-       j.s$($idx[$k.KSev]), j.s$($idx[$k.KDom]), j.s$($idx[$k.KRep]), j.s$($idx[$k.KKpi]), j.s$($idx[$k.KTier]), $iacS,
-       CASE WHEN $iacS IS NOT NULL AND CHARINDEX(N'"ImpactedAssetCount":"', f.DetailJson) > 0 THEN 1 ELSE 0 END,
-       CASE WHEN ISNULL(c.PCveT, N'') <> N'' OR ISNULL(c.PCfgT, N'') COLLATE Latin1_General_CI_AS LIKE N'CVE-%' THEN 1 ELSE 0 END,
-       ISNULL(c.PGiven, N''), ISNULL(c.PUid, N''), ISNULL(c.PUpd, N''), ISNULL(c.PDev, N''),
-       CASE WHEN $listAny IS NOT NULL OR $anyJson IS NOT NULL OR f.DetailJson IS NULL THEN 1 ELSE 0 END
+       d.AName, d.AKey, HASHBYTES('SHA2_256', d.AKey) AS AKeyH, HASHBYTES('SHA2_256', d.AName) AS ANH, HASHBYTES('SHA2_256', UPPER(d.AName)) AS ANUH,
+       HASHBYTES('SHA2_256', UPPER(c.CId)) AS CKeyH, HASHBYTES('SHA2_256', $bucket) AS BucketH,
+       $($sx[$idx[$k.KSev]]) AS KSev, $($sx[$idx[$k.KDom]]) AS KDom, $($sx[$idx[$k.KRep]]) AS KRep, $($sx[$idx[$k.KKpi]]) AS KKpi, $($sx[$idx[$k.KTier]]) AS KTier, $iacS AS KIac,
+       CONVERT(bit, CASE WHEN $iacS IS NOT NULL AND ($iacStr) THEN 1 ELSE 0 END) AS KIacStr,
+       CONVERT(bit, CASE WHEN ISNULL(c.PCveT, N'') <> N'' OR ISNULL(c.PCfgT, N'') COLLATE Latin1_General_CI_AS LIKE N'CVE-%' THEN 1 ELSE 0 END) AS PCve,
+       ISNULL(c.PGiven, N'') AS PGiven, ISNULL(c.PUid, N'') AS PUid, ISNULL(c.PUpd, N'') AS PUpd, ISNULL(c.PDev, N'') AS PDev,
+       CONVERT(bit, CASE WHEN $listAny IS NOT NULL OR $anyJson IS NOT NULL OR f.DetailJson IS NULL THEN 1 ELSE 0 END) AS Odd
 FROM sidata.Finding f
 OUTER APPLY OPENJSON(f.DetailJson) WITH (
     $($with -join ",`n    ")
@@ -220,7 +286,8 @@ CROSS APPLY (SELECT
 ) c
 CROSS APPLY (SELECT TRIM(@ws FROM c.ANr) AS AName,
     CASE WHEN c.ANr IS NULL THEN NULL WHEN c.AId IS NOT NULL THEN N'id:' + LOWER(TRIM(@ws FROM c.AId)) ELSE N'name:' + LOWER(TRIM(@ws FROM c.ANr)) END AS AKey) d
-WHERE f.CollectionId = $([int]$CollectionId) AND f.FindingId > $([long]$Lo) AND f.FindingId <= $([long]$Hi) AND f.RaSeq IS NOT NULL AND f.RaInView = 1$heldWhere;
+WHERE f.CollectionId = $([int]$CollectionId) AND f.FindingId > $([long]$Lo) AND f.FindingId <= $([long]$Hi) AND f.RaSeq IS NOT NULL AND f.RaInView = 1$heldWhere
+) x;
 DECLARE @n bigint = @@ROWCOUNT;
 SELECT @n AS N, (SELECT COUNT_BIG(*) FROM #ra WHERE FindingId > $([long]$Lo) AND FindingId <= $([long]$Hi) AND Odd = 1) AS Odd;
 "@
@@ -232,21 +299,33 @@ function Get-RATopPrepareSql {
         (the first row of a pair in the final order -- score highest first, then the write order -- the representative the
         row loop keeps), and the indexes the lists read through.
     #>
-    param([bool]$Collapse)
-    $kh = Get-RATopKeyExpr -Cols @('KSev', 'KDom', 'KRep', 'KKpi', 'KTier', 'KIac', 'CONVERT(nvarchar(1), KIacStr)')
-    $ph = Get-RATopKeyExpr -Cols @('PGiven', 'PUid', 'PUpd')
-    $kept = if ($Collapse) {
+    # #1275 (4) MILLIONS OF ROWS (scale bench 2026-11-17, 1.5 M rows: "The transaction log for database 'tempdb' is full due to
+    # 'ACTIVE_TRANSACTION'" -- one UPDATE over every row of the work table is one transaction): the key-figure and patch keys
+    # are made as each range is read (Get-RATopRangeSql, the same expressions), and the collapse is marked in FindingId ranges
+    # of -Chunk rows, one statement (one short transaction) each -- the same rows marked, the log never holds the whole table.
+    param([bool]$Collapse, [long]$Chunk = 100000)
+    if ($Chunk -lt 1) { $Chunk = 100000 }
+    $pick = if ($Collapse) {
         @'
-;WITH k AS (SELECT Kept, ROW_NUMBER() OVER (PARTITION BY AKeyH, BucketH ORDER BY RaSort DESC, RaSeq) AS Rn FROM #ra WHERE AKeyH IS NOT NULL)
-UPDATE k SET Kept = CASE WHEN Rn = 1 THEN 1 ELSE 0 END;
+IF OBJECT_ID('tempdb..#keep') IS NOT NULL DROP TABLE #keep;
+SELECT x.FindingId INTO #keep FROM (SELECT FindingId, ROW_NUMBER() OVER (PARTITION BY AKeyH, BucketH ORDER BY RaSort DESC, RaSeq) AS Rn FROM #ra WHERE AKeyH IS NOT NULL) x WHERE x.Rn = 1;
+CREATE UNIQUE CLUSTERED INDEX CX_keep ON #keep (FindingId);
 '@
-    } else { 'UPDATE #ra SET Kept = 1 WHERE AKeyH IS NOT NULL;' }
+    } else { '' }
+    $set = if ($Collapse) {
+        'UPDATE r SET Kept = 1 FROM #ra r INNER JOIN #keep k ON k.FindingId = r.FindingId WHERE r.FindingId > @lo AND r.FindingId <= @lo + @chunk;'
+    } else { 'UPDATE #ra SET Kept = 1 WHERE AKeyH IS NOT NULL AND FindingId > @lo AND FindingId <= @lo + @chunk;' }
+    $kept = @"
+$pick
+DECLARE @chunk bigint = $([long]$Chunk);
+DECLARE @lo bigint = (SELECT MIN(FindingId) FROM #ra) - 1, @top bigint = (SELECT MAX(FindingId) FROM #ra);
+WHILE @lo < @top BEGIN
+    $set
+    SET @lo = @lo + @chunk;
+END
+"@
     @"
 SET NOCOUNT ON; SET XACT_ABORT ON;
-UPDATE #ra SET KH = $kh,
-    PTripleH = CASE WHEN PCve = 1 THEN $ph END,
-    PUidUH = CASE WHEN PCve = 1 AND PUid <> N'' THEN HASHBYTES('SHA2_256', UPPER(PUid)) END,
-    PDevUH = CASE WHEN PCve = 1 AND PDev <> N'' THEN HASHBYTES('SHA2_256', UPPER(PDev)) END;
 $kept
 CREATE INDEX IX_ra_Asset ON #ra (AKeyH, RaSort DESC, RaSeq) INCLUDE (W, U, Dom) WHERE Kept = 1;
 CREATE INDEX IX_ra_Conf ON #ra (CKeyH, RaSort DESC, RaSeq) INCLUDE (W, U, ANH, ANUH) WHERE Kept = 1;
@@ -311,14 +390,23 @@ INSERT #$Table (H, V) SELECT CONVERT(binary(32), m.h, 2), $sel FROM OPENJSON(N'$
 }
 
 function Get-RATopApplyNumbersSql {
-    <# PURE. Each row's two scores from the mapping; no text = ConvertTo-RADouble's default (0). #>
-    @'
+    <# PURE. Each row's two scores from the mapping; no text = ConvertTo-RADouble's default (0). #1275 (4): in FindingId ranges of
+       -Chunk rows, one short transaction each (one UPDATE over 1.5 M rows filled tempdb's log). #>
+    param([long]$Chunk = 100000)
+    if ($Chunk -lt 1) { $Chunk = 100000 }
+    @"
 SET NOCOUNT ON; SET XACT_ABORT ON;
-UPDATE r SET W = ISNULL(w.V, 0.0), U = ISNULL(u.V, 0.0)
-FROM #ra r
-LEFT JOIN #num w ON w.H = HASHBYTES('SHA2_256', r.WT)
-LEFT JOIN #num u ON u.H = HASHBYTES('SHA2_256', r.UT);
-'@
+DECLARE @chunk bigint = $([long]$Chunk);
+DECLARE @lo bigint = (SELECT MIN(FindingId) FROM #ra) - 1, @top bigint = (SELECT MAX(FindingId) FROM #ra);
+WHILE @lo < @top BEGIN
+    UPDATE r SET W = ISNULL(w.V, 0.0), U = ISNULL(u.V, 0.0)
+    FROM #ra r
+    LEFT JOIN #num w ON w.H = HASHBYTES('SHA2_256', r.WT)
+    LEFT JOIN #num u ON u.H = HASHBYTES('SHA2_256', r.UT)
+    WHERE r.FindingId > @lo AND r.FindingId <= @lo + @chunk;
+    SET @lo = @lo + @chunk;
+END
+"@
 }
 
 function Get-RATopAssetAggSql {
@@ -456,9 +544,12 @@ function Get-RATopKpiGroupsSql {
     <# PURE. The key figures' six values of every row, each distinct combination once with its count. #>
     @'
 SET NOCOUNT ON; SET XACT_ABORT ON;
-SELECT MIN(KSev) AS KSev, MIN(KDom) AS KDom, MIN(KRep) AS KRep, MIN(KKpi) AS KKpi, MIN(KTier) AS KTier, MIN(KIac) AS KIac,
-       MAX(CONVERT(int, KIacStr)) AS KIacStr, COUNT_BIG(*) AS N
-FROM #ra GROUP BY KH;
+-- #1275 (4): grouped on the key alone, the values read from ONE row of each group (the key IS those values, with their
+-- lengths) -- a MIN over six nvarchar(max) columns of 1.5 M rows spilled tempdb ('large record overflow storage')
+SELECT r.KSev, r.KDom, r.KRep, r.KKpi, r.KTier, r.KIac, CONVERT(int, r.KIacStr) AS KIacStr, g.N
+FROM (SELECT KH, MIN(FindingId) AS Fid, COUNT_BIG(*) AS N FROM #ra GROUP BY KH) g
+INNER JOIN #ra r ON r.FindingId = g.Fid
+ORDER BY g.KH;
 '@
 }
 
@@ -466,7 +557,9 @@ function Get-RATopPatchTriplesSql {
     <# PURE. The patch cycle's distinct (given cycle, update id, update name) of the CVE rows -- each decided by Get-SIPatchCycle. #>
     @'
 SET NOCOUNT ON; SET XACT_ABORT ON;
-SELECT CONVERT(varchar(64), PTripleH, 2) AS H, MIN(PGiven) AS G, MIN(PUid) AS I, MIN(PUpd) AS U FROM #ra WHERE PCve = 1 GROUP BY PTripleH;
+-- #1275 (4): the values of one row of each triple (the key IS them), never a MIN over nvarchar(max)
+SELECT CONVERT(varchar(64), g.PTripleH, 2) AS H, r.PGiven AS G, r.PUid AS I, r.PUpd AS U
+FROM (SELECT PTripleH, MIN(FindingId) AS Fid FROM #ra WHERE PCve = 1 GROUP BY PTripleH) g INNER JOIN #ra r ON r.FindingId = g.Fid;
 '@
 }
 
@@ -485,8 +578,8 @@ UNION ALL
 SELECT 'F', f.PUid, f.PUpd, a.N, a.D FROM (
     SELECT r.PUidUH, COUNT_BIG(*) AS N, COUNT(DISTINCT r.PDevUH) AS D FROM #ra r JOIN #cyc c ON c.H = r.PTripleH
     WHERE r.PCve = 1 AND c.V = N'catchup' AND r.PUid <> N'' GROUP BY r.PUidUH) a
-JOIN (SELECT r.PUidUH, r.PUid, r.PUpd, ROW_NUMBER() OVER (PARTITION BY r.PUidUH ORDER BY r.RaSort DESC, r.RaSeq) AS Rn FROM #ra r JOIN #cyc c ON c.H = r.PTripleH
-      WHERE r.PCve = 1 AND c.V = N'catchup' AND r.PUid <> N'') f ON f.PUidUH = a.PUidUH AND f.Rn = 1;
+JOIN (SELECT x.PUidUH, r2.PUid, r2.PUpd FROM (SELECT r.PUidUH, r.FindingId, ROW_NUMBER() OVER (PARTITION BY r.PUidUH ORDER BY r.RaSort DESC, r.RaSeq) AS Rn FROM #ra r JOIN #cyc c ON c.H = r.PTripleH
+      WHERE r.PCve = 1 AND c.V = N'catchup' AND r.PUid <> N'') x INNER JOIN #ra r2 ON r2.FindingId = x.FindingId WHERE x.Rn = 1) f ON f.PUidUH = a.PUidUH;
 '@
 }
 
@@ -552,13 +645,15 @@ function Invoke-RATopListsInSql {
           [Parameter(Mandatory)][hashtable]$KpiState, $Progress = $null, [scriptblock]$Log, [double]$TargetSeconds = 20, [long]$FirstSpan = 200000)
     if (-not $Log) { $Log = { param($l, $m) } }
     $clock = [System.Diagnostics.Stopwatch]::StartNew()
-    $out = [ordered]@{ Status = 'declined'; Why = ''; Rows = 0L; Assets = 0L; Kept = 0L; NoAsset = 0L; TopAssets = @(); TopFindings = @(); KpiState = $null; Seconds = 0.0; Ranges = 0 }
+    $out = [ordered]@{ Status = 'declined'; Why = ''; Rows = 0L; Assets = 0L; Kept = 0L; NoAsset = 0L; TopAssets = @(); TopFindings = @(); KpiState = $null; Seconds = 0.0; Ranges = 0; Variants = @() }
     try {
         if ($null -eq $Stream -or -not ($Stream.Invoke -is [scriptblock])) { $out.Why = 'no database seam'; return [pscustomobject]$out }
         if ([string]$Stream.Grain -ne 'Detailed' -or [int]$Stream.CollectionId -le 0) { $out.Why = 'not a Detailed run with a collection'; return [pscustomobject]$out }
         if ($null -ne $KpiState.Prot) { $out.Why = 'the Protection Score is counted in this run'; return [pscustomobject]$out }
-        $why = Test-RATopListsColumns -Reports $Stream.Reports -WithAi $WithAi
-        if ($why) { $out.Why = $why; return [pscustomobject]$out }
+        # #1275 (4): a report whose column is a read column in another case is READ under that spelling (it was declined:
+        # live 2026-11-17, one report's 'CVE' sent 1.56 M rows to the row loop, ~4.8 h) -- the same value PowerShell reads
+        $variants = Get-RATopCaseVariants -Reports $Stream.Reports -WithAi $WithAi
+        $out.Variants = @(foreach ($vk in @($variants.Keys | Sort-Object -CaseSensitive)) { '{0} = {1}' -f $vk, (@($variants[$vk]) -join ' / ') })
         $cid = [int]$Stream.CollectionId
         $held = @(Get-RAStreamHeldOrdinals -Stream $Stream)
         $inv = $Stream.Invoke
@@ -570,6 +665,7 @@ function Invoke-RATopListsInSql {
             $rd = { param([string]$Sql) @(& $Run $Sql 'reader') | ForEach-Object { $_ } | Where-Object { $null -ne $_ } }
             $null = & $Run (Get-RATopSetupSql) 'nonquery'
             # ---- the rows, a FindingId range at a time (two seeks on the clustered key, never a count of the rows) ----
+            $res.Step = 'reading the rows'
             $rg = @(& $rd ("SELECT MIN(FindingId) AS Lo, MAX(FindingId) AS Hi FROM sidata.Finding WHERE CollectionId = {0};" -f $cid)) | Select-Object -First 1
             $lo = $null; $hi = $null
             if ($rg) { $lo = $rg['Lo']; $hi = $rg['Hi']; if ($lo -is [System.DBNull]) { $lo = $null }; if ($hi -is [System.DBNull]) { $hi = $null } }
@@ -583,7 +679,7 @@ function Invoke-RATopListsInSql {
                     }
                     $to = [long][Math]::Min([double]$top, [double]$from + $span)
                     $sw = [System.Diagnostics.Stopwatch]::StartNew()
-                    $r1 = @(& $rd (Get-RATopRangeSql -CollectionId $cid -Lo $from -Hi $to -Held $held -WithAi $WithAi)) | Select-Object -First 1
+                    $r1 = @(& $rd (Get-RATopRangeSql -CollectionId $cid -Lo $from -Hi $to -Held $held -WithAi $WithAi -Variants $variants)) | Select-Object -First 1
                     $sec = [Math]::Max(0.05, $sw.Elapsed.TotalSeconds); $lastMs = [long]$sw.ElapsedMilliseconds
                     $res.Ranges = [int]$res.Ranges + 1
                     if ($r1) { $rows += [long]$r1['N']; $odd += [long]$r1['Odd'] }
@@ -598,6 +694,7 @@ function Invoke-RATopListsInSql {
             if ($odd -gt 0) { $res.Why = 'a stored row carries an asset list or a list / object value the lists read as one value'; return }
             if ($ViewRows -ge 0 -and $rows -ne $ViewRows) { $res.Why = ('{0} rows read, the run counted {1} (collection {2}, finding ids {3}..{4}, {5} range(s))' -f $rows, $ViewRows, $cid, $lo, $hi, [int]$res.Ranges); return }
             # ---- the scores: each distinct text through ConvertTo-RADouble ----
+            $res.Step = 'the scores'
             $nums = @(& $rd (Get-RATopNumberTextsSql))
             $pairs = @(foreach ($x in $nums) { @{ H = [string]$x['H']; V = (ConvertTo-RADouble -Value (ConvertFrom-RATopStoredValue -Text $x['T'] -AsJsonNumber $true) -Default 0.0) } })
             $null = & $Run (Get-RATopMapInsertSql -Table 'num' -SqlType 'float' -Pairs $pairs -Bits) 'nonquery'
@@ -605,15 +702,18 @@ function Invoke-RATopListsInSql {
             $p = @(& $rd (Get-RATopPrepareSql -Collapse $Collapse)) | Select-Object -First 1
             if ($p) { $res.Kept = [long]$p['Kept']; $res.NoAsset = [long]$p['NoAsset'] }
             # ---- the assets ----
+            $res.Step = 'the assets'
             $tiers = @(& $rd (Get-RATopAssetAggSql))
             $tp = @(foreach ($x in $tiers) { @{ H = [string]$x['H']; V = [long](Get-RATopTierSortKey -Text ([string]$x['T'])) } })
             $null = & $Run (Get-RATopMapInsertSql -Table 'tier' -SqlType 'int' -Pairs $tp) 'nonquery'
             $res.TA = @(& $rd (Get-RATopAssetsSql -N $TopAssetsN -WithAi $WithAi))
             $res.TAI = @(& $rd (Get-RATopAssetItemsSql -WithAi $WithAi))
             # ---- the findings ----
+            $res.Step = 'the findings'
             $res.TF = @(& $rd (Get-RATopFindingsSql -N $TopFindingsN))
             $res.TFI = @(& $rd (Get-RATopFindingItemsSql -WithAi $WithAi))
             # ---- the key figures ----
+            $res.Step = 'the key figures'
             $res.K = @(& $rd (Get-RATopKpiGroupsSql))
             $tri = @(& $rd (Get-RATopPatchTriplesSql))
             $ct = $KpiState.Patch.CollectionTime; $cd = [int]$KpiState.Patch.CatchUpDays
@@ -709,7 +809,9 @@ function Invoke-RATopListsInSql {
         $out.Status = 'ok'
     } catch {
         $at = ''; try { if ($_.InvocationInfo -and $_.InvocationInfo.ScriptLineNumber -gt 0) { $at = (' (at {0}:{1}: {2})' -f [IO.Path]::GetFileName([string]$_.InvocationInfo.ScriptName), $_.InvocationInfo.ScriptLineNumber, ([string]$_.InvocationInfo.Line).Trim()) } } catch { }
-        $out.Status = 'declined'; $out.Why = ('the database pass failed: {0}{1}' -f (([string]$_.Exception.Message -split "`n")[0]).Trim(), $at)
+        # #1275: the step it failed in (measurement: the phase row of the decline names it)
+        $stp = ''; try { if ($res -and $res.Step) { $stp = (' in ' + [string]$res.Step) } } catch { }
+        $out.Status = 'declined'; $out.Why = ('the database pass failed{2}: {0}{1}' -f (([string]$_.Exception.Message -split "`n")[0]).Trim(), $at, $stp)
     } finally {
         $out.Seconds = $clock.Elapsed.TotalSeconds
     }
@@ -721,8 +823,12 @@ function Format-RATopListsLine {
     param([Parameter(Mandatory)]$Result)
     $inv = [System.Globalization.CultureInfo]::InvariantCulture
     if ([string]$Result.Status -eq 'ok') {
-        return [string]::Format($inv, 'Top 50 lists and key figures: worked out in the database in {0:N0} s ({1:N0} rows read in {2} range(s); {3} asset(s), {4} on the list; {5} finding(s) on the list)',
+        $line = [string]::Format($inv, 'Top 50 lists and key figures: worked out in the database in {0:N0} s ({1:N0} rows read in {2} range(s); {3} asset(s), {4} on the list; {5} finding(s) on the list)',
             [double]$Result.Seconds, [long]$Result.Rows, [int]$Result.Ranges, [long]$Result.Assets, @($Result.TopAssets).Count, @($Result.TopFindings).Count)
+        # #1275 (4): the columns read under a report's own spelling (another case)
+        $vs = @(); if ($Result.PSObject.Properties['Variants']) { $vs = @($Result.Variants | Where-Object { $_ }) }
+        if ($vs.Count) { $line += ('; read under another spelling as well: ' + ($vs -join '; ')) }
+        return $line
     }
     [string]::Format($inv, 'Top 50 lists and key figures: read row by row as before ({0}; the database pass took {1:N0} s)', [string]$Result.Why, [double]$Result.Seconds)
 }

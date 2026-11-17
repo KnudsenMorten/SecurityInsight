@@ -42,6 +42,8 @@ $script:SIEngineSchemaGrants = @(
 # install still has it). An Admin's manual CI override is written by the web app only; the engine reads it.
 $script:SIEngineDenies = @(
     @{ Object = 'sidata.CiOverride'; Verbs = 'INSERT, UPDATE, DELETE' }
+    # an Admin's per-server software exception: written by the web app only (Review & commit); the engine and the updater read it
+    @{ Object = 'sidata.CiSoftwareException'; Verbs = 'INSERT, UPDATE, DELETE' }
     # What the engine must never read or change, DENIED to the role -- a DENY beats db_datareader / db_datawriter, so an
     # install that still has the broad roles is held to it too (every update applies this list through the signed grant
     # procedure). The web app's sign-in key ring and the secret hand-over are never read; who may sign in, the settings and
@@ -200,6 +202,7 @@ $script:SIEngineNeverGranted = @(
     @{ Object = 'cfg.Connector';         Verbs = 'INSERT, UPDATE, DELETE' }
     @{ Object = 'cfg.Exemption';         Verbs = 'INSERT, UPDATE, DELETE' }
     @{ Object = 'sidata.CiOverride';     Verbs = 'INSERT, UPDATE, DELETE' }
+    @{ Object = 'sidata.CiSoftwareException'; Verbs = 'INSERT, UPDATE, DELETE' }
 )
 
 # Code under engine\ that does NOT run as the engine identity -- left out of the inventory, with the reason. A function
@@ -224,6 +227,10 @@ $script:SIEngineNotEngine = @(
     @{ File = 'engine/asset-cmdb/_shared/SI-SnowTestPack.ps1';  Function = '*';  Why = 'setup\New-SIServiceNowTestPack.ps1 (reads the schema text, runs nothing)' }
     @{ File = 'engine/asset-cmdb/_shared/SI-Connector.ps1';     Function = 'Set-SIConnector';               Why = 'setup\Import-SIProSettings.ps1' }
     @{ File = 'engine/pro-settings/SI-ProSettingWrite.ps1';     Function = 'Set-SIProSetting';              Why = 'setup\Set-SIProSetting.ps1 / Import-SIProSettings.ps1 / the updater''s control-plane step (#1270)' }
+    # the output column writer (cfg.ItemOverride + its cfg.ChangeLog row): called ONLY by the updater's control-plane step
+    # (setup\_shared\SI-ControlPlaneValues.ps1, SI_UPDATER_OUTPUTS) as caj-si-updater, whose db_datawriter covers it -- the
+    # same right Set-SIProSetting writes cfg.Setting with; cfg.ItemOverride stays on the engine's never-list
+    @{ File = 'engine/pro-settings/SI-OutputColumnWrite.ps1';   Function = '*';  Why = 'the updater''s control-plane step (SI_UPDATER_OUTPUTS): caj-si-updater''s identity, its db_datawriter' }
     @{ File = 'engine/pro-settings/SI-ProSettings.ps1';         Function = 'Set-SIProDocument';             Why = 'setup\Import-SIProSettings.ps1' }
     @{ File = 'engine/pro-settings/SI-ProConfig.ps1';           Function = 'Set-SIProItem';                 Why = 'setup\Import-SIProSettings.ps1 / Publish-SITemplates.ps1' }
     @{ File = 'engine/pro-settings/SI-ProConfig.ps1';           Function = 'New-SIProExemption';            Why = 'no engine caller (the web app writes exemptions)' }

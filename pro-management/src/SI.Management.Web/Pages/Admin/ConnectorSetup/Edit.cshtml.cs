@@ -205,7 +205,7 @@ public sealed class EditModel : PageModel
                     TeamTables.Add(SI.Management.Web.Outputs.ServiceNowTeamBrief.TableFromSchema(info.Output, "Staging table for " + info.Label, o.Table, schema,
                         "/Connectors/Fields?handler=Schema&output=" + Uri.EscapeDataString(info.Output)));
                     if (o.Latest is { Facts.ColumnsRead: true } l)
-                        o.Schema = SI.Management.Web.Outputs.ServiceNowSchemaCompare.Compare(SI.Management.Web.Outputs.ServiceNowSchemaCompare.FromSchema(schema), l.Facts.Columns, l.Facts.Mapping, batchIdSent: StagingStatusTable.Length > 0);
+                        o.Schema = SI.Management.Web.Outputs.ServiceNowSchemaCompare.Compare(SI.Management.Web.Outputs.ServiceNowSchemaCompare.FromSchema(schema), l.Facts.Columns, l.Facts.Mapping, batchIdSent: StagingStatusTable.Length > 0, canSwitchOn: await ShippedOffAsync(info.Output, ct));
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException) { _log.LogWarning(ex, "the ServiceNow schema could not be built for the comparison"); o.SchemaProblem = "The columns in force could not be read for the comparison: " + ViewerError.Text(ex); }
             }
@@ -387,6 +387,14 @@ public sealed class EditModel : PageModel
             return (s, s.Resolved(st.Membership()));
         }
         catch (Exception ex) when (ex is not OperationCanceledException) { _log.LogWarning(ex, "the connector scope could not be read"); return (null, null); }
+    }
+
+    /// The output's columns shipped switched off that no admin switched on (the check shows them as "can be switched on").
+    private async Task<IReadOnlyCollection<string>?> ShippedOffAsync(string output, CancellationToken ct)
+    {
+        if (Svc<SI.Management.Web.Outputs.OutputMapStore>() is not { } maps) return null;
+        try { return (await maps.LoadAsync(output, ct))?.ShippedOffNames; }
+        catch (Exception ex) when (ex is not OperationCanceledException) { _log.LogWarning(ex, "the output map could not be read for the columns shipped off"); return null; }
     }
 
     private async Task<string?> CountWordsAsync(SI.Management.Web.Outputs.ServiceNowOutputs.Info info, SI.Management.Core.ProData.OutputScope? scope, IReadOnlySet<string>? resolved, CancellationToken ct)

@@ -19,7 +19,7 @@
     </ul>
     <p>The role given here is the role the person has. Roles given earlier in Microsoft Entra (on the enterprise application <em>SecurityInsight</em>) were moved into this table once, marked "carried over from Entra" -- nobody gained or lost access by it. After that, changing or removing a person here is all it takes.</p>
     <p><strong>Send SecurityInsight mail to</strong>: an admin account often has no mailbox anyone reads. Give the person's normal mail address here and every SecurityInsight mail to that account -- reports, alerts, approvals -- goes there instead (never to both). Leave it empty to use the account's own mail. The table shows where each person's mail goes.</p>
-    <p>A change applies within a few seconds. A group's members get the group's role@(Model.NameLookup ? "" : " when their sign-in carries the group"). Every change is in the change history with your name and reason.</p>
+    <p>A change applies within a few seconds. A group's members get the group's role@(Model.LiveDirectory ? "" : " when their sign-in carries the group"). Every change is in the change history with your name and reason.</p>
 </details>
 @if (Model.Error is not null) { <div class="notice error" role="alert" data-access-error>@Model.Error</div> }
 @if (!Model.TableExists)
@@ -42,6 +42,7 @@ else
                            role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="a-find-list" data-picker-input value="@(Model.EditingIsNew ? e?.DisplayName : null)" />
                     <ul id="a-find-list" class="picker-list" role="listbox" hidden data-picker-list></ul>
                     <p class="hint" data-picker-chosen hidden></p>
+                    <partial name="~/Pages/Admin/_PickerNames.cshtml" model="SI.Management.Web.Pages.Admin.PickerNamesModel.Of(Model.Names, Model.NamesFrom)" />
                 </div>
             }
             else if (isNew)
@@ -62,7 +63,7 @@ else
                 </div>
                 <div class="wide">
                     <label for="a-name">Name shown</label>
-                    <input id="a-name" type="text" name="DisplayName" value="@e?.DisplayName" maxlength="256" required="@(!Model.NameLookup)" placeholder="@(Model.NameLookup ? "looked up from the directory when left empty" : "e.g. Identity team")" />
+                    <input id="a-name" type="text" name="DisplayName" value="@e?.DisplayName" maxlength="256" required="@(!Model.NameLookup)" placeholder="@(Model.NameLookup ? "looked up from the names when left empty" : "e.g. Identity team")" />
                 </div>
                 <div>
                     <label for="a-role">Role</label>

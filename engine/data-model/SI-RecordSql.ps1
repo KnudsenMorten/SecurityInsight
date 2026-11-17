@@ -534,6 +534,21 @@ function Get-SIRecordFeedDropVerdict {
     [pscustomobject]$res
 }
 
+$script:SIRecordFeedProviderNames = @{ mde = 'Defender for Endpoint'; intune = 'Intune'; entra = 'Entra ID'; ad = 'Active Directory'; mdi = 'Defender for Identity'
+                                       azure = 'Azure'; mdc = 'Defender for Cloud'; shodan = 'Shodan'; eg = 'Exposure Management'; cmdb = 'the CMDB'; servicenow = 'ServiceNow' }
+$script:SIRecordFeedTypeNames = @{ device = 'devices'; user = 'users'; group = 'groups'; azure_resource = 'Azure resources'; public_ip = 'public IP addresses'
+                                   service_principal = 'apps (service principals)'; subscription = 'subscriptions'; application = 'apps' }
+
+function Get-SIRecordFeedPlainName {
+    <# PURE. A feed as a customer reads it: "Defender for Endpoint devices", "Exposure Management Azure resources". An
+       unknown provider or record type is shown as it is (underscores as spaces). #>
+    param([AllowEmptyString()][AllowNull()][string]$Provider, [AllowEmptyString()][AllowNull()][string]$RecordType)
+    $p = ([string]$Provider).Trim(); $t = ([string]$RecordType).Trim()
+    $pn = if ($script:SIRecordFeedProviderNames.ContainsKey($p.ToLowerInvariant())) { $script:SIRecordFeedProviderNames[$p.ToLowerInvariant()] } else { $p }
+    $tn = if ($script:SIRecordFeedTypeNames.ContainsKey($t.ToLowerInvariant())) { $script:SIRecordFeedTypeNames[$t.ToLowerInvariant()] } elseif ($t) { $t -replace '_', ' ' } else { 'assets' }
+    ('{0} {1}' -f $pn, $tn).Trim()
+}
+
 function Get-SIRecordFeedDropSql {
     <# ONE read at the close: per feed of @f, how many records the collection @ctText holds now, and the feed's 8 newest
        earlier collections OF THE SAME COLLECTION STEP @engine (newest first). Without sidata.RecordCollection: no rows.
@@ -622,10 +637,12 @@ function Get-SIRecordFeedDrops {
             $v = Get-SIRecordFeedDropVerdict -Now $f.Now -History $f.History.ToArray() -Percent $Settings.Percent -MinRecords $Settings.MinRecords -Action $Settings.Action
             if ($null -ne $Checks) { $ck = Get-SIRecordFeedDropCheck -Feed $f -Verdict $v -Percent $Settings.Percent; if ($ck) { $Checks.Add($ck) } }
             if (-not $v.Drop) { continue }
-            $what = '{0} {1} records: {2} in this collection against {3} in the last good one ({4} %)' -f $f.Provider, $f.RecordType, $f.Now, $v.Baseline, $v.ChangePercent
+            # owner 2026-11-16 ("Customers dont understand this mail"): plain words, the real numbers first --
+            # "Defender for Endpoint devices: 697 now, 990 last time (-29.6 %). SecurityInsight keeps the last good data ..."
+            $what = '{0}: {1} now, {2} last time ({3} %)' -f (Get-SIRecordFeedPlainName -Provider $f.Provider -RecordType $f.RecordType), $f.Now, $v.Baseline, $v.ChangePercent
             $text = switch ($v.Action) {
-                'hold' { $what + ' -- the last good collection is kept until the next complete collection shows the same level' }
-                default { if ($v.Confirmed) { $what + ' -- the same level as the collection before it: the drop is accepted' } else { $what + ' -- taken as it came (SI_Pro_SourceDropout_AssetDropAction = accept)' } }
+                'hold' { $what + '. SecurityInsight keeps the last good data for the missing ones until the next complete read shows the same level' }
+                default { if ($v.Confirmed) { $what + '. The same level as the read before, so the new level is accepted' } else { $what + '. Taken as it came, because drops are set to be accepted at once (SI_Pro_SourceDropout_AssetDropAction = accept)' } }
             }
             Write-Host ('[{0}] records: {1}' -f $(if ($v.Action -eq 'hold') { 'WARN' } else { 'INFO' }), $text)
             [pscustomobject]@{ Feed = $k; Provider = $f.Provider; RecordType = $f.RecordType; Now = $f.Now; Baseline = $v.Baseline; ChangePercent = $v.ChangePercent

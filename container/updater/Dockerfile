@@ -63,6 +63,11 @@ COPY pro-management/deploy/SI-ManagementSignInCredential.ps1 /si/pro-management/
 # setting writer and checked by the settings catalog -- those two files and the catalog, not the whole settings layer
 COPY engine/pro-settings/SI-Settings.ps1 engine/pro-settings/SI-ProSettingWrite.ps1 /si/engine/pro-settings/
 COPY config/settings.catalog.locked.json /si/config/
+# ... and SI_UPDATER_OUTPUTS: the output column writer (the web app's own statement), the output maps and the data-out
+# catalog the allow-list is derived from -- not the data model's other templates
+COPY engine/pro-settings/SI-OutputColumnWrite.ps1 /si/engine/pro-settings/
+COPY data-model/outputs/ /si/data-model/outputs/
+COPY config/data-out.locked.json /si/config/
 # After an automatic licence request the updater mails the result with the transports the guard mails use.
 COPY engine/risk-analysis/_shared/RA-Mail.ps1 /si/engine/risk-analysis/_shared/
 

@@ -22,7 +22,7 @@ public sealed record DataOutEntry(string Output, string Connector, string Label,
 /// output gives it (as -- the customer's rename; the target when empty). <paramref name="Position"/> (owner 2026-10-19, the
 /// column builder's order): the column's place among the columns sent, 1 = first -- set only on a column the customer
 /// moved (<see cref="OutputMapRules.Arrange{T}"/>); null = its place in the map.
-public sealed record OutputColumn(string Target, string From, string? Op, string? As, int? Position = null)
+public sealed record OutputColumn(string Target, string From, string? Op, string? As, int? Position = null, bool Off = false)
 {
     public string Name => string.IsNullOrWhiteSpace(As) ? Target : As.Trim();
 }
@@ -52,7 +52,9 @@ public static partial class OutputMapRules
     [GeneratedRegex(@"^[a-z][a-z0-9\-]{0,60}$", RegexOptions.CultureInvariant)]
     public static partial Regex OutputId();
 
-    [GeneratedRegex(@"^(finding|summary|record)\.[A-Za-z_][A-Za-z0-9_\.]{0,120}$", RegexOptions.CultureInvariant)]
+    // extra.<field>: a value of the finding field map (data-model/finding-fields.locked.json) -- the engine works it out per
+    // finding (SI-FindingFieldMapper.ps1), so a column shipped switched off is switched on by saving it unchanged
+    [GeneratedRegex(@"^(finding|summary|record|extra)\.[A-Za-z_][A-Za-z0-9_\.]{0,120}$", RegexOptions.CultureInvariant)]
     private static partial Regex PathPattern();
 
     /// The data-model key of one column.
@@ -128,7 +130,9 @@ public static partial class OutputMapRules
             var target = S(o, "target");
             if (string.IsNullOrEmpty(target)) return null;
             int? pos = o.TryGetProperty("position", out var pv) && pv.ValueKind == JsonValueKind.Number && pv.TryGetInt32(out var pi) ? pi : null;
-            return new OutputColumn(target, S(o, "from") ?? "", S(o, "op"), S(o, "as"), pos);
+            // "off": true -- a column SHIPPED switched off (a template row): not sent until an admin switches it on (an override never carries it)
+            var off = o.TryGetProperty("off", out var ov) && (ov.ValueKind == JsonValueKind.True || (ov.ValueKind == JsonValueKind.String && string.Equals(ov.GetString(), "true", StringComparison.OrdinalIgnoreCase)));
+            return new OutputColumn(target, S(o, "from") ?? "", S(o, "op"), S(o, "as"), pos, off);
         }
         catch (JsonException) { return null; }
     }

@@ -1,0 +1,76 @@
+{
+  "$comment": "Output map: which columns an output receives, read from the item. Template kind: output-map. \"from\" is an SI field, record.<name> (a value of the item), or a system token ($run_id, $run_time, $row_hash, $changed_at, $const:<value>). \"op\" is from the closed output operation set. Customer overrides: outputs/<id>.custom.json (add, remove or rename columns; a column keeps its place unless moved).",
+  "kind": "output-map",
+  "id": "servicenow-remediation-task-finding",
+  "version": "1.0.0",
+  "description": "ServiceNow remediation task links (Import Set): one row per task and finding it resolves (many-to-many: one finding can belong to several tasks). u_source_record_id is the vulnerable item's own record id (<CI key>|<finding>), unchanged. The SQL hand-off view snowstage.vImportRemediationTaskFinding carries the same columns, the same row hash and source run. Every date UTC 'yyyy-MM-dd HH:mm:ss'; u_changed_at is when its task last changed. Key u_si_task_id + u_vulnerability. Column names are a contract; append only.",
+  "grain": "remediation_task_finding",
+  "columns": [
+    {
+      "target": "u_si_task_id",
+      "from": "record.task_id"
+    },
+    {
+      "target": "u_si_correlation_id",
+      "from": "si_ci_id"
+    },
+    {
+      "target": "u_vulnerability",
+      "from": "si_finding_key",
+      "op": "finding_key"
+    },
+    {
+      "target": "u_source_record_id",
+      "from": "record.item_key"
+    },
+    {
+      "target": "u_cve",
+      "from": "record.cve"
+    },
+    {
+      "target": "u_title",
+      "from": "si_title"
+    },
+    {
+      "target": "u_severity",
+      "from": "record.severity"
+    },
+    {
+      "target": "u_product_version",
+      "from": "record.version"
+    },
+    {
+      "target": "u_in_collection",
+      "from": "record.in_collection"
+    },
+    {
+      "target": "u_source",
+      "from": "$const:SecurityInsight"
+    },
+    {
+      "target": "u_row_hash",
+      "from": "record.row_hash"
+    },
+    {
+      "target": "u_source_run",
+      "from": "record.source_run"
+    },
+    {
+      "target": "u_changed_at",
+      "from": "record.changed_at"
+    },
+    {
+      "target": "u_action",
+      "from": "$action"
+    },
+    {
+      "target": "u_si_batch_id",
+      "from": "$batch_id"
+    },
+    {
+      "target": "u_si_cleared",
+      "from": "$cleared"
+    }
+  ],
+  "contract": "snowstage.vImportRemediationTaskFinding"
+}

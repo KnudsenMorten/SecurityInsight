@@ -164,6 +164,12 @@ else
         }
     </section>
 
+    @if (Model.Software is { } swv)
+    {
+        var swr = new CiSoftwareRender(swv, Model.Pro && User.IsAdmin(), Model.Pro, "ci");
+        <partial name="_CiSoftware" model="swr" />
+    }
+
     @* #462 the manual overrides of this CI: who set them, why, until when; an expired one is marked and no longer wins *@
     <section class="card" aria-labelledby="h-overrides" data-ci-overrides>
         <h2 id="h-overrides">Manual overrides</h2>
@@ -295,6 +301,11 @@ else
 
     <section class="card" aria-labelledby="h-findings" data-ci-findings>
         <h2 id="h-findings">Findings (@Fmt.Int(d.Findings.Count))</h2>
+        @* #1219 (4) a detection excepted on this server: its findings stay, marked here *@
+        @if (Model.Software is { } swx && swx.Active.Count > 0)
+        {
+            <p class="notice warn" role="status" data-findings-excepted>Detection excepted on this server: @(string.Join("; ", swx.Active.Select(e => "rule " + e.RuleId + " for " + e.Software))). The findings of the software stay and are listed below.</p>
+        }
         @if (d.Findings.Count == 0) { <p class="hint">No finding of the newest collection is on this CI.</p> }
         else
         {

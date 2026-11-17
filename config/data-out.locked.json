@@ -63,6 +63,28 @@
       "default": false
     },
     {
+      "output": "servicenow-remediation-task",
+      "connector": "data-out-servicenow-remediation-task",
+      "label": "ServiceNow remediation tasks per CI (Import Set)",
+      "kind": "servicenow-importset",
+      "tableSetting": "SI_DataOut_ServiceNowTaskTable",
+      "editions": [ "pro" ],
+      "default": false,
+      "onWithServiceNow": true,
+      "notSetUpIsQuiet": true
+    },
+    {
+      "output": "servicenow-remediation-task-finding",
+      "connector": "data-out-servicenow-remediation-task-finding",
+      "label": "ServiceNow remediation task links to findings (Import Set)",
+      "kind": "servicenow-importset",
+      "tableSetting": "SI_DataOut_ServiceNowTaskFindingTable",
+      "editions": [ "pro" ],
+      "default": false,
+      "onWithServiceNow": true,
+      "notSetUpIsQuiet": true
+    },
+    {
       "output": "sql-vulnerability-target",
       "connector": "asset-vulnerabilities",
       "label": "SQL vulnerability target",

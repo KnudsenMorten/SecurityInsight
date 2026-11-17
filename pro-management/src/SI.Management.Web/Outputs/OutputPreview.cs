@@ -172,12 +172,15 @@ ELSE
 
     public const string SummaryNote = "This output sums every finding into groups when it is sent, so its rows cannot be previewed from a few findings.";
     public const string NoItemsNote = "There is no data to preview yet: the rows appear after the next CI build and data sync.";
+    /// #1277 the remediation task outputs: their rows are the tasks per CI the data sync builds -- the Remediations > Tasks per asset page shows them.
+    public const string TaskNote = "This output sends the remediation tasks per CI (and their links to the findings) the data sync builds; the remediation tasks page of the web app shows them.";
 
     /// The preview of <paramref name="columns"/> (in the order sent) for an output of <paramref name="grain"/>.
     public async Task<OutputPreviewResult> ReadAsync(string? grain, IReadOnlyList<OutputColumn> columns, JsonObject? filter, CancellationToken ct, int take = 10)
     {
         var header = columns.Select(c => c.Name).ToList();
         if (grain == "finding_summary") return new OutputPreviewResult(header, Array.Empty<IReadOnlyList<string>>(), SummaryNote);
+        if (grain is "remediation_task" or "remediation_task_finding") return new OutputPreviewResult(header, Array.Empty<IReadOnlyList<string>>(), TaskNote);
         var (text, convert) = grain switch
         {
             "ci_finding" => (FindingSql, (Func<SqlRow, JsonObject>)FindingItem),

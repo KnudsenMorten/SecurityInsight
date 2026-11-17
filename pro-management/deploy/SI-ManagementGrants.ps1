@@ -77,8 +77,10 @@ $script:WebWriteGrants = @(
     @{ Object = 'cfg.WebKeyRing';              Verbs = 'INSERT' }
     @{ Object = 'sidata.Collection';           Verbs = 'UPDATE' }
     @{ Object = 'sidata.CiOverride';           Verbs = 'INSERT, UPDATE' }   # #462: an Admin's manual CI override (a removal is soft: an UPDATE)
+    @{ Object = 'sidata.CiSoftwareException';  Verbs = 'INSERT, UPDATE' }   # an Admin's per-server software exception (an undo is soft: an UPDATE) -- NEW web grant, approval pending Invardia review (least-privilege SQL rights list)
     @{ Object = 'sidata.CiSuspectDecision';    Verbs = 'INSERT, UPDATE' }   # a person's merge / split decision on a correlation suspect (a removal is soft: an UPDATE)
     @{ Object = 'sidata.CiSuspectDecisionRecord'; Verbs = 'INSERT' }        # the CIs and records a decision covers
+    @{ Object = 'sidata.DirectorySearchAsk';   Verbs = 'EXECUTE' }          # the people picker's "Search the tenant": one request row the engine runs (checked and limited inside; never the table) -- NEW web grant, the FIRST EXECUTE on a sidata object, approval pending Invardia review (least-privilege SQL rights list)
     @{ Object = 'cmdbsync.AssetLifecycle';      Verbs = 'UPDATE' }   # #406: an Admin retires an asset in its grace period early (Not seen anymore)
     @{ Object = 'cmdbsync.AssetLifecycleEvent'; Verbs = 'INSERT' }   # #406: ... with who and why
 )

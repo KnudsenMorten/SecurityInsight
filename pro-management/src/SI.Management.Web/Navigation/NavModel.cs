@@ -109,7 +109,9 @@ public static class NavModel
             // machines without the agent -- real, unprotected devices, counted while active
             new("/Cis/NotOnboarded", "Not onboarded in Defender"),
             // #462 the values an Admin set by hand on a CI (who, why, until)
-            new("/Cis/Overrides", "Manual overrides")),
+            new("/Cis/Overrides", "Manual overrides"),
+            // #1219 (4) a software detection an Admin marked a false positive on one server, and the suggestions to review (Pro)
+            new("/Cis/SoftwareExceptions", "Software detection exceptions")),
         new("Assets & services", "/Collection/Correlation", "Correlation quality", "reader"),
         new("Assets & services", "/Tiers/Index", "Tier board", "reader"),
         // #636: moved in from the retired Risks menu -- one row per asset, and one row per service (the weighted score)
@@ -137,6 +139,11 @@ public static class NavModel
         new("Remediations", "/Remediations/TopAssets", "Top 10 assets to fix", "reader"),
         new("Remediations", "/Remediations/TopFixes", "Top 10 fixes by reach", "reader"),
         new("Remediations", "/Remediations/Index", "All remediations", "reader"),
+        // #1277 the remediation tasks per CI (one task per thing to do on one asset, its state run to run; a task opens its findings):
+        // a READER's page, like every other collection view: a department-scoped reader opens it and sees only the tasks with
+        // findings they may see (finding level); a person of a department WITHOUT a role is refused every collection view
+        // (the /Remediations folder needs a reader), so the menu does not offer it to them either
+        new("Remediations", "/Remediations/Tasks", "Tasks per asset", "reader"),
         new("Changes & trends", "/Management/Trends", "Trends", "reader"),
         new("Changes & trends", "/Collection/Changes", "What changed", "reader"),
         Group("Changes & trends", "Vulnerabilities over time", "reader",

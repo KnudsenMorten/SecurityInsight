@@ -492,7 +492,8 @@ function Invoke-SIUpdaterControlPlaneStep {
     <#
         #1270 CONTROL-PLANE VALUES (Invardia ruling 2026-11-15: install state is never changed by an ops SQL write): what
         Invardia sets on THIS job's environment -- SI_UPDATER_STATE_IDENTITYMOVEMODE (plan | apply | off) and
-        SI_UPDATER_SETTINGS (a JSON object, allow-listed settings only, never a secret) -- written into the Pro store by
+        SI_UPDATER_SETTINGS (a JSON object, allow-listed settings only, never a secret) and SI_UPDATER_OUTPUTS (the output
+        columns / outputs shipped switched off, switched on or off as an Admin's change does) -- written into the Pro store by
         this update itself, each with its change-log row and read back (setup\_shared\SI-ControlPlaneValues.ps1). Runs
         BEFORE the identity-names step, so a mode set on the job is the mode that step reads in the same run. Each applied
         value is one line; a refusal is a warning, never a failed update. The library is dot-sourced and called HERE, in
@@ -507,8 +508,33 @@ function Invoke-SIUpdaterControlPlaneStep {
         $global:SI_UpdaterStep = 'control-plane'
         . $file
         $root = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $file))
-        Invoke-SIControlPlaneValues -Env $Env -Store $Store -SIRoot $root -UpdaterJob (Get-SIUpdaterInstallName -Role updater -Env $Env) -Log { param($m) Write-UpdLog $m }
+        $cpv = Invoke-SIControlPlaneValues -Env $Env -Store $Store -SIRoot $root -UpdaterJob (Get-SIUpdaterInstallName -Role updater -Env $Env) -Log { param($m) Write-UpdLog $m }
+        # owner 2026-11-17: the remediation task outputs on by default -- once per install that sends to ServiceNow, read back
+        if (Get-Command -Name Invoke-SIDefaultTaskOutputsStep -ErrorAction SilentlyContinue) { $null = Invoke-SIDefaultTaskOutputsStep -Store $Store -SIRoot $root -Log { param($m) Write-UpdLog $m } }
+        $cpv
     } catch { Write-UpdLog ('WARNING: control-plane values: not applied ({0}) -- the next update tries again' -f $_.Exception.Message); $null }
+}
+
+function Invoke-SIUpdaterVulnViewStep {
+    <#
+        THE VULNERABLE-ITEM VIEW (snowstage.vImportVulnerableItem) as the output map in force wants it: today's columns + the
+        switched-on finding-field columns (engine\asset-cmdb\_shared\SI-VulnItemExtra.ps1, Invoke-SIVulnImportViewStep). The
+        view is DDL, so it is the UPDATER's -- the engine holds no schema right and only fills the values. Runs after the
+        control-plane values (SI_UPDATER_OUTPUTS switches a column in the same run) and again after a roll (a new release's
+        schema step). Re-stated only when its columns differ; nothing switched on = metadata reads only. A failure leaves the
+        view as it is (one warning; the next update tries again). Never throws, never fails the update. -Lib: test seam.
+    #>
+    param($Store, [string]$Lib = '', [string]$Root = '')
+    try {
+        if (-not $Store) { return $null }
+        $file = if ($Lib) { $Lib } elseif ($siAutoRoot) { [IO.Path]::Combine($siAutoRoot, 'engine', 'asset-cmdb', '_shared', 'SI-VulnItemExtra.ps1') } else { '' }
+        if (-not $file -or -not (Test-Path -LiteralPath $file)) { return $null }
+        if (-not $Root) { $Root = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $file))) }
+        # (reported under the step 'control-plane': a step name Invardia's uplink already knows -- the view follows the outputs)
+        $global:SI_UpdaterStep = 'control-plane'
+        . $file
+        Invoke-SIVulnImportViewStep -Invoke $Store.Invoke -SIRoot $Root -Log { param($m) Write-UpdLog $m }
+    } catch { Write-UpdLog ('WARNING: the vulnerable-item view was not re-stated ({0}) -- it stays as it is; the next update tries again' -f $_.Exception.Message); $null }
 }
 
 function Invoke-SIUpdaterIdentityNamesStep {
@@ -1021,7 +1047,15 @@ function Invoke-SIUpdaterRecordEndpoints {
         foreach ($p in @(@('webapp', $WebApp), @('mcp', $McpApp))) {
             if (-not "$($p[1])".Trim()) { continue }
             $fqdn = ''
-            try { $a = & $GetApp $p[1]; if ($a) { $fqdn = [string]$a.properties.configuration.ingress.fqdn } } catch { $fqdn = '' }
+            try {
+                $a = & $GetApp $p[1]
+                if ($a) {
+                    $fqdn = [string]$a.properties.configuration.ingress.fqdn
+                    # 2026-11-16 (owner, framework 12.34): the MCP server is CLOSED to the internet (ingress external = false) --
+                    # not a customer endpoint, so it is not reported (its internal address would read as a changed address)
+                    if ($p[0] -eq 'mcp' -and "$($a.properties.configuration.ingress.external)" -notmatch '^(?i)true$') { $fqdn = '' }
+                }
+            } catch { $fqdn = '' }
             if ($fqdn.Trim()) { $items.Add([pscustomobject]@{ kind = $p[0]; url = $fqdn.Trim() }) }
         }
         $list = @(ConvertTo-SITelemetryEndpointList -Items $items.ToArray())
@@ -1507,6 +1541,9 @@ function Invoke-SIUpdaterCore {
     # there). Never fails or holds the update.
     $null = Invoke-SIUpdaterAiSettingsStep -SubscriptionId $sub -ResourceGroup $rg -Store $proStore -Env $Env
     $null = Invoke-SIUpdaterOpenAIRightsStep -SubscriptionId $sub -ResourceGroup $rg -Store $proStore -Env $Env
+    # the vulnerable-item view as the output map in force wants it (after the control-plane values above; also in an
+    # apply-settings run -- an Admin's column switch arrives there). Never fails or holds the update.
+    $null = Invoke-SIUpdaterVulnViewStep -Store $proStore
     if ($updMode -eq 'apply-settings') {
         if ($proSql -and $proDb -and -not $proStore) { throw "the Pro settings database could not be opened: $proStoreError" }
         Write-UpdLog 'apply-settings run: the settings handed over in the web app were applied -- nothing else runs'
@@ -1569,6 +1606,8 @@ function Invoke-SIUpdaterCore {
     $rcInvardia = (Invoke-SIUpdaterFromInvardia -Env $Env -SubscriptionId $sub -ResourceGroup $rg -AcrName $acrName -Blocked $blocked -Store $proStore `
                 -Deployed (Get-SIUpdaterDeployed -ResourceGroup $rg -AcrName $acrName -SubscriptionId $sub -Env $Env) -AcceptFingerprint (& $get 'SI_UPDATER_ACCEPT_TEMPLATE_FINGERPRINT'))
     Invoke-SIUpdaterWebAppStepsAfter -Rc $rcInvardia -Env $Env -Store $proStore -SubscriptionId $sub -ResourceGroup $rg
+    # after a roll that ended well: the schema step may have re-stated the vulnerable-item view (idempotent: unchanged = nothing)
+    if ("$(@($rcInvardia)[-1])".Trim() -eq '0') { $null = Invoke-SIUpdaterVulnViewStep -Store $proStore }
     return $rcInvardia
 }
 
@@ -1586,6 +1625,8 @@ function Invoke-SIUpdaterPostRollRun {
     $ver = ''; if ($siAutoRoot) { try { $ver = ([IO.File]::ReadAllText([IO.Path]::Combine($siAutoRoot, 'VERSION'))).Trim() } catch { $ver = '' } }
     Write-UpdLog ('post-roll run: the post-roll steps of {0} in its own code (no image roll, no licence request, no further run)' -f $(if ($ver) { "SecurityInsight $ver" } else { 'this release' }))
     Invoke-SIUpdaterWebAppStepsAfter -Rc 0 -Env $Env -Store $Store -SubscriptionId $SubscriptionId -ResourceGroup $ResourceGroup
+    # the release's schema step may have re-stated the vulnerable-item view to today's columns: the switched-on ones again
+    $null = Invoke-SIUpdaterVulnViewStep -Store $Store
     Write-UpdLog 'post-roll run: done'
     0
 }

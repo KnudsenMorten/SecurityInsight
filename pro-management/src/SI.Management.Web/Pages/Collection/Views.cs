@@ -282,6 +282,8 @@ public sealed class AssetModel(ICollectionViews views, ILogger<AssetModel> log) 
     public IReadOnlyList<AssetHistoryRow> History { get; private set; } = Array.Empty<AssetHistoryRow>();
     public IReadOnlyList<AssetVulnRow> VulnItems { get; private set; } = Array.Empty<AssetVulnRow>();
     public string? VulnNote { get; private set; }
+    /// The asset's remediation tasks (one page, open first; null = not read: no CI picked, or an export).
+    public SI.Management.Web.Pages.Remediations.AssetTasksView? Tasks { get; private set; }
     /// The CI's property bag per source system ({ "MDE": {...}, "Azure": {...} }), flattened one level for display.
     public IReadOnlyList<(string Source, IReadOnlyList<(string Name, string Value)> Props)> Properties { get; private set; } = Array.Empty<(string, IReadOnlyList<(string, string)>)>();
 
@@ -323,6 +325,10 @@ public sealed class AssetModel(ICollectionViews views, ILogger<AssetModel> log) 
                 VulnNote = "The vulnerability close-loop could not be read" + SchemaHint(ex.Message);
             }
             Properties = ParseProperties(Asset?.PropertiesJson);
+            // owner 2026-11-18 ("why are tasks not shown on the asset ci view"): the asset's remediation tasks, open first, paged
+            Tasks = await SI.Management.Web.Pages.Remediations.AssetTasks.OfAssetAsync(Views, Current!.CollectionId, RemediationTaskSql.OneAsset.AssetKey, key, Visibility,
+                SI.Management.Web.Pages.Remediations.AssetTasks.PageOf(Request.Query[SI.Management.Web.Pages.Remediations.AssetTasks.PageParameter]),
+                n => Link((SI.Management.Web.Pages.Remediations.AssetTasks.PageParameter, n.ToString(System.Globalization.CultureInfo.InvariantCulture))) + "#h-tasks-asset", Log, ct);
             await LoadEvidenceAsync(key, ct);
             await LoadMetadataAsync(key, ct);
             await LoadFacetsAsync(ct);

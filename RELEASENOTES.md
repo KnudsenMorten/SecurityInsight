@@ -13,6 +13,39 @@ SecurityInsight Pro and the Pro trial install from invardia.com, never from GitH
 [invardia.com/trial](https://invardia.com/trial/), and your installation page there gives your two lines.
 <!-- /install lines -->
 
+## v3.1.32 — remediation tasks for IT operations, linked everywhere; complete attack-path reports at large installations
+
+### New
+
+- **Task reports for IT operations** (Remediations > Task reports), each with export and a click-through to the tasks
+  behind a row:
+  - **Deploy once, fix many**: one row per action across all assets -- the assets it covers (and how many are Tier 0/1),
+    its highest severity and risk rating, the CVEs it removes and the tool that fits (patch tool, software deployment,
+    policy, Azure, manual). Actions on many assets come first, ranked by the risk they remove.
+  - **By product** (and version), **by any dimension** (tool, kind, owner, department, IT service, OS, age and more),
+    **actions no mass deployment fits**, and **opened and fixed per week**.
+  - Every report, Tasks per asset and Task findings filter by IT service (from the CMDB link), OS and OS version, device
+    type, subscription, resource group, location, tool, kind, tier, owner, department, age, and by the findings' severity,
+    risk rating, security domain, category and subcategory. A task matches when one of its findings matches, and it is
+    then counted over those findings.
+  - Tasks now show their highest risk rating next to their highest severity.
+- **Management report, chapter 6 "Remediation"**: open tasks and the assets they cover, opened and closed as fixed since the
+  last report, the oldest open task, open work per tool, and the **Top 50 actions** -- in full on the page, in the PDF and in
+  the mail, and on five slides in the presentation pack.
+- **Tasks linked everywhere**: the asset page and the CI page show the asset's remediation tasks (open first, every task
+  reachable); a finding's page lists the task it belongs to; an asset name on the task pages, the findings list and a
+  finding's page opens the asset page with its linked objects.
+
+### Fixed
+
+- **The CI page lists every finding.** Its two findings lists stopped at 500 without saying so; they now page through all
+  findings, and the headings give the true totals (open and overdue counted over every finding).
+- **Attack-path reports complete at the largest installations.** The two reports on devices with high-severity
+  vulnerabilities that allow lateral movement to Azure read Microsoft's attack-path data once per run and work out the
+  paths in SecurityInsight's own database, instead of asking for the whole graph again for each part of the report. The rows
+  are the same as before; a read that fails keeps the report's last complete result, and nothing of it closes.
+- The asset filter on Tasks per asset matches the asset exactly (it also matched assets whose name only started the same).
+
 ## v3.1.31 — the task's own columns in the Tasks view
 
 ### Changed

@@ -1641,6 +1641,43 @@ number -- so a row and a list entry match exactly when their texts are equal, pl
 (lower-cased in KQL on both sides), same direction (a row goes when any of its three keys is listed). A key in another form
 refuses the answer as not complete -- never a silent "no match".
 
+**#1275 stage 2 -- the attack-path reports from vulnerable devices to Azure read the Exposure Graph ONCE per run and join it in
+SQL (RA-GraphPathStage.ps1, owner 2026-11-18).** `Attack_Paths_Detailed_/Summary_Device_with_high_severity_vulnerabilities_
+allows_lateral_movement_Azure` walk device -[contains | has credentials of | frequently logged in by]-> secret / identity
+-[any of the six labels, 0..3]-> principal -[has role on]-> scope -[any, 0..2]-> Azure resource. Their query built the whole
+graph (`make-graph` over every edge of the six labels and every identity, secret and Azure node) in EVERY slice; only the
+devices were cut, so a slice at 1/256 still timed out at the largest tenants (a fixed cost, not size). Now
+`Invoke-GraphHuntingQuery` asks the port first (after the 504 stop is taken, before any route): a call that is exactly one
+of the two locked queries (`Get-RAGpsQueryShape`: a pinned hash of the text without the parts the engine writes per run; the
+slice filter read and checked to be cut on the device key; the weights block read back and rebuilt by its own generator; the
+excluded configuration ids, a row split, a count, a group count read) is answered from SQL; anything else -- a customer's own
+query of that name, a changed locked query -- runs as before (said once). **The read, once per run** (`Sync-RAGraphStage`, the
+producer before its workers; a worker takes it from the manifest and never loads): S1 the query's node table (the vulnerable
+devices with their device key, CVSS and Exposure Graph risk factors exactly as `VulnerableDevices` / `_DeviceEnrichment`
+compute them; every identity, secret and Azure node), each node's category and label tests evaluated by the query engine
+itself into bits; S2 every edge of the six labels. Keys: the first 32 hex digits of `hash_sha256(NodeId)`. Both are read in
+parts cut on the same hash-modulo the slices use, through the report loop's own hunting call (its 429 / busy back-off, its
+504 count, its row-limit check): a part answered 504 twice, or too large, is read as two halves; a busy part is asked again
+after the others. Each read is counted before and again after; the rows stored must equal both counts (a graph that changed
+while it was read is read once more; a shortfall drops what was stored). **The join** (`sidata.RaGraphRun / Node / Edge /
+CP / ST`, keyed by a run number): the walk credential / identity -> principal (0..3 steps; walks, as the query engine; only
+nodes from which a principal can still be reached are kept -- never a path dropped) and role scope -> Azure target (0..2, the
+query's target tests); each slice (the engine's own slicing, unchanged) asks SQL for its devices only, on one connection
+(`Get-RAGpsSliceSql`), and the rest of the query -- the CI lookups (read once per run through the engine's own lookup cache:
+the same rows the query carried), the columns, the weights, the excluded ids, the project and the sort -- is done in
+PowerShell row for row (`ConvertTo-RAGpsDetailedRows` / `-SummaryRows`); the engine then merges and stores as always.
+**Semantics, probed in advanced hunting on 2026-11-18** (`.ops\ra-stage2-probe\semantics.json`): an edge to a node outside the
+node table is KEPT (a node without name or category); variable-length steps are walks, `*0` includes the start; `make_set`
+keeps ""; strings sort ordinally. So slicing never lost a path: the only difference is that a vulnerable device read in
+another slice, when it is itself a principal, had an empty name -- the new path names it, and the run says how many such rows
+once ("now names N identities that are themselves vulnerable devices"). Two values the query does not fix are fixed now:
+`ViaRoleScope` (take_any) is the scope with the lowest name, then label; `CredentialNodes` (make_set(..., 10)) the first ten
+names in order; lists are sorted. **Never a partial graph:** a part that cannot be read, a short read, or a graph that keeps
+changing fails the load as "lookup unavailable" -- every report that needs it is NOT COMPLETE and keeps its last complete
+result; there is no fallback to the old query at run time. **Scratch tables** are removed at the run's end; every load first
+removes an earlier run of the same grain (one that stopped half way), anything older than two days and rows without a run.
+Community: the same code and schema (v3 Community has SQL).
+
 **#675 -- a subscription-level Azure recommendation takes the tier of the WHOLE subscription, also in a sliced run.** The
 Azure recommendation reports give a subscription-level row no CI links the tier of the subscription's most critical CI
 (`_subTierG`, #192). It was computed from `_ciLink`, which the hybrid path cuts per query slice on `_ciKey`: a slice held only
@@ -8040,8 +8077,29 @@ collection built before it (the base); the task rows of older collections are re
   out of the tasks (before the ranged write) still runs over the whole collection and grows faster than the findings (tasks +
   links 37 s at 300,000, 236 s at 600,000): until it also runs a range of CIs at a time, the tasks stay OFF at the very large
   installs (decision 2026-11-17).
-- *Web app*: Remediations > Tasks per asset (`/Remediations/Tasks`; an asset opens its own tasks, a task its findings) and Task
-  findings (`/Remediations/TaskFindings`, opened from a task, with the paths of a bundled copy); CSV / Excel exports; department-limited readers see
+- *Web app*: Remediations > Tasks per asset (`/Remediations/Tasks`) and Task findings (`/Remediations/TaskFindings`, opened
+  from a task, with the paths of a bundled copy); CSV / Excel exports.
+  *Where tasks are reachable from (owner 2026-11-18: "why are tasks not shown on the asset ci view", "it isnt linked
+  everywhere")*: the asset page (`/Collection/Asset`) and the CI page (`/Cis/Detail`) each have a "Remediation tasks"
+  section -- the asset's tasks, open first, the highest risk first, the total said, paged in SQL (25 a page, every page
+  reachable), each task opening its findings, and "All tasks of this asset" opening Tasks per asset filtered to it. The asset
+  page reads them by the asset's key (`AssetKey`), the CI page by the CI id: the data sync keys every task on its CI
+  (`OwnerKey` = the CI id), so the CI page needs no guess. Both filters match the key EXACTLY (a key is never matched as part
+  of another). The finding page (`/Findings/Detail`) lists the task(s) the finding belongs to -- found among the links of the
+  newest marked collection by the finding's owner and key (the parts of its Risk Analysis key the build links by), or in its
+  own collection by its row -- each opening Task findings for that task. On Tasks per asset and Task findings the asset NAME
+  opens the asset page (its linked objects and identifiers, tasks and findings), as on every other collection grid; the task's
+  findings count opens its findings; the asset's own task list stays one click away: on Tasks per asset the task's NAME opens
+  every task of that asset. The Findings list, and the finding page's asset, link the asset page too. On the CI page the two
+  findings lists ("Findings" and "Findings and their lifecycle") head with the CI's TRUE total (counted, with its open and
+  overdue counts) and are paged in SQL, 500 a page, every page reachable -- they were cut at 500 with the heading counting
+  only the rows shown (owner 2026-11-18: "the findings view on the asset id capped to 500 in the view, why").
+  The asset page and the CI page are refused to a department-limited person (they show the asset's identifiers, evidence,
+  metadata and history across departments), so a limited person is never offered them: on the task pages their asset opens
+  its own tasks and a task its findings, as before; the Findings list and the finding page show the asset as text; the
+  Departments pages keep the asset as text. On the finding page a limited person sees a task only when its link to this
+  finding is one they may see (Task findings' rule: the collection's own link, its finding visible to them).
+  Department-limited readers see
   a task only when they may see at least one of its findings, and then only those findings: its counts, highest severity,
   risk, tier and security domain are worked out over them (a finding can belong to another department than its CI, through a
   recommendation override). A finding carried with a task kept as it was is not in this collection, so its department is not
@@ -8055,6 +8113,61 @@ collection built before it (the base); the task rows of older collections are re
   collection whose tasks are still being written range by range (until the picked one is marked, the one before it; none =
   no rows). A department-limited reader sees the task's CI owner and CI department, as the findings views show a CI's
   owner and department on every finding of that CI the person may see (CI context, not finding data).
+- *Task reports for IT operations (#1283, owner 2026-11-18: "a summarized version so we can figure out candidates for
+  large-scale deployment using patch tools, policies, deployments" / "think as an it operation team")*: Remediations > Task
+  reports, every one a grouping of the SAME task rows Tasks per asset shows (`MarkedCollection`), OPEN tasks only, so a report
+  row is exactly the sum of the task rows it opens (`RemediationTaskReports`, `Pages/Remediations/RemediationTaskReportPages.cs`):
+  - *Deploy once, fix many* (`/Remediations/TaskActions`): one row per task across assets (the same update / upgrade /
+    configuration, `TaskKeyHash` = SHA-256 of the task key): assets, Tier 0/1 assets, findings closed, DISTINCT CVEs removed,
+    highest severity and risk rating, highest and summed weighted risk ("weighted risk removed": each asset's highest -- assets
+    x risk), the tool, open since. Ranked: the candidates for one fleet-wide deployment first -- open on at least
+    `SI_Pro_TaskMassMinAssets` assets (default 5, an Admin setting; it MARKS rows, never hides one; the build records the value
+    it ran with in `Collection.RemediationTaskMinAssets`) -- then by weighted risk removed. The rank is over every row (a
+    column filter does not renumber).
+  - *By product* (`/Remediations/TaskProducts`, per product or per product and version), *by any dimension*
+    (`/Remediations/TaskGroups?by=`: the tool, kind, tier, owner, department, how long open, IT service, OS, OS platform, OS
+    version, device type, cloud subscription, resource group, location, environment, severity, risk rating, security domain,
+    category, subcategory), *no mass action fits* (`/Remediations/TaskSingles`: the open tasks whose action is open on fewer
+    assets than the minimum), *opened and fixed per week* (`/Remediations/TaskTrend`, per tool or all).
+  - *The tool* (`RemediationTask.Channel`, worked out by the build from the kind; the web app's `RemediationTaskReports.Channels`
+    holds the same words and a one-line tooltip each): security update -> Patch tool; software upgrade and a bundled
+    application's vendor update -> Software deployment; configuration -> Policy; cloud recommendation -> Azure; identity and
+    attack path -> Manual.
+  - *Dimensions* (`d.<key>` in the address, several values with `|`, at most 50): every report and Tasks per asset / Task
+    findings filter by them, and they travel to the task rows a report row opens. Where each comes from: the task row (tool,
+    kind, product, tier, owner, department, age), the CI (`sidata.Ci`: OS, OS platform, OS version, device type, subscription,
+    resource group, location, environment -- joined at read time on the CI's key, current state), the CI's business services
+    (`sidata.CiService`, the CMDB link; a CI in several services matches each and counts under each), each finding of the task
+    (severity, risk rating, security domain, category, subcategory -- copied to the link at build:
+    `RemediationTaskFinding.RiskRating / Category / Subcategory / SecurityDomain / WeightedRisk / Tier`). A FINDING-LEVEL value
+    matches a task when at least one of its findings has it, and the task is then counted over those findings only -- the
+    rule `TasksFor` uses for a department-limited person; a grouping by a finding-level value counts a task under each value
+    over that value's findings (the rows can overlap). The task row carries its highest risk rating (`HighestRiskRating`) next
+    to its highest severity.
+  - *Stored or read time*: the unfiltered Deploy-once report of a person who sees everything reads the rows the task build
+    stores per collection (`sidata.RemediationTaskRollup`, with `sidata.RemediationTaskTrend` -- open tasks and assets, opened,
+    closed as fixed, closed otherwise per tool -- both written by `engine/pro-data/_shared/SI-DataRemediationTaskReports.sql`
+    after the last range and BEFORE the collection is marked, so a marked collection always has them; the rollup goes with its
+    tasks in the retention, the trend stays as history). Every other report, filter and grouping is grouped at read time over
+    the task rows (index `IX_RemediationTask_Group`) and, for a finding-level value or a limited person, their links. A
+    collection built before the reports existed has no `RemediationTaskRollupAt`: every report says "built from the next run"
+    and shows no table (never an empty report as zero); the next data sync's build fills the new columns and rows (the schema
+    step adds them; the build reads them only once they exist).
+  - *Department scoping*: a limited person's reports are worked out over the findings they may see (this collection's own links
+    whose finding is visible, the `TasksFor` rule) -- counts, values, the dimension choices offered and the exports; the
+    weekly trend (stored counts over every department) is not shown to them. The Executive report is not open to a
+    department-limited person (`DepartmentScopePageFilter`), so its remediation chapter counts every department.
+  - *The Executive report's remediation chapter* (block 6, renamed "6. Remediation"; its key `todo` stays, so every report
+    definition that lists it keeps it): the open tasks and the assets they cover, opened and closed as fixed since the run it
+    is compared with (the trend rows after it), the oldest open, the open work per tool, and the TOP 50 ACTIONS (the stored
+    Deploy-once rows in rank order: action, tool, assets, Tier 0/1 assets, highest severity, risk rating, CVEs removed),
+    before the top fixes and top assets. Page and PDF: every row, each opening its tasks. Management mail: every row of this
+    table (`FigureTable.MailRows`; other tables keep their first rows). Management pack: 10 rows to a slide (5 slides).
+  - *Size (measured 2026-11-18 on the test runner, 120,000 tasks / 600,000 links)*: the stored rows 3.8 s and 104 MB tempdb
+    in the build (17-18 s in the 600,000-finding engine bench, 1.4 M links); the stored Deploy-once report 71 ms; read time
+    for everyone 0.7-3.7 s (a finding-level filter 3.6-7 s, at most 25 MB tempdb); a department-limited person 10-18 s per
+    report. The dimension values offered on the page are read for a person who sees everything only (16 s for a limited
+    person: they type the values). No cap anywhere.
 - *On by default (owner 2026-11-17)*: the two task outputs are switched on with the ServiceNow data-out connector, and once by the
   update at an install that already sends to ServiceNow (read back; an Admin's later off stays). A task output whose Import Set
   table is not set is not set up: nothing is sent to it, never a failure. The vulnerable items' new columns stay off in 3.1.30

@@ -106,7 +106,9 @@ Describe 'container scope -- every new entry point loads what it calls in ITS sc
         $ast = [System.Management.Automation.Language.Parser]::ParseFile($script:EnginePath, [ref]$null, [ref]$null)
         $defs = @($ast.FindAll({ param($x) $x -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $false) | ForEach-Object { $_.Extent.Text })
         $sh = Join-Path $script:SIRoot 'engine\risk-analysis\_shared'
-        $load = @('RA-ScaleOut.ps1', 'RA-SqlStream.ps1', 'RA-DefenderFilter.ps1', 'RA-IngestKeyColumns.ps1', 'RA-ExcelColumnTypes.ps1', 'RA-AutoBucketing.ps1') | ForEach-Object { Join-Path $sh $_ }
+        # RA-GraphPathStage.ps1: the producer loads the run's attack-path graph before its workers (the engine dot-sources it
+        # at the top, next to RA-DefenderFilter.ps1)
+        $load = @('RA-ScaleOut.ps1', 'RA-SqlStream.ps1', 'RA-DefenderFilter.ps1', 'RA-GraphPathStage.ps1', 'RA-IngestKeyColumns.ps1', 'RA-ExcelColumnTypes.ps1', 'RA-AutoBucketing.ps1') | ForEach-Object { Join-Path $sh $_ }
         $glue = @('Get-RAScaleOutEngineState', 'Get-RAScaleOutEngineCounters', 'Clear-RAScaleOutReportRows', 'Receive-RAScaleOutWorkerItem',
                   'Invoke-RAScaleOutLocalWorker', 'Invoke-RAScaleOutProducerPass', 'Step-RALoopPass', 'Complete-RALoopPass',
                   'Get-RAScaleOutSplitOfItem', 'Complete-RAScaleOutSplitPart')

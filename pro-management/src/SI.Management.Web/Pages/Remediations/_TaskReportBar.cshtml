@@ -1,0 +1,75 @@
+@* #1283 the task reports' bar: the reports, the page's own views, the "group by" choice and the task dimensions (the IT
+   service, the OS and its version, the risk rating, the category ...). A dimension takes one or more values ("a|b"); a task
+   matches when it has one of them -- for a value that differs per finding, when one of its findings has it, and it is then
+   counted over those findings. Every value travels to the task rows a report row opens. *@
+@using SI.Management.Core.ProData
+@model SI.Management.Web.Pages.Remediations.RemediationTaskPageModel
+@{
+    var report = Model as SI.Management.Web.Pages.Remediations.TaskReportPageModel;
+    var dims = Model.Dims;
+}
+@if (report is not null)
+{
+    <nav class="tabs" aria-label="Task reports" data-task-reports>
+        @foreach (var (label, href, on) in report.Reports)
+        {
+            <a href="@href" class="@(on ? "on" : null)" aria-current="@(on ? "page" : null)">@label</a>
+        }
+    </nav>
+    @if (report.Choices.Count > 0)
+    {
+        <nav class="tabs small" aria-label="View" data-task-report-views>
+            @foreach (var (label, href, on) in report.Choices)
+            {
+                <a href="@href" class="@(on ? "on" : null)" aria-current="@(on ? "page" : null)" title="@(RemediationTaskReports.ChannelTip(label))">@label</a>
+            }
+        </nav>
+    }
+}
+@if (report is { OffersDimensions: true } || (report is null && dims.Count > 0))
+{
+    <details class="filters" data-task-dimensions open="@(dims.Count > 0 ? "open" : null)">
+        <summary>Filter by IT service, OS, risk rating, category and more@(dims.Count > 0 ? " (" + dims.Count + " chosen)" : "")</summary>
+        <form method="get" action="@Model.PagePath" class="dims">
+            @if (Model.Current is not null) { <input type="hidden" name="c" value="@Model.Current.CollectionId" /> }
+            @if (report is { OffersGrouping: true })
+            {
+                <label>Group by
+                    <select name="by">
+                        @foreach (var d in RemediationTaskReports.Groupings)
+                        {
+                            <option value="@d.Key" selected="@(d.Key == report.GroupBy)">@d.Label</option>
+                        }
+                    </select>
+                </label>
+            }
+            @if (report is SI.Management.Web.Pages.Remediations.TaskProductsModel { PerVersion: true }) { <input type="hidden" name="v" value="1" /> }
+            @foreach (var d in RemediationTaskReports.Dimensions)
+            {
+                var chosen = dims.TryGetValue(d.Key, out var v) ? string.Join("|", v) : "";
+                IReadOnlyList<string>? values = null;
+                if (report is not null && report.DimValues.TryGetValue(d.Key, out var dv)) { values = dv; }
+                <label title="@(d.Help ?? (d.Level == TaskDimLevel.Finding ? "A task matches when one of its findings has this value; it is then counted over those findings." : null))">@d.Label
+                    <input type="text" name="@d.Query" value="@chosen" list="@(values is null ? null : "dv-" + d.Key)" placeholder="any" autocomplete="off" />
+                </label>
+                @if (values is not null)
+                {
+                    <datalist id="dv-@d.Key">@foreach (var x in values) { <option value="@x"></option> }</datalist>
+                }
+            }
+            <div class="actions">
+                <button type="submit">Apply</button>
+                <a class="button secondary" href="@(Model.ViewLink(Model.PagePath, report?.GroupBy is { } gb ? new (string, string?)[] { ("by", gb) } : Array.Empty<(string, string?)>()))">Clear</a>
+            </div>
+            <p class="hint">Several values: separate them with |. A value that differs per finding (severity, risk rating, security domain, category, subcategory) matches a task when one of its findings has it, and the task is then counted over those findings only.</p>
+        </form>
+    </details>
+}
+@if (report is not null && report.MarkedId is not null && Model.Current is not null && report.MarkedId != Model.Current.CollectionId)
+{
+    <div class="notice" role="status" data-utc>The tasks shown are those of the newest collection whose tasks are fully built: @(report.MarkedTime is { } mt ? Fmt.When(mt) : report.MarkedId).</div>
+}
+@if (report is not null && report.MarkedId is not null && (report is SI.Management.Web.Pages.Remediations.TaskActionsModel || report is SI.Management.Web.Pages.Remediations.TaskSinglesModel))
+{
+    <p class="hint" data-mass-minimum>A task open on at least @report.MinAssets assets is a candidate for one fleet-wide deployment (an Admin setting: Fewest assets for a fleet-wide deployment). The minimum only marks rows: every task is listed and counted.</p>
+}

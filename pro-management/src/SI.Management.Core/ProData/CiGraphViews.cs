@@ -32,9 +32,15 @@ public sealed record CiFindingStateRow(string FindingKey, string? Title, string?
 /// One change of the CI (sidata.CiChange).
 public sealed record CiChangeRow(DateTime? ChangedAt, string Field, string? OldValue, string? NewValue, string? Source, string? Reason);
 
-/// Everything of the CI graph the CI page shows.
+/// How many findings with their lifecycle the CI has: all, open (open or reopened) and overdue -- over every finding, never
+/// one page.
+public sealed record CiFindingCounts(long Total, long Open, long Overdue);
+
+/// Everything of the CI graph the CI page shows. <paramref name="Findings"/> is ONE page of the CI's findings with their
+/// lifecycle (paged in SQL), starting at row <paramref name="FindingsSkip"/>; <paramref name="FindingCounts"/> counts them all
+/// (null = not counted).
 public sealed record CiGraph(CiGraphSchema Schema, IReadOnlyList<CiServiceRow> Services, IReadOnlyList<CiRelationRow> Relations,
-    IReadOnlyList<CiFindingStateRow> Findings, IReadOnlyList<CiChangeRow> Changes)
+    IReadOnlyList<CiFindingStateRow> Findings, IReadOnlyList<CiChangeRow> Changes, CiFindingCounts? FindingCounts = null, int FindingsSkip = 0)
 {
     public static readonly CiGraph Empty = new(CiGraphSchema.None, [], [], [], []);
 }
@@ -47,6 +53,9 @@ public interface ICiGraphViews
 {
     /// The services, relations, findings with their lifecycle and changes of one CI.
     Task<QueryResult<CiGraph>> CiGraphAsync(string ciId, CancellationToken ct);
+    /// The same with page <paramref name="findingsPage"/> (1 = the first) of its findings and their counts. A reader without
+    /// its own paging answers with <see cref="CiGraphAsync(string, CancellationToken)"/>.
+    Task<QueryResult<CiGraph>> CiGraphAsync(string ciId, int findingsPage, CancellationToken ct) => CiGraphAsync(ciId, ct);
     /// The CIs one service owns (by its key -- a CMDB service's number), with their open and overdue findings.
     Task<QueryResult<IReadOnlyList<ServiceCiRow>>> ServiceCisAsync(string serviceKey, CancellationToken ct);
     /// #855 M19: the CIs of one service of a lifecycle (null = the default, active; All = every CI the service owns).
@@ -57,7 +66,8 @@ public interface ICiGraphViews
 public static class CiGraphSql
 {
     public const int MaxRelations = 500;
-    public const int MaxFindings = 500;
+    /// The findings with their lifecycle the CI page lists per page (paged in SQL; the heading counts them all).
+    public const int FindingsPageSize = 500;
     public const int MaxChanges = 200;
     public const int MaxServiceCis = 500;
     public const int MaxServiceKey = 256;
@@ -85,12 +95,23 @@ WHERE v.CiId = @CiId
 ORDER BY CASE WHEN v.State = N'active' THEN 0 ELSE 1 END, v.Direction DESC, v.Kind, COALESCE(o.Name, v.ToValue);
 """;
 
+    /// One page of the CI's findings with their lifecycle (@Skip, @Take): reopened and open first, the overdue first.
     public const string Findings = """
-SELECT TOP (@Take) m.FindingKey, m.Title, m.FindingType, m.Severity, m.State, m.Status, m.FirstDetected, m.LastSeen, m.ClosedAt, m.CloseReason, m.ReopenCount,
+SELECT m.FindingKey, m.Title, m.FindingType, m.Severity, m.State, m.Status, m.FirstDetected, m.LastSeen, m.ClosedAt, m.CloseReason, m.ReopenCount,
        m.Owner, m.OwnerSource, m.SlaDays, m.DueAt, m.Overdue, m.ExemptionReason, m.ExemptedUntil, m.TicketState, m.Excluded
 FROM sidata.vCiFindingModel AS m
 WHERE m.CiId = @CiId
-ORDER BY CASE m.Status WHEN N'reopened' THEN 0 WHEN N'open' THEN 1 WHEN N'exempted' THEN 2 ELSE 3 END, m.Overdue DESC, m.DueAt, m.FindingKey;
+ORDER BY CASE m.Status WHEN N'reopened' THEN 0 WHEN N'open' THEN 1 WHEN N'exempted' THEN 2 ELSE 3 END, m.Overdue DESC, m.DueAt, m.FindingKey
+OFFSET @Skip ROWS FETCH NEXT @Take ROWS ONLY;
+""";
+
+    /// The CI's findings with their lifecycle counted: all, open (open or reopened) and overdue (the CI page's heading).
+    public const string FindingCounts = """
+SELECT COUNT_BIG(*) AS Total,
+       SUM(CASE WHEN fm.Status IN (N'open', N'reopened') THEN 1 ELSE 0 END) AS OpenN,
+       SUM(CASE WHEN fm.Overdue = 1 THEN 1 ELSE 0 END) AS OverdueN
+FROM sidata.vCiFindingModel AS fm
+WHERE fm.CiId = @CiId;
 """;
 
     public const string Changes = """
@@ -153,9 +174,13 @@ public sealed class CiGraphViews : ICiGraphViews
             CiViews.Flag(r, "HasServiceCis"));
     }
 
-    public async Task<QueryResult<CiGraph>> CiGraphAsync(string ciId, CancellationToken ct)
+    public Task<QueryResult<CiGraph>> CiGraphAsync(string ciId, CancellationToken ct) => CiGraphAsync(ciId, 1, ct);
+
+    public async Task<QueryResult<CiGraph>> CiGraphAsync(string ciId, int findingsPage, CancellationToken ct)
     {
         var id = CiSql.CiId(ciId);
+        var skip = (Math.Clamp(findingsPage, 1, int.MaxValue / CiGraphSql.FindingsPageSize) - 1) * CiGraphSql.FindingsPageSize;
+        CiFindingCounts? counts = null;
         var schema = await SchemaAsync(ct).ConfigureAwait(false);
         if (!schema.Any) return R(CiGraph.Empty, "");
         var texts = new List<string>();
@@ -181,7 +206,11 @@ public sealed class CiGraphViews : ICiGraphViews
         IReadOnlyList<CiFindingStateRow> findings = [];
         if (schema.FindingModel)
         {
-            var (rows, text) = await Run(new SqlQuery(CiGraphSql.Findings, P(("CiId", id), ("Take", CiGraphSql.MaxFindings))), ct).ConfigureAwait(false);
+            var (rows, text) = await Run(new SqlQuery(CiGraphSql.Findings, P(("CiId", id), ("Skip", skip), ("Take", CiGraphSql.FindingsPageSize))), ct).ConfigureAwait(false);
+            var (cr, ctext) = await Run(new SqlQuery(CiGraphSql.FindingCounts, P(("CiId", id))), ct).ConfigureAwait(false);
+            if (cr.Count > 0 && ProDataQueries.LN(cr[0], "Total") is { } total)
+                counts = new CiFindingCounts(total, ProDataQueries.LN(cr[0], "OpenN") ?? 0, ProDataQueries.LN(cr[0], "OverdueN") ?? 0);
+            texts.Add(ctext);
             findings = rows.Select(r => new CiFindingStateRow(ProDataQueries.S(r, "FindingKey"), ProDataQueries.SN(r, "Title"), ProDataQueries.SN(r, "FindingType"),
                 ProDataQueries.SN(r, "Severity"), ProDataQueries.S(r, "State"), ProDataQueries.S(r, "Status"), ProDataQueries.T(r, "FirstDetected"),
                 ProDataQueries.T(r, "LastSeen"), ProDataQueries.T(r, "ClosedAt"), ProDataQueries.SN(r, "CloseReason"), ProDataQueries.L(r, "ReopenCount"),
@@ -197,7 +226,7 @@ public sealed class CiGraphViews : ICiGraphViews
                 ProDataQueries.SN(r, "NewValue"), ProDataQueries.SN(r, "Source"), ProDataQueries.SN(r, "Reason"))).ToList();
             texts.Add(text);
         }
-        return R(new CiGraph(schema, services, relations, findings, changes), string.Join("\n\n", texts));
+        return R(new CiGraph(schema, services, relations, findings, changes, counts, skip), string.Join("\n\n", texts));
     }
 
     /// Every CI the service owns, whatever its lifecycle (a caller without a lifecycle choice, as before).

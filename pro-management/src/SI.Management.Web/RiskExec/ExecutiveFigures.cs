@@ -10,7 +10,11 @@ public sealed record FigureLine(string Key, string Label, string Value, ChangeSi
 
 /// A small table of a block or a topic: headers, rows of cells (text), a link per row (or none), a note under it.
 public sealed record FigureTable(string Key, string Title, IReadOnlyList<string> Headers, IReadOnlyList<IReadOnlyList<string>> Rows,
-    IReadOnlyList<string?>? Hrefs = null, string? Note = null, IReadOnlyList<double>? Bars = null);
+    IReadOnlyList<string?>? Hrefs = null, string? Note = null, IReadOnlyList<double>? Bars = null)
+{
+    /// How many rows the management mail shows (null = its usual first rows). #1283: the top 50 actions are mailed in full.
+    public int? MailRows { get; init; }
+}
 
 /// One block of the Executive report (and its topics): its lines and tables, or why it is not available.
 public sealed record ReportBlock(string Key, string Title, IReadOnlyList<FigureLine> Lines, IReadOnlyList<FigureTable> Tables, string? Unavailable = null);
@@ -31,6 +35,14 @@ public sealed class ExecutiveFigures
     public IReadOnlyList<KeyFigurePoint> Trend { get; init; } = [];
     public IReadOnlyList<IReadOnlyDictionary<string, object?>> TopFixes { get; init; } = [];
     public IReadOnlyList<IReadOnlyDictionary<string, object?>> TopAssets { get; init; } = [];
+    /// #1283 the remediation tasks of the newest collection whose tasks are built (at or before the one shown): its state (null =
+    /// none built), the top actions ("deploy once, fix many", stored rollup, in rank order) and the counts per tool since the
+    /// last report. Read for a person who sees everything only: the Executive report is not open to a department-limited person.
+    public IReadOnlyDictionary<string, object?>? TaskState { get; init; }
+    public IReadOnlyList<IReadOnlyDictionary<string, object?>> TaskTop { get; init; } = [];
+    public IReadOnlyList<IReadOnlyDictionary<string, object?>> TaskSince { get; init; } = [];
+    /// How many actions the remediation chapter lists (owner 2026-11-18: "top 50 actions").
+    public const int TopActions = 50;
     public List<QueryInfo> Queries { get; } = new();
     /// #818 (owner 2026-10-20: "why can i not select previous data collection sets ... so we can easily compare"): every
     /// complete run a page can show (the published one first, never a loading / stopped one -- CollectionViewSql.CollectionsReady)
@@ -51,7 +63,9 @@ public sealed class ExecutiveFigures
         // the protection score leads (owner 2026-10-19: "a new number which defines our ability to protect our assets")
         ("protection", "Protection score"),
         ("patching", "1. Patching"), ("exposure", "2. Exposure"), ("coverage", "3. Coverage"), ("identity", "4. Identity"),
-        ("cloud", "5. Cloud"), ("todo", "6. What to do first"), ("trend", "7. Trend"),
+        // #1283 (owner 2026-11-18: "summary of top 50 actions in mgmt report under remediation chapter"): the same block, renamed --
+        // its key stays, so every report definition that lists it keeps it
+        ("cloud", "5. Cloud"), ("todo", "6. Remediation"), ("trend", "7. Trend"),
     ];
 
     /// The headline figures on top of both pages, each opening its topic.
@@ -548,7 +562,58 @@ public sealed class ExecutiveFigures
             TopAssets.Select(r => S(r, "AssetKey") is { } a ? (string?)("/Collection/Asset?key=" + Uri.EscapeDataString(a)) : null).ToList(), TopAssets.Count == 0 ? "The remediations of this collection are being prepared." : null);
         // catch-up first (owner 2026-10-19): the devices behind the monthly cycle are the work; the monthly rollout needs none
         var first = PatchSections("cve", "catchup").SelectMany(b => b.Lines).FirstOrDefault(l => l.Key == "catchup.action");
-        return new ReportBlock("todo", title, first is null ? Array.Empty<FigureLine>() : new[] { first with { Key = "todo.catchup", Label = "First: catch-up" } }, [fixes, assets]);
+        var lines = new List<FigureLine>();
+        if (first is not null) lines.Add(first with { Key = "todo.catchup", Label = "First: catch-up" });
+        var (taskLines, actions) = TaskChapter();
+        lines.AddRange(taskLines);
+        // the top actions lead the tables: the mail shows three tables of a block, and these are the remediation chapter's
+        return new ReportBlock("todo", title, lines, [actions, fixes, assets]);
+    }
+
+    // ---- #1283 the remediation tasks in the remediation chapter -------------------------------------------------------------
+
+    public const string TasksNotBuilt = "built from the next run";
+
+    private static long L(IReadOnlyDictionary<string, object?> r, string k) => r.TryGetValue(k, out var v) && v is not null && v is not DBNull ? Convert.ToInt64(v, CultureInfo.InvariantCulture) : 0;
+
+    /// The task lines (open tasks and assets, opened and closed as fixed since the last report, the oldest open, the open work
+    /// per tool) and the top actions table -- or, for a collection whose task reports are not built yet, lines that say so
+    /// (never a zero).
+    public (IReadOnlyList<FigureLine> Lines, FigureTable Actions) TaskChapter()
+    {
+        const string topTitle = "Top 50 actions: deploy once, fix many";
+        string[] headers = ["Action", "Tool", "Assets", "Tier 0/1 assets", "Highest severity", "Risk rating", "CVEs removed"];
+        var built = TaskState is { } st && L(st, "Built") == 1;
+        if (!built)
+        {
+            var why = TaskState is null ? "No remediation tasks are built yet." : "The remediation task reports are " + TasksNotBuilt + ".";
+            return ([new FigureLine("tasks.open", "Open remediation tasks", TaskState is null ? "–" : TasksNotBuilt, Note: why)],
+                new FigureTable("topactions", topTitle, headers, [], Note: why) { MailRows = TopActions });
+        }
+        var state = TaskState!;
+        var marked = Convert.ToString(state["MarkedId"], CultureInfo.InvariantCulture);
+        var all = TaskSince.FirstOrDefault(r => S(r, "Channel") is null or "");
+        var lines = new List<FigureLine>
+        {
+            new("tasks.open", "Open remediation tasks", all is null ? "0" : Fmt.Int(L(all, "OpenTasks")) + " on " + Fmt.Int(L(all, "OpenAssets")) + " assets",
+                Href: "/Remediations/TaskActions?c=" + Uri.EscapeDataString(marked ?? ""), Raw: all is null ? 0 : L(all, "OpenTasks")),
+            new("tasks.opened", Previous is null ? "Opened in this run" : "Opened since the last report", Fmt.Int(all is null ? 0 : L(all, "Opened"))),
+            new("tasks.fixed", Previous is null ? "Closed as fixed in this run" : "Closed as fixed since the last report", Fmt.Int(all is null ? 0 : L(all, "ClosedFixed"))),
+        };
+        if (all is not null && all.TryGetValue("OldestOpen", out var oo) && oo is DateTime old && state.TryGetValue("MarkedTime", out var mtv) && mtv is DateTime mt)
+            lines.Add(new FigureLine("tasks.oldest", "Oldest open task", Fmt.Int((long)Math.Max(0, (mt - old).TotalDays)) + " days"));
+        foreach (var (name, tip) in RemediationTaskReports.Channels)
+            if (TaskSince.FirstOrDefault(r => S(r, "Channel") == name) is { } ch && L(ch, "OpenTasks") > 0)
+                lines.Add(new FigureLine("tasks.tool." + name.ToLowerInvariant().Replace(' ', '-'), name, Fmt.Int(L(ch, "OpenTasks")) + " open tasks on " + Fmt.Int(L(ch, "OpenAssets")) + " assets", Note: tip,
+                    Href: "/Remediations/TaskGroups?by=Channel&c=" + Uri.EscapeDataString(marked ?? "")));
+        var rows = TaskTop.Take(TopActions).ToList();
+        var table = new FigureTable("topactions", topTitle, headers,
+            rows.Select(r => (IReadOnlyList<string>)[S(r, "Action") ?? "", S(r, "Channel") ?? "", Fmt.Int(L(r, "Assets")), Fmt.Int(L(r, "Tier01Assets")),
+                S(r, "HighestSeverity") ?? "", S(r, "HighestRiskRating") ?? "–", Fmt.Int(L(r, "Cves"))]).ToList(),
+            rows.Select(r => S(r, "TaskGroup") is { } g ? (string?)("/Remediations/Tasks?c=" + Uri.EscapeDataString(marked ?? "") + "&f.TaskGroup=" + g + "&f.State=open") : null).ToList(),
+            rows.Count == 0 ? "No open remediation task." : "Candidates for one fleet-wide deployment (open on at least " + Fmt.Int(L(state, "MinAssets")) + " assets) first, then by the weighted risk each action removes. The full list: " + NavModel.PathOf("/Remediations/TaskActions") + ".",
+            Bars: rows.Select(r => (double)L(r, "Assets")).ToList()) { MailRows = TopActions };
+        return (lines, table);
     }
 
     private ReportBlock TrendBlock(string title)
@@ -753,9 +818,28 @@ public sealed class ExecutiveFigures
                     .Where(r => Convert.ToString(r.TryGetValue("FixRank", out var fr) ? fr : null, CultureInfo.InvariantCulture) == "1").ToList();
             }
             catch (Exception ex) when (ex is not OperationCanceledException) { _ = ex; }
+            // #1283 the remediation tasks: the newest collection whose tasks are built at or before the shown one, its top actions
+            // (the stored rollup, in rank order) and what was opened / closed since the run compared with
+            IReadOnlyDictionary<string, object?>? taskState = null;
+            IReadOnlyList<IReadOnlyDictionary<string, object?>> taskTop = [], taskSince = [];
+            try
+            {
+                var tp = new Dictionary<string, object?> { ["CollectionId"] = cur.CollectionId };
+                taskState = (await views.GridAsync(new GridQuery(RemediationTaskReports.State, tp, cur.Version + "|remtaskstate", new GridRequest { Size = 25 }), ct)).Data.Rows.FirstOrDefault();
+                if (taskState is not null && Convert.ToInt32(taskState["Built"], CultureInfo.InvariantCulture) == 1)
+                {
+                    var ap = TaskSlice.None.Parameters();
+                    ap["CollectionId"] = cur.CollectionId;
+                    taskTop = (await views.GridAsync(new GridQuery(RemediationTaskReports.Actions(TaskSlice.None), ap, cur.Version + "|remtasktop", new GridRequest { Size = TopActions, Sort = "Rank", Desc = false }), ct)).Data.Rows;
+                    var sp = new Dictionary<string, object?> { ["CollectionId"] = cur.CollectionId, ["Since"] = prev?.CollectionTime.ToString("yyyy-MM-ddTHH:mm:ss.fff", CultureInfo.InvariantCulture) };
+                    taskSince = (await views.GridAsync(new GridQuery(RemediationTaskReports.Since, sp, cur.Version + "|remtasksince|" + prev?.CollectionId, new GridRequest { Size = 25 }), ct)).Data.Rows;
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException) { _ = ex; taskState = null; }
             var f = new ExecutiveFigures
             {
                 Grace = grace, TierWeights = weights, Lifecycle = life,
+                TaskState = taskState, TaskTop = taskTop, TaskSince = taskSince,
                 Current = cur, Previous = prev, Now = now.Data, Before = before, Trend = trend.Data, TopFixes = fixes, TopAssets = assets,
                 Collections = cols, Compared = chosen is not null,
                 // the shown (published) run is being prepared; an earlier run synced before the figures existed has none

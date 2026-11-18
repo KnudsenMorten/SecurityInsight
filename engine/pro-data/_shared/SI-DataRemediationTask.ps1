@@ -147,6 +147,57 @@ GROUP BY x.SigHash;
 "@
 }
 
+#region #1283 THE TASK REPORTS FOR IT OPERATIONS (owner 2026-11-18: "a summarized version so we can figure out candidates for
+# large-scale deployment using patch tools, policies, deployments" / "think as an it operation team"). The web app's task reports
+# group the task rows; what is heavy at a large install (distinct CVEs over every link) is stored here per collection, by the
+# build that writes the tasks, from the collection's FINAL task rows -- the same rows and rules the task grid reads.
+
+function Get-SIRemediationTaskChannelSql {
+    <# PURE. The tool that fits a task, from its kind (the web app's RemediationTaskReports.Channels holds the same words):
+       a security update -> Patch tool; a software upgrade or a bundled application's vendor update -> Software deployment;
+       a configuration -> Policy; a cloud recommendation -> Azure; everything else (identity, attack path) -> Manual. #>
+    param([Parameter(Mandatory)][string]$Kind)
+    "CASE $Kind WHEN N'security-update' THEN N'Patch tool' WHEN N'software-upgrade' THEN N'Software deployment' WHEN N'bundled-upgrade' THEN N'Software deployment'" +
+    " WHEN N'configuration' THEN N'Policy' WHEN N'cloud-recommendation' THEN N'Azure' ELSE N'Manual' END"
+}
+
+function Get-SIRemediationTaskRatingRankSql {
+    <# PURE. A finding's risk rating (Critical | High | Moderate | Low, banded by Risk Analysis) as a rank 4..1; 0 = none. #>
+    param([Parameter(Mandatory)][string]$Column)
+    "CASE LOWER(LTRIM(RTRIM(ISNULL($Column, N'')))) WHEN N'critical' THEN 4 WHEN N'high' THEN 3 WHEN N'moderate' THEN 2 WHEN N'medium' THEN 2 WHEN N'low' THEN 1 ELSE 0 END"
+}
+
+function Get-SIRemediationTaskRatingTextSql {
+    <# PURE. A rating rank back to its words; NULL for none. #>
+    param([Parameter(Mandatory)][string]$Rank)
+    "CASE $Rank WHEN 4 THEN N'Critical' WHEN 3 THEN N'High' WHEN 2 THEN N'Moderate' WHEN 1 THEN N'Low' END"
+}
+
+function Get-SIRemediationTaskMinAssets {
+    <# The "mass deployment" minimum (SI_Pro_TaskMassMinAssets, default 5, at least 1): a task open on at least this many
+       assets is a candidate for one deployment. It CLASSIFIES rows -- no row is ever hidden by it. #>
+    $n = 5
+    $sv = Get-Variable -Name SI_Pro_TaskMassMinAssets -Scope Global -ValueOnly -ErrorAction SilentlyContinue
+    $x = 0; if ($null -ne $sv -and [int]::TryParse([string]$sv, [ref]$x) -and $x -ge 1) { $n = $x }
+    $n
+}
+
+function Get-SIRemediationTaskReportsSql {
+    <#
+        PURE. The stored rows of the task reports for collection @c (inside the build, after its last range, before the mark):
+          sidata.RemediationTaskRollup  one row per distinct task across assets, OPEN tasks only: assets (distinct CIs), Tier 0/1
+                                        assets, findings (a sum: each finding is on one asset), DISTINCT CVEs over every link,
+                                        highest severity and risk rating, highest and summed weighted risk (each asset's highest
+                                        -- "assets x risk"), oldest first seen
+          sidata.RemediationTaskTrend   one row per tool ('' = every tool): open tasks and assets, the oldest open, and what this
+                                        build opened / closed as fixed / closed for another reason (#tr, added up per range)
+        A trend row of a collection no longer stored is removed. One code path at every size; no cap.
+    #>
+    # ONE TEXT: the file the web app's proof tests run over their own task rows (RemediationTaskReportsLocalSqlTests)
+    [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'SI-DataRemediationTaskReports.sql'))
+}
+#endregion
+
 function Get-SIRemediationTaskKey {
     <# PURE. The task key: '<kind>|<name, trimmed, lower case>' -- in full, never cut (the task id is a hash of it). #>
     param([string]$Kind, [string]$Name)
@@ -332,7 +383,8 @@ function Get-SIRemediationTaskBuildSql {
 SET NOCOUNT ON;
 SET XACT_ABORT ON;
 DECLARE @c INT = CONVERT(int, @CollectionId), @b INT = TRY_CONVERT(int, NULLIF(@BaseId, N'')), @bid UNIQUEIDENTIFIER = CONVERT(uniqueidentifier, @BuildId),
-        @keep INT = CONVERT(int, @KeepClosedDays);
+        @keep INT = CONVERT(int, @KeepClosedDays), @mass INT = ISNULL(TRY_CONVERT(int, NULLIF(@MinAssets, N'')), 5);
+IF @mass < 1 SET @mass = 1;
 DECLARE @ct DATETIME2(3) = (SELECT CollectionTime FROM sidata.Collection WHERE CollectionId = @c);
 -- THE BUILD LOCK IS PROVEN before anything is written (and again before every range below): it is held by this build's own
 -- session; a lock that could be granted now means that session is gone -- the build stops, nothing more is written
@@ -370,7 +422,9 @@ CREATE TABLE #wk (OwnerKey NVARCHAR(450) COLLATE DATABASE_DEFAULT NOT NULL PRIMA
 CREATE TABLE #f (FindingId BIGINT NOT NULL PRIMARY KEY, OwnerKey NVARCHAR(450) COLLATE DATABASE_DEFAULT NOT NULL, FindingKey NVARCHAR(256) COLLATE DATABASE_DEFAULT NOT NULL,
                  SigHash BINARY(32) NOT NULL, AssetKey NVARCHAR(400) NULL, AssetName NVARCHAR(400) NULL, CmdbName NVARCHAR(400) NULL, Cve NVARCHAR(256) NULL,
                  Title NVARCHAR(1000) NULL, SevRank TINYINT NOT NULL, RiskScore FLOAT NULL, Weighted FLOAT NULL, Tier TINYINT NULL, SecurityDomain NVARCHAR(128) NULL,
-                 DepartmentId INT NULL, Own BIT NOT NULL, Exempt BIT NOT NULL);
+                 DepartmentId INT NULL, Own BIT NOT NULL, Exempt BIT NOT NULL,
+                 -- #1283 the finding-level values the task reports filter and group by (copied to the links)
+                 RatingRank TINYINT NOT NULL, RiskRating NVARCHAR(16) NULL, Category NVARCHAR(256) NULL, Subcategory NVARCHAR(256) NULL);
 CREATE INDEX IX_f ON #f (OwnerKey, FindingKey) INCLUDE (Own, Exempt);
 -- the owners of the range: the CI's lifecycle -- active | retired | hold (not seen, frozen, gone, or its evidence not read this run)
 CREATE TABLE #o (OwnerKey NVARCHAR(450) COLLATE DATABASE_DEFAULT NOT NULL PRIMARY KEY, Lc NVARCHAR(16) NOT NULL, CiId NVARCHAR(64) NULL,
@@ -394,11 +448,14 @@ CREATE TABLE #t (TaskId BINARY(32) NOT NULL PRIMARY KEY, OwnerKey NVARCHAR(450) 
                  TaskName NVARCHAR(MAX) NOT NULL, Kind NVARCHAR(32) NOT NULL, Product NVARCHAR(400) NULL, Vendor NVARCHAR(400) NULL, Version NVARCHAR(400) NULL,
                  Application NVARCHAR(MAX) NULL, Paths NVARCHAR(MAX) NULL, EvidenceAt DATETIME2(3) NULL, Findings INT NOT NULL, Cves INT NOT NULL, SevRank TINYINT NULL,
                  MaxRisk FLOAT NULL, MaxWeighted FLOAT NULL, Tier TINYINT NULL, Doms INT NOT NULL, Dom NVARCHAR(128) NULL, Depts INT NOT NULL, Dept INT NULL,
-                 AssetKey NVARCHAR(400) NULL, AssetName NVARCHAR(400) NULL);
+                 AssetKey NVARCHAR(400) NULL, AssetName NVARCHAR(400) NULL, RatingRank TINYINT NULL);
 -- the links of those tasks (one per task and finding key)
 CREATE TABLE #k (TaskId BINARY(32) NOT NULL, FindingKey NVARCHAR(256) COLLATE DATABASE_DEFAULT NOT NULL, OwnerKey NVARCHAR(450) COLLATE DATABASE_DEFAULT NOT NULL,
                  FindingId BIGINT NOT NULL, Cve NVARCHAR(256) NULL, Title NVARCHAR(1000) NULL, SevRank TINYINT NULL, RiskScore FLOAT NULL, Version NVARCHAR(400) NULL,
+                 RiskRating NVARCHAR(16) NULL, Category NVARCHAR(256) NULL, Subcategory NVARCHAR(256) NULL, SecurityDomain NVARCHAR(128) NULL, Weighted FLOAT NULL, Tier TINYINT NULL,
                  PRIMARY KEY (TaskId, FindingKey));
+-- #1283 what this build opened and closed, per tool (added up range by range: the collection's trend rows)
+CREATE TABLE #tr (Channel NVARCHAR(32) NOT NULL, Opened INT NOT NULL, ClosedFixed INT NOT NULL, ClosedOther INT NOT NULL);
 -- THE BASE'S OPEN TASKS NOT WORKED OUT NOW (on an active CI): what each of their findings is now. "fixed" ONLY ON POSITIVE
 -- EVIDENCE that the finding is gone -- never because a task with the same key did not come out this run:
 --   fixed    the finding is gone and the finding lifecycle closed it as remediated (complete runs); or -- a BUNDLED task --
@@ -442,7 +499,8 @@ SELECT f.FindingId, LEFT(o.OwnerKey, 450), k.FKey, {SIG}, f.AssetKey, f.AssetNam
             WHEN N'medium' THEN 2 WHEN N'moderate' THEN 2 WHEN N'low' THEN 1 ELSE 0 END,
        f.RiskScore, ISNULL(f.RiskScoreWeighted, f.RiskScore), f.Tier, f.SecurityDomain, f.DepartmentId,
        CASE WHEN f.CarriedFrom IS NULL AND EXISTS (SELECT 1 FROM #rep AS r WHERE r.ReportName = f.ReportName) THEN 1 ELSE 0 END,
-       CASE WHEN f.ExemptionId IS NULL THEN 0 ELSE 1 END
+       CASE WHEN f.ExemptionId IS NULL THEN 0 ELSE 1 END,
+       {RATINGRANK_F}, {RATINGTEXT_F}, f.Category, f.Subcategory
 FROM #fo AS x
     JOIN #wk AS wf ON wf.OwnerKey = x.OwnerKey
     JOIN sidata.Finding AS f ON f.CollectionId = @c AND f.FindingId = x.FindingId
@@ -486,17 +544,19 @@ WHERE f.Exempt = 0 AND LOWER(LTRIM(RTRIM(x.TaskName))) <> LOWER(LTRIM(RTRIM(ISNU
 INSERT #t
 SELECT HASHBYTES('SHA2_256', CONCAT(g.OwnerKey, N'|', g.TaskKey)), g.OwnerKey, g.TaskKey, g.TaskName, g.Kind, NULLIF(g.Product, N''), NULLIF(g.Vendor, N''),
        NULLIF(g.Version, N''), g.Application, g.Paths, g.EvidenceAt, g.Findings, g.Cves, g.SevRank, g.MaxRisk, g.MaxWeighted, g.Tier,
-       g.Doms, CASE WHEN g.Doms = 1 THEN g.Dom END, g.Depts, CASE WHEN g.Depts = 1 THEN g.Dept END, g.AssetKey, g.AssetName
+       g.Doms, CASE WHEN g.Doms = 1 THEN g.Dom END, g.Depts, CASE WHEN g.Depts = 1 THEN g.Dept END, g.AssetKey, g.AssetName, g.RatingRank
 FROM (SELECT l.OwnerKey, l.TaskKey, MAX(l.TaskName) AS TaskName, MAX(l.Kind) AS Kind, MAX(l.Product) AS Product, MAX(l.Vendor) AS Vendor,
              CASE WHEN MIN(l.Version) = MAX(l.Version) THEN MAX(l.Version) ELSE N'' END AS Version, MAX(l.Application) AS Application,
              MAX(l.Paths) AS Paths, MAX(l.EvidenceAt) AS EvidenceAt, COUNT(DISTINCT l.FindingKey) AS Findings, COUNT(DISTINCT f.Cve) AS Cves,
              MAX(f.SevRank) AS SevRank, MAX(f.RiskScore) AS MaxRisk, MAX(f.Weighted) AS MaxWeighted, MIN(f.Tier) AS Tier,
              COUNT(DISTINCT ISNULL(f.SecurityDomain, N'')) AS Doms, MAX(f.SecurityDomain) AS Dom,
-             COUNT(DISTINCT ISNULL(f.DepartmentId, -1)) AS Depts, MAX(f.DepartmentId) AS Dept, MAX(f.AssetKey) AS AssetKey, MAX(f.AssetName) AS AssetName
+             COUNT(DISTINCT ISNULL(f.DepartmentId, -1)) AS Depts, MAX(f.DepartmentId) AS Dept, MAX(f.AssetKey) AS AssetKey, MAX(f.AssetName) AS AssetName,
+             MAX(f.RatingRank) AS RatingRank
       FROM #l AS l JOIN #f AS f ON f.FindingId = l.FindingId
       GROUP BY l.OwnerKey, l.TaskKey) AS g;
 INSERT #k
-SELECT t.TaskId, l.FindingKey, MAX(l.OwnerKey), MIN(l.FindingId), MAX(f.Cve), MAX(f.Title), MAX(f.SevRank), MAX(f.RiskScore), NULLIF(MAX(l.Version), N'')
+SELECT t.TaskId, l.FindingKey, MAX(l.OwnerKey), MIN(l.FindingId), MAX(f.Cve), MAX(f.Title), MAX(f.SevRank), MAX(f.RiskScore), NULLIF(MAX(l.Version), N''),
+       MAX(f.RiskRating), MAX(f.Category), MAX(f.Subcategory), MAX(f.SecurityDomain), MAX(f.Weighted), MIN(f.Tier)
 FROM #l AS l JOIN #t AS t ON t.OwnerKey = l.OwnerKey AND t.TaskKey = l.TaskKey JOIN #f AS f ON f.FindingId = l.FindingId
 GROUP BY t.TaskId, l.FindingKey;
     SET @msT = @msT + DATEDIFF(millisecond, @tp, SYSUTCDATETIME()); SET @tp = SYSUTCDATETIME();
@@ -542,12 +602,13 @@ FROM #ls GROUP BY TaskId;
     SET @msB = @msB + DATEDIFF(millisecond, @tp, SYSUTCDATETIME()); SET @tp = SYSUTCDATETIME();
 INSERT #out (Src, CollectionId, TaskId, OwnerKey, CiId, AssetKey, AssetName, TaskKey, TaskName, Kind, Product, Vendor, Version, Application, ApplicationPaths, EvidenceAt,
              Findings, Cves, HighestSeverity, MaxRiskScore, MaxWeightedRisk, Tier, SecurityDomain, DepartmentId, Departments, CiOwner, CiDepartment, CmdbId,
-             FirstSeen, LastSeen, State, ClosedAt, ClosedWhy, ReopenCount, InThisCollection, RowHash, ChangedAt, SentInScope)
+             FirstSeen, LastSeen, State, ClosedAt, ClosedWhy, ReopenCount, InThisCollection, RowHash, ChangedAt, SentInScope, HighestRiskRating)
 SELECT CASE WHEN p.TaskId IS NULL THEN N'new' WHEN p.State = N'closed' THEN N'reopened' ELSE N'seen' END,
        @c, t.TaskId, t.OwnerKey, o.CiId, t.AssetKey, t.AssetName, t.TaskKey, t.TaskName, t.Kind, t.Product, t.Vendor, t.Version, t.Application, t.Paths, t.EvidenceAt,
        t.Findings, t.Cves, CASE t.SevRank WHEN 4 THEN N'critical' WHEN 3 THEN N'high' WHEN 2 THEN N'medium' WHEN 1 THEN N'low' ELSE N'info' END,
        t.MaxRisk, t.MaxWeighted, t.Tier, t.Dom, ad.DepartmentId, CASE WHEN ad.DepartmentId IS NULL THEN 0 ELSE 1 END, o.CiOwner, o.CiDept, o.CmdbId,
-       ISNULL(p.FirstSeen, @ct), @ct, N'open', NULL, NULL, ISNULL(p.ReopenCount, 0) + CASE WHEN p.State = N'closed' THEN 1 ELSE 0 END, 1, 0x00, @now, p.SentInScope
+       ISNULL(p.FirstSeen, @ct), @ct, N'open', NULL, NULL, ISNULL(p.ReopenCount, 0) + CASE WHEN p.State = N'closed' THEN 1 ELSE 0 END, 1, 0x00, @now, p.SentInScope,
+       {RATINGTEXT_T}
 FROM #t AS t
 JOIN #o AS o ON o.OwnerKey = t.OwnerKey
 LEFT JOIN #p AS p ON p.TaskId = t.TaskId
@@ -555,11 +616,11 @@ LEFT JOIN #p AS p ON p.TaskId = t.TaskId
 LEFT JOIN sidata.Asset AS ad ON ad.AssetKey = t.AssetKey;
 INSERT #out (Src, CollectionId, TaskId, OwnerKey, CiId, AssetKey, AssetName, TaskKey, TaskName, Kind, Product, Vendor, Version, Application, ApplicationPaths, EvidenceAt,
              Findings, Cves, HighestSeverity, MaxRiskScore, MaxWeightedRisk, Tier, SecurityDomain, DepartmentId, Departments, CiOwner, CiDepartment, CmdbId,
-             FirstSeen, LastSeen, State, ClosedAt, ClosedWhy, ReopenCount, InThisCollection, RowHash, ChangedAt, SentInScope)
+             FirstSeen, LastSeen, State, ClosedAt, ClosedWhy, ReopenCount, InThisCollection, RowHash, ChangedAt, SentInScope, HighestRiskRating)
 SELECT z.Src, @c, p.TaskId, p.OwnerKey, p.CiId, p.AssetKey, p.AssetName, p.TaskKey, p.TaskName, p.Kind, p.Product, p.Vendor, p.Version, p.Application, p.ApplicationPaths, p.EvidenceAt,
        p.Findings, p.Cves, p.HighestSeverity, p.MaxRiskScore, p.MaxWeightedRisk, p.Tier, p.SecurityDomain, p.DepartmentId, p.Departments, p.CiOwner, p.CiDepartment, p.CmdbId,
        p.FirstSeen, p.LastSeen, CASE WHEN z.Why IS NULL THEN p.State ELSE N'closed' END, CASE WHEN z.Why IS NULL THEN p.ClosedAt ELSE @ct END,
-       ISNULL(z.Why, p.ClosedWhy), p.ReopenCount, 0, p.RowHash, p.ChangedAt, p.SentInScope
+       ISNULL(z.Why, p.ClosedWhy), p.ReopenCount, 0, p.RowHash, p.ChangedAt, p.SentInScope, p.HighestRiskRating
 FROM #p AS p
 LEFT JOIN #o AS o ON o.OwnerKey = p.OwnerKey
 LEFT JOIN #d AS d ON d.TaskId = p.TaskId
@@ -586,28 +647,49 @@ FROM #out AS o LEFT JOIN #p AS p ON p.TaskId = o.TaskId;
     SET @nFindings = @nFindings + (SELECT COUNT(*) FROM (SELECT DISTINCT OwnerKey, FindingKey FROM #f) AS q);
     SET @nOwn = @nOwn + (SELECT COUNT(*) FROM #f WHERE Own = 1);
     IF EXISTS (SELECT 1 FROM #ls) SET @states = CONCAT(@states + N',', (SELECT STRING_AGG(CONVERT(nvarchar(max), St), N',') FROM #ls));
+    INSERT #tr (Channel, Opened, ClosedFixed, ClosedOther)
+    SELECT {CHANNEL_O}, SUM(CASE WHEN o.Src IN (N'new', N'reopened') THEN 1 ELSE 0 END),
+           SUM(CASE WHEN o.Src = N'closed' AND o.ClosedWhy = N'fixed' THEN 1 ELSE 0 END),
+           SUM(CASE WHEN o.Src = N'closed' AND ISNULL(o.ClosedWhy, N'') <> N'fixed' THEN 1 ELSE 0 END)
+    FROM #out AS o GROUP BY {CHANNEL_O};
     SET @msO = @msO + DATEDIFF(millisecond, @tp, SYSUTCDATETIME()); SET @tp = SYSUTCDATETIME();
     BEGIN TRAN;
     DELETE l FROM sidata.RemediationTaskFinding AS l JOIN #wk AS w ON w.OwnerKey = l.OwnerKey WHERE l.CollectionId = @c;
     DELETE t FROM sidata.RemediationTask AS t JOIN #wk AS w ON w.OwnerKey = t.OwnerKey WHERE t.CollectionId = @c;
     INSERT sidata.RemediationTask (CollectionId, TaskId, OwnerKey, CiId, AssetKey, AssetName, TaskKey, TaskName, Kind, Product, Vendor, Version, Application, ApplicationPaths,
                                    EvidenceAt, Findings, Cves, HighestSeverity, MaxRiskScore, MaxWeightedRisk, Tier, SecurityDomain, DepartmentId, Departments, CiOwner,
-                                   CiDepartment, CmdbId, FirstSeen, LastSeen, State, ClosedAt, ClosedWhy, ReopenCount, InThisCollection, RowHash, ChangedAt, SentInScope)
+                                   CiDepartment, CmdbId, FirstSeen, LastSeen, State, ClosedAt, ClosedWhy, ReopenCount, InThisCollection, RowHash, ChangedAt, SentInScope,
+                                   TaskKeyHash, Channel, HighestRiskRating)
     SELECT o.CollectionId, o.TaskId, o.OwnerKey, o.CiId, o.AssetKey, o.AssetName, o.TaskKey, o.TaskName, o.Kind, o.Product, o.Vendor, o.Version, o.Application, o.ApplicationPaths,
            o.EvidenceAt, o.Findings, o.Cves, o.HighestSeverity, o.MaxRiskScore, o.MaxWeightedRisk, o.Tier, o.SecurityDomain, o.DepartmentId, o.Departments, o.CiOwner,
-           o.CiDepartment, o.CmdbId, o.FirstSeen, o.LastSeen, o.State, o.ClosedAt, o.ClosedWhy, o.ReopenCount, o.InThisCollection, o.RowHash, o.ChangedAt, o.SentInScope
+           o.CiDepartment, o.CmdbId, o.FirstSeen, o.LastSeen, o.State, o.ClosedAt, o.ClosedWhy, o.ReopenCount, o.InThisCollection, o.RowHash, o.ChangedAt, o.SentInScope,
+           HASHBYTES('SHA2_256', o.TaskKey), {CHANNEL_O}, o.HighestRiskRating
     FROM #out AS o JOIN #wk AS w ON w.OwnerKey = o.OwnerKey;
-    INSERT sidata.RemediationTaskFinding (CollectionId, TaskId, FindingKey, OwnerKey, FindingId, Cve, Title, Severity, RiskScore, Version, InThisCollection, SentInScope)
+    INSERT sidata.RemediationTaskFinding (CollectionId, TaskId, FindingKey, OwnerKey, FindingId, Cve, Title, Severity, RiskScore, Version, InThisCollection, SentInScope,
+                                          RiskRating, Category, Subcategory, SecurityDomain, WeightedRisk, Tier)
     SELECT @c, k.TaskId, k.FindingKey, k.OwnerKey, k.FindingId, k.Cve, k.Title,
-           CASE k.SevRank WHEN 4 THEN N'critical' WHEN 3 THEN N'high' WHEN 2 THEN N'medium' WHEN 1 THEN N'low' ELSE N'info' END, k.RiskScore, k.Version, 1, bl.SentInScope
+           CASE k.SevRank WHEN 4 THEN N'critical' WHEN 3 THEN N'high' WHEN 2 THEN N'medium' WHEN 1 THEN N'low' ELSE N'info' END, k.RiskScore, k.Version, 1, bl.SentInScope,
+           k.RiskRating, k.Category, k.Subcategory, k.SecurityDomain, k.Weighted, k.Tier
     FROM #k AS k JOIN #out AS o ON o.TaskId = k.TaskId JOIN #wk AS w ON w.OwnerKey = o.OwnerKey
     LEFT JOIN sidata.RemediationTaskFinding AS bl ON bl.CollectionId = @b AND bl.TaskId = k.TaskId AND bl.FindingKey = k.FindingKey;
-    INSERT sidata.RemediationTaskFinding (CollectionId, TaskId, FindingKey, OwnerKey, FindingId, Cve, Title, Severity, RiskScore, Version, InThisCollection, SentInScope)
-    SELECT @c, pl.TaskId, pl.FindingKey, pl.OwnerKey, NULL, pl.Cve, pl.Title, pl.Severity, pl.RiskScore, pl.Version, 0, pl.SentInScope
+    -- a carried link keeps its finding-level values; a link written before they existed takes them from its finding in the base
+    INSERT sidata.RemediationTaskFinding (CollectionId, TaskId, FindingKey, OwnerKey, FindingId, Cve, Title, Severity, RiskScore, Version, InThisCollection, SentInScope,
+                                          RiskRating, Category, Subcategory, SecurityDomain, WeightedRisk, Tier)
+    SELECT @c, pl.TaskId, pl.FindingKey, pl.OwnerKey, NULL, pl.Cve, pl.Title, pl.Severity, pl.RiskScore, pl.Version, 0, pl.SentInScope,
+           COALESCE(pl.RiskRating, bf.RiskRating), COALESCE(pl.Category, bf.Category), COALESCE(pl.Subcategory, bf.Subcategory), COALESCE(pl.SecurityDomain, bf.SecurityDomain),
+           COALESCE(pl.WeightedRisk, bf.RiskScoreWeighted, bf.RiskScore), COALESCE(pl.Tier, bf.Tier)
     FROM sidata.RemediationTaskFinding AS pl
     JOIN #out AS o ON o.TaskId = pl.TaskId AND o.InThisCollection = 0
     JOIN #wk AS w ON w.OwnerKey = o.OwnerKey
+    LEFT JOIN sidata.Finding AS bf ON bf.CollectionId = @b AND bf.FindingId = pl.FindingId
     WHERE pl.CollectionId = @b;
+    -- a carried task written before the risk rating was kept: its highest one from its links (as a built task's)
+    UPDATE t SET HighestRiskRating = x.Rating
+    FROM sidata.RemediationTask AS t
+    JOIN #wk AS w ON w.OwnerKey = t.OwnerKey
+    CROSS APPLY (SELECT {RATINGTEXT_X} AS Rating
+                 FROM (SELECT MAX({RATINGRANK_L}) AS Rk FROM sidata.RemediationTaskFinding AS l WHERE l.CollectionId = t.CollectionId AND l.TaskId = t.TaskId) AS q) AS x
+    WHERE t.CollectionId = @c AND t.HighestRiskRating IS NULL AND t.InThisCollection = 0 AND x.Rating IS NOT NULL;
     COMMIT;
     SET @msW = @msW + DATEDIFF(millisecond, @tp, SYSUTCDATETIME());
     SET @ranges = @ranges + 1;
@@ -619,12 +701,22 @@ FROM #out AS o LEFT JOIN #p AS p ON p.TaskId = o.TaskId;
     SET @take = CASE WHEN @ms < 1000 AND @take < @wn THEN @take * 2 WHEN @ms > 4000 AND @take > 1 THEN @take / 2 ELSE @take END;
 END
 IF APPLOCK_TEST(N'public', N'si-remediation-task-build', N'Exclusive', N'Session') = 1 THROW 51277, N'the build lock was lost before the collection was marked -- the next run writes it again', 1;
-UPDATE sidata.Collection SET RemediationTasksAt = SYSUTCDATETIME() WHERE CollectionId = @c;
+-- #1283 the task reports' stored rows, from the collection's final task rows -- written BEFORE the mark, so a collection the
+-- task grids show always has them
+SET @tp = SYSUTCDATETIME();
+{ROLLUP}
+SET @ph = @ph + CONCAT(N'reports=', DATEDIFF(millisecond, @tp, SYSUTCDATETIME()), N';');
+UPDATE sidata.Collection SET RemediationTasksAt = SYSUTCDATETIME(), RemediationTaskRollupAt = SYSUTCDATETIME(), RemediationTaskMinAssets = @mass WHERE CollectionId = @c;
 SET @ph = @ph + CONCAT(N'findings=', @msF, N';owners+units=', @msU, N';tasks+links=', @msT, N';base-states=', @msB, N';out+hash=', @msO, N';write=', @msW, N';ranges=', @ranges, N';largest-range=', @maxTake, N';');
 SELECT @nTasks AS Tasks, @nOpen AS [Open], @nClosed AS Closed, @nNewlyClosed AS NewlyClosed, @nKept AS Kept, @nReopened AS Reopened,
        (SELECT COUNT(*) FROM sidata.RemediationTaskFinding WHERE CollectionId = @c) AS Links, @nFindings AS Findings, @noTask AS NoTask,
        @nOwn AS OwnRows, (SELECT COUNT(*) FROM #rep) AS CompleteReports, @states AS LinkStates, @ranges AS WriteRanges, (SELECT COUNT(*) FROM #hold) AS Held, @ph AS BuildPhases;
 '@
+    $rkF = Get-SIRemediationTaskRatingRankSql -Column 'f.RiskRating'
+    $text = $text.Replace('{ROLLUP}', (Get-SIRemediationTaskReportsSql))
+    $text = $text.Replace('{RATINGRANK_F}', $rkF).Replace('{RATINGTEXT_F}', (Get-SIRemediationTaskRatingTextSql -Rank $rkF))
+    $text = $text.Replace('{RATINGTEXT_T}', (Get-SIRemediationTaskRatingTextSql -Rank 't.RatingRank')).Replace('{RATINGTEXT_X}', (Get-SIRemediationTaskRatingTextSql -Rank 'q.Rk'))
+    $text = $text.Replace('{RATINGRANK_L}', (Get-SIRemediationTaskRatingRankSql -Column 'l.RiskRating')).Replace('{CHANNEL_O}', (Get-SIRemediationTaskChannelSql -Kind 'o.Kind'))
     $text = $text.Replace('{SIG}', $sig).Replace('{APPLY}', (Get-SIRemediationTaskKeyApplySql)).Replace('{HASHCOLS}', $hashCols)
     $text = $text.Replace('{COMBO_F}', (& $combo 'f.OwnerKey' 's.Vendor' 's.Product' 's.Version'))
     $text.Replace('{COMBO_P}', (& $combo 'p.OwnerKey' 'p.Vendor' "ISNULL(p.Product, N'')" 'p.Version'))
@@ -643,7 +735,13 @@ function Get-SIRemediationTaskSchemaCheckSql {
         "COL_LENGTH('sidata.Finding', 'FixRecommendedUpdateId')", "COL_LENGTH('sidata.Finding', 'DepartmentId')", "COL_LENGTH('sidata.Finding', 'RiskScoreWeighted')",
         "COL_LENGTH('sidata.Finding', 'CmdbName')", "COL_LENGTH('sidata.Finding', 'ContextCmdbName')", "COL_LENGTH('sidata.Ci', 'Owner')", "COL_LENGTH('sidata.Ci', 'Department')", "COL_LENGTH('sidata.Asset', 'DepartmentId')", "COL_LENGTH('sidata.Finding', 'ExemptionId')",
         "COL_LENGTH('sidata.RemediationTask', 'SentInScope')", "COL_LENGTH('sidata.RemediationTaskFinding', 'SentInScope')",
-        "COL_LENGTH('sidata.RemediationTaskSig', 'CreatedAt')", "COL_LENGTH('sidata.RemediationTaskSplit', 'CreatedAt')")
+        "COL_LENGTH('sidata.RemediationTaskSig', 'CreatedAt')", "COL_LENGTH('sidata.RemediationTaskSplit', 'CreatedAt')",
+        # #1283 the task reports' columns and tables (the schema step adds them; a build never writes half of them)
+        "COL_LENGTH('sidata.RemediationTask', 'TaskKeyHash')", "COL_LENGTH('sidata.RemediationTask', 'Channel')", "COL_LENGTH('sidata.RemediationTask', 'HighestRiskRating')",
+        "COL_LENGTH('sidata.RemediationTaskFinding', 'Category')", "COL_LENGTH('sidata.RemediationTaskFinding', 'Subcategory')", "COL_LENGTH('sidata.RemediationTaskFinding', 'RiskRating')",
+        "COL_LENGTH('sidata.RemediationTaskFinding', 'SecurityDomain')", "COL_LENGTH('sidata.RemediationTaskFinding', 'WeightedRisk')", "COL_LENGTH('sidata.RemediationTaskFinding', 'Tier')",
+        "COL_LENGTH('sidata.Finding', 'RiskRating')", "COL_LENGTH('sidata.Collection', 'RemediationTaskRollupAt')", "COL_LENGTH('sidata.Collection', 'RemediationTaskMinAssets')",
+        "OBJECT_ID('sidata.RemediationTaskRollup')", "OBJECT_ID('sidata.RemediationTaskTrend')")
     'SELECT CASE WHEN ' + (($need | ForEach-Object { "$_ IS NOT NULL" }) -join ' AND ') + ' THEN 1 ELSE 0 END'
 }
 
@@ -675,9 +773,16 @@ DECLARE @t DATETIME2(3) = (SELECT CollectionTime FROM sidata.Collection WHERE Co
 DECLARE @n INT = 0;
 IF @t IS NOT NULL
 BEGIN
-    DELETE TOP (CONVERT(int, @Take)) l FROM sidata.RemediationTaskFinding AS l
-    WHERE l.CollectionId IN (SELECT c.CollectionId FROM sidata.Collection AS c WHERE c.CollectionTime < @t);
+    -- #1283 the task reports' rows go with their tasks (the trend rows stay: they are the history)
+    DELETE TOP (CONVERT(int, @Take)) r FROM sidata.RemediationTaskRollup AS r
+    WHERE r.CollectionId IN (SELECT c.CollectionId FROM sidata.Collection AS c WHERE c.CollectionTime < @t);
     SET @n = @@ROWCOUNT;
+    IF @n = 0
+    BEGIN
+        DELETE TOP (CONVERT(int, @Take)) l FROM sidata.RemediationTaskFinding AS l
+        WHERE l.CollectionId IN (SELECT c.CollectionId FROM sidata.Collection AS c WHERE c.CollectionTime < @t);
+        SET @n = @@ROWCOUNT;
+    END
     IF @n = 0
     BEGIN
         DELETE TOP (CONVERT(int, @Take)) t FROM sidata.RemediationTask AS t
@@ -685,7 +790,7 @@ BEGIN
         SET @n = @@ROWCOUNT;
     END
     IF @n = 0
-        UPDATE c SET RemediationTasksAt = NULL FROM sidata.Collection AS c
+        UPDATE c SET RemediationTasksAt = NULL, RemediationTaskRollupAt = NULL FROM sidata.Collection AS c
         WHERE c.CollectionTime < @t AND c.RemediationTasksAt IS NOT NULL
           AND NOT EXISTS (SELECT 1 FROM sidata.RemediationTask AS t WHERE t.CollectionId = c.CollectionId);
 END
@@ -909,7 +1014,8 @@ function Invoke-SIDataRemediationTasks {
         $laps.Add(('evidence={0:N0}' -f $lap.Elapsed.TotalSeconds)); $lap.Restart()
         $sql = $(if ($BuildSql) { [string](& $BuildSql $fields) } else { Get-SIRemediationTaskBuildSql -Fields $fields })
         $r = @(@(& $Invoke $sql @{ CollectionId = [string]$cid; BaseId = $(if ($null -ne $base) { [string]$base } else { '' }); BuildId = $buildId; KeepClosedDays = [string]$keepDays
-                                    HoldOwners = (ConvertTo-Json -InputObject @($ev.Held.ToArray()) -Compress); FirstTake = [string]$FirstTake } 'reader') | ForEach-Object { $_ } | Where-Object { $null -ne $_ }) | Select-Object -First 1
+                                    HoldOwners = (ConvertTo-Json -InputObject @($ev.Held.ToArray()) -Compress); FirstTake = [string]$FirstTake
+                                    MinAssets = [string](Get-SIRemediationTaskMinAssets) } 'reader') | ForEach-Object { $_ } | Where-Object { $null -ne $_ }) | Select-Object -First 1
         $v = { param($n) if ($null -eq $r) { 0 } else { $x = $r[$n]; if ($x -is [System.DBNull]) { 0 } else { [long]$x } } }
         $laps.Add(('build={0:N0}' -f $lap.Elapsed.TotalSeconds)); $lap.Restart()
         # the task rows of collections older than the base are removed (the base and this one stay)

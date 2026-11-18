@@ -1005,6 +1005,9 @@ $script:_GlobalExcludeFileName = 'RiskAnalysisGlobalExclusions.custom.json'
 # #673 plan B: the Defender de-duplication of the Azure recommendation reports done in the engine against the run's
 # Defender list in SQL (SI_RA_DefenderFilterInEngine / SI_RA_DefenderFilterCompare, in-engine on by default since rc2, compare off -- REMOVE-ME)
 . (Join-Path $PSScriptRoot '_shared/RA-DefenderFilter.ps1')
+# #1275 stage 2: the attack-path reports from vulnerable devices to Azure -- the Exposure Graph read ONCE per run and joined
+# in SQL slice by slice (Invoke-GraphHuntingQuery asks it first; a worker uses its producer's load).
+. (Join-Path $PSScriptRoot '_shared/RA-GraphPathStage.ps1')
 # #742: the reports on queue workers -- the plan, the manifest, the queue, the hand-over (RA-ScaleOut.ps1). A worker never
 # loads the run's Defender list itself (the producer did, once).
 . (Join-Path $PSScriptRoot '_shared/RA-ScaleOut.ps1')
@@ -1012,6 +1015,7 @@ $script:RAScaleProducerOn = $false
 $script:RAScaleManifest = $null; $script:RAScaleFirst = $null; $script:RAScaleItem = $null; $script:RAWorkerTime = $null
 if ($script:RAScaleRole -eq 'worker') {
     $script:RADfcWorker = $true
+    $script:RAGpsWorker = $true   # #1275 stage 2: the attack-path graph is loaded once, by the producer
     # A worker takes its FIRST report before it prepares anything (an execution that finds nothing to do ends at once): the
     # report's run -- its manifest -- decides the collection time, the collection it writes to and the run's shared lookups.
     $__soAcct = [string]$global:SI_StorageAccount
@@ -1029,6 +1033,10 @@ if ($script:RAScaleRole -eq 'worker') {
     $__soDfc = $script:RAScaleManifest['Defender']
     if ($__soDfc -and [string]$__soDfc['State'] -eq 'loaded') { $script:RADfcSet = @{ RunKey = [string]$script:RAScaleManifest['RunKey']; Keys = [long]$__soDfc['Keys']; Pages = [int]$__soDfc['Pages']; Verdict = $null } }
     elseif ($__soDfc -and [string]$__soDfc['State'] -eq 'failed') { $script:RADfcSetFailed = [string]$__soDfc['Error'] }
+    # #1275 stage 2: the run's attack-path graph, loaded by the producer before any worker started
+    $__soGps = $script:RAScaleManifest['GraphStage']
+    if ($__soGps -and [string]$__soGps['State'] -eq 'loaded') { $script:RAGpsSet = @{ RunKey = [string]$script:RAScaleManifest['RunKey']; RunNo = [int]$__soGps['RunNo']; Nodes = [long]$__soGps['Nodes']; Edges = [long]$__soGps['Edges'] } }
+    elseif ($__soGps -and [string]$__soGps['State'] -eq 'failed') { $script:RAGpsSetFailed = [string]$__soGps['Error'] }
     $__soLockPath = Get-RAScaleOutPath -Engine ([string]$script:RAScaleManifest['Engine']) -RunId $script:RAScaleRunId -Kind lock
     $global:SI_RA_ScaleOutLockPath = $__soLockPath   # the entry point keeps this worker's bucket counts under the same lock
     $script:RAScaleLockPath = $__soLockPath
@@ -4245,12 +4253,23 @@ function Invoke-RAScaleOutProducerPass {
             Write-Warn2 ("[scale-out] the Defender recommendation list could not be loaded for this run -- the reports that need it are not complete: {0}" -f $_.Exception.Message)
         }
     }
+    # #1275 stage 2: the run's attack-path graph, ONCE, before any worker starts (a load sweeps what an earlier run left)
+    $gps = @{ State = 'none'; Error = ''; RunNo = 0; Nodes = 0L; Edges = 0L }
+    if (Test-RAGraphStageNeeded -Queries $queries) {
+        try {
+            $gset = Sync-RAGraphStage -Stream $script:RAStream
+            $gps = @{ State = 'loaded'; Error = ''; RunNo = [int]$gset.RunNo; Nodes = [long]$gset.Nodes; Edges = [long]$gset.Edges }
+        } catch {
+            $gps = @{ State = 'failed'; Error = [string]$_.Exception.Message; RunNo = 0; Nodes = 0L; Edges = 0L }
+        }
+    }
     $hn = if ($env:COMPUTERNAME) { [string]$env:COMPUTERNAME } else { [System.Net.Dns]::GetHostName() }
     $hostInfo = @{ Name = $hn; Fqdn = $(if ($global:RA_DnsName) { [string]$global:RA_DnsName } else { $hn }); User = $(if ($env:USERNAME) { [string]$env:USERNAME } elseif ($env:USER) { [string]$env:USER } else { 'container' }) }
     $m = New-RAScaleOutManifest -Grain $grain -TimeText ([string]$script:RAStream.TimeText) -CollectionTime ([datetime]$global:RA_CollectionTime).ToUniversalTime() -CollectionId ([int]$script:RAStream.CollectionId) `
             -RunKey ([string]$script:RAStream.RunKey) -HealthRunId ([string]$script:_RunHealthCtx.RunId) -Template ([string]$global:ReportTemplate) -Items $plan -Defender $dfc -HostInfo $hostInfo `
             -ProducerExecution ([string]$env:CONTAINER_APP_JOB_EXECUTION_NAME)
     $m['RaCollectionTime'] = ([datetime]$global:RA_CollectionTime).ToString('o', [System.Globalization.CultureInfo]::InvariantCulture)
+    $m['GraphStage'] = $gps
     $script:RAScaleManifest = $m
     $earlier = @(Close-RAScaleOutEarlierRuns -Store $store -Engine $engine -RunId ([string]$m.RunId))
     if ($earlier.Count) { Write-Info ('[scale-out] {0} earlier run(s) whose producer did not finish are closed -- their reports are not run again' -f $earlier.Count) }
@@ -6359,6 +6378,7 @@ Complete-RALoopPass
 # #742: a QUEUE WORKER's part ends here -- every report it took is in the database, posted and handed over; the producer
 # finishes the run (the guards, the completion, the mail). Nothing below runs in a worker.
 if ($script:RAScaleRole -eq 'worker') {
+    try { Write-RAGraphStageNote } catch { }
     Write-Section ('worker finished: {0} report(s) run' -f [int]$script:RAScaleDone)
     return
 }
@@ -6366,6 +6386,8 @@ if ($script:RAScaleRole -eq 'worker') {
 # #673 plan B: every report has run -- the comparison of both paths is said and written (SI_RA_DefenderFilterCompare),
 # and the run's Defender list is removed from SQL. Never fails the run.
 try { $null = Complete-RADefenderFilterRun } catch { Write-Warn2 ("the Defender recommendation list of this run could not be removed from the database (the next run removes it): {0}" -f $_.Exception.Message) }
+# #1275 stage 2: the run's attack-path graph is removed from SQL (what a run that stopped leaves is removed by the next load)
+try { Complete-RAGraphStageRun } catch { Write-Warn2 ("the attack-path graph of this run could not be removed from the database (the next run removes it): {0}" -f $_.Exception.Message) }
 
 # Final result
 Write-Section "final result"

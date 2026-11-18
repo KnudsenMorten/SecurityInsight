@@ -828,6 +828,14 @@
       ]
     },
     {
+      "name": "Remediation task reports",
+      "category": "Web app",
+      "description": "The reports under Remediations > Task reports and the Executive report's remediation chapter: which tasks are marked as candidates for one fleet-wide deployment.",
+      "settings": [
+        "SI_Pro_TaskMassMinAssets"
+      ]
+    },
+    {
       "name": "Protection score",
       "category": "Web app",
       "description": "The protection score of the Executive overview, the Executive report, the management mail and the wall board: its accepted lifecycle per asset type, the tier weights and the severities that count.",
@@ -10085,12 +10093,12 @@
       "purpose": "How SecurityInsight sends every mail: sharedMailbox = an Office 365 shared mailbox through Microsoft Graph as SecurityInsight's own identity (recommended); smtp = your own SMTP relay; none = no mail.",
       "effect": "Every mail (reports, safety-check alerts, close-loop, exemption, governance and digest mails, licence notices) goes this way. With sharedMailbox SecurityInsight sends only once it has verified that Mail.Send is restricted to the shared mailbox.",
       "whenToChange": "Set up with Settings > E-mail > Set up mail, or setup\\Set-SIMail.ps1.",
+      "editor": "radio",
       "values": [
         "sharedMailbox",
         "smtp",
         "none"
       ],
-      "editor": "radio",
       "valueLabels": {
         "sharedMailbox": "Shared mailbox (Office 365) -- recommended",
         "smtp": "SMTP relay (your own mail server)",
@@ -12009,6 +12017,33 @@
         "default": "off",
         "recommended": "Keep the default. Change it when: Once follow-up tasks are in use and people want a reminder without opening the web app.",
         "docUrl": "https://invardia.com/docs/si/settings/SI_Pro_TaskDigest_SendMail/"
+      }
+    },
+    {
+      "name": "SI_Pro_TaskMassMinAssets",
+      "label": "Fewest assets for a fleet-wide deployment",
+      "group": "Data & retention",
+      "type": "int",
+      "engines": [],
+      "edition": "community",
+      "secret": false,
+      "advanced": false,
+      "default": null,
+      "defaultText": "5 assets",
+      "description": "--- Remediation task reports ---",
+      "purpose": "The fewest assets a remediation task must be open on to be marked as a candidate for one fleet-wide deployment (a patch tool, a policy or a software deployment) in Remediations > Task reports and in the Executive report.",
+      "effect": "Tasks open on at least this many assets are marked as candidates and listed first. It only marks rows: every task is still shown and counted. Applies from the next data sync.",
+      "whenToChange": "Raise it in a large estate to keep the candidates to the actions that reach many devices; lower it in a small one.",
+      "unit": "assets",
+      "card": "Remediation task reports",
+      "info": {
+        "what": "The fewest assets a remediation task must be open on to be marked as a candidate for one fleet-wide deployment (a patch tool, a policy or a software deployment) in Remediations > Task reports and in the Executive report.",
+        "whenChanged": "Tasks open on at least this many assets are marked as candidates and listed first. It only marks rows: every task is still shown and counted. Applies from the next data sync.",
+        "risk": "Changes how long data is kept or how quickly assets are treated as gone. Shortening a retention DELETES older data at the next clean-up and that cannot be undone; shortening a grace period retires assets (and closes their findings) sooner. Lengthening is safe but uses more storage.",
+        "requires": "Nothing else.",
+        "default": "5 assets",
+        "recommended": "Keep the default. Change it when: Raise it in a large estate to keep the candidates to the actions that reach many devices; lower it in a small one.",
+        "docUrl": "https://invardia.com/docs/si/settings/SI_Pro_TaskMassMinAssets/"
       }
     },
     {

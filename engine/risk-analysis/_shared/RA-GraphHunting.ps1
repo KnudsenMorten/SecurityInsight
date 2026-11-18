@@ -301,6 +301,22 @@ function Invoke-GraphHuntingQuery {
     $__gwHere = 0
     $script:_LastGraphHuntingGatewayTimeouts = 0
 
+    # #1275 stage 2 (RA-GraphPathStage.ps1): the attack-path reports from vulnerable devices to Azure are answered from the
+    # run's graph, read ONCE per run through this same call (its 429 / busy back-off, its 504 count, its row-limit check)
+    # and joined in SQL slice by slice -- never the whole graph built again in every slice. A query that is not exactly the
+    # one that port reproduces runs below as before. A graph that could not be read whole is "lookup unavailable": the
+    # report is not complete and keeps its last complete result.
+    if (Get-Command -Name Get-RAGraphStagePlan -ErrorAction SilentlyContinue) {
+        $__gpsPlan = Get-RAGraphStagePlan -Query $Query
+        if ($null -ne $__gpsPlan) {
+            # a part asked AHEAD (RA-PartsInParallel.ps1) is only ever an advanced-hunting request: this answer is not asked ahead
+            if ($null -ne $script:SIHuntingPrefetch -and $script:SIHuntingPrefetch.Capture) { throw (Get-SIHuntingNotAheadText) }
+            $__gpsAnswer = Invoke-RAGraphStageAnswer -Plan $__gpsPlan -ReportName ([string]$__gpsPlan.Grain)
+            $script:_RALastQueryBackend = 'hunting'
+            return $__gpsAnswer
+        }
+    }
+
     # 2026-05-02 -- 2-phase post-augment plan holder. Populated by Resolve-ProfileAugmentPlan
     # in the EG+CL hybrid block below, consumed after AH submission to attach alias cols
     # to returned rows from a single LA snapshot per (TableName, RightKey). Empty array

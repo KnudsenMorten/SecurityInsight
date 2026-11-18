@@ -323,7 +323,8 @@ public static class MgmtSummaryComposer
             foreach (var t in b.Tables.Where(t => t.Rows.Count > 0).Take(3))
             {
                 sb.Append(H3(t.Title));
-                foreach (var row in t.Rows.Take(8))
+                // the usual first rows of a table; #1283 a table that says how many it shows in the mail (the top 50 actions: all)
+                foreach (var row in t.Rows.Take(t.MailRows ?? 8))
                     sb.Append(MailLayout.Line(row[0], html: string.Join(" &middot; ", row.Skip(1).Select((v, i) => E(t.Headers.Count > i + 1 ? t.Headers[i + 1] + " " + v : v)))));
             }
         }

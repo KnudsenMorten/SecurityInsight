@@ -18,6 +18,10 @@ public static class RemediationTaskSql
     /// The task's id as the SQL hand-off and the ServiceNow output give it (lower-case hex).
     private static string Hex(string col) => $"LOWER(CONVERT(varchar(64), {col}, 2))";
 
+    /// #1283 the same task on every asset: the hash of the task key as hex (a row written before the hash was stored: worked
+    /// out from its key, the same value).
+    public static string TaskGroupOf(string alias) => Hex($"ISNULL({alias}.TaskKeyHash, HASHBYTES('SHA2_256', {alias}.TaskKey))");
+
     private const string SevSort = "CASE g.[HighestSeverity] WHEN N'critical' THEN 0 WHEN N'high' THEN 1 WHEN N'medium' THEN 2 WHEN N'low' THEN 3 ELSE 4 END";
     private static readonly string TierSort = "CASE WHEN g.[Tier] = N'Unclassified' THEN 9 ELSE TRY_CONVERT(int, g.[Tier]) END";
 
@@ -47,23 +51,31 @@ public static class RemediationTaskSql
     // ---- Remediations > Tasks per asset: one row per CI and task ---------------------------------------------------------
 
     public static readonly GridSpec Tasks = GridSql.Check(new GridSpec("remediationtasks", "", $"""
-SELECT {Hex("f.TaskId")} AS TaskId, f.AssetKey, COALESCE(f.AssetName, f.AssetKey, f.OwnerKey) AS AssetName, {ProDataSql.TierExpr("f.Tier")} AS Tier,
+SELECT {Hex("f.TaskId")} AS TaskId, f.AssetKey, f.OwnerKey, COALESCE(f.AssetName, f.AssetKey, f.OwnerKey) AS AssetName, {ProDataSql.TierExpr("f.Tier")} AS Tier,
        f.TaskName, f.Kind, f.State, f.ClosedWhy, f.Findings, f.Cves, f.HighestSeverity, f.MaxRiskScore, f.MaxWeightedRisk,
        f.Product, f.Version, f.Application, f.ApplicationPaths, f.FirstSeen, f.LastSeen, f.ClosedAt, f.ReopenCount,
        CASE WHEN f.InThisCollection = 1 THEN N'{SeenNow}' ELSE N'{SeenKept}' END AS Seen,
-       f.CiOwner, f.CiDepartment, d.Name AS Department, f.SecurityDomain
+       f.CiOwner, f.CiDepartment, d.Name AS Department, f.SecurityDomain,
+       {TaskGroupOf("f")} AS TaskGroup, {RemediationTaskReports.ChannelOf("f")} AS Channel, f.HighestRiskRating
 FROM sidata.RemediationTask AS f
 LEFT JOIN cfg.Department AS d ON d.DepartmentId = f.DepartmentId
 WHERE f.CollectionId = {MarkedCollection}
 """, new GridColumn[]
     {
         new("TaskId", "Task id", Filter: GridFilter.Contains, Search: true, Hidden: true),
+        // #1283 the same task on every asset (a report row opens its tasks by it)
+        new("TaskGroup", "Task across assets", Filter: GridFilter.Values, Hidden: true),
         new("AssetName", "Asset (CI)", Filter: GridFilter.Contains, Search: true),
-        new("AssetKey", "Asset (CI) key", Filter: GridFilter.Contains, Search: true, Hidden: true),
+        // the asset's key and the CI id a task belongs to match EXACTLY (one asset's or one CI's own tasks: a key is never
+        // matched as part of another, "srv1" in "srv10")
+        new("AssetKey", "Asset (CI) key", Filter: GridFilter.Values, Search: true, Hidden: true),
+        new("OwnerKey", "CI id", Filter: GridFilter.Values, Hidden: true),
         new("TaskName", "Task", Filter: GridFilter.Contains, Search: true),
         new("Kind", "Kind", Filter: GridFilter.Values),
+        new("Channel", "Tool", Filter: GridFilter.Values),
         new("State", "State", Filter: GridFilter.Values),
         new("HighestSeverity", "Highest severity", Filter: GridFilter.Values, SortSql: SevSort),
+        new("HighestRiskRating", "Highest risk rating", Filter: GridFilter.Values, SortSql: RemediationTaskReports.RatingSort("g.[HighestRiskRating]")),
         new("MaxRiskScore", "Highest risk score", GridType.Number, GridFilter.Range),
         new("MaxWeightedRisk", "Highest weighted risk", GridType.Number, GridFilter.Range),
         new("Tier", "Tier", GridType.Tier, GridFilter.Values, SortSql: TierSort),
@@ -130,7 +142,7 @@ WHERE f.CollectionId = {MarkedCollection}
     private const string SevRankOfLink = "CASE l.Severity WHEN N'critical' THEN 4 WHEN N'high' THEN 3 WHEN N'medium' THEN 2 WHEN N'low' THEN 1 ELSE 0 END";
 
     /// The visibility predicate over f = sidata.Finding (the asset kind looked up on f, as DepartmentScope.Restrict does).
-    private static string Visible(RowVisibility v) => v.Sql.Replace("a.AssetKind", DepartmentScope.AssetKindLookup, StringComparison.Ordinal);
+    internal static string Visible(RowVisibility v) => v.Sql.Replace("a.AssetKind", DepartmentScope.AssetKindLookup, StringComparison.Ordinal);
 
     /// The links a limited person may see: this collection's own links, their finding visible to them.
     private const string VisibleLinks = """
@@ -144,18 +156,19 @@ JOIN sidata.Finding AS f ON f.CollectionId = l.CollectionId AND f.FindingId = l.
     {
         Name = Tasks.Name + "@dept",
         Source = $"""
-SELECT {Hex("t.TaskId")} AS TaskId, t.AssetKey, COALESCE(t.AssetName, t.AssetKey, t.OwnerKey) AS AssetName, {ProDataSql.TierExpr("s.Tier")} AS Tier,
+SELECT {Hex("t.TaskId")} AS TaskId, t.AssetKey, t.OwnerKey, COALESCE(t.AssetName, t.AssetKey, t.OwnerKey) AS AssetName, {ProDataSql.TierExpr("s.Tier")} AS Tier,
        t.TaskName, t.Kind, t.State, t.ClosedWhy, s.Findings, s.Cves,
        CASE s.SevRank WHEN 4 THEN N'critical' WHEN 3 THEN N'high' WHEN 2 THEN N'medium' WHEN 1 THEN N'low' ELSE N'info' END AS HighestSeverity,
        s.MaxRiskScore, s.MaxWeightedRisk,
        t.Product, t.Version, t.Application, t.ApplicationPaths, t.FirstSeen, t.LastSeen, t.ClosedAt, t.ReopenCount,
        CASE WHEN t.InThisCollection = 1 THEN N'{SeenNow}' ELSE N'{SeenKept}' END AS Seen,
-       t.CiOwner, t.CiDepartment, d.Name AS Department, CASE WHEN s.Doms = 1 THEN s.Dom END AS SecurityDomain
+       t.CiOwner, t.CiDepartment, d.Name AS Department, CASE WHEN s.Doms = 1 THEN s.Dom END AS SecurityDomain,
+       {TaskGroupOf("t")} AS TaskGroup, {RemediationTaskReports.ChannelOf("t")} AS Channel, {RemediationTaskReports.RatingText("s.RatingRank")} AS HighestRiskRating
 FROM sidata.RemediationTask AS t
 CROSS APPLY (
     SELECT COUNT(*) AS Findings, COUNT(DISTINCT l.Cve) AS Cves, MAX({SevRankOfLink}) AS SevRank, MAX(l.RiskScore) AS MaxRiskScore,
            MAX(ISNULL(f.RiskScoreWeighted, f.RiskScore)) AS MaxWeightedRisk, MIN(f.Tier) AS Tier,
-           COUNT(DISTINCT ISNULL(f.SecurityDomain, N'')) AS Doms, MAX(f.SecurityDomain) AS Dom
+           COUNT(DISTINCT ISNULL(f.SecurityDomain, N'')) AS Doms, MAX(f.SecurityDomain) AS Dom, MAX({RemediationTaskReports.RatingRank("f.RiskRating")}) AS RatingRank
     FROM {VisibleLinks}
     WHERE l.CollectionId = t.CollectionId AND l.TaskId = t.TaskId AND l.InThisCollection = 1 AND l.FindingId IS NOT NULL
       AND ({Visible(v)})
@@ -183,6 +196,97 @@ WHERE l.CollectionId = {MarkedCollection} AND l.InThisCollection = 1 AND l.Findi
         SourceParameters = TaskFindings.SourceParameters.Concat(v.Parameters.Keys).Distinct(StringComparer.Ordinal).ToList(),
         Keyset = null,
     });
+
+    // ---- the tasks of ONE asset (the asset page, the CI page) and of ONE finding (the finding page) ---------------------------
+    //
+    // The same rows as Tasks per asset (a limited person: TasksFor, unchanged), narrowed in the statement to one asset by an
+    // exact key: the asset page by the asset's key (AssetKey, as Tasks per asset filters it), the CI page by the CI id -- the
+    // task's owner (OwnerKey: the data sync keys every task on '<CI id>|<task>', SI-DataRemediationTask.ps1). Open tasks
+    // first, the highest risk first; paged in SQL like every grid.
+
+    /// Open first, then the highest risk score (one ascending order).
+    public const string OpenFirstSort = "CASE WHEN g.[State] = N'open' THEN 0 ELSE 1 END * 1000000000.0 - ISNULL(g.[MaxRiskScore], 0)";
+
+    /// Which key narrows the tasks to one asset.
+    public enum OneAsset { AssetKey, CiId }
+
+    private static readonly GridSpec OfAssetKey = One(Tasks, OneAsset.AssetKey, "f");
+    private static readonly GridSpec OfCiId = One(Tasks, OneAsset.CiId, "f");
+
+    /// The tasks of one asset: by the asset's key (@AssetKey) or by the CI id (@OwnerKey). A limited person gets
+    /// <see cref="TasksFor"/> narrowed the same way (finding level, unchanged).
+    public static GridSpec OfOne(OneAsset by, RowVisibility? v) =>
+        v is null ? (by == OneAsset.AssetKey ? OfAssetKey : OfCiId) : One(TasksFor(v), by, "t");
+
+    /// The source parameter (and the task column) that carries the key of <paramref name="by"/>.
+    public static string KeyParameter(OneAsset by) => by == OneAsset.AssetKey ? "AssetKey" : "OwnerKey";
+
+    private static GridSpec One(GridSpec spec, OneAsset by, string alias)
+    {
+        var key = KeyParameter(by);
+        return GridSql.Check(spec with
+        {
+            Name = spec.Name + (by == OneAsset.AssetKey ? "@asset" : "@ci"),
+            Source = spec.Source.TrimEnd() + "\n  AND " + alias + "." + key + " = @" + key + "\n",
+            SourceParameters = spec.SourceParameters.Append(key).Distinct(StringComparer.Ordinal).ToList(),
+            Columns = spec.Columns.Select(c => c.Key == "State" ? c with { SortSql = OpenFirstSort } : c).ToList(),
+            DefaultSort = "State",
+            DefaultDesc = false,
+            Keyset = null,
+        });
+    }
+
+    /// <summary>
+    /// The task(s) ONE finding belongs to (the finding page). The finding (@CollectionId, @FindingId) is found among the links
+    /// of the newest marked collection by its owner and key -- the parts of its Risk Analysis key the data sync links it by
+    /// (Get-SIRemediationTaskKeyApplySql) -- or, in its own collection, by its row. A limited person gets only a task whose
+    /// link to this finding they may see, as on Task findings (<see cref="TaskFindingsFor"/>: the collection's own link, its
+    /// finding visible to them).
+    /// </summary>
+    public static GridSpec OfFinding(RowVisibility? v) => v is null ? OfFindingAll : FindingTasks(v);
+
+    private static readonly GridSpec OfFindingAll = FindingTasks(null);
+
+    private static GridSpec FindingTasks(RowVisibility? v)
+    {
+        var limited = v is null ? "" : $"""
+
+      AND l.InThisCollection = 1 AND l.FindingId IS NOT NULL
+      AND EXISTS (SELECT 1 FROM sidata.Finding AS f WHERE f.CollectionId = l.CollectionId AND f.FindingId = l.FindingId AND ({Visible(v)}))
+""";
+        var source = $"""
+SELECT {Hex("t.TaskId")} AS TaskId, t.TaskName, t.Kind, t.State, t.ClosedWhy, t.HighestSeverity, t.MaxRiskScore, t.Findings,
+       COALESCE(t.AssetName, t.AssetKey, t.OwnerKey) AS AssetName, t.AssetKey
+FROM sidata.RemediationTask AS t
+WHERE t.CollectionId = {MarkedCollection}
+  AND t.TaskId IN (
+    SELECT l.TaskId
+    FROM sidata.Finding AS cf
+    CROSS APPLY (SELECT CHARINDEX(N'|', ISNULL(cf.RaFindingKey, N'')) AS P) AS sp
+    CROSS APPLY (SELECT CASE WHEN sp.P > 1 THEN LEFT(LEFT(cf.RaFindingKey, sp.P - 1), 450) END AS OwnerKey,
+                        CASE WHEN sp.P > 1 THEN SUBSTRING(cf.RaFindingKey, sp.P + 1, 900) END AS KeyPart) AS o
+    CROSS APPLY (SELECT LEFT(CASE WHEN LOWER(cf.ConfigurationId) = o.KeyPart THEN cf.ConfigurationId ELSE o.KeyPart END, 256) AS FKey) AS k
+    JOIN sidata.RemediationTaskFinding AS l ON l.CollectionId = t.CollectionId
+         AND ((l.OwnerKey = o.OwnerKey AND l.FindingKey = k.FKey) OR (l.CollectionId = cf.CollectionId AND l.FindingId = cf.FindingId))
+    WHERE cf.CollectionId = TRY_CONVERT(int, @CollectionId) AND cf.FindingId = TRY_CONVERT(bigint, @FindingId){limited}
+  )
+""";
+        var parameters = new List<string> { "CollectionId", "FindingId" };
+        if (v is not null) parameters.AddRange(v.Parameters.Keys);
+        return GridSql.Check(new GridSpec("remediationtasksoffinding" + (v is null ? "" : "@dept"), "", source, new GridColumn[]
+        {
+            new("TaskId", "Task id", Hidden: true),
+            new("TaskName", "Task"),
+            new("Kind", "Kind"),
+            new("State", "State", SortSql: OpenFirstSort),
+            new("ClosedWhy", "Closed because"),
+            new("HighestSeverity", "Highest severity"),
+            new("MaxRiskScore", "Highest risk score", GridType.Number),
+            new("Findings", "Findings", GridType.Number),
+            new("AssetName", "Asset (CI)"),
+            new("AssetKey", "Asset (CI) key", Hidden: true),
+        }, "State", false, "TaskId", parameters.Distinct(StringComparer.Ordinal).ToList(), Immutable: false));
+    }
 
     /// The grid a limited person gets for one of the task grids (null = not a task grid).
     public static GridSpec? For(GridSpec spec, RowVisibility v) =>

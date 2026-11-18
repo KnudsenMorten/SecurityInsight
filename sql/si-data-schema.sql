@@ -5608,6 +5608,72 @@ IF COL_LENGTH('sidata.RemediationTaskSig', 'CreatedAt') IS NULL ALTER TABLE sida
 IF COL_LENGTH('sidata.RemediationTaskSplit', 'CreatedAt') IS NULL ALTER TABLE sidata.RemediationTaskSplit ADD CreatedAt DATETIME2(0) NOT NULL CONSTRAINT DF_RemediationTaskSplit_Created DEFAULT SYSUTCDATETIME();
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'CX_RemediationTaskSplit' AND object_id = OBJECT_ID('sidata.RemediationTaskSplit'))
     EXEC (N'CREATE CLUSTERED INDEX CX_RemediationTaskSplit ON sidata.RemediationTaskSplit (BuildId, ComboHash)');
+-- ---------------------------------------------------------------------------------------------
+-- THE TASK REPORTS FOR IT OPERATIONS (ADDED 2026-11-18, REQUIREMENTS #1283; owner: "a summarized version so we can figure out
+-- candidates for large-scale deployment using patch tools, policies, deployments" / "think as an it operation team"). Written
+-- by the task build (engine\pro-data\_shared\SI-DataRemediationTask.ps1) in the same build that writes the tasks, before the
+-- collection is marked built -- so a marked collection has them. Additive. A collection built before this release has none:
+-- the reports say "built from the next run" (Collection.RemediationTaskRollupAt NULL), never an empty table as zero.
+--   RemediationTask.TaskKeyHash        SHA-256 of the task key (the key is NVARCHAR(MAX): this is what the same task on many
+--                                      assets is grouped and indexed by)
+--   RemediationTask.Channel            the tool that fits: Patch tool | Software deployment | Policy | Azure | Manual (from the kind)
+--   RemediationTask.HighestRiskRating  the highest risk rating of its findings (Critical | High | Moderate | Low)
+--   RemediationTaskFinding.Category / Subcategory / RiskRating / SecurityDomain / WeightedRisk / Tier   the finding's values,
+--                                      copied at build: a filter on a finding-level value reads the links only
+--   RemediationTaskRollup              one row per collection x distinct task across assets (OPEN tasks): the "deploy once, fix
+--                                      many" grain -- assets, Tier 0/1 assets, findings, distinct CVEs, highest severity and
+--                                      risk rating, highest and summed weighted risk, oldest first seen
+--   RemediationTaskTrend               one row per collection x tool ('' = every tool): open tasks and assets, opened, closed as
+--                                      fixed, closed for another reason this run, the oldest open -- kept while the collection is
+--   Collection.RemediationTaskRollupAt when the two above were written; RemediationTaskMinAssets: the "mass deployment" minimum
+--                                      (SI_Pro_TaskMassMinAssets) the build ran with -- it classifies rows, never hides one
+-- ---------------------------------------------------------------------------------------------
+IF COL_LENGTH('sidata.RemediationTask', 'TaskKeyHash') IS NULL ALTER TABLE sidata.RemediationTask ADD TaskKeyHash BINARY(32) NULL;
+IF COL_LENGTH('sidata.RemediationTask', 'Channel') IS NULL ALTER TABLE sidata.RemediationTask ADD Channel NVARCHAR(32) NULL;
+IF COL_LENGTH('sidata.RemediationTask', 'HighestRiskRating') IS NULL ALTER TABLE sidata.RemediationTask ADD HighestRiskRating NVARCHAR(16) NULL;
+IF COL_LENGTH('sidata.RemediationTaskFinding', 'Category') IS NULL ALTER TABLE sidata.RemediationTaskFinding ADD Category NVARCHAR(256) NULL;
+IF COL_LENGTH('sidata.RemediationTaskFinding', 'Subcategory') IS NULL ALTER TABLE sidata.RemediationTaskFinding ADD Subcategory NVARCHAR(256) NULL;
+IF COL_LENGTH('sidata.RemediationTaskFinding', 'RiskRating') IS NULL ALTER TABLE sidata.RemediationTaskFinding ADD RiskRating NVARCHAR(16) NULL;
+IF COL_LENGTH('sidata.RemediationTaskFinding', 'SecurityDomain') IS NULL ALTER TABLE sidata.RemediationTaskFinding ADD SecurityDomain NVARCHAR(128) NULL;
+IF COL_LENGTH('sidata.RemediationTaskFinding', 'WeightedRisk') IS NULL ALTER TABLE sidata.RemediationTaskFinding ADD WeightedRisk FLOAT NULL;
+IF COL_LENGTH('sidata.RemediationTaskFinding', 'Tier') IS NULL ALTER TABLE sidata.RemediationTaskFinding ADD Tier TINYINT NULL;
+IF COL_LENGTH('sidata.Collection', 'RemediationTaskRollupAt') IS NULL ALTER TABLE sidata.Collection ADD RemediationTaskRollupAt DATETIME2(0) NULL;
+IF COL_LENGTH('sidata.Collection', 'RemediationTaskMinAssets') IS NULL ALTER TABLE sidata.Collection ADD RemediationTaskMinAssets INT NULL;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_RemediationTask_Group' AND object_id = OBJECT_ID('sidata.RemediationTask'))
+    EXEC (N'CREATE INDEX IX_RemediationTask_Group ON sidata.RemediationTask (CollectionId, State, TaskKeyHash) INCLUDE (OwnerKey, CiId, Kind, Channel, Product, Version, Tier, Findings, HighestSeverity, HighestRiskRating, MaxWeightedRisk, FirstSeen, DepartmentId, CiOwner)');
+IF OBJECT_ID('sidata.RemediationTaskRollup') IS NULL
+CREATE TABLE sidata.RemediationTaskRollup (
+    CollectionId      INT            NOT NULL,
+    TaskKeyHash       BINARY(32)     NOT NULL,
+    TaskName          NVARCHAR(MAX)  NOT NULL,
+    Kind              NVARCHAR(32)   NOT NULL,
+    Channel           NVARCHAR(32)   NOT NULL,
+    Product           NVARCHAR(400)  NULL,       -- NULL when the tasks name several (never for one task key)
+    Version           NVARCHAR(400)  NULL,
+    Assets            INT            NOT NULL,   -- distinct assets (CIs) with this task open
+    Tier01Assets      INT            NOT NULL,   -- of them Tier 0 or Tier 1
+    Findings          INT            NOT NULL,   -- the findings the tasks close (each finding is on ONE asset: a sum)
+    Cves              INT            NOT NULL,   -- DISTINCT CVEs over every link of the tasks (not a sum per asset)
+    HighestSeverity   NVARCHAR(16)   NULL,
+    HighestRiskRating NVARCHAR(16)   NULL,
+    MaxWeightedRisk   FLOAT          NULL,
+    SumWeightedRisk   FLOAT          NULL,       -- the sum of each asset's highest weighted risk: "assets x risk"
+    OldestFirstSeen   DATETIME2(3)   NULL,
+    CONSTRAINT PK_RemediationTaskRollup PRIMARY KEY CLUSTERED (CollectionId, TaskKeyHash)
+);
+IF OBJECT_ID('sidata.RemediationTaskTrend') IS NULL
+CREATE TABLE sidata.RemediationTaskTrend (
+    CollectionId     INT            NOT NULL,
+    Channel          NVARCHAR(32)   NOT NULL,   -- '' = every tool
+    CollectionTime   DATETIME2(3)   NOT NULL,
+    OpenTasks        INT            NOT NULL,
+    OpenAssets       INT            NOT NULL,
+    Opened           INT            NOT NULL,   -- worked out new this run, or reopened
+    ClosedFixed      INT            NOT NULL,   -- closed as fixed this run
+    ClosedOther      INT            NOT NULL,   -- closed this run for another reason (exempted, asset retired, report or task changed)
+    OldestOpen       DATETIME2(3)   NULL,
+    CONSTRAINT PK_RemediationTaskTrend PRIMARY KEY CLUSTERED (CollectionId, Channel)
+);
 IF SCHEMA_ID('snowstage') IS NULL EXEC ('CREATE SCHEMA snowstage');
 -- The two hand-off views live in the Pro database beside snowstage.vImportVulnerableItem (sql\si-vulnerability-target.sql, applied
 -- first by the same schema step), so ServiceNow's data source reads all of them the same way. THE VULNERABLE ITEMS' SCOPE: a task
@@ -5703,4 +5769,63 @@ CREATE TABLE sidata.CiBuildInputCache (
     Name     NVARCHAR(64)   NOT NULL CONSTRAINT PK_CiBuildInputCache PRIMARY KEY,
     Json     NVARCHAR(MAX)  NOT NULL,
     SavedAt  DATETIME2(0)   NOT NULL CONSTRAINT DF_CiBuildInputCache_SavedAt DEFAULT SYSUTCDATETIME()
+);
+-- (#1275 stage 2's tables are APPENDED here, not beside sidata.RaDefenderKey: the schema of a release only appends -- the
+-- ServiceNow task outputs' proof holds every byte before this release's additions to the release before's file)
+-- #1275 stage 2 (ADDED 2026-11-18): the attack-path reports from vulnerable devices to Azure read the Exposure Graph ONCE per
+-- run into these scratch tables (engine\risk-analysis\_shared\RA-GraphPathStage.ps1) and join it here, slice by slice.
+-- Keyed by a small run number (sidata.RaGraphRun); removed at the end of the run, and every load first removes what an
+-- earlier run of the same grain left behind (a run that stopped half way) and anything older than two days.
+-- Node / edge keys are the first 16 bytes of SHA-256 over the Exposure Graph node id (the query engine's hash_sha256).
+IF OBJECT_ID('sidata.RaGraphRun') IS NULL
+CREATE TABLE sidata.RaGraphRun (
+    RunNo       INT IDENTITY(1,1) NOT NULL CONSTRAINT PK_RaGraphRun PRIMARY KEY CLUSTERED,
+    RunKey      NVARCHAR(64)   NOT NULL,
+    Grain       NVARCHAR(16)   NOT NULL,
+    State       NVARCHAR(16)   NOT NULL CONSTRAINT DF_RaGraphRun_State DEFAULT N'loading',
+    Nodes       BIGINT         NULL,
+    Edges       BIGINT         NULL,
+    CreatedAt   DATETIME2(0)   NOT NULL CONSTRAINT DF_RaGraphRun_CreatedAt DEFAULT SYSUTCDATETIME()
+);
+IF OBJECT_ID('sidata.RaGraphNode') IS NULL
+CREATE TABLE sidata.RaGraphNode (
+    RunNo         INT            NOT NULL,
+    Seq           BIGINT IDENTITY(1,1) NOT NULL,
+    K             BINARY(16)     NOT NULL,
+    Pk            BIT            NOT NULL CONSTRAINT DF_RaGraphNode_Pk DEFAULT 0,   -- the one row of this id the graph keeps
+    Fl            INT            NOT NULL,                                          -- category / label bits (RA-GraphPathStage.ps1)
+    NodeId        NVARCHAR(MAX)  NULL,
+    NodeName      NVARCHAR(MAX)  NULL,
+    NodeLabel     NVARCHAR(MAX)  NULL,
+    DeviceKey     NVARCHAR(MAX)  NULL,
+    Bh            BIGINT         NULL,                                              -- a vulnerable device's slice hash
+    Cvss          FLOAT          NULL,
+    RiskFactorSet NVARCHAR(MAX)  NULL,                                              -- JSON array
+    CONSTRAINT PK_RaGraphNode PRIMARY KEY CLUSTERED (RunNo, K, Seq)
+);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_RaGraphNode_Device' AND object_id = OBJECT_ID('sidata.RaGraphNode'))
+    EXEC (N'CREATE INDEX IX_RaGraphNode_Device ON sidata.RaGraphNode (RunNo, Bh) INCLUDE (K) WHERE Bh IS NOT NULL');
+IF OBJECT_ID('sidata.RaGraphEdge') IS NULL
+CREATE TABLE sidata.RaGraphEdge (
+    RunNo       INT            NOT NULL,
+    Seq         BIGINT IDENTITY(1,1) NOT NULL,
+    S           BINARY(16)     NOT NULL,
+    T           BINARY(16)     NOT NULL,
+    L           TINYINT        NOT NULL,     -- 1 has role on, 2 a device edge label, 3 the other labels
+    Lt          NVARCHAR(MAX)  NULL,         -- a device edge's label as written
+    CONSTRAINT PK_RaGraphEdge PRIMARY KEY CLUSTERED (RunNo, S, Seq)
+);
+IF OBJECT_ID('sidata.RaGraphCP') IS NULL
+CREATE TABLE sidata.RaGraphCP (              -- credential / identity -> principal in 0..3 steps
+    RunNo       INT            NOT NULL,
+    C           BINARY(16)     NOT NULL,
+    P           BINARY(16)     NOT NULL,
+    CONSTRAINT PK_RaGraphCP PRIMARY KEY CLUSTERED (RunNo, C, P)
+);
+IF OBJECT_ID('sidata.RaGraphST') IS NULL
+CREATE TABLE sidata.RaGraphST (              -- role scope -> Azure target in 0..2 steps, the report's target tests applied
+    RunNo       INT            NOT NULL,
+    S           BINARY(16)     NOT NULL,
+    T           BINARY(16)     NOT NULL,
+    CONSTRAINT PK_RaGraphST PRIMARY KEY CLUSTERED (RunNo, S, T)
 );

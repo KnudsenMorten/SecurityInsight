@@ -401,12 +401,25 @@ public static class MgmtDeck
                 w.AddContentSlide(title + " (continued)", null, cards.Skip(PptxWriter.MaxCards).Take(PptxWriter.MaxCards).ToList(), null, null, null, noteText);
             if (!Tables) return;
             foreach (var x in tables.Where(t => tableHere is null || !ReferenceEquals(t, tables[0])).Take(MaxTables))
+            {
+                // #1283 the top 50 actions: every row, 10 to a slide (owner 2026-11-18)
+                if (x.Key == "topactions")
+                {
+                    for (var at = 0; at < x.Rows.Count; at += 10)
+                    {
+                        var part = x.Title + " (" + (at + 1).ToString(CultureInfo.InvariantCulture) + "-" + Math.Min(at + 10, x.Rows.Count).ToString(CultureInfo.InvariantCulture) + ")";
+                        w.AddContentSlide(title + ": " + part, null, [], null, Table(x, at) with { Title = part }, x.Note is null ? null : new[] { x.Note },
+                            part + ", as SecurityInsight shows them.\n" + (x.Note is null ? "" : x.Note + "\n") + Scope);
+                    }
+                    continue;
+                }
                 w.AddContentSlide(title + ": " + x.Title, null, [], null, Table(x), x.Note is null ? null : new[] { x.Note }, x.Title + ". The first 10 rows, as SecurityInsight shows them.\n" + (x.Note is null ? "" : x.Note + "\n") + Scope);
+            }
         }
 
-        /// A table's top 10 rows, at most 7 columns.
-        private static PptxTable Table(FigureTable t) =>
-            new(t.Title, t.Headers.Take(7).ToList(), t.Rows.Take(10).Select(r => (IReadOnlyList<string>)r.Take(7).ToList()).ToList());
+        /// A table's 10 rows from <paramref name="skip"/> (the top 10 by default), at most 7 columns.
+        private static PptxTable Table(FigureTable t, int skip = 0) =>
+            new(t.Title, t.Headers.Take(7).ToList(), t.Rows.Skip(skip).Take(10).Select(r => (IReadOnlyList<string>)r.Take(7).ToList()).ToList());
 
         private void TopAssets()
         {

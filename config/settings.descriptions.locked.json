@@ -2999,6 +2999,16 @@
       "group": "Data & retention",
       "unit": "days"
     },
+    "SI_Pro_TaskMassMinAssets": {
+      "label": "Fewest assets for a fleet-wide deployment",
+      "purpose": "The fewest assets a remediation task must be open on to be marked as a candidate for one fleet-wide deployment (a patch tool, a policy or a software deployment) in Remediations > Task reports and in the Executive report.",
+      "defaultText": "5 assets",
+      "effect": "Tasks open on at least this many assets are marked as candidates and listed first. It only marks rows: every task is still shown and counted. Applies from the next data sync.",
+      "whenToChange": "Raise it in a large estate to keep the candidates to the actions that reach many devices; lower it in a small one.",
+      "advanced": false,
+      "group": "Data & retention",
+      "unit": "assets"
+    },
     "SI_Pro_FindingSla_CriticalDays": {
       "label": "Days to fix a critical finding",
       "purpose": "How many days a critical finding has to be fixed, counted from when it was first found (or found again after it was fixed).",
@@ -6148,6 +6158,14 @@
         "SI_KeyFigures_MeanTimeToFixDays",
         "SI_KeyFigures_StaleAdminDays",
         "SI_KeyFigures_CveAgeBands"
+      ]
+    },
+    {
+      "name": "Remediation task reports",
+      "category": "Web app",
+      "description": "The reports under Remediations > Task reports and the Executive report's remediation chapter: which tasks are marked as candidates for one fleet-wide deployment.",
+      "settings": [
+        "SI_Pro_TaskMassMinAssets"
       ]
     },
     {

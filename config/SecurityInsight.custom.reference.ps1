@@ -608,6 +608,9 @@ $global:SI_StorageAccount = '<storage-account-name>'
 # $global:SI_Pro_CiDailyRetentionDays      = 400   # each CI's daily trend
 # $global:SI_Pro_FindingStateRetentionDays = 365   # closed findings' lifecycle rows (open ones are never removed)
 
+# --- Remediation task reports ---
+# $global:SI_Pro_TaskMassMinAssets = 5   # the fewest assets a task must be open on to be a candidate for one fleet-wide deployment (marks rows only)
+
 # --- Findings per CI: the days a finding has to be fixed, per severity (its due date; 0 = no due date) ---
 # $global:SI_Pro_FindingSla_CriticalDays = 15
 # $global:SI_Pro_FindingSla_HighDays     = 30    # the days a high finding has to be fixed (0 = no due date)
@@ -6736,6 +6739,22 @@ $global:SI_StorageAccount = '<storage-account-name>'
 #   Recommended:      Keep the default. Change it when: Most installs never should; drop file outputs if nobody uses
 #                     them.
 #   More info:        https://invardia.com/docs/si/settings/SI_Sinks_Endpoint/
+#
+# Fewest assets for a fleet-wide deployment  [SI_Pro_TaskMassMinAssets]  (assets)
+#   What it is for:   The fewest assets a remediation task must be open on to be marked as a candidate for one
+#                     fleet-wide deployment (a patch tool, a policy or a software deployment) in Remediations > Task
+#                     reports and in the Executive report.
+#   Default:          5 assets
+#   If you change it: Tasks open on at least this many assets are marked as candidates and listed first. It only marks
+#                     rows: every task is still shown and counted. Applies from the next data sync.
+#   When to change:   Raise it in a large estate to keep the candidates to the actions that reach many devices; lower
+#                     it in a small one.
+#   Risk:             Changes how long data is kept or how quickly assets are treated as gone. Shortening a retention
+#                     DELETES older data at the next clean-up and that cannot be undone; shortening a grace period
+#                     retires assets (and closes their findings) sooner. Lengthening is safe but uses more storage.
+#   Recommended:      Keep the default. Change it when: Raise it in a large estate to keep the candidates to the
+#                     actions that reach many devices; lower it in a small one.
+#   More info:        https://invardia.com/docs/si/settings/SI_Pro_TaskMassMinAssets/
 #
 # Identity collection outputs  [SI_Sinks_Identity]  (engine: identity)
 #   What it is for:   Chooses where the identity collection writes its results: Log Analytics (LA), JSON files and/or

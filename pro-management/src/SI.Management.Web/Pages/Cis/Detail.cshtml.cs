@@ -65,7 +65,7 @@ public sealed class DetailModel : PageModel
             }
             var schema = await _cis.SchemaAsync(ct);
             if (!schema.Data.Ci) { NotLoaded = true; return Page(); }
-            var r = await _cis.CiAsync(Id, schema.Data, ct);
+            var r = await _cis.CiAsync(Id, schema.Data, FindingsPage, ct);
             Ci = r.Data;
             Queries.Add(QueryInfo.From(r, "This CI"));
             if (Ci is null) { Response.StatusCode = StatusCodes.Status404NotFound; Error = "That CI is not in the Pro database (it may have been retired, or the id is wrong)."; return Page(); }
@@ -85,7 +85,7 @@ public sealed class DetailModel : PageModel
             {
                 try
                 {
-                    var g = await _graph.CiGraphAsync(Id, ct);
+                    var g = await _graph.CiGraphAsync(Id, LifecyclePage, ct);
                     Graph = g.Data;
                     if (Graph.Schema.Any) Queries.Add(QueryInfo.From(g, "Services, relations, finding lifecycle and changes"));
                 }
@@ -95,6 +95,7 @@ public sealed class DetailModel : PageModel
                     GraphError = "The services, relations and history of this CI could not be read: " + ViewerError.Text(ex);
                 }
             }
+            await LoadTasksAsync(Ci.Ci.CiId, ct);
             if (Ci.Trend.Count > 0)
                 TrendChart = new ChartSpec("ci-trend", "line", Ci.Trend.Select(d => Fmt.Day(d.Day)).ToList(), new[]
                 {
@@ -111,6 +112,51 @@ public sealed class DetailModel : PageModel
             Error = "The CI could not be read from the Pro database: " + ViewerError.Text(ex);
         }
         return Page();
+    }
+
+    // ---- owner 2026-11-18: the CI's remediation tasks, and its findings paged (never a silent cut) ----------------------------
+
+    /// The address parameters of the pages of the findings list, the findings-with-lifecycle list and the tasks.
+    public const string FindingsPageParameter = "fp", LifecyclePageParameter = "lp";
+
+    /// The page of the findings list asked for (1 = the first).
+    public int FindingsPage => SI.Management.Web.Pages.Remediations.AssetTasks.PageOf(Request.Query[FindingsPageParameter]);
+    /// The page of the findings-with-lifecycle list asked for.
+    public int LifecyclePage => SI.Management.Web.Pages.Remediations.AssetTasks.PageOf(Request.Query[LifecyclePageParameter]);
+
+    /// The CI's remediation tasks (one page, open first); null = not read.
+    public SI.Management.Web.Pages.Remediations.AssetTasksView? Tasks { get; private set; }
+
+    /// This CI page with one list's page changed (the other lists keep theirs), at that list.
+    public string PageLink(string parameter, int page, string anchor)
+    {
+        var parts = new List<string> { "id=" + Uri.EscapeDataString(Id ?? "") };
+        foreach (var p in new[] { FindingsPageParameter, LifecyclePageParameter, SI.Management.Web.Pages.Remediations.AssetTasks.PageParameter })
+        {
+            var n = p == parameter ? page : SI.Management.Web.Pages.Remediations.AssetTasks.PageOf(Request.Query[p]);
+            if (n > 1) parts.Add(p + "=" + n.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        }
+        return "/Cis/Detail?" + string.Join("&", parts) + "#" + anchor;
+    }
+
+    /// The tasks of this CI in the newest collection: the data sync keys every task on its CI id (the task's owner), so the
+    /// CI page reads them by that id exactly. (This page is refused to a person limited to some rows, before anything is read.)
+    private async Task LoadTasksAsync(string ciId, CancellationToken ct)
+    {
+        if (HttpContext?.RequestServices.GetService<ICollectionViews>() is not { } views) return;
+        try
+        {
+            var cols = (await views.CollectionsAsync(ct)).Data;
+            if (cols.Count == 0) { Tasks = new() { Note = "No collection has been loaded yet, so there are no remediation tasks." }; return; }
+            Tasks = await SI.Management.Web.Pages.Remediations.AssetTasks.OfAssetAsync(views, cols[0].CollectionId, RemediationTaskSql.OneAsset.CiId, ciId, null,
+                SI.Management.Web.Pages.Remediations.AssetTasks.PageOf(Request.Query[SI.Management.Web.Pages.Remediations.AssetTasks.PageParameter]),
+                n => PageLink(SI.Management.Web.Pages.Remediations.AssetTasks.PageParameter, n, "h-tasks-asset"), _log, ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _log.LogWarning(ex, "the remediation tasks of CI {Id} could not be read", ciId);
+            Tasks = new() { Note = "The remediation tasks could not be read just now: " + ViewerError.Text(ex) };
+        }
     }
 
     /// "Tier 2" / "Unclassified".

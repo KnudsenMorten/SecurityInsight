@@ -37,7 +37,34 @@ public sealed class DetailModel : PageModel
     public async Task<IActionResult> OnGetAsync(CancellationToken ct)
     {
         if (!await LoadAsync(ct)) return Error is null ? NotFound() : Page();
+        await LoadTasksAsync(Detail!.Finding, ct);
         return Page();
+    }
+
+    // ---- owner 2026-11-18: a finding leads to its task(s) and to its asset --------------------------------------------------
+
+    /// The person's view is limited to some rows (departments, or a role's visibility).
+    public bool Limited { get; private set; }
+    /// What a limited person may see (null = everything).
+    private RowVisibility? _scope;
+
+    /// The remediation task(s) this finding belongs to (null = not read).
+    public SI.Management.Web.Pages.Remediations.AssetTasksView? Tasks { get; private set; }
+
+    /// The asset page of the finding's asset -- its linked objects and identifiers, its tasks and findings -- for a person who
+    /// sees everything (the asset page is not limited to departments, so a limited person is not offered it); null = none.
+    public string? AssetHref(FindingRow f) => Limited || string.IsNullOrWhiteSpace(f.AssetKey) ? null
+        : "/Collection/Asset?c=" + Uri.EscapeDataString(f.CollectionId) + "&key=" + Uri.EscapeDataString(f.AssetKey);
+
+    private async Task LoadTasksAsync(FindingRow f, CancellationToken ct)
+    {
+        if (HttpContext?.RequestServices.GetService<ICollectionViews>() is not { } views) return;
+        var here = "/Findings/Detail?c=" + Uri.EscapeDataString(f.CollectionId) + "&id=" + Uri.EscapeDataString(f.FindingId);
+        // a limited person: the task's link to this finding must be one they may see (Task findings' own rule)
+        Tasks = await SI.Management.Web.Pages.Remediations.AssetTasks.OfFindingAsync(views, f.CollectionId, f.FindingId, _scope,
+            SI.Management.Web.Pages.Remediations.AssetTasks.PageOf(Request.Query[SI.Management.Web.Pages.Remediations.AssetTasks.PageParameter]),
+            n => here + "&" + SI.Management.Web.Pages.Remediations.AssetTasks.PageParameter + "=" + n.ToString(System.Globalization.CultureInfo.InvariantCulture) + "#h-tasks-finding", _log, ct);
+        Tasks = Tasks with { AssetHref = Limited ? null : key => "/Collection/Asset?c=" + Uri.EscapeDataString(f.CollectionId) + "&key=" + Uri.EscapeDataString(key) };
     }
 
     private async Task<bool> LoadAsync(CancellationToken ct)
@@ -87,11 +114,14 @@ public sealed class DetailModel : PageModel
         var access = HttpContext?.RequestServices.GetService<IAccessScope>();
         // no limit on this person's view (the role framework says so -- every role on the ladder whose scopes do not limit
         // what it sees, and a one-page link, which is bound to this very finding): every finding
+        Limited = false; _scope = null;
         if (access?.Visibility(User) is null) return true;
+        Limited = true;
         var resolver = HttpContext?.RequestServices.GetService<SI.Management.Web.Departments.IDepartmentScopeResolver>();
         if (resolver is null) return false;
         var mine = await resolver.ResolveAsync(User, ct);
-        if (mine.Unrestricted) return true;
+        if (mine.Unrestricted) { Limited = false; return true; }
+        _scope = mine.Rows;
         if (HttpContext?.RequestServices.GetService<SI.Management.Web.Departments.GovernanceService>() is not { } gov) return false;
         try
         {

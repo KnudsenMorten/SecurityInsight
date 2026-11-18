@@ -144,6 +144,12 @@ public static class NavModel
         // findings they may see (finding level); a person of a department WITHOUT a role is refused every collection view
         // (the /Remediations folder needs a reader), so the menu does not offer it to them either
         new("Remediations", "/Remediations/Tasks", "Tasks per asset", "reader"),
+        // #1283 the task reports for IT operations: the same task rows grouped -- one deployment that clears the most risk on the
+        // most assets first; by product, by tool / owner / IT service ..., the leftovers and the weekly trend (finding-level scoping)
+        Group("Remediations", "Task reports", "reader",
+            new("/Remediations/TaskActions", "Deploy once, fix many"), new("/Remediations/TaskProducts", "By product"),
+            new("/Remediations/TaskGroups", "By tool, owner, IT service ..."), new("/Remediations/TaskSingles", "No mass action fits"),
+            new("/Remediations/TaskTrend", "Opened and fixed per week")),
         new("Changes & trends", "/Management/Trends", "Trends", "reader"),
         new("Changes & trends", "/Collection/Changes", "What changed", "reader"),
         Group("Changes & trends", "Vulnerabilities over time", "reader",

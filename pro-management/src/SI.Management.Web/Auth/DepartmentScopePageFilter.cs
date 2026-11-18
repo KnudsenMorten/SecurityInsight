@@ -26,6 +26,9 @@ public sealed class DepartmentScopePageFilter(IAccessScope access, SI.Management
         "/Exemptions/Request", "/Changes/Index", "/Admin/History", "/Columns",
         // #1277 the remediation tasks per asset and their findings: limited at finding level (RemediationTaskSql.TasksFor / TaskFindingsFor)
         "/Remediations/Tasks", "/Remediations/TaskFindings",
+        // #1283 the task reports: grouped over the findings the person may see (RemediationTaskReports, TaskSlice); the weekly
+        // trend (stored counts over every department) opens and says it is shown to people who see every department
+        "/Remediations/TaskActions", "/Remediations/TaskProducts", "/Remediations/TaskGroups", "/Remediations/TaskSingles", "/Remediations/TaskTrend",
     };
 
     /// Whole folders whose every page applies the department scope itself (a collection view refuses, in its own words,

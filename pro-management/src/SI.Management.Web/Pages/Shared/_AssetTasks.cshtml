@@ -1,0 +1,68 @@
+@* The remediation tasks of ONE asset (the asset page, the CI page) or of ONE finding (the finding page): open first, the
+   total always said, every page reachable (paged in SQL). Pages/Remediations/AssetTasks.cs reads them. *@
+@model SI.Management.Web.Pages.Remediations.AssetTasksView
+@using SI.Management.Web.Pages.Remediations
+@{
+    var v = Model;
+    string T(IReadOnlyDictionary<string, object?> r, string k) => AssetTasksView.Text(r, k);
+}
+<section class="card" aria-labelledby="h-tasks-@v.For" data-remediation-tasks="@v.For" data-tasks-total="@v.Total">
+    <h2 id="h-tasks-@v.For">@(v.Finding ? "Remediation task" + (v.Total == 1 ? "" : "s") + " of this finding" : "Remediation tasks") (@Fmt.Int(v.Total))</h2>
+    @if (v.Note is not null)
+    {
+        <p class="hint" data-tasks-note>@v.Note</p>
+    }
+    else if (v.Total == 0)
+    {
+        <p class="hint" data-tasks-none>@(v.Finding ? "This finding is not part of a remediation task." : "This asset has no remediation task.")</p>
+    }
+    else
+    {
+        <p class="hint">@(v.Finding
+            ? "The task to perform that resolves this finding, with its state. Open a task for every finding it resolves."
+            : "One row per task to perform on this asset: the update, the software upgrade or the configuration change, with the findings it resolves. Open tasks first. Open a task for its findings.")</p>
+        <div class="table-wrap">
+            <table data-sortable data-tasks-table>
+                <thead><tr><th scope="col">Task</th><th scope="col">Kind</th><th scope="col">State</th><th scope="col">Highest severity</th><th scope="col" class="num">Highest risk score</th><th scope="col" class="num">Findings</th>@if (v.Finding) { <th scope="col">Asset (CI)</th> }</tr></thead>
+                <tbody>
+                    @foreach (var r in v.Rows)
+                    {
+                        var id = T(r, "TaskId");
+                        var state = T(r, "State");
+                        var name = T(r, "TaskName");
+                        var kind = T(r, "Kind").Replace('-', ' ');
+                        var why = T(r, "ClosedWhy");
+                        var sev = T(r, "HighestSeverity");
+                        var riskText = T(r, "MaxRiskScore");
+                        double? risk = double.TryParse(riskText, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var rv) ? rv : null;
+                        var findings = T(r, "Findings");
+                        var assetKey = T(r, "AssetKey");
+                        var assetName = T(r, "AssetName");
+                        <tr data-task="@id" data-state="@state">
+                            <td class="wrap"><a href="@v.TaskHref(id)" data-task-link>@name</a></td>
+                            <td>@kind</td>
+                            <td>@if (state == "open") { <span class="badge warn">open</span> } else { <span class="badge good">closed</span>@if (why.Length > 0) { <text> </text><span class="muted">@why</span> } }</td>
+                            <td>@sev</td>
+                            <td class="num" data-value="@riskText">@Fmt.Score(risk)</td>
+                            <td class="num" data-value="@findings">@findings</td>
+                            @if (v.Finding)
+                            {
+                                <td class="wrap">@if (assetKey.Length > 0 && v.AssetHref is not null) { <a href="@v.AssetHref(assetKey)" data-task-asset>@assetName</a> } else { @assetName }</td>
+                            }
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+        @if (v.Pages > 1)
+        {
+            <p class="hint" data-tasks-pager>Showing @Fmt.Int(v.First)–@Fmt.Int(v.Last) of @Fmt.Int(v.Total).
+                @if (v.Page > 1) { <a href="@v.PageLink(v.Page - 1)" rel="prev">Previous @Fmt.Int(v.Size)</a> }
+                @if (v.Page < v.Pages) { <a href="@v.PageLink(v.Page + 1)" rel="next">Next @Fmt.Int(v.Size)</a> }</p>
+        }
+    }
+    @if (v.AllHref is not null && v.Note is null)
+    {
+        <p><a href="@v.AllHref" data-tasks-all>All tasks of this asset</a> <span class="hint">on Tasks per asset, with every column, filter and export.</span></p>
+    }
+</section>

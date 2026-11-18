@@ -254,12 +254,17 @@ public sealed class IndexModel : SI.Management.Web.Columns.DataViewPageModel
         if (rows is null) return Array.Empty<SI.Management.Web.Columns.DataTable>();
         static FindingRow F(object o) => (FindingRow)o;
         var marked = ShowsExempted;
+        var limited = HttpContext?.RequestServices.GetService<IAccessScope>()?.Visibility(User) is not null;
         // the columns of the findings export, in its order and with its names (CollectionTime ... FindingId, Exempted)
         var cols = new List<SI.Management.Web.Columns.DataColumn>
         {
             new("CollectionTime", "CollectionTime", o => F(o).CollectionTime),
             new("Tier", "Tier", o => ExcelExport.Tier(F(o).Tier), Text: o => SI.Management.Web.Pages.Tiers.TierLinks.IsUnclassified(F(o).Tier) ? "Unclassified" : "Tier " + F(o).Tier),
-            new("AssetName", "AssetName", o => F(o).AssetName),
+            // owner 2026-11-18: the asset opens its page (linked objects and identifiers, tasks, findings) -- for a person who sees
+            // everything; that page is not limited to departments, so a limited person keeps the name as text
+            new("AssetName", "AssetName", o => F(o).AssetName,
+                Link: limited ? null : o => string.IsNullOrWhiteSpace(F(o).AssetKey) ? null
+                    : "/Collection/Asset?c=" + Uri.EscapeDataString(F(o).CollectionId) + "&key=" + Uri.EscapeDataString(F(o).AssetKey)),
             new("AssetKind", "AssetKind", o => F(o).AssetKind),
             new("Severity", "Severity", o => F(o).Severity),
             new("RiskScore", "Risk Score", o => F(o).RiskScore, Number: true, Text: o => Fmt.Score(F(o).RiskScore)),

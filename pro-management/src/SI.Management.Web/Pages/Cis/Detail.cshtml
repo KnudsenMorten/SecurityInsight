@@ -76,6 +76,12 @@ else
         </section>
     </div>
 
+    @* owner 2026-11-18: the CI's remediation tasks, open first *@
+    @if (Model.Tasks is { } tasks)
+    {
+        <partial name="~/Pages/Shared/_AssetTasks.cshtml" model="tasks" />
+    }
+
     var gr = Model.Graph;
     @if (Model.GraphError is not null) { <div class="notice warn" role="status">@Model.GraphError</div> }
     <section class="card" aria-labelledby="h-services" data-ci-services>
@@ -300,15 +306,26 @@ else
     </section>
 
     <section class="card" aria-labelledby="h-findings" data-ci-findings>
-        <h2 id="h-findings">Findings (@Fmt.Int(d.Findings.Count))</h2>
+        @{
+            // the TRUE total (counted), never the rows of one page; every page is reachable
+            var fTotal = d.FindingsTotal ?? d.FindingsSkip + d.Findings.Count;
+            var fPage = d.FindingsSkip / CiSql.FindingsPageSize + 1;
+        }
+        <h2 id="h-findings" data-findings-total="@fTotal">Findings (@Fmt.Int(fTotal))</h2>
         @* #1219 (4) a detection excepted on this server: its findings stay, marked here *@
         @if (Model.Software is { } swx && swx.Active.Count > 0)
         {
             <p class="notice warn" role="status" data-findings-excepted>Detection excepted on this server: @(string.Join("; ", swx.Active.Select(e => "rule " + e.RuleId + " for " + e.Software))). The findings of the software stay and are listed below.</p>
         }
-        @if (d.Findings.Count == 0) { <p class="hint">No finding of the newest collection is on this CI.</p> }
+        @if (d.Findings.Count == 0 && fTotal == 0) { <p class="hint">No finding of the newest collection is on this CI.</p> }
         else
         {
+            @if (fTotal > d.Findings.Count || d.FindingsSkip > 0)
+            {
+                <p class="hint" data-findings-pager>Showing @Fmt.Int(d.Findings.Count == 0 ? 0 : d.FindingsSkip + 1)–@Fmt.Int(d.FindingsSkip + d.Findings.Count) of @Fmt.Int(fTotal), the highest weighted risk first.
+                    @if (fPage > 1) { <a href="@Model.PageLink(DetailModel.FindingsPageParameter, fPage - 1, "h-findings")" rel="prev">Previous @Fmt.Int(CiSql.FindingsPageSize)</a> }
+                    @if (d.FindingsSkip + d.Findings.Count < fTotal) { <a href="@Model.PageLink(DetailModel.FindingsPageParameter, fPage + 1, "h-findings")" rel="next" data-findings-next>Next @Fmt.Int(CiSql.FindingsPageSize)</a> }</p>
+            }
             <div class="table-wrap">
                 <table data-sortable>
                     <thead><tr><th>Finding</th><th>Type</th><th>Severity</th><th>Risk rating</th><th>Risk score</th><th>Weighted</th><th>Domain</th><th>Detected by</th><th>Risk factors</th><th>Exempted</th></tr></thead>
@@ -326,11 +343,22 @@ else
     </section>
 
     <section class="card" aria-labelledby="h-lifecycle" data-ci-lifecycle>
-        <h2 id="h-lifecycle">Findings and their lifecycle (@Fmt.Int(gr.Findings.Count(f => f.Status is "open" or "reopened")) open, @Fmt.Int(gr.Findings.Count(f => f.Overdue)) overdue)</h2>
+        @{
+            // counted over EVERY finding of the CI (never one page); a reader that does not count says what its page holds
+            var lc = gr.FindingCounts ?? new CiFindingCounts(gr.FindingsSkip + gr.Findings.Count, gr.Findings.Count(f => f.Status is "open" or "reopened"), gr.Findings.Count(f => f.Overdue));
+            var lPage = gr.FindingsSkip / CiGraphSql.FindingsPageSize + 1;
+        }
+        <h2 id="h-lifecycle" data-lifecycle-total="@lc.Total">Findings and their lifecycle: @Fmt.Int(lc.Total) in all (@Fmt.Int(lc.Open) open, @Fmt.Int(lc.Overdue) overdue)</h2>
         @if (!gr.Schema.FindingModel) { <p class="hint">Not available yet: the data sync of this release has not run.</p> }
-        else if (gr.Findings.Count == 0) { <p class="hint">No finding has been recorded on this CI.</p> }
+        else if (gr.Findings.Count == 0 && lc.Total == 0) { <p class="hint">No finding has been recorded on this CI.</p> }
         else
         {
+            @if (lc.Total > gr.Findings.Count || gr.FindingsSkip > 0)
+            {
+                <p class="hint" data-lifecycle-pager>Showing @Fmt.Int(gr.Findings.Count == 0 ? 0 : gr.FindingsSkip + 1)–@Fmt.Int(gr.FindingsSkip + gr.Findings.Count) of @Fmt.Int(lc.Total), reopened and open first.
+                    @if (lPage > 1) { <a href="@Model.PageLink(DetailModel.LifecyclePageParameter, lPage - 1, "h-lifecycle")" rel="prev">Previous @Fmt.Int(CiGraphSql.FindingsPageSize)</a> }
+                    @if (gr.FindingsSkip + gr.Findings.Count < lc.Total) { <a href="@Model.PageLink(DetailModel.LifecyclePageParameter, lPage + 1, "h-lifecycle")" rel="next" data-lifecycle-next>Next @Fmt.Int(CiGraphSql.FindingsPageSize)</a> }</p>
+            }
             <p class="hint">Every finding on this CI from when it was first found: who owns it, when it is due, whether it is exempted, fixed or reopened, and its ticket. A finding of a disabled account or device that a setting leaves out is kept as it was -- marked excluded, never closed.</p>
             <div class="table-wrap">
                 <table data-sortable>

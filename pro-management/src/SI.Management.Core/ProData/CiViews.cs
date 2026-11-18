@@ -54,9 +54,10 @@ public sealed record CiDailyRow(DateOnly Day, int? Tier, double? RiskScore, doub
 public sealed record CiRecordRow(string RecordKey, string? CiId, string Provider, string? RecordType, string? Class, string? Name, DateTime? SourceLastSeen,
     DateTime? CollectionTime, bool? Complete, string? DocJson);
 
-/// One CI and everything the CI page shows.
+/// One CI and everything the CI page shows. <paramref name="Findings"/> is ONE page of its findings (paged in SQL), starting
+/// at row <paramref name="FindingsSkip"/>; <paramref name="FindingsTotal"/> is how many it has (null = not counted).
 public sealed record CiDetail(CiRow Ci, CiDocument Doc, IReadOnlyList<CiLinkRow> Links, IReadOnlyList<CiFindingRow> Findings, IReadOnlyList<CiDailyRow> Trend,
-    IReadOnlyList<CiRecordRow> Records);
+    IReadOnlyList<CiRecordRow> Records, long? FindingsTotal = null, int FindingsSkip = 0);
 
 /// The values a filter offers (Facet = the column, V = a value, N = how many rows have it).
 public sealed record CiFacet(string Facet, string Value, long N);
@@ -101,6 +102,9 @@ public interface ICiViews
         Task.FromResult(new QueryResult<IReadOnlyList<CiFacet>>(Array.Empty<CiFacet>(), "", "", DateTimeOffset.UtcNow));
     /// One CI with its links, findings, trend and records (null = no such CI).
     Task<QueryResult<CiDetail?>> CiAsync(string ciId, CiSchema schema, CancellationToken ct);
+    /// The same with page <paramref name="findingsPage"/> (1 = the first) of its findings and their total. A reader without
+    /// its own paging answers with <see cref="CiAsync(string, CiSchema, CancellationToken)"/>.
+    Task<QueryResult<CiDetail?>> CiAsync(string ciId, CiSchema schema, int findingsPage, CancellationToken ct) => CiAsync(ciId, schema, ct);
     Task<QueryResult<CiRecordRow?>> RecordAsync(string recordKey, CancellationToken ct);
     /// The tier board's tile counts: the CIs per tier and class, and per tier and who decided the tier -- two GROUP BYs over
     /// narrow columns of sidata.Ci (never the document), kept per data version.
@@ -123,8 +127,8 @@ public static class CiSql
 {
     /// How many days of the daily rows the CI page draws (the daily rows are kept 13 months by default).
     public const int TrendDays = 400;
-    /// The most findings the CI page lists.
-    public const int MaxFindings = 500;
+    /// The findings the CI page lists per page (paged in SQL; the heading says the CI's true total and every page is reachable).
+    public const int FindingsPageSize = 500;
     public const int MaxCiId = 64;
     public const int MaxRecordKey = 450;
 
@@ -252,12 +256,21 @@ WHERE l.CiId = @CiId
 ORDER BY l.IsPrimary DESC, l.Provider, l.RecordType, l.NativeId;
 """;
 
+    /// One page of the CI's findings (@Skip, @Take): the highest weighted risk first.
     public const string Findings = """
-SELECT TOP (@Take) f.FindingKey, f.FindingType, f.Title, f.Severity, f.Tier, f.RiskScore, f.WeightedRiskScore, f.RiskRating, f.SecurityDomain,
+SELECT f.FindingKey, f.FindingType, f.Title, f.Severity, f.Tier, f.RiskScore, f.WeightedRiskScore, f.RiskRating, f.SecurityDomain,
        f.DetectedBy, f.RiskFactors, f.ExemptionId, f.CollectionTime
 FROM sidata.CiFinding AS f
 WHERE f.CiId = @CiId
-ORDER BY CASE WHEN f.WeightedRiskScore IS NULL THEN 1 ELSE 0 END, f.WeightedRiskScore DESC, f.RiskScore DESC, f.FindingKey;
+ORDER BY CASE WHEN f.WeightedRiskScore IS NULL THEN 1 ELSE 0 END, f.WeightedRiskScore DESC, f.RiskScore DESC, f.FindingKey
+OFFSET @Skip ROWS FETCH NEXT @Take ROWS ONLY;
+""";
+
+    /// How many findings the CI has (the CI page's heading: the true total, never the rows of one page).
+    public const string FindingCount = """
+SELECT COUNT_BIG(*) AS N
+FROM sidata.CiFinding AS f
+WHERE f.CiId = @CiId;
 """;
 
     public const string Trend = """
@@ -745,9 +758,14 @@ public sealed class CiViews : ICiViews
         ProDataQueries.S(r, "Provider"), ProDataQueries.SN(r, "RecordType"), ProDataQueries.SN(r, "Class"), ProDataQueries.SN(r, "Name"),
         ProDataQueries.T(r, "SourceLastSeen"), ProDataQueries.T(r, "CollectionTime"), FlagN(r, "Complete"), ProDataQueries.SN(r, "DocJson"));
 
-    public async Task<QueryResult<CiDetail?>> CiAsync(string ciId, CiSchema schema, CancellationToken ct)
+    public Task<QueryResult<CiDetail?>> CiAsync(string ciId, CiSchema schema, CancellationToken ct) => CiAsync(ciId, schema, 1, ct);
+
+    public async Task<QueryResult<CiDetail?>> CiAsync(string ciId, CiSchema schema, int findingsPage, CancellationToken ct)
     {
         var id = CiSql.CiId(ciId);
+        // a page past the row offset's range is the last one it can hold (never an overflow)
+        var skip = (Math.Clamp(findingsPage, 1, int.MaxValue / CiSql.FindingsPageSize) - 1) * CiSql.FindingsPageSize;
+        long? findingsTotal = null;
         if (!schema.Ci) return R<CiDetail?>(null, "");
         var (rows, text) = await Run(new SqlQuery(CiSql.Ci, P(("CiId", id))), ct).ConfigureAwait(false);
         if (rows.Count == 0) return R<CiDetail?>(null, text);
@@ -764,7 +782,11 @@ public sealed class CiViews : ICiViews
         IReadOnlyList<CiFindingRow> findings = [];
         if (schema.Findings)
         {
-            var (fr, ft) = await Run(new SqlQuery(CiSql.Findings, P(("CiId", id), ("Take", CiSql.MaxFindings))), ct).ConfigureAwait(false);
+            var (fr, ft) = await Run(new SqlQuery(CiSql.Findings, P(("CiId", id), ("Skip", skip), ("Take", CiSql.FindingsPageSize))), ct).ConfigureAwait(false);
+            // the true total: a page holds at most FindingsPageSize rows, the heading says how many the CI has
+            var (cr, ctext) = await Run(new SqlQuery(CiSql.FindingCount, P(("CiId", id))), ct).ConfigureAwait(false);
+            findingsTotal = cr.Count > 0 ? ProDataQueries.LN(cr[0], "N") : null;
+            texts.Add(ctext);
             findings = fr.Select(r => new CiFindingRow(ProDataQueries.S(r, "FindingKey"), ProDataQueries.SN(r, "FindingType"), ProDataQueries.SN(r, "Title"),
                 ProDataQueries.SN(r, "Severity"), Int(r, "Tier"), ProDataQueries.DN(r, "RiskScore"), ProDataQueries.DN(r, "WeightedRiskScore"), ProDataQueries.SN(r, "RiskRating"),
                 ProDataQueries.SN(r, "SecurityDomain"), ProDataQueries.SN(r, "DetectedBy"), ProDataQueries.SN(r, "RiskFactors"), ProDataQueries.SN(r, "ExemptionId"),
@@ -786,7 +808,7 @@ public sealed class CiViews : ICiViews
             records = rr.Select(MapRecord).ToList();
             texts.Add(rt);
         }
-        return R<CiDetail?>(new CiDetail(ci, CiDoc.Parse(ci.DocJson), links, findings, trend, records), string.Join("\n\n", texts));
+        return R<CiDetail?>(new CiDetail(ci, CiDoc.Parse(ci.DocJson), links, findings, trend, records, findingsTotal, skip), string.Join("\n\n", texts));
     }
 
     public async Task<QueryResult<CiRecordRow?>> RecordAsync(string recordKey, CancellationToken ct)

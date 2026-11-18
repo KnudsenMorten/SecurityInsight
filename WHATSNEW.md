@@ -1,5 +1,21 @@
 # What's new in SecurityInsight
 
+## 3.1.32 · 2026-11-18 · Feature update
+
+Remediation tasks for IT operations, linked everywhere, and complete attack-path reports at the largest installations.
+
+### New features
+
+- **Deploy once, fix many** - Remediations > Task reports shows each action across all assets: the assets it covers, the risk and CVEs it removes, and the tool that fits (patch tool, software deployment, policy, Azure, manual). Actions on many assets come first.
+- **Task reports by product, owner and service** - Group open tasks by product, tool, owner, department, IT service, OS or age, see what no mass deployment fits, and follow tasks opened and fixed per week. Filter by IT service, OS version, risk rating, category and more.
+- **Top 50 actions in the management report** - Chapter 6 "Remediation" shows the open tasks, what was fixed since the last report, the work per tool and the top 50 actions -- on the page, in the PDF, in the mail and in the presentation pack.
+- **Tasks on the asset pages** - The asset and CI pages show the asset's remediation tasks, a finding shows the task it belongs to, and an asset name opens the asset page with its linked objects.
+
+### Fixes
+
+- **Every finding on the CI page** - The CI page's findings lists no longer stop at 500: they page through every finding and show the true totals.
+- **Attack-path reports complete at large installations** - The reports on devices whose vulnerabilities allow lateral movement to Azure read Microsoft's attack-path data once per run, so they no longer time out at the largest installations. The rows are the same as before.
+
 ## 3.1.31 · 2026-11-18 · Fix-only
 
 The Tasks view shows each task's own columns, next to the vulnerability's columns.

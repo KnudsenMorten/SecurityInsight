@@ -1,5 +1,17 @@
 # What's new in SecurityInsight
 
+## 3.1.31 · 2026-11-18 · Fix-only
+
+The Tasks view shows each task's own columns, next to the vulnerability's columns.
+
+### New features
+
+None in this version.
+
+### Fixes
+
+- **Task columns in the Tasks view** - Remediations > Tasks now shows Paths, Closed, Reopened, Highest weighted risk and Security domain by default, next to the other vulnerability columns. A layout you saved yourself stays as you saved it; reset the layout to get the new default.
+
 ## 3.1.30 · 2026-11-17 · Feature update
 
 Remediation tasks per asset, ready for ServiceNow, and more reliable attack-path reports.

@@ -1,0 +1,13 @@
+{
+  "version": "3.1.31",
+  "date": "2026-11-18",
+  "type": "fix-only",
+  "summary": "The Tasks view shows each task's own columns, next to the vulnerability's columns.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "Task columns in the Tasks view",
+      "text": "Remediations > Tasks now shows Paths, Closed, Reopened, Highest weighted risk and Security domain by default, next to the other vulnerability columns. A layout you saved yourself stays as you saved it; reset the layout to get the new default."
+    }
+  ]
+}

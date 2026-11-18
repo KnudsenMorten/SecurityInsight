@@ -13,6 +13,16 @@ SecurityInsight Pro and the Pro trial install from invardia.com, never from GitH
 [invardia.com/trial](https://invardia.com/trial/), and your installation page there gives your two lines.
 <!-- /install lines -->
 
+## v3.1.31 — the task's own columns in the Tasks view
+
+### Changed
+
+- **Remediations > Tasks shows the task's own columns.** Paths, Closed, Reopened, Highest weighted risk and Security domain
+  are now shown by default (before, they were only in the export), and they stand with the other vulnerability columns: the
+  weighted risk next to the risk score, the security domain next to the tier, the paths next to the application, the closed
+  date and reopen count with the other dates. A layout you saved yourself stays as you saved it; reset the layout to get the
+  new default.
+
 ## v3.1.30 — remediation tasks per asset, ready for ServiceNow
 
 ### New

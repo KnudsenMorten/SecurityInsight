@@ -29,6 +29,8 @@ var azureAd = builder.Configuration.GetSection("AzureAd");
 // SECURE-WEB-1: Microsoft's built-in Container Apps authentication in front of this app -- the platform signs the user in
 // and this app reads the user from X-MS-CLIENT-PRINCIPAL, ONLY while SI_Web_BuiltInAuth is on (Auth/BuiltInAuth.cs). It
 // wins over the sign-in front when both switches are on (a warning once at start). The app listens as usual.
+// the retired sign-in front's switch without built-in: refuse to start (never the front, never built-in unprotected)
+if (BuiltInAuth.RetiredFrontRefusal(builder.Configuration) is { } retiredFront) throw new InvalidOperationException(retiredFront);
 var signInMode = BuiltInAuth.Resolve(builder.Configuration);
 var builtInAuth = signInMode == BuiltInAuth.Mode.BuiltIn;
 var signinFront = signInMode == BuiltInAuth.Mode.SigninFront;
@@ -679,7 +681,7 @@ else app.Logger.LogError("{Line}", webAuthSelfCheck.Result?.Line ?? WebAuthSelfC
 // #997: a page never shows a database's or a service's error text -- it says what failed with a reference, logged here
 SI.Management.Web.ViewerError.Log = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("SI.ViewerError");
 if (BuiltInAuth.BothOn(app.Configuration))
-    app.Logger.LogWarning("{BuiltIn} and {Front} are both on: the built-in authentication is used and the sign-in front setting is ignored", BuiltInAuth.Setting, SigninFront.Setting);
+    app.Logger.LogWarning("{Front} is ignored: the shared sign-in front is retired and the built-in authentication ({BuiltIn}) is used", SigninFront.Setting, BuiltInAuth.Setting);
 
 app.UseForwardedHeaders();
 // the old web app, once the install record names the new one: every page request goes there (path + query kept; never /healthz)

@@ -1,5 +1,18 @@
 # What's new in SecurityInsight
 
+## 3.1.33 · 2026-11-19 · Security
+
+Microsoft's newest base images, and the earlier sign-in component removed.
+
+### New features
+
+None in this version.
+
+### Fixes
+
+- **Security updates for the base images** - The engine, the updater, the web app and the MCP server are rebuilt on Microsoft's newest .NET base images, with Microsoft's latest security fixes.
+- **Earlier sign-in component removed** - Every installation signs in with Microsoft's built-in sign-in. The separate sign-in component that came before it is no longer carried, built or offered.
+
 ## 3.1.32 · 2026-11-18 · Feature update
 
 Remediation tasks for IT operations, linked everywhere, and complete attack-path reports at the largest installations.

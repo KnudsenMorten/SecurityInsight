@@ -145,9 +145,12 @@ function Test-SISigninFrontCarried {
         PURE (reads the disk). '' when the release folder -SIRoot (an extracted Pro package or public Community release)
         carries the sign-in front the way every install builds it -- its pin, and the pinned tree at
         pro-management\signin-front\ (Resolve-SISigninFrontSource, source 'release'); else why not. A pin in state
-        'contract' carries no front (''). The same check for both editions (framework PRO-COMMUNITY-SAME, SI #1207).
+        'contract' carries no front (''), and so does a release with NO pin at all: the shared sign-in front is retired
+        (framework §0 + SECURE-WEB-1, 2026-11-19) and a release from then on carries neither the pin nor the front. The same
+        check for both editions (framework PRO-COMMUNITY-SAME, SI #1207).
     #>
     param([Parameter(Mandatory)][string]$SIRoot)
+    if (-not (Test-Path -LiteralPath ([IO.Path]::Combine($SIRoot, 'pro-management', 'signin-front.pin.json')))) { return '' }
     $pin = $null
     try { $pin = Get-SISigninFrontPin -SIRoot $SIRoot } catch { return ('the sign-in front pin could not be read ({0})' -f $_.Exception.Message) }
     if ([string]$pin.state -ne 'pinned') { return '' }

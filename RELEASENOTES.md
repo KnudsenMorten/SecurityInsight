@@ -13,6 +13,15 @@ SecurityInsight Pro and the Pro trial install from invardia.com, never from GitH
 [invardia.com/trial](https://invardia.com/trial/), and your installation page there gives your two lines.
 <!-- /install lines -->
 
+## v3.1.33 — security update of the base images; the earlier sign-in component removed
+
+### Security
+- **SecurityInsight's containers are rebuilt on Microsoft's newest base images.** Microsoft published security fixes
+  for the .NET base images SecurityInsight builds on; this release moves the engine, the updater, the web app and the
+  MCP server to them.
+- **The earlier sign-in component is no longer part of the release.** Every installation signs in with Microsoft's
+  built-in sign-in; the separate sign-in component that came before it is no longer carried, built or offered.
+
 ## v3.1.32 — remediation tasks for IT operations, linked everywhere; complete attack-path reports at large installations
 
 ### New

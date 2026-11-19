@@ -18,7 +18,7 @@
 # (New-SIReleaseCodeArchive -RequirePinnedBaseImages), and the digests go into the release's SBOM.
 # THE .NET RESTORE IS LOCKED: every project carries packages.lock.json (RestorePackagesWithLockFile) and the restore runs
 # --locked-mode -- a package (or a package it brings in) that differs from the lock file fails the build.
-FROM mcr.microsoft.com/dotnet/sdk:10.0@sha256:fe0fd4e93bd2fbb47c883b7a6369e5c8d3db8bf01cdc5981f6ee35fbdf3ff4fb AS build
+FROM mcr.microsoft.com/dotnet/sdk:10.0@sha256:bef136a371963aaa46ec97882845ef6f54dec15728bb4b128b1c2a400ffbc9b4 AS build
 WORKDIR /src
 # every shipped config file the projects link (settings catalog, audit actions, guard catalog, ...): the stage holds
 # exactly those, read from the csproj files by Deploy-SIManagement.ps1

@@ -84,12 +84,21 @@ public static class BuiltInAuth
     /// </summary>
     public static string ReferrerPolicy(bool builtIn) => builtIn ? "same-origin" : "no-referrer";
 
-    /// The sign-in this process uses: built-in wins over the sign-in front; neither = the in-app sign-in.
+    /// The sign-in this process uses: built-in, else the in-app sign-in. NEVER the sign-in front: the shared front is retired
+    /// (framework §0 + SECURE-WEB-1, owner 2026-11-19: "we cannot roll out old design"), so SI_Web_SigninFront chooses nothing
+    /// any more -- with built-in on it is ignored (one warning at start), with built-in off the app refuses to start
+    /// (<see cref="RetiredFrontRefusal"/>): never the front, and never built-in without the platform's sign-in in front.
     public static Mode Resolve(IConfiguration configuration) =>
-        IsEnabled(configuration) ? Mode.BuiltIn : SigninFront.IsEnabled(configuration) ? Mode.SigninFront : Mode.InApp;
+        IsEnabled(configuration) ? Mode.BuiltIn : Mode.InApp;
 
-    /// Both switches on (built-in wins): worth one warning at start.
+    /// The retired front's switch is on next to built-in: ignored, worth one warning at start.
     public static bool BothOn(IConfiguration configuration) => IsEnabled(configuration) && SigninFront.IsEnabled(configuration);
+
+    /// The retired front's switch is on WITHOUT built-in: the reason the app refuses to start; null when it may start.
+    public static string? RetiredFrontRefusal(IConfiguration configuration) =>
+        SigninFront.IsEnabled(configuration) && !IsEnabled(configuration)
+            ? $"{SigninFront.Setting} is set, but the shared sign-in front is retired: the web app signs in with Microsoft's built-in sign-in only. Remove {SigninFront.Setting} and turn {Setting} on."
+            : null;
 
     /// A redeemed link browses its own area (/MagicLink/s/, its own cookie) whenever a platform or the front signs people in.
     public static bool LinkAreaOn(IConfiguration configuration) => Resolve(configuration) != Mode.InApp;

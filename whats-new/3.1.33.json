@@ -1,0 +1,17 @@
+{
+  "version": "3.1.33",
+  "date": "2026-11-19",
+  "type": "security",
+  "summary": "Microsoft's newest base images, and the earlier sign-in component removed.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "Security updates for the base images",
+      "text": "The engine, the updater, the web app and the MCP server are rebuilt on Microsoft's newest .NET base images, with Microsoft's latest security fixes."
+    },
+    {
+      "title": "Earlier sign-in component removed",
+      "text": "Every installation signs in with Microsoft's built-in sign-in. The separate sign-in component that came before it is no longer carried, built or offered."
+    }
+  ]
+}

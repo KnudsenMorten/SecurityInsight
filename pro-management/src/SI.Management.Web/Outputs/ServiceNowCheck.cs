@@ -357,36 +357,64 @@ public static class ServiceNowChecklist
 }
 
 /// <summary>
-/// "VERIFY": starts the mail job once with SI_SNOW_VERIFY=&lt;output&gt; (and the outbox-only switch, so nothing else is sent),
+/// "VERIFY": the mail job runs once with SI_SNOW_VERIFY=&lt;output&gt; (and the outbox-only switch, so nothing else is sent),
 /// which runs the ServiceNow checks with the engine identity and records the result -- the web app never reads the key.
-/// The same pattern as the mail restriction's Verify (<see cref="MailVerifier"/>).
+/// #1292 (SECURE-WEB-1): the internet-facing web app holds NO job right, so it never starts the job itself (Azure refused
+/// every Verify with 403 jobs/start/action). It writes ONE start request for the PIPELINE RUNNER (cfg.JobTriggerRequest,
+/// start-env, Outcome 'runner-start'); the runner's next wake-up (every 5 minutes, during a run too) starts the mail job as
+/// its own identity and binds the request to that execution, which takes the values (engine\_shared\SI-JobStartRequest.ps1).
+/// A request still waiting is not asked twice.
 /// </summary>
-public sealed class ServiceNowVerifier(IJobsClient jobs, IOptions<JobsOptions> options, ILogger<ServiceNowVerifier> log)
+public sealed class ServiceNowVerifier(ISqlExecutor sql, IOptions<JobsOptions> options, ILogger<ServiceNowVerifier> log)
 {
     public const string VerifyEnv = "SI_SNOW_VERIFY";
     public const string ByEnv = "SI_SNOW_VERIFY_BY";
     /// Both ServiceNow outputs at once.
     public const string AllOutputs = "all";
+    /// The request the pipeline runner starts (engine: Get-SIJobRunnerStartPendingSql).
+    public const string RunnerStart = "runner-start";
+    /// A request not started within this many minutes is closed by the runner (engine: $script:SIJobRunnerStartMaxAgeMinutes).
+    public const int MaxWaitMinutes = 30;
+
+    /// One request per job while one waits (a second click says so instead of asking again).
+    public const string AskSql = """
+IF EXISTS (SELECT 1 FROM cfg.JobTriggerRequest WHERE JobName = @Job AND Action = N'start-env' AND AppliedUtc IS NULL
+           AND ExecutionName IS NULL AND Outcome IN (N'runner-start', N'runner-starting') AND RequestedUtc >= DATEADD(MINUTE, -30, SYSUTCDATETIME()))
+    SELECT CAST(0 AS bigint) AS RequestId, 1 AS Waiting;
+ELSE
+BEGIN
+    INSERT INTO cfg.JobTriggerRequest (JobName, Action, EnvJson, RequestedBy, Outcome, Detail)
+    VALUES (@Job, N'start-env', @Env, @By, N'runner-start', N'the ServiceNow check -- the pipeline job starts it');
+    SELECT CAST(SCOPE_IDENTITY() AS bigint) AS RequestId, 0 AS Waiting;
+END
+""";
 
     public async Task<(bool Started, string Message)> StartAsync(string output, string by, CancellationToken ct)
     {
-        // #903: "all" = both outputs of the one data-out connector (the mail job's Invoke-SISnowChecks -Only all)
+        // #903: "all" = every output of the one data-out connector (the mail job's Invoke-SISnowChecks -Only all)
         if (output != AllOutputs && ServiceNowOutputs.Of(output) is null) return (false, "Not started: that is not a ServiceNow output.");
         var job = options.Value.CloseLoopMailJob;
-        if (!jobs.IsConfigured || string.IsNullOrWhiteSpace(job))
-            return (false, "The check cannot be started from here on this install -- it runs before the next run of the output and every day.");
+        if (string.IsNullOrWhiteSpace(job))
+            return (false, "The check cannot be asked for from here on this install -- it runs before the next run of the output and every day.");
+        var who = (by ?? "").Length > 200 ? by![..200] : by ?? "";
         try
         {
-            await jobs.StartWithEnvAsync(job, new Dictionary<string, string>
+            var env = StartRequestJobsClient.EnvJson(new Dictionary<string, string>
             {
-                [SI.Management.Web.Exemptions.OutboxExemptionMailer.OnlyEnv] = "1", [VerifyEnv] = output, [ByEnv] = (by ?? "").Length > 200 ? by![..200] : by ?? "",
+                [SI.Management.Web.Exemptions.OutboxExemptionMailer.OnlyEnv] = "1", [VerifyEnv] = output, [ByEnv] = who,
+            });
+            var rows = await sql.QueryAsync(AskSql, new Dictionary<string, object?>
+            {
+                ["Job"] = JobRules.Name(job), ["Env"] = env, ["By"] = who.Length == 0 ? "web app" : who,
             }, ct);
-            return (true, "The check was started: SecurityInsight signs in to ServiceNow with the stored key and reads the table -- reload this page in a few minutes to see the result.");
+            if (rows.Count > 0 && rows[0].Long("Waiting") == 1)
+                return (true, "A check asked for a moment ago is still waiting to start -- it checks the tables as they are when it runs. Reload this page in a few minutes to see the result.");
+            return (true, "The check was asked for: SecurityInsight's pipeline job starts it within 5 minutes and signs in to ServiceNow with the stored key. Each table is measured against all the data that would be sent, so the result can take 15 minutes or more at a large install -- reload this page to see it.");
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            log.LogWarning(ex, "the mail job could not be started for a ServiceNow check");
-            return (false, "The check could not be started: " + ViewerError.Text(ex));
+            log.LogWarning(ex, "the ServiceNow check could not be asked for");
+            return (false, "The check could not be asked for: " + ViewerError.Text(ex));
         }
     }
 }

@@ -237,7 +237,9 @@ function ConvertTo-SIExecutionStoppedAlert {
     param([Parameter(Mandatory)]$Event, [Parameter(Mandatory)]$Context)
     $c = Get-SIExecutionLivenessContract
     if ([string]$Context.Mode -ne 'identified') { return $null }
-    if ($c.Kinds -notcontains [string]$Event.Kind) { return $null }
+    # ROLL-HUNG-1 (Invardia 2026-11-20): the updater's stop of a HUNG step (Kind 'step') is its own alert, si.pipeline.step-hung
+    $isStep = ([string]$Event.Kind -eq 'step')
+    if ($c.Kinds -notcontains [string]$Event.Kind -and -not $isStep) { return $null }
     $r = [ordered]@{ Schema = 2; Kind = 'alert'; Product = 'securityinsight' }
     $ctxv = { param($n) if ($Context.PSObject.Properties[$n] -and $null -ne $Context.$n -and "$($Context.$n)".Trim() -ne '') { $Context.$n } else { $null } }
     if (& $ctxv 'Version') { $r.Version = [string](& $ctxv 'Version') }
@@ -250,8 +252,11 @@ function ConvertTo-SIExecutionStoppedAlert {
     if (& $ctxv 'LicenceId') { $r.LicenceId = [string](& $ctxv 'LicenceId') }
     if (& $ctxv 'EnvironmentName') { $r.EnvironmentName = [string](& $ctxv 'EnvironmentName') }
     $m = [ordered]@{ ageMin = [int]$(if ($null -ne $Event.AgeMin) { $Event.AgeMin } else { 0 }) }
-    if ($Event.LastBeatUtc -and $null -ne $Event.MinutesSinceBeat) { $m.minutesSinceBeat = [int]$Event.MinutesSinceBeat }
-    $m.queuedRunStarted = $(if ($Event.QueuedRunStarted) { 1 } else { 0 })
+    if ($isStep) { $m.usualMin = [int]$(if ($null -ne $Event.UsualMin) { $Event.UsualMin } else { 0 }) }
+    else {
+        if ($Event.LastBeatUtc -and $null -ne $Event.MinutesSinceBeat) { $m.minutesSinceBeat = [int]$Event.MinutesSinceBeat }
+        $m.queuedRunStarted = $(if ($Event.QueuedRunStarted) { 1 } else { 0 })
+    }
     $lockWords = switch ([string]$Event.LockName) {
         'install'      { 'its last beat was on the install lock' }
         'updater'      { 'its last beat was on the update''s own lock' }
@@ -262,15 +267,20 @@ function ConvertTo-SIExecutionStoppedAlert {
     $at = ('SecurityInsight stopped the {0} execution {1}: Azure still showed it running, but {2}{3} -- {4}.' -f [string]$Event.Kind, [string]$Event.Execution, $lockWords,
         $(if ($Event.LastBeatUtc) { (' ({0:yyyy-MM-dd HH:mm}Z)' -f ([datetime]$Event.LastBeatUtc)) } else { '' }),
         $(if ($Event.QueuedRunStarted) { 'the queued work started' } else { 'nothing else was waiting for it' }))
+    if ($isStep) {
+        $at = ('SecurityInsight stopped step {0} (execution {1}) of pipeline run {2}: it ran {3} min, more than 10 times its usual {4} min, and wrote no log line since it started -- the pipeline is stuck; the update is installed when the run has ended.' -f [string]$Event.Step, [string]$Event.Execution, [string]$Event.RunId, [int]$Event.AgeMin, [int]$Event.UsualMin)
+    }
     $at = ($at -replace '[\x00-\x1F\x7F]', ' ')
     if ($at.Length -gt $c.ActionTextMax) { $at = $at.Substring(0, $c.ActionTextMax) }
-    $r.AlertId = $c.AlertId
+    $r.AlertId = if ($isStep) { 'si.pipeline.step-hung' } else { $c.AlertId }
     $r.Severity = 'warning'
     $r.Measured = [pscustomobject]$m
     $r.FirstSeenUtc = ([datetime]$Event.StoppedUtc).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ', [Globalization.CultureInfo]::InvariantCulture)
     $r.Count = 1
     $r.Area = 'execution'
-    $r.Job = [string]$Event.Kind
+    # Invardia catalog (main 46e5cd9a): Job is the EXECUTION KIND, never a step key -- a hung step is part of the flow; its
+    # key is in ActionText
+    $r.Job = if ($isStep) { 'flow' } else { [string]$Event.Kind }
     $r.ActionText = $at
     [pscustomobject]$r
 }

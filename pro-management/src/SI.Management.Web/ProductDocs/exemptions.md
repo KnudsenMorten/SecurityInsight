@@ -65,6 +65,23 @@ Analytics and marks exempted ones. The reports, the mails and the web app leave 
 
 Whether exempted findings count in the management numbers is a setting (*Configuration > Settings > Data & retention*).
 
+## False positive on this server
+
+*SecurityInsight Pro.* Sometimes a software detection is wrong for one server: for example, WordPress files on a
+data share make a file server look like a content management system, and give it a higher privilege tier. An Admin can mark that one
+detection a false positive for that one server. It is not an exemption: no finding is hidden, and nothing else changes.
+
+You find it on **Assets & services > Assets (CIs) > Software detection exceptions**.
+
+- **Suggestions to review** lists detections whose every path is in a user profile or a data folder, or in a copy
+  bundled inside another program. A suggestion is never applied by itself.
+- To mark one, open the server, pick the detection and give a reason. The change goes through *Review & commit*, is
+  written in your name with its reason in the change log, and applies from the next run.
+- The exception covers exactly that detection rule and that software on that server: never another server, never
+  another rule. The server's tier is worked out without that software for that rule; the server shows that the
+  detection is excepted.
+- An Admin can undo an exception the same way. The history is kept.
+
 ## Keep exemptions current
 
 The tiles and filters on the Exemptions page show what needs attention: *Active*, *Expiring within 30 days*, *Expired*

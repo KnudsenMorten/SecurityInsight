@@ -34,7 +34,7 @@ else { <p class="lede">@Model.Lede</p> }
             <select id="pick-c" name="c">
                 @foreach (var c in Model.Collections)
                 {
-                    <option data-utc value="@c.CollectionId" selected="@(c.CollectionId == Model.Current?.CollectionId)">@Fmt.When(c.CollectionTime)@(c.Rows is { } n ? " · " + Fmt.Int(n) + " rows" : "")@(c == Model.Collections[0] ? " · newest" : "")@(marks.TryGetValue(c.CollectionId, out var pm) && pm.ShowsOn(Model.PagePath) ? " · " + pm.Badge : "")</option>
+                    <option data-utc value="@c.CollectionId" selected="@(c.CollectionId == Model.Current?.CollectionId)">@Fmt.When(c.CollectionTime)@(c.Rows is { } n ? " · " + Fmt.Int(n) + " rows" : "")@(c == Model.Collections[0] ? " · newest" : "")@(marks.TryGetValue(c.CollectionId, out var pm) && !pm.PerReport && pm.ShowsOn(Model.PagePath) ? " · " + pm.Badge : "")</option>
                 }
             </select>
         </div>

@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    SecurityInsight Pro -- ONE TIME: let the product updater (caj-si-updater) apply a release's database schema and grants.
+    SecurityInsight Pro -- ONE TIME: let the updater job apply a release's database schema and grants.
 
 .DESCRIPTION
     THE PRODUCT DOES THIS NOW: the install's database setup job (caj-si-dbinit) makes the updater's database user and its rights
@@ -16,7 +16,7 @@
 
     Shows the statements by default; -Apply runs them AS THE CALLER, who must be the SQL server's Entra admin (or a member
     of its admin group) -- the same way Deploy-SIManagement.ps1 -GrantSql creates the web app's users. The identity is found
-    by name (a user-assigned identity, the default uami-si-updater) or given by -ClientId (an SPN); its database user is
+    by name (a user-assigned identity: the updater identity by default) or given by -ClientId (an SPN); its database user is
     found by SID, so an existing user is reused whatever its name. Idempotent.
 
 .EXAMPLE
@@ -32,6 +32,7 @@ param(
     [Parameter(Mandatory)][string]$SqlServer,
     [Parameter(Mandatory)][string]$SqlDatabase,
     [string]$ResourceGroupName,
+    # the updater identity's name; the default fits an install whose identities have not moved to the standard names yet
     [string]$IdentityName = 'uami-si-updater',
     # an SPN instead of a managed identity: its app (client) id; -UserName names a NEW database user (default: the identity name)
     [string]$ClientId,

@@ -298,5 +298,3 @@ day; kept seven days, about 1.2 million import set rows.
 
 Every date and time in every column is UTC, as `yyyy-MM-dd HH:mm:ss`: ServiceNow's own date-time format, so a field map
 needs no date format. The SQL views give `datetime2` values in UTC.
-
-Verified against SecurityInsight 3.0.0.202610261957 on 2026-10-27.

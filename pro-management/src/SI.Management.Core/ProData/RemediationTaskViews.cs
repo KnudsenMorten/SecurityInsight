@@ -56,20 +56,21 @@ SELECT {Hex("f.TaskId")} AS TaskId, f.AssetKey, f.OwnerKey, COALESCE(f.AssetName
        f.Product, f.Version, f.Application, f.ApplicationPaths, f.FirstSeen, f.LastSeen, f.ClosedAt, f.ReopenCount,
        CASE WHEN f.InThisCollection = 1 THEN N'{SeenNow}' ELSE N'{SeenKept}' END AS Seen,
        f.CiOwner, f.CiDepartment, d.Name AS Department, f.SecurityDomain,
-       {TaskGroupOf("f")} AS TaskGroup, {RemediationTaskReports.ChannelOf("f")} AS Channel, f.HighestRiskRating
+       {TaskGroupOf("f")} AS TaskGroup, {RemediationTaskReports.ChannelOf("f")} AS Channel, f.HighestRiskRating,
+       {DetectedPaths("f")} AS DetectedPaths
 FROM sidata.RemediationTask AS f
 LEFT JOIN cfg.Department AS d ON d.DepartmentId = f.DepartmentId
 WHERE f.CollectionId = {MarkedCollection}
 """, new GridColumn[]
     {
-        new("TaskId", "Task id", Filter: GridFilter.Contains, Search: true, Hidden: true),
+        new("TaskId", "Task id", Filter: GridFilter.Contains, Search: true),
         // #1283 the same task on every asset (a report row opens its tasks by it)
-        new("TaskGroup", "Task across assets", Filter: GridFilter.Values, Hidden: true),
+        new("TaskGroup", "Task across assets", Filter: GridFilter.Values),
         new("AssetName", "Asset (CI)", Filter: GridFilter.Contains, Search: true),
         // the asset's key and the CI id a task belongs to match EXACTLY (one asset's or one CI's own tasks: a key is never
         // matched as part of another, "srv1" in "srv10")
-        new("AssetKey", "Asset (CI) key", Filter: GridFilter.Values, Search: true, Hidden: true),
-        new("OwnerKey", "CI id", Filter: GridFilter.Values, Hidden: true),
+        new("AssetKey", "Asset (CI) key", Filter: GridFilter.Values, Search: true),
+        new("OwnerKey", "CI id", Filter: GridFilter.Values),
         new("TaskName", "Task", Filter: GridFilter.Contains, Search: true),
         new("Kind", "Kind", Filter: GridFilter.Values),
         new("Channel", "Tool", Filter: GridFilter.Values),
@@ -85,6 +86,8 @@ WHERE f.CollectionId = {MarkedCollection}
         new("Product", "Product", Filter: GridFilter.Contains, Search: true),
         new("Version", "Version", Filter: GridFilter.Contains, Search: true),
         new("Application", "Application (bundles it)", Filter: GridFilter.Contains, Search: true),
+        // owner 2026-11-19: where the product was detected on the asset, shown by default ("so we know where it needs fixing")
+        new("DetectedPaths", "Detected paths", Filter: GridFilter.Contains),
         new("ApplicationPaths", "Paths", Filter: GridFilter.Contains, Search: true),
         new("ClosedWhy", "Closed because", Filter: GridFilter.Values),
         new("ClosedAt", "Closed", GridType.Date, GridFilter.Dates),
@@ -93,28 +96,40 @@ WHERE f.CollectionId = {MarkedCollection}
         new("ReopenCount", "Reopened", GridType.Number, GridFilter.Range),
         new("Seen", "Worked out from", Filter: GridFilter.Values),
         new("CiOwner", "Owner", Filter: GridFilter.Contains, Search: true),
-        new("CiDepartment", "Department (the asset's, when the task was worked out)", Filter: GridFilter.Contains, Hidden: true),
+        new("CiDepartment", "Department (the asset's, when the task was worked out)", Filter: GridFilter.Contains),
         new("Department", "Department", Filter: GridFilter.Values),
     }, "MaxRiskScore", true, "TaskId", ["CollectionId"], Immutable: false));   // reads the department name (cfg): not cached long
+
+    /// owner 2026-11-19: the disk paths where Defender found the task's product on the task's CI (sidata.SoftwareEvidence of
+    /// its READ Defender devices, the newest run), at most 10, one per line -- "so we know where it needs fixing". Empty for a
+    /// task without a product or a CI without Defender evidence.
+    public static string DetectedPaths(string t) => $"""
+(SELECT STRING_AGG(CAST(p.FullPath AS nvarchar(max)), NCHAR(10))
+ FROM (SELECT DISTINCT TOP (10) e.FullPath
+       FROM sidata.CiLink AS dpl
+       JOIN sidata.SoftwareEvidence AS e ON e.DeviceId = LOWER(dpl.NativeId)
+       WHERE dpl.CiId = {t}.OwnerKey AND dpl.Provider = N'mde' AND e.Product = {t}.Product AND e.PathType = N'disk') AS p)
+""";
 
     // ---- Remediations > Task findings: the findings each task resolves (and, bundled, the paths of the copy) ---------------
 
     public static readonly GridSpec TaskFindings = GridSql.Check(new GridSpec("remediationtaskfindings", "", $"""
 SELECT {Hex("l.TaskId")} + N'|' + l.FindingKey AS LinkKey, {Hex("l.TaskId")} AS TaskId, f.TaskName, f.Kind, f.State AS TaskState,
        COALESCE(f.AssetName, f.AssetKey, f.OwnerKey) AS AssetName, f.AssetKey, l.FindingKey, l.Cve AS CveId, l.Title, l.Severity, l.RiskScore,
-       l.Version, f.Application, f.ApplicationPaths, CASE WHEN l.InThisCollection = 1 THEN N'{SeenNow}' ELSE N'{SeenKept}' END AS Seen
+       l.Version, f.Application, f.ApplicationPaths, CASE WHEN l.InThisCollection = 1 THEN N'{SeenNow}' ELSE N'{SeenKept}' END AS Seen,
+       {DetectedPaths("f")} AS DetectedPaths
 FROM sidata.RemediationTaskFinding AS l
 JOIN sidata.RemediationTask AS f ON f.CollectionId = l.CollectionId AND f.TaskId = l.TaskId
 WHERE f.CollectionId = {MarkedCollection}
 """, new GridColumn[]
     {
         new("LinkKey", "Link", Hidden: true),
-        new("TaskId", "Task id", Filter: GridFilter.Contains, Search: true, Hidden: true),
+        new("TaskId", "Task id", Filter: GridFilter.Contains, Search: true),
         new("TaskName", "Task", Filter: GridFilter.Contains, Search: true),
         new("Kind", "Kind", Filter: GridFilter.Values),
         new("TaskState", "Task state", Filter: GridFilter.Values),
         new("AssetName", "Asset (CI)", Filter: GridFilter.Contains, Search: true),
-        new("AssetKey", "Asset (CI) key", Filter: GridFilter.Contains, Search: true, Hidden: true),
+        new("AssetKey", "Asset (CI) key", Filter: GridFilter.Contains, Search: true),
         new("FindingKey", "Finding", Filter: GridFilter.Contains, Search: true),
         new("CveId", "CVE", Filter: GridFilter.Contains, Search: true),
         new("Title", "Title", Filter: GridFilter.Contains, Search: true),
@@ -122,6 +137,8 @@ WHERE f.CollectionId = {MarkedCollection}
         new("RiskScore", "Risk score", GridType.Number, GridFilter.Range),
         new("Version", "Version", Filter: GridFilter.Contains, Search: true),
         new("Application", "Application (bundles it)", Filter: GridFilter.Contains, Search: true),
+        // owner 2026-11-19: where the product was detected on the asset, shown by default
+        new("DetectedPaths", "Detected paths", Filter: GridFilter.Contains),
         new("ApplicationPaths", "Paths of the copy", Filter: GridFilter.Contains, Search: true),
         new("Seen", "Seen in", Filter: GridFilter.Values),
     }, "RiskScore", true, "LinkKey", ["CollectionId"], Immutable: false));
@@ -163,7 +180,8 @@ SELECT {Hex("t.TaskId")} AS TaskId, t.AssetKey, t.OwnerKey, COALESCE(t.AssetName
        t.Product, t.Version, t.Application, t.ApplicationPaths, t.FirstSeen, t.LastSeen, t.ClosedAt, t.ReopenCount,
        CASE WHEN t.InThisCollection = 1 THEN N'{SeenNow}' ELSE N'{SeenKept}' END AS Seen,
        t.CiOwner, t.CiDepartment, d.Name AS Department, CASE WHEN s.Doms = 1 THEN s.Dom END AS SecurityDomain,
-       {TaskGroupOf("t")} AS TaskGroup, {RemediationTaskReports.ChannelOf("t")} AS Channel, {RemediationTaskReports.RatingText("s.RatingRank")} AS HighestRiskRating
+       {TaskGroupOf("t")} AS TaskGroup, {RemediationTaskReports.ChannelOf("t")} AS Channel, {RemediationTaskReports.RatingText("s.RatingRank")} AS HighestRiskRating,
+       {DetectedPaths("t")} AS DetectedPaths
 FROM sidata.RemediationTask AS t
 CROSS APPLY (
     SELECT COUNT(*) AS Findings, COUNT(DISTINCT l.Cve) AS Cves, MAX({SevRankOfLink}) AS SevRank, MAX(l.RiskScore) AS MaxRiskScore,
@@ -188,7 +206,8 @@ WHERE t.CollectionId = {MarkedCollection} AND s.Findings > 0
         Source = $"""
 SELECT {Hex("l.TaskId")} + N'|' + l.FindingKey AS LinkKey, {Hex("l.TaskId")} AS TaskId, t.TaskName, t.Kind, t.State AS TaskState,
        COALESCE(t.AssetName, t.AssetKey, t.OwnerKey) AS AssetName, t.AssetKey, l.FindingKey, l.Cve AS CveId, l.Title, l.Severity, l.RiskScore,
-       l.Version, t.Application, t.ApplicationPaths, CASE WHEN l.InThisCollection = 1 THEN N'{SeenNow}' ELSE N'{SeenKept}' END AS Seen
+       l.Version, t.Application, t.ApplicationPaths, CASE WHEN l.InThisCollection = 1 THEN N'{SeenNow}' ELSE N'{SeenKept}' END AS Seen,
+       {DetectedPaths("t")} AS DetectedPaths
 FROM {VisibleLinks}
 JOIN sidata.RemediationTask AS t ON t.CollectionId = l.CollectionId AND t.TaskId = l.TaskId
 WHERE l.CollectionId = {MarkedCollection} AND l.InThisCollection = 1 AND l.FindingId IS NOT NULL AND ({Visible(v)})

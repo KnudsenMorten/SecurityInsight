@@ -73,6 +73,11 @@ $global:Location               = 'westeurope'
 # not a coordination mechanism. KEDA replicas don't share state through it.
 $global:SI_FingerprintCache_Enabled = $false
 
+# Hard daily limit on the Azure OpenAI tokens all engines of this install may use per UTC day (OPENAI-CAP, owner
+# 2026-11-21). The engines also fall back to this value themselves when the setting is missing, 0 or invalid -- it is
+# never unlimited (engine\_shared\SI-AiBudget.ps1).
+$global:SI_AI_DailyTokenBudget = 200000
+
 # --- Mail ---
 # Your own SMTP relay kept by choice: the Pro web app then stops suggesting the move to an Office 365 shared mailbox.
 # Mail is sent the same way either way.

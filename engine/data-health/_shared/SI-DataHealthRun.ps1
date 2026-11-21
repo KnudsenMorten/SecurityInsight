@@ -107,7 +107,11 @@ function Invoke-SIDataHealthCycle {
                     if ($null -eq $def) { $def = @{} }
                     # the stored collection's time (#747): a CVE Defender published after it is drift, not a miss
                     $collAt = $null; foreach ($p0 in $pop) { $collAt = Get-SIDataHealthItem $p0 'CollectionTime'; if ($null -ne $collAt) { break } }
-                    $vc = Compare-SIDataHealthVulnerabilities -Assets $sample -Defender $def -Stored @($sr.Rows) -InScope $InScope -CollectionTime $collAt
+                    # 2026-11-20: a missing CVE a NEWER complete collection already holds for the device is drift, and that
+                    # collection's first sighting (SourceFirstDetected) tells when Defender first saw it there -- read AFTER the
+                    # Defender reads (minutes), so a collection that completed meanwhile counts (best effort; never fails the check)
+                    $nw = Read-SIDataHealthNewerFindings -Invoke $Invoke -MdeIds $ids -CollectionId $collId -Log $Log
+                    $vc = Compare-SIDataHealthVulnerabilities -Assets $sample -Defender $def -Stored @($sr.Rows) -InScope $InScope -CollectionTime $collAt -Newer @($nw.Rows)
                 }
                 if (-not $sr.Complete) {
                     & $addResult 'source' 'vulnerabilities' $vLabel 0 0 0 0 $vm 'not-checked' ('the check could not read all stored findings -- not a data anomaly ({0}; read {1} time(s))' -f $sr.Why, $sr.Attempts)

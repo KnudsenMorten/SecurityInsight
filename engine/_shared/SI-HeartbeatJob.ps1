@@ -81,6 +81,8 @@ $script:SIHeartbeatJob = @{
     # them since 2026-11-01 and its support-SQL check expects no standing admin where readOnly is true);
     # SI_Uplink_SendSupportSqlAccessJit 'off' still turns them off.
     SupportSqlAccessJitConfirmedRings = @(0, 1, 2, 3)
+    # OPEN-04: SignedRequests -- the SHARED any-product field PIM sends ({ mode, checked, wouldRefuse, refused, sinceUtc }) plus SI's soft adoptedUtc / waitingSince; live at Invardia 1.0.1165 (2026-11-20): on for every ring, SI_Uplink_SendSignedRequests 'off' still turns it off
+    SignedRequestsConfirmedRings = @(0, 1, 2, 3)
     # a run record whose runner has not beaten for this long is not "running" -- its runner stopped (the next wake-up resumes it)
     StaleRunMinutes = 30
     ClaimRow       = 'HeartbeatJob'
@@ -134,6 +136,13 @@ function Resolve-SIUplinkSupportSqlAccessJitSwitch {
     Resolve-SIUplinkFieldSwitch -Name 'SI_Uplink_SendSupportSqlAccessJit' -Value $Value -EnvValue $EnvValue -Ring $Ring -ConfirmedRings $ConfirmedRings
 }
 
+function Resolve-SIUplinkSignedRequestsSwitch {
+    <# OPEN-04: does the heartbeat carry the shared SignedRequests { mode; checked; wouldRefuse; refused; sinceUtc; adoptedUtc; waitingSince }? SI_Uplink_SendSignedRequests /
+       SI_UPLINK_SENDSIGNEDREQUESTS; 'auto' = the confirmed rings (every ring: Invardia 1.0.1165 takes it). #>
+    param([AllowNull()]$Value = $global:SI_Uplink_SendSignedRequests, [AllowNull()][AllowEmptyString()][string]$EnvValue = $env:SI_UPLINK_SENDSIGNEDREQUESTS, [AllowNull()]$Ring,
+          [int[]]$ConfirmedRings = @($script:SIHeartbeatJob.SignedRequestsConfirmedRings))
+    Resolve-SIUplinkFieldSwitch -Name 'SI_Uplink_SendSignedRequests' -Value $Value -EnvValue $EnvValue -Ring $Ring -ConfirmedRings $ConfirmedRings
+}
 function Resolve-SIUplinkRunProgressSwitch {
     param([AllowNull()]$Value = $global:SI_Uplink_SendRunProgress, [AllowNull()][AllowEmptyString()][string]$EnvValue = $env:SI_UPLINK_SENDRUNPROGRESS, [AllowNull()]$Ring,
           [int[]]$ConfirmedRings = @($script:SIHeartbeatJob.RunProgressConfirmedRings))
@@ -680,6 +689,12 @@ function Send-SIHeartbeatTick {
           READ ONLY; default: the job's own databases, Graph and ARM -- New-SISupportSqlAccessSeams; never in a test session)
           -SupportGrantStatus { param([datetime]$NowUtc) } -> Get-SISupportGrantStatus's answer @{ Wire; Text } (#1021, READ ONLY;
           default: the job's own databases; never in a test session); -SupportSqlAccessJit forces its switch (tests)
+          The same read gives the STATE field SupportAccess (Invardia 2026-11-20, OPEN-01): { level, adminUntil, readUser,
+          checkedUtc } on EVERY heartbeat (ConvertTo-SISupportAccessState); a state that could not be read is LEFT OUT and
+          the tick's line says why -- never 'none'.
+          -Extra           ONE extra heartbeat right after a support grant opened, closed or expired (SI_HEARTBEAT_EXTRA =
+                           support-access): sent at once, OUTSIDE the half hour's claim -- the half hour's own heartbeat and
+                           its delivery record are not touched.
     #>
     [CmdletBinding()]
     param($Context, [scriptblock]$Transport, $Now, [scriptblock]$HeartbeatCounts, $RunState, $RunStore, [object[]]$CollectionRows, [scriptblock]$DataInvoke,
@@ -692,7 +707,11 @@ function Send-SIHeartbeatTick {
           # #1065 (3.0.30): the cfg.InstallState rows the setup steps are read from (tests; default: one read through -ClaimInvoke)
           [AllowNull()][object[]]$SetupStepRows,
           # #1264 (framework DOCS-FRESH): the docs' live version (tests; default Get-SITelemetryDocsVersion -- BUILD.json only)
-          [AllowNull()][AllowEmptyString()][string]$DocsVersion)
+          [AllowNull()][AllowEmptyString()][string]$DocsVersion,
+          # Invardia 2026-11-20: the extra heartbeat after a support grant changed -- no half-hour claim (see above)
+          [switch]$Extra,
+          # OPEN-04: forces the signedRequests field's switch (tests)
+          [AllowNull()]$SignedRequestsField)
     $out = { param($s, $why, $rec, $sent) [pscustomobject]@{ Status = $s; Reason = $why; Record = $rec; Sent = [bool]$sent } }
     # LIVE 2026-10-16 (#718): the hour is recorded SENT only after Invardia answered 2xx; every other end of a claimed tick
     # records it FAILED (with why), so the next execution takes the hour again -- never a claimed hour that sent nothing
@@ -709,10 +728,12 @@ function Send-SIHeartbeatTick {
         if ($Context.Mode -eq 'anonymous') {
             return (& $out 'skipped' (Get-SIHeartbeatTickLine -Status 'skipped' -Context $Context -Note 'an anonymous install sends its one heartbeat a day with its engine runs -- nothing is sent from here') $null $false)
         }
-        if (-not (Invoke-SIHeartbeatClaim -Invoke $ClaimInvoke -NowUtc $nowUtc)) {
-            return (& $out 'not-due' (Get-SIHeartbeatTickLine -Status 'not-due' -Context $Context -Note 'the heartbeat of this half hour was sent already (or another execution is sending it)') $null $false)
+        if (-not $Extra) {
+            if (-not (Invoke-SIHeartbeatClaim -Invoke $ClaimInvoke -NowUtc $nowUtc)) {
+                return (& $out 'not-due' (Get-SIHeartbeatTickLine -Status 'not-due' -Context $Context -Note 'the heartbeat of this half hour was sent already (or another execution is sending it)') $null $false)
+            }
+            $claimed = $true
         }
-        $claimed = $true
         # Invardia S16: the uplink job makes the install's lasting id ONCE when it is missing (the knock's code; never rewritten;
         # a vault it cannot write = no id this tick, never a failure) -- the heartbeat then carries it as InstallId
         if (Get-Command -Name Initialize-SITelemetryLastingInstallId -ErrorAction SilentlyContinue) {
@@ -762,6 +783,19 @@ function Send-SIHeartbeatTick {
                 -Components $(if ($relF) { $relF.Components } else { $null }) -Evidence $(if ($relF) { $relF.Evidence } else { $null }) -SupportSqlAccess $(if ($ssa) { $ssa.Wire } else { $null }) -Build $(if ($Context.PSObject.Properties['Build']) { [string]$Context.Build } else { '' })
         if ($null -eq $w) { $failWhy = 'the heartbeat could not be built'; return (& $out 'error' (Get-SIHeartbeatTickLine -Status 'error' -Context $Context -Note $failWhy) $null $false) }
 
+        # Invardia 2026-11-20 (OPEN-01): SupportAccess -- what the Support app holds NOW, read from the install (the same read
+        # as above). On every heartbeat, every ring, no switch; left out (and said) when it could not be read. Invardia takes
+        # it as a SOFT any-product state field (a bad shape drops this field alone, never the heartbeat), so it is not on the
+        # resend-without list (Get-SITelemetryOptionalFields).
+        $saLine = ''
+        try {
+            if (Get-Command -Name ConvertTo-SISupportAccessState -ErrorAction SilentlyContinue) {
+                $sa = ConvertTo-SISupportAccessState -Status $sgs
+                if ($sa.Wire) { $w | Add-Member -NotePropertyName 'SupportAccess' -NotePropertyValue ([pscustomobject]$sa.Wire) -Force }
+                $saLine = Get-SISupportAccessLine -State $sa
+            }
+        } catch { if ($w.PSObject.Properties['SupportAccess']) { $w.PSObject.Properties.Remove('SupportAccess') }; $saLine = 'support access: not sent this time -- ' + $_.Exception.Message }
+
         # #1065 (3.0.30, Invardia's alignment gap no-setup-steps): every one-time step this install can check, with its state
         # -- the updater's record of its last run (cfg.InstallState) and this tick's support grant read. Identified only (this
         # job sends nothing else); no step checked = no field. Never costs the tick.
@@ -779,6 +813,16 @@ function Send-SIHeartbeatTick {
             if ("$dv" -match '^\d{1,6}(\.\d{1,12}){2,3}$') { $w | Add-Member -NotePropertyName 'docsVersion' -NotePropertyValue ([string]$dv) -Force }
         } catch { if ($w.PSObject.Properties['docsVersion']) { $w.PSObject.Properties.Remove('docsVersion') } }
 
+        # OPEN-04: the install's signed-request state -- "waiting for adoption by a SuperAdmin" (observe) or enforced; only where
+        # its switch says so (off until Invardia confirms the shape). Never costs the tick.
+        try {
+            $sendSr = if ($PSBoundParameters.ContainsKey('SignedRequestsField')) { [bool]$SignedRequestsField } else { (Resolve-SIUplinkSignedRequestsSwitch -Ring $ring).On }
+            if ($sendSr -and $ClaimInvoke) {
+                if (-not (Get-Command -Name Get-SISignedRequestState -ErrorAction SilentlyContinue)) { . ([System.IO.Path]::Combine($PSScriptRoot, 'SI-SignedRequests.ps1')) }
+                $srs = Get-SISignedRequestState -Invoke $ClaimInvoke
+                if ($srs) { $w | Add-Member -NotePropertyName 'SignedRequests' -NotePropertyValue ([pscustomobject]$srs.Wire) -Force }
+            }
+        } catch { if ($w.PSObject.Properties['SignedRequests']) { $w.PSObject.Properties.Remove('SignedRequests') } }
         # the two new optional fields -- each only where its switch says so (default: off until Invardia confirms them)
         $sendProgress = if ($null -ne $RunProgress) { [bool]$RunProgress } else { (Resolve-SIUplinkRunProgressSwitch -Ring $ring).On }
         $sendCollections = if ($null -ne $Collections) { [bool]$Collections } else { (Resolve-SIUplinkCollectionsSwitch -Ring $ring).On }
@@ -818,7 +862,7 @@ function Send-SIHeartbeatTick {
             $lim = Limit-SIHeartbeatRecordSize -Record $w
             if (@($lim.Dropped).Count) { $sizeNote = ('over 48 KB: sent without {0}' -f (@($lim.Dropped) -join ', ')) }
         } catch { foreach ($k in (Get-SIHeartbeatFieldsContract).Names) { if ($w.PSObject.Properties[$k]) { $w.PSObject.Properties.Remove($k) } } }
-        $had = @(@('guardMode', 'wave', 'releaseMode', 'components', 'evidence', 'Collections', 'runProgress', 'supportSqlAccess') + @((Get-SIHeartbeatFieldsContract).Names) + @('setupSteps', 'docsVersion') | Where-Object { $w.PSObject.Properties[$_] })
+        $had = @(@('guardMode', 'wave', 'releaseMode', 'components', 'evidence', 'Collections', 'runProgress', 'supportSqlAccess', 'SupportAccess') + @((Get-SIHeartbeatFieldsContract).Names) + @('setupSteps', 'docsVersion', 'SignedRequests') | Where-Object { $w.PSObject.Properties[$_] })
 
         # the pipeline's progress and estimated end are newer than the rest of Pipeline: a heartbeat Invardia refuses (4xx)
         # WITH them is sent again with Pipeline WITHOUT them first -- never the rest of the record lost to them (the same for
@@ -846,12 +890,12 @@ function Send-SIHeartbeatTick {
             if (-not $global:SI_HeartbeatJobWarned) { $global:SI_HeartbeatJobWarned = $true; try { Write-Warning ("The Invardia support link could not deliver this report ({0}). Nothing else is affected; it is retried next cycle." -f $failWhy) } catch { } }
             return (& $out 'failed' (Get-SIHeartbeatTickLine -Status 'failed' -Context $Context -Answer $failWhy -Fields $had -Note $sizeNote) $(if ($s) { $s.Record } else { $w }) $false)
         }
-        $null = Complete-SIHeartbeatClaim -Invoke $ClaimInvoke -NowUtc $nowUtc -Status 'sent' -Reason $answer
+        if ($claimed) { $null = Complete-SIHeartbeatClaim -Invoke $ClaimInvoke -NowUtc $nowUtc -Status 'sent' -Reason $answer }
         $completed = $true
         $sentFields = @($had | Where-Object { $s.Record.PSObject.Properties[$_] })
         $dropped = @($had | Where-Object { -not $s.Record.PSObject.Properties[$_] })
         $etaNote = if ($etaState.Dropped -and $s.Record.PSObject.Properties['Pipeline']) { 'Invardia did not take the pipeline estimate -- sent again without it' } else { '' }
-        $note = @($sizeNote, $etaNote, $(if ($dropped.Count) { 'Invardia did not take ' + ($dropped -join ', ') + ' -- sent again without them' } else { '' }), $(if ($progress -and $s.Record.PSObject.Properties['runProgress']) { 'pipeline ' + $progress.state } else { '' }), $(if ($ssa) { [string]$ssa.Text } else { '' }), $(if ($sgs) { [string]$sgs.Text } else { '' })) | Where-Object { $_ }
+        $note = @($sizeNote, $etaNote, $(if ($dropped.Count) { 'Invardia did not take ' + ($dropped -join ', ') + ' -- sent again without them' } else { '' }), $(if ($progress -and $s.Record.PSObject.Properties['runProgress']) { 'pipeline ' + $progress.state } else { '' }), $(if ($ssa) { [string]$ssa.Text } else { '' }), $(if ($sgs) { [string]$sgs.Text } else { '' }), $saLine, $(if ($Extra) { 'the extra heartbeat after a support access change' } else { '' })) | Where-Object { $_ }
         & $out 'sent' (Get-SIHeartbeatTickLine -Status 'sent' -Context $Context -Answer $answer -Fields $sentFields -Note ($note -join '; ')) $s.Record $true
     } catch {
         $failWhy = ConvertTo-AitUplinkRedacted -Text $_.Exception.Message

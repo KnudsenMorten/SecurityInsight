@@ -1,6 +1,6 @@
 #Requires -Version 5.1
 <#
-    SecurityInsight -- sign in on an INTERNAL (AutomateIT platform) install with no PowerShell module.
+    SecurityInsight -- sign in on an INTERNAL (platform-hosted) install with no PowerShell module.
 
     The platform framework's own sign-in lives in a PowerShell module that uses the Az / Microsoft Graph modules.
     SecurityInsight runs with no modules, so it signs in to the platform itself, over plain REST, reading exactly what
@@ -34,7 +34,7 @@ $__siCertFile = Join-Path $PSScriptRoot 'Find-SICertificate.ps1'
 if ((Test-Path -LiteralPath $__siCertFile) -and -not (Get-Command -Name Get-SICertificateFromStore -ErrorAction SilentlyContinue)) { . $__siCertFile }
 
 function Test-SIPlatformConfigDisabled {
-    <# True when this process must not use the machine's AutomateIT platform configuration: SI_PLATFORM_CONFIG = off
+    <# True when this process must not use the machine's internal platform configuration: SI_PLATFORM_CONFIG = off
        (the guided install sets it for its run -- live 2026-10-06 on the development machine the platform's subscription was used). #>
     [string]([Environment]::GetEnvironmentVariable('SI_PLATFORM_CONFIG')) -match '^(?i)(off|0|false|no|disabled)$'
 }

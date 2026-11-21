@@ -45,6 +45,6 @@ $sql = {
 # Every line straight to the container's STANDARD OUTPUT, flushed at once: that stream is what Container Apps hands to the
 # environment's console logs (ContainerAppConsoleLogs in the install's workspace) -- not the host's information stream, and
 # nothing left in a buffer when the process exits (2026-11-05: a run's lines never reached the workspace).
-$r = Invoke-SIDbInit -DbInput $dbInput -Sql $sql -Version $version -Log { param($m) [Console]::Out.WriteLine('[dbinit] ' + $m); [Console]::Out.Flush() }
+$r = Invoke-SIDbInit -DbInput $dbInput -Sql $sql -Version $version -SIRoot $siRoot -Log { param($m) [Console]::Out.WriteLine('[dbinit] ' + $m); [Console]::Out.Flush() }
 [Console]::Out.Flush()
 exit $r.ExitCode

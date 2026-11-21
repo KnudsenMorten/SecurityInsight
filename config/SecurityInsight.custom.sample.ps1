@@ -135,7 +135,7 @@ $global:OpenAI_endpoint            = 'https://<aoai-account>.openai.azure.com'
 $global:OpenAI_deployment          = '<deployment-name>'
 $global:OpenAI_apiVersion          = '2025-01-01-preview'
 $global:OpenAI_MaxTokensPerRequest = 16384
-$global:BuildSummaryByAI           = $true
+$global:BuildSummaryByAI           = $false   # AI is off by default: a person switches it on in the Settings
 
 # ============================================================================
 # 8. CMDB + ACTIVITY FRESHNESS

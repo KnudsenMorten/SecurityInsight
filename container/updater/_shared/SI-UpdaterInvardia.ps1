@@ -357,6 +357,18 @@ function Invoke-SIUpdaterFromInvardia {
         if ($gate.Result) { return $gate.Result }
         $r = & $askGate
         Write-UpdLog ("run gate: {0}" -f $r.Reason)
+        # ROLL-HUNG-1 (framework 2026-11-20): a WAIT for a run whose step is HUNG (10x its usual length, at least 120 min, no
+        # log line since its start) stops that one execution, reports the pipeline as stuck and asks the gate again. A run
+        # that writes log lines is never stopped. Seam (tests): HungCheck { param($RunId) } -> @{ Stopped = @() }.
+        if (-not $r.Go -and [string]$r.Verdict -eq 'Wait' -and "$($r.RunId)".Trim()) {
+            $hung = $null
+            if ($s['HungCheck']) { $hung = & $s.HungCheck ([string]$r.RunId) }
+            elseif ($real -and (Get-Command -Name Invoke-SIUpdaterHungStepGate -ErrorAction SilentlyContinue)) { $hung = Invoke-SIUpdaterHungStepGate -Store $Store -RunId ([string]$r.RunId) -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId }
+            if ($hung -and @($hung.Stopped).Count) {
+                $r = & $askGate
+                Write-UpdLog ("run gate (after the hung step was stopped): {0}" -f $r.Reason)
+            }
+        }
         # AN UPDATE NEVER CANCELS A RUNNING PIPELINE (owner 2026-11-05: "it must not auto cancel a running job due to missing
         # upd"; it replaces the 6-hour bound of 2026-10-29, which cut a run after its Risk Analysis had finished). The update
         # waits for the run to end and is installed between two runs (the wait mark: a run that ends starts no new one first).

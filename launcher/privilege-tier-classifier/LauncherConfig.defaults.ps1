@@ -28,10 +28,9 @@
 # Authentication mode is resolved by the launcher (community) or by
 # the native platform sign-in (internal-vm). No defaults here.
 
-# AI behaviour: when $true, engine runs all 4 AI categories. Set to $false in
-# config\SecurityInsight.custom.ps1 if you want to short-circuit the AI
-# call (engine will fall back to a static built-in tier map).
-if ($null -eq $global:SI_PrivilegeTierClassifier_RunAI) { $global:SI_PrivilegeTierClassifier_RunAI = $true }
+# AI behaviour: OFF by default (OPENAI-CAP, owner 2026-11-21: AI runs only when a person switches it on). $true runs
+# all 4 AI categories; off, the engine uses the catalog (downloaded or the static built-in tier map).
+if ($null -eq $global:SI_PrivilegeTierClassifier_RunAI) { $global:SI_PrivilegeTierClassifier_RunAI = $false }
 
 # Days the catalog is kept while its inputs (role definitions, permission catalogs, the engine, the AI settings) are
 # unchanged: the AI pass is skipped and the catalog kept. 0 = rebuild on every run. Rebuilt at least this often.

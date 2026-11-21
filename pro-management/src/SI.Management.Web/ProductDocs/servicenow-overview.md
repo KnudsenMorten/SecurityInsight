@@ -19,11 +19,12 @@ gets there, which part of it you receive, and where the other ServiceNow pages f
 |---|---|---|
 | **Configuration items (CIs)** | CI | Devices, Azure resources and Entra identities: the identifiers your identification rules match on (name, FQDN, serial number, MAC address, Azure ids, Entra ids), SecurityInsight's security attributes (tier, tier reason, internet exposure, last seen) and the CI's state in SecurityInsight |
 | **Vulnerable items** | CI and finding | Every security finding on a CI: CVEs, Defender for Cloud recommendations, Defender security configurations, identity findings, attack paths and exposures; open, or closed with the reason |
+| **Remediation tasks** | CI and task | One thing to do on one CI (an update, an upgrade, a setting), with the findings it resolves as links, open or closed with the reason. See [Remediation tasks](remediation-tasks) |
 | **Tags** | CI, source and key | Azure tags and Defender machine tags, present or removed |
 | **Relations** | parent, child and type | A VM's disks, network interfaces and user-assigned identities, present or removed |
 | **Proposed CIs** | CI | Assets no CMDB CI is known to match, with the evidence. A report for your CMDB team |
 
-CIs and vulnerable items travel through both routes. Tags, relations and proposed CIs travel through the hand-off
+CIs, vulnerable items and remediation tasks travel through both routes. Tags, relations and proposed CIs travel through the hand-off
 database only.
 
 ## What SecurityInsight never does
@@ -45,7 +46,7 @@ rules and Vulnerability Response transform own every record and make every chang
 |---|---|---|
 | **How the data moves** | The ServiceNow data-out connector posts rows to your Import Set staging tables through the Import Set API | Your MID Server reads SQL views through a JDBC data source into an import set |
 | **ServiceNow credential in SecurityInsight** | An API key, or a user and a password, in your Key Vault | None |
-| **Objects** | CIs (output *ServiceNow CI hand-off*), vulnerable items (output *ServiceNow vulnerable items*) | CIs, tags, relations, proposed CIs, vulnerable items, batches |
+| **Objects** | CIs (output *ServiceNow CI hand-off*), vulnerable items (output *ServiceNow vulnerable items*), remediation tasks and their links (outputs *ServiceNow remediation tasks* and *ServiceNow remediation task links*) | CIs, tags, relations, proposed CIs, vulnerable items, remediation tasks and their links, batches |
 | **Which rows** | The full current scoped state, every sync, each row with `u_action` | Every row, every time; you filter on `u_changed_at` |
 | **When to import** | When the batch's `complete` row is in the staging status table | When the batch is complete in `snowstage.vImportBatch` |
 
@@ -130,5 +131,3 @@ when a record leaves the scope:
 key. A vulnerable item's key is `u_si_correlation_id` + `u_vulnerability`. In IRE, keep your own identification rules
 first, and use `u_si_correlation_id` at most as the last identifier entry. See
 [ServiceNow staging tables and columns](servicenow-columns#keys).
-
-Verified against SecurityInsight 3.0.0.202610261957 on 2026-10-27.

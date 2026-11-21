@@ -106,5 +106,3 @@ is active again. SecurityInsight hands the state to ServiceNow and never retires
 Credentials are never stored in a file or on a web page. They live in the install's Key Vault, and connectors refer to
 them by secret **name**. The database route needs no ServiceNow credential at all.
 
-Verified against SecurityInsight 3.0.0.202610261957 on 2026-10-27.
-

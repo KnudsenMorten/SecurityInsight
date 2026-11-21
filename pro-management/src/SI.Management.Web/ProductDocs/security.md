@@ -37,10 +37,46 @@ review pack for your CISO is published at https://invardia.com/products/security
 
 ## Signed requests
 
-A decision that leads to a change outside SecurityInsight (connector settings, exemptions, asset tagging, data-out
-decisions) carries the signed Entra token of the person who made it, stored with the time it was verified. Before it
-acts, the engine checks the token's signature, issuer, audience, lifetime, the user and the role, for the requester and
-for the approver. A request that cannot be verified is refused. Safety checks, approvals and limits stay on top.
+Every change a person makes in the web app carries the signed Entra token of that person, stored with the time it was
+captured. Before it acts, the engine checks the token's signature against Entra's published keys, the issuer (your
+tenant), the audience (the web app), that it was valid when the change was made, and that it is the person who made the
+change. Who wrote a change is decided by the database, not by the web app.
+
+- **Observe first.** After the update, SecurityInsight records the configuration that exists (per kind: the number of rows
+  and a SHA-256 over them) and only reports what it would refuse, on the audit trail. *Configuration > Signed requests*
+  shows "Waiting for adoption by a SuperAdmin".
+- **One adoption, signed by a SuperAdmin.** A SuperAdmin adopts exactly the recorded configuration on that page, signed
+  with their own sign-in. The engine verifies the signature, that the person is a SuperAdmin and that the hash is the
+  recorded one; anything else is refused and the install stays in observe.
+- **Then enforced.** A change the engine acts on (settings, documents such as tagging and exclusions, exemptions,
+  connectors, overrides, the pipeline, templates, service models and responsibility rules) that carries no verified token
+  holds every new pipeline run - a running run is never stopped - until it is undone on *Configuration > Commits* or made
+  again signed in; a resend into a connector without one is refused. Each refusal is said in plain words and kept on the
+  audit trail. Safety checks, approvals and limits stay on top.
+
+## Pro and Community: the same core security
+
+Every security control is the same in both editions. Pro adds features and support from Invardia, never a security
+control; the only difference by design is that Community reports anonymously. Each row names where the control is set in
+the source of this release.
+
+| Control | Pro | Community | Where it is set |
+|---|---|---|---|
+| Sign-in: Microsoft's built-in sign-in in front of the web app, the token verified again by the app | Yes | Yes | pro-management/src/SI.Management.Web/Auth/BuiltInAuth.cs:219 (AuthenticateAsync); the web app is an install step of both editions: setup/_shared/SI-GuidedInstall.ps1:110 |
+| Four server-checked roles, and roles and scopes for people and groups (Configuration > Access) | Yes | Yes | pro-management/src/SI.Management.Web/Licensing/ProFeatures.cs:48 (no licence gate on /Admin/Access since this release) |
+| Signed requests: the engine verifies the person's signed token before it acts on a change | Yes | Yes | engine/_shared/SI-SignedRequests.ps1:345 (Invoke-SISignedRequestEnforcement; observe until a SuperAdmin-signed adoption); pro-management/src/SI.Management.Web/Audit/AuditFilter.cs:131 |
+| One identity per role, each with only its job's rights; the internet-facing web identity holds no job, Key Vault or Graph write right | Yes | Yes | setup/_shared/si-identity-rights.json:118 (internetFacing) |
+| SQL least privilege: one role per component (si_engine, si_web, si_mcp, si_updater), no DDL or security right at runtime | Yes | Yes | engine/pro-settings/SI-EngineGrants.ps1:68; pro-management/deploy/SI-ManagementGrants.ps1:15; applied by the database steps of both editions: setup/_shared/SI-GuidedInstallData.ps1:1271 |
+| No person as SQL admin: a database setup job does what needed an admin | Yes | Yes | setup/_shared/SI-GuidedInstall.ps1:98 (db-job), one of the steps of both editions (:110) |
+| Key Vault: soft delete, purge protection on | Yes | Yes | setup/_shared/SI-GuidedInstall.ps1:3675 |
+| Container registry: admin user off, every job pulls with its own identity | Yes | Yes | setup/_shared/SI-GuidedInstall.ps1:3682 (the registry is created with adminUserEnabled false); setup/_shared/SI-SecurityBaseline.ps1:149 (an existing install) |
+| SQL auditing to your own workspace, 90 days | Yes | Yes | setup/_shared/SI-GuidedInstallData.ps1:1077 (the security baseline of the database step) |
+| Private network: private endpoints, private DNS, public endpoints closed (your choice at install) | Yes | Yes | setup/_shared/SI-GuidedInstall.ps1:100; the only Pro-only install step is the v2.2 CMDB import (:108) |
+| Browser hardening: HSTS, Content Security Policy, framing refused, anti-forgery on every change | Yes | Yes | pro-management/src/SI.Management.Web/Program.cs:696 |
+| Signed updates: the release verified against keys shipped inside SecurityInsight, then by size and SHA-256 | Yes | Yes | engine/_shared/SI-InvardiaUpdate.ps1:66 (Pro route); engine/_shared/SI-CommunityUpdate.ps1:235 (Community route) - one update client |
+| An audit trail the database protects from change, and its viewer (Configuration > History) | Yes | Yes | sql/si-pro-settings.sql:1662; pro-management/src/SI.Management.Web/Licensing/ProFeatures.cs:48 (no licence gate on /Admin/History since this release) |
+| Second-person approval of a restore or a guard release (optional setting) | Yes | Yes | sql/si-pro-settings.sql:2696 (cfg.ConfigApproval) |
+| Support access by the Invardia Support app: optional, off until you create it, at the level you choose | Yes | Yes | setup/_shared/SI-GuidedInstall.ps1:97 (support-app-access) |
 
 ## Network
 
@@ -61,7 +97,8 @@ trail cannot be changed or deleted, enforced by the database itself. See [SQL ac
 
 | What | Where |
 |---|---|
-| Licence, install key, connector secrets, optional keys (Azure OpenAI, Shodan, SMTP) | The install's Key Vault, purge protection on |
+| Licence, install key, connector secrets, optional keys (Shodan, SMTP password) | The install's Key Vault, purge protection on |
+| Azure OpenAI | No key is needed: SecurityInsight signs in to your Azure OpenAI resource with its own identities, which need the role Cognitive Services OpenAI User that you or your support partner give. A key an older setup still keeps stays in the Key Vault and is used only when that sign-in is refused. |
 | A secret you paste in the web app | Handed encrypted to the updater, which stores it in the Key Vault. The web app itself never writes a secret. |
 | The container registry | Admin user off; every job pulls with its own identity |
 

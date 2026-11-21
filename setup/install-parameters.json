@@ -54,7 +54,7 @@
     { "key": "managementGroupId", "page": "data", "label": "Management group id", "type": "string", "showIf": { "collectionScope": "managementGroup" } },
 
     { "key": "aiClassification", "page": "features", "label": "AI classification and summaries (Azure OpenAI)", "type": "bool", "default": false,
-      "help": "Uses your own Azure OpenAI deployment. The key is entered in Cloud Shell, never here." },
+      "help": "Uses your own Azure OpenAI deployment. No key is needed: SecurityInsight signs in with its own identities, once you or your support partner give them the role Cognitive Services OpenAI User on that resource." },
     { "key": "openAiEndpoint",   "page": "features", "label": "Azure OpenAI endpoint", "type": "string", "pattern": "^https://[^/]+\\.openai\\.azure\\.com/?$",
       "showIf": { "aiClassification": true } },
     { "key": "openAiDeployment", "page": "features", "label": "Azure OpenAI deployment name", "type": "string", "showIf": { "aiClassification": true } },

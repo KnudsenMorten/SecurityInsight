@@ -26,22 +26,32 @@
         </nav>
     }
 }
-@if (report is { OffersDimensions: true } || (report is null && dims.Count > 0))
+@if (report is null && dims.Count > 0)
 {
-    <details class="filters" data-task-dimensions open="@(dims.Count > 0 ? "open" : null)">
-        <summary>Filter by IT service, OS, risk rating, category and more@(dims.Count > 0 ? " (" + dims.Count + " chosen)" : "")</summary>
-        <form method="get" action="@Model.PagePath" class="dims">
+    @* owner 2026-11-19: a grid page filters with the grid's own toolbar (the SI standard) -- no second filter form; a task
+       dimension that came with the link is said in one line and can be cleared *@
+    <p class="hint" data-task-dimensions-chosen>Narrowed by: @string.Join("; ", dims.Select(kv => (RemediationTaskReports.Dimensions.FirstOrDefault(x => x.Key == kv.Key)?.Label ?? kv.Key) + ": " + string.Join(" or ", kv.Value)))
+        · <a href="@Model.ViewLink(Model.PagePath, Array.Empty<(string, string?)>())">Clear</a></p>
+}
+@if (report is { OffersDimensions: true })
+{
+    @* owner 2026-11-19: the SI standard filter row (form.filters, one compact cell per field, as History / Deviations /
+       Overrides), never full-width stacked fields; collapsed until a value is chosen *@
+    <details data-task-dimensions open="@(dims.Count > 0 ? "open" : null)">
+        <summary>Filter@(dims.Count > 0 ? " (" + dims.Count + " chosen)" : "")</summary>
+        <form method="get" action="@Model.PagePath" class="filters" title="Several values: separate them with |. A value that differs per finding (severity, risk rating, security domain, category, subcategory) matches a task when one of its findings has it, and the task is then counted over those findings only.">
             @if (Model.Current is not null) { <input type="hidden" name="c" value="@Model.Current.CollectionId" /> }
             @if (report is { OffersGrouping: true })
             {
-                <label>Group by
-                    <select name="by">
+                <div>
+                    <label for="td-by">Group by</label>
+                    <select id="td-by" name="by">
                         @foreach (var d in RemediationTaskReports.Groupings)
                         {
                             <option value="@d.Key" selected="@(d.Key == report.GroupBy)">@d.Label</option>
                         }
                     </select>
-                </label>
+                </div>
             }
             @if (report is SI.Management.Web.Pages.Remediations.TaskProductsModel { PerVersion: true }) { <input type="hidden" name="v" value="1" /> }
             @foreach (var d in RemediationTaskReports.Dimensions)
@@ -49,19 +59,19 @@
                 var chosen = dims.TryGetValue(d.Key, out var v) ? string.Join("|", v) : "";
                 IReadOnlyList<string>? values = null;
                 if (report is not null && report.DimValues.TryGetValue(d.Key, out var dv)) { values = dv; }
-                <label title="@(d.Help ?? (d.Level == TaskDimLevel.Finding ? "A task matches when one of its findings has this value; it is then counted over those findings." : null))">@d.Label
-                    <input type="text" name="@d.Query" value="@chosen" list="@(values is null ? null : "dv-" + d.Key)" placeholder="any" autocomplete="off" />
-                </label>
-                @if (values is not null)
-                {
-                    <datalist id="dv-@d.Key">@foreach (var x in values) { <option value="@x"></option> }</datalist>
-                }
+                <div title="@(d.Help ?? (d.Level == TaskDimLevel.Finding ? "A task matches when one of its findings has this value; it is then counted over those findings." : null))">
+                    <label for="td-@d.Key">@d.Label</label>
+                    <input id="td-@d.Key" type="search" name="@d.Query" value="@chosen" list="@(values is null ? null : "dv-" + d.Key)" placeholder="any" autocomplete="off" />
+                    @if (values is not null)
+                    {
+                        <datalist id="dv-@d.Key">@foreach (var x in values) { <option value="@x"></option> }</datalist>
+                    }
+                </div>
             }
             <div class="actions">
-                <button type="submit">Apply</button>
+                <button type="submit">Filter</button>
                 <a class="button secondary" href="@(Model.ViewLink(Model.PagePath, report?.GroupBy is { } gb ? new (string, string?)[] { ("by", gb) } : Array.Empty<(string, string?)>()))">Clear</a>
             </div>
-            <p class="hint">Several values: separate them with |. A value that differs per finding (severity, risk rating, security domain, category, subcategory) matches a task when one of its findings has it, and the task is then counted over those findings only.</p>
         </form>
     </details>
 }

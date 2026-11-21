@@ -95,7 +95,7 @@
             <option value="">Newest</option>
             @foreach (var c in Model.Collections)
             {
-                <option data-utc value="@c.CollectionId" selected="@(c.CollectionId == Model.C)">@Fmt.When(c.CollectionTime) · @c.Kind@(c.Rows is { } n ? " · " + Fmt.Int(n) + " rows" : "")@(marks.TryGetValue(c.CollectionId, out var pm) && pm.ShowsOn("/Findings", Model.Rep) ? " · " + pm.Badge : "")</option>
+                <option data-utc value="@c.CollectionId" selected="@(c.CollectionId == Model.C)">@Fmt.When(c.CollectionTime) · @c.Kind@(c.Rows is { } n ? " · " + Fmt.Int(n) + " rows" : "")@(marks.TryGetValue(c.CollectionId, out var pm) && !pm.PerReport && pm.ShowsOn("/Findings", Model.Rep) ? " · " + pm.Badge : "")</option>
             }
         </select>
     </div>

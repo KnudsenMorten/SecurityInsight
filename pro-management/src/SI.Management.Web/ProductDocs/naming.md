@@ -8,12 +8,13 @@ and its tags say which environment an install is.
 
 | Kind | Pattern | SecurityInsight |
 |---|---|---|
-| Container app | `ca-<code>-<purpose>` | `ca-si-web` (the web app), `ca-si-mcp` (the MCP server) |
+| Container app | `ca-<code>-<purpose>` | `ca-si-management` (the web app), `ca-si-mcp` (the MCP server) |
 | Container Apps job | `caj-<code>-<purpose>` | `caj-si-<step>` for each pipeline step, `caj-si-updater` |
 | Managed identity | `id-<code>-<role>` | `id-si-engine`, `id-si-web`, `id-si-mcp`, `id-si-updater`, `id-si-tagging` |
 | Entra group | `grp-<code>-<purpose>` | `grp-si-sql-admins` |
 
-The purpose words are the same in every product: `engine`, `web`, `updater`, `mcp`.
+The purpose words are the same in every product: `engine`, `web`, `updater`, `mcp`. The web app is the one exception:
+it is `ca-si-management` at every install, so its address stays the one your people know.
 
 ## Where people read
 
@@ -30,7 +31,9 @@ The purpose words are the same in every product: `engine`, `web`, `updater`, `mc
 
 Azure cannot rename a container app, a job, a managed identity, a SQL server, a Key Vault or a registry. So:
 
-- **Resources keep their names** on an install made before this convention. A new install gets the new names.
+- **Container apps, jobs and the other resources keep their names.** The update moves each managed identity to its
+  standard name, one install at a time: it creates the new identity, gives it the same rights, switches over, and removes
+  the earlier identity only once the new one is proven.
 - **Display names are renamed by the update** on every install: the engine application first, then the sign-in
   application, and the SQL admin group's display name - only from SecurityInsight's earlier name; a name you chose is kept.
   Each is renamed once, read back, and put back if it does not take. Where the update may not rename them, an
@@ -43,15 +46,16 @@ Azure cannot rename a container app, a job, a managed identity, a SQL server, a 
 SecurityInsight never finds its own resources by a name written into its code. Every install records the names it runs
 with, and every part of SecurityInsight reads them from that record, so earlier and new names work side by side.
 
-| Component | Earlier name | New install |
-|---|---|---|
-| The web app | `ca-si-management` | `ca-si-web` |
-| The MCP server, the updater job, the pipeline steps | `ca-si-mcp`, `caj-si-updater`, `caj-si-<step>` | unchanged |
-| The engine's identity | `id-si-<ring>-<edition>-<hosting>` | `id-si-engine` |
-| The web app's identity | `uami-si-management` | `id-si-web` |
-| The MCP server's identity | `uami-si-mcp` | `id-si-mcp` |
-| The updater's identity | `uami-si-updater` | `id-si-updater` |
-| Asset tagging's identity | `uami-securityinsight-tagging` | `id-si-tagging` |
-| The sign-in application | *SecurityInsight Management* | *SecurityInsight* (an existing install keeps the earlier name until its update renames it) |
-| The engine application | *SecurityInsight* | *SecurityInsight Engine* (an existing install keeps the earlier name until its update renames it) |
-| The SQL admin group | `grp-si-sql-admins` | `grp-si-sql-admins`, shown as *SecurityInsight SQL admins* |
+<!-- naming-table -->
+| Role | Standard name | Earlier name | Identity |
+|---|---|---|---|
+| The pipeline and its steps (the engine jobs) | `caj-si-flow`, `caj-si-<step>` for each step | - | `id-si-engine` (earlier: `id-si-<ring>-<edition>-<hosting>`) |
+| The updater job | `caj-si-updater` | - | `id-si-updater` (earlier: `uami-si-updater`) |
+| The database job | `caj-si-dbinit` | - | `id-si-dbinit` |
+| The asset tagging job | `caj-si-asset-tagging` | - | `id-si-tagging` (earlier: `uami-securityinsight-tagging`) |
+| The web app | `ca-si-management` | - (unchanged: the web app keeps its name and address at every install) | `id-si-web` (earlier: `uami-si-management`) |
+| The MCP server | `ca-si-mcp` | - | `id-si-mcp` (earlier: `uami-si-mcp`) |
+| The SQL admin group | `grp-si-sql-admins`, shown as *SecurityInsight SQL admins* | - | - |
+| The sign-in application | *SecurityInsight* | *SecurityInsight Management* (until the update renames it) | - |
+| The engine application, where the install has one | *SecurityInsight Engine* | *SecurityInsight* (until the update renames it) | - |
+<!-- /naming-table -->

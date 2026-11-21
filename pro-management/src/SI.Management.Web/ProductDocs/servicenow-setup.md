@@ -50,12 +50,15 @@ target shares are on [The SecurityInsight data contract](data-out-contract).
 ## ServiceNow push steps
 
 1. **Create the staging tables.** One import set table per output, extending *Import Set Row* (`sys_import_set_row`),
-   for example `u_si_ci_import` and `u_si_vuln_import`, plus the **staging status table** `u_si_staging_status` (see
+   for example `u_si_ci_import` and `u_si_vuln_import`, one each for the remediation tasks and their links (see
+   [Remediation tasks](servicenow-columns#remediation-tasks-vimportremediationtask-task-staging-table)), plus the
+   **staging status table** `u_si_staging_status` (see
    [Create the staging status table](servicenow-sync-complete#create-the-staging-status-table)). The names your
    SecurityInsight admin sets must be custom (`u_…`) or scoped (`x_…`) tables; a record table is refused. Create every
    column with its exact name and at least the length the ServiceNow schema (JSON) gives: `u_si_correlation_id` 400 and
-   `u_vulnerability` 100. A 40-character default cuts values. The connector page offers the JSON definition of all three
-   tables under *For your ServiceNow team > Tables to create in ServiceNow*.
+   `u_vulnerability` 100. A 40-character default cuts values. The connector page offers the JSON definition of the
+   tables under *For your ServiceNow team > Tables to create in ServiceNow*, and **Verify table schema** checks each
+   table you entered.
 2. **Map by column name.** For each table, add a *REST Insert Multiple* record (`sys_rest_insert_multiple`, source table
    = the table) with a *Column mappings* row = **Column name**. Without it, `insertMultiple` matches the keys to the column
    **labels**: on a table whose labels are not the column names, every row lands with every column empty, with HTTP 200
@@ -63,7 +66,7 @@ target shares are on [The SecurityInsight data contract](data-out-contract).
 3. **The transform.** Gate it on the staging status table, act on `u_action`, honor `u_si_cleared` and `u_si_replaces`
    (see the [example scripts](#example-transform-scripts)).
 4. **The integration user and its roles** (see below).
-5. **Give your SecurityInsight admin** the instance URL, the three table names, and the API key, or the user and the
+5. **Give your SecurityInsight admin** the instance URL, the table names (CI, vulnerable items, remediation tasks, remediation task links and staging status), and the API key, or the user and the
    password.
 6. **Network.** The instance must be reachable over https from Azure, where SecurityInsight runs. If your instance allows
    only listed IP addresses, add SecurityInsight's outbound address (your SecurityInsight admin has it).
@@ -82,9 +85,9 @@ sync or makes SecurityInsight warn on every run.
 | `personalize_dictionary` | Reading the staging table (`sys_db_object`) and its columns (`sys_dictionary`) | ServiceNow answers 403 `unauthorized to access table: sys_db_object`. The check before each sync fails, and **nothing is sent** |
 | `import_admin` | Reading the REST Insert Multiple column mapping (`sys_rest_insert_multiple`, `sys_rest_insert_multiple_column_mapping`) | A warning on every check: the mapping is not checked |
 | Read on `sys_import_set_row` (`import_admin` gives it on a standard instance) | Reading your import's result per batch | A warning on every run; the import result is not shown |
-| Read and create on the three staging tables; for a **scoped application**'s tables (`x_<scope>_...`), the application's own role its access controls use | Writing the rows, and reading one row back after each page and each staging status row after it is written | The send or the read-back is refused (403) |
+| Read and create on every staging table; for a **scoped application**'s tables (`x_<scope>_...`), the application's own role its access controls use | Writing the rows, and reading one row back after each page and each staging status row after it is written | The send or the read-back is refused (403) |
 
-**Each of the three staging tables** (System Definition > Tables > the table > *Application Access*): *Accessible from* =
+**Each staging table** (System Definition > Tables > the table > *Application Access*): *Accessible from* =
 All application scopes; *Can read* and *Can create* on; *Allow access to this table via web services* on.
 
 ### Every call SecurityInsight makes
@@ -96,6 +99,7 @@ All application scopes; *Can read* and *Can create* on; *Allow access to this ta
 | `GET /api/now/table/sys_rest_insert_multiple`, `.../sys_rest_insert_multiple_column_mapping` | read (`import_admin`) | The column mapping |
 | `POST /api/now/import/<CI staging table>/insertMultiple` | create (import roles + the tables' role) | The CI rows |
 | `POST /api/now/import/<vulnerable item staging table>/insertMultiple` | create (the same) | The vulnerable items, when that output is on |
+| `POST /api/now/import/<remediation task staging table>/insertMultiple`, `.../<remediation task links staging table>/insertMultiple` | create (the same) | The remediation tasks and their links, once their table names are entered |
 | `POST /api/now/import/<staging status table>` | create (the same) | The batch's writing row and end row |
 | `GET /api/now/table/<each staging table>` | read (the tables' role) | The read-back of one row per page and of each status row |
 | `GET /api/now/table/sys_import_set_row`, `/api/now/stats/sys_import_set_row` | read (`import_admin`) | Your import's result per batch |
@@ -255,5 +259,3 @@ The rules:
 
 What each scope means for the rows you receive is on
 [Handling records and states](servicenow-records-and-states#the-actions-on-the-push).
-
-Verified against SecurityInsight 3.0.0.202610261957 on 2026-10-27.

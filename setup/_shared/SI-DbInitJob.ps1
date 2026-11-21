@@ -99,7 +99,9 @@ function Import-SIDbInitSqlSources {
     param([Parameter(Mandatory)][string]$SIRoot)
     foreach ($rel in @('engine/pro-settings/SI-EngineGrants.ps1', 'engine/pro-settings/SI-ProSchema.ps1', 'engine/pro-settings/SI-GrantProcedure.ps1',
                        'engine/pro-settings/SI-SupportGrantSql.ps1', 'pro-management/deploy/SI-ManagementGrants.ps1', 'pro-management/deploy/SI-SigninFrontStore.ps1',
-                       'setup/_shared/SI-SupportAppDatabase.ps1', 'setup/_shared/SI-SupportGrantUpdate.ps1', 'setup/_shared/SI-IdentityMoveSql.ps1')) {
+                       'setup/_shared/SI-SupportAppDatabase.ps1', 'setup/_shared/SI-SupportGrantUpdate.ps1', 'setup/_shared/SI-IdentityMoveSql.ps1',
+                       # framework §12.23 (Invardia 2026-11-20): SQL least privilege switched on through the updater
+                       'setup/_shared/SI-SqlLeastPrivilege.ps1')) {
         $p = [IO.Path]::Combine($SIRoot, $rel)
         if (Test-Path -LiteralPath $p) { . $p }
     }
@@ -151,6 +153,10 @@ function Read-SIDbInitInput {
                          SI_DBINIT_SIGNIN_DROP ('1': the updater READ BACK the web app SWITCHED to Microsoft's built-in
                          sign-in -- the earlier sign-in front's store, the schema signin and its tables, is no longer made
                          and is dropped where it is there, Invoke-SIDbInitSigninDrop; never in a grants-only run)
+                         SI_DBINIT_SQLLP (plan | apply | off: framework §12.23, the updater hands SI_UPDATER_SQL_LEAST_PRIVILEGE
+                         on -- setup\_shared\SI-SqlLeastPrivilege.ps1; anything else = not done, said, NEVER a refusal of
+                         the run), SI_DBINIT_SQLLP_NAMES ('a;b': the names the install recorded for its identities),
+                         SI_DBINIT_SQLLP_REASON (who asked and why, into the record)
     #>
     param([hashtable]$Env = @{})
     $e = { param($k) if ($Env.ContainsKey($k)) { [string]$Env[$k] } else { [string][Environment]::GetEnvironmentVariable($k) } }
@@ -205,9 +211,17 @@ function Read-SIDbInitInput {
     if (-not $mv.Ok) { return (& $no $mv.Reason) }
     $dr = Read-SIDbInitMoveList -Json (& $e 'SI_DBINIT_DROPS') -Kind drops -MiClientId $mi -Support $sup -InUse @($p | ForEach-Object { $_.ClientId })
     if (-not $dr.Ok) { return (& $no $dr.Reason) }
+    # framework §12.23 (Invardia 2026-11-20): SQL least privilege -- a value that is not a mode is said, never a refused run
+    $lpRaw = (& $e 'SI_DBINIT_SQLLP').Trim().ToLowerInvariant()
+    $lp = ''; $lpNote = ''
+    if ($lpRaw -in 'plan', 'apply', 'off') { $lp = $lpRaw } elseif ($lpRaw) { $lpNote = ("SI_DBINIT_SQLLP='{0}' is not plan, apply or off -- SQL least privilege is not done in this run" -f $(if ($lpRaw.Length -gt 20) { $lpRaw.Substring(0, 20) + '...' } else { $lpRaw })) }
+    $lpNames = @((& $e 'SI_DBINIT_SQLLP_NAMES') -split ';' | ForEach-Object { $_.Trim() } | Where-Object { $_ -match '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$' } | Select-Object -Unique)
+    $lpReason = [regex]::Replace([regex]::Replace((& $e 'SI_DBINIT_SQLLP_REASON'), '[\x00-\x1F]', ' '), '\s+', ' ').Trim()
+    if ($lpReason.Length -gt 200) { $lpReason = $lpReason.Substring(0, 197) + '...' }
     [pscustomobject]@{ Ok = $true; Reason = ''; Server = $server; Database = $db; LedgerDatabase = $ledger; MiClientId = $mi; Principals = $p.ToArray()
                        Support = $sup; SignedGrants = (& $on 'SI_DBINIT_SIGNED_GRANTS'); EngineRoleOnly = (& $on 'SI_DBINIT_ENGINE_ROLE_ONLY'); Run = $run; By = $by; Steps = $steps
-                       Moves = @($mv.Items); Drops = @($dr.Items); StandingOff = $off; SigninDrop = [bool](& $on 'SI_DBINIT_SIGNIN_DROP') }
+                       Moves = @($mv.Items); Drops = @($dr.Items); StandingOff = $off; SigninDrop = [bool](& $on 'SI_DBINIT_SIGNIN_DROP')
+                       SqlLp = $lp; SqlLpNote = $lpNote; SqlLpNames = $lpNames; SqlLpReason = $lpReason }
 }
 
 function Read-SIDbInitMoveList {
@@ -921,7 +935,10 @@ function Invoke-SIDbInit {
     #>
     param([Parameter(Mandatory)]$DbInput, [Parameter(Mandatory)][scriptblock]$Sql, [scriptblock]$Log = { param($m) Write-Host $m },
           [string]$Version = '', [int]$LoginTries = 16, [int]$LoginWaitSeconds = 20, [scriptblock]$Sleep = { param($s) Start-Sleep -Seconds $s },
-          [scriptblock]$Now = { [datetime]::UtcNow }, [int[]]$DeadlockWaits = (Get-SIDbInitNames).DeadlockWaits)
+          [scriptblock]$Now = { [datetime]::UtcNow }, [int[]]$DeadlockWaits = (Get-SIDbInitNames).DeadlockWaits,
+          # framework §12.23: the release's folder (the engine code inventory the least-privilege step proves the role against);
+          # -SqlLpRequired / -SqlLpReady / -SqlLpAfterChange / -SqlLpTypes: test seams of that step
+          [string]$SIRoot = '', [object[]]$SqlLpRequired, [scriptblock]$SqlLpReady, [scriptblock]$SqlLpAfterChange, [string[]]$SqlLpTypes = @('E'))
     $out = New-Object System.Collections.Generic.List[string]
     $say = { param($m) $out.Add([string]$m); $null = & $Log $m }
     $res = { param($code, $verdict, $rec) [pscustomobject]@{ ExitCode = $code; Verdict = $verdict; Lines = $out.ToArray(); Record = $rec } }
@@ -1049,6 +1066,30 @@ function Invoke-SIDbInit {
             try { $null = & $Sql $pro (Get-SIDbInitRecordSql -Name (Get-SIDbInitNames).SigninDropRecord) @{ Value = $sdVal; Version = $null; By = (Get-SIDbInitNames).Job } 'nonquery'; & $say ('the earlier sign-in''s tables recorded: {0}' -f $sdVal) }
             catch { & $say ('WARNING: the earlier sign-in''s tables result could not be recorded: {0}' -f $_.Exception.Message) }
         }
+        # 3e. framework §12.23 (Invardia 2026-11-20): SQL LEAST PRIVILEGE (only when the updater hands a mode on): AFTER the
+        # batches above applied the replacement grants, BEFORE the read-back. Plan first; apply only on the planned state,
+        # snapshot / diff / restore on any loss; off = the way back. Its own record -- NEVER part of this run's verdict.
+        $lpNote = [string](Get-SIDbInitProp $in @('SqlLpNote'))
+        if ($lpNote) { & $say ('WARNING: ' + $lpNote) }
+        if ([string](Get-SIDbInitProp $in @('SqlLp'))) {
+            if (-not (Get-Command -Name Invoke-SIDbInitSqlLeastPrivilege -ErrorAction SilentlyContinue)) { & $say 'WARNING: SQL least privilege: this package does not carry it -- not done' }
+            else {
+                $req = $SqlLpRequired
+                if ($null -eq $req) {
+                    $req = @()
+                    if ($SIRoot -and (Get-Command -Name Get-SIEngineSqlReference -ErrorAction SilentlyContinue)) {
+                        try { $req = @(Get-SIEngineRequiredPermission -References (Get-SIEngineSqlReference -SIRoot $SIRoot)) } catch { & $say ('SQL least privilege: the engine code inventory could not be read ({0})' -f $_.Exception.Message); $req = @() }
+                    }
+                }
+                $lpArgs = @{ DbInput = $in; Sql = $Sql; Required = @($req); AllowedTypes = $SqlLpTypes; Now = $Now }
+                if ($SqlLpReady) { $lpArgs.Ready = $SqlLpReady }
+                if ($SqlLpAfterChange) { $lpArgs.AfterChange = $SqlLpAfterChange }
+                $lpRes = Invoke-SIDbInitSqlLeastPrivilege @lpArgs
+                foreach ($l in @($lpRes.Lines)) { & $say $l }
+                $lpLine = Get-SISqlLpRecordLine -Record $(try { $lpRes.Record | ConvertFrom-Json } catch { $null })
+                if ($lpLine) { & $say $lpLine }
+            }
+        }
         # 4. THE READ-BACK (read only)
         $after = @{}; $after[$pro] = & $usersOf $pro
         if ($in.LedgerDatabase) { $after[$in.LedgerDatabase] = & $usersOf $in.LedgerDatabase }
@@ -1094,6 +1135,19 @@ function Invoke-SIDbInit {
             return (& $res 1 'failed' $rec)
         }
         $rec = & $writeRecord 'ok' $t.Count ''
+        # framework §12.23 gap 1: a run by the guided install (or support) WITH a least-privilege switch on records it, so the
+        # update keeps it on (cfg.InstallState 'SqlLeastPrivilege'; merged: a switch on stays on)
+        if ($in.By -ne 'updater' -and ($in.EngineRoleOnly -or $in.SignedGrants) -and (Get-Command -Name New-SISqlLpSwitchesValue -ErrorAction SilentlyContinue)) {
+            try {
+                $swName = (Get-SISqlLpNames).Switches
+                $cur = ConvertFrom-SISqlLpSwitches -Value ([string](Get-SIDbInitProp (@(& $Sql $pro (Get-SIDbInitRecordReadSql -Name $swName) @{} 'rows' | ForEach-Object { $_ } | Where-Object { $null -ne $_ }) | Select-Object -First 1) @('Value')))
+                $e1 = [bool]($cur.EngineRoleOnly -or $in.EngineRoleOnly); $s1 = [bool]($cur.SignedGrants -or $in.SignedGrants)
+                if (-not $cur.Present -or $e1 -ne $cur.EngineRoleOnly -or $s1 -ne $cur.SignedGrants) {
+                    & $send $pro (Get-SIDbInitRecordSql -Name $swName) @{ Value = (New-SISqlLpSwitchesValue -EngineRoleOnly $e1 -SignedGrants $s1 -By $in.By -NowUtc (& $Now)); Version = $null; By = (Get-SIDbInitNames).Job } 'the least-privilege switches'
+                    & $say ('SQL least privilege: the switches recorded for the updater (engine role only {0}, signed grants {1})' -f $e1, $s1)
+                }
+            } catch { & $say ('WARNING: SQL least privilege: the switches could not be recorded for the updater: {0}' -f $_.Exception.Message) }
+        }
         & $say ('verdict: every identity read back ({0})' -f $t.Count)
         return (& $res 0 'ok' $rec)
     } catch {
@@ -1865,7 +1919,7 @@ function Start-SIDbInitRun {
     $run = New-SIDbInitRunId
     $env = [ordered]@{ SI_DBINIT_RUN = $run; SI_DBINIT_BY = $By; SI_DBINIT_STEPS = $Steps }
     if ($Support) { $env.SI_DBINIT_SUPPORT = $Support }
-    foreach ($k in @($Extra.Keys)) { if ([string]$k -match '^SI_DBINIT_(MOVES|DROPS|PRINCIPALS|SUPPORT_STANDING_OFF|SIGNIN_DROP)$') { $env[[string]$k] = [string]$Extra[$k] } }
+    foreach ($k in @($Extra.Keys)) { if ([string]$k -match '^SI_DBINIT_(MOVES|DROPS|PRINCIPALS|SUPPORT_STANDING_OFF|SIGNIN_DROP|SQLLP|SQLLP_NAMES|SQLLP_REASON)$') { $env[[string]$k] = [string]$Extra[$k] } }
     $start = & $Arm 'POST' ('{0}/start?api-version={1}' -f $JobId, (Get-SIDbInitNames).AppApi) (Get-SIDbInitStartBody -Job $Job -Env $env)
     $exec = [string](Get-SIDbInitProp $start @('name')); if (-not $exec) { $exec = (([string](Get-SIDbInitProp $start @('id'))) -split '/')[-1] }
     if (-not $exec) { return [pscustomobject]@{ Ok = $false; Status = 'NotStarted'; Execution = ''; Run = $run; Seconds = 0; Why = '' } }

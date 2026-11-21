@@ -303,5 +303,3 @@ batch that did not complete go again in the next batch. Coalescing on the keys m
 - Rows go in calls of 200, one after the other. Each call is one import set; ServiceNow transforms them asynchronously
   by default, so do not rely on the order in which import sets transform. Wait for the `complete` row, then import the
   batch.
-
-Verified against SecurityInsight 3.0.0.202610261957 on 2026-10-27.

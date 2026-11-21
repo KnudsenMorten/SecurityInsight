@@ -125,8 +125,10 @@ public sealed class AuditPageFilter : IAsyncPageFilter, IAsyncAlwaysRunResultFil
         }
         // the response is already decided: the write must not cancel with the request
         await _writer.WriteAsync(scope.ToRecord(outcome, text), CancellationToken.None);
-        // CR8 step 2 (observe only): a change that went through is recorded with the person's signed token for the engine to verify
-        if (_signed is not null && IsMutating(http.Request.Method) && outcome == AuditOutcomes.Ok && !scope.WhatIf)
+        // CR8 step 2, ENFORCED (OPEN-04): every mutating handler that RAN is recorded with the person's signed token for the
+        // engine to verify -- whatever its outcome (a handler can write records and then answer a warning or an error), never
+        // a what-if. The engine holds new pipeline runs for a web-written change without a verified one.
+        if (_signed is not null && IsMutating(http.Request.Method) && !scope.WhatIf)
             await _signed.WriteAsync(http, scope, CancellationToken.None);
     }
 

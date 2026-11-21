@@ -312,6 +312,31 @@
     "since": "3.1.13"
   },
   {
+    "code": "si-col-0506",
+    "title": "Log Analytics was still taking new columns of a SecurityInsight table",
+    "causeClass": "missing-column",
+    "appliesTo": {
+      "capabilities": [],
+      "licences": []
+    },
+    "customerText": "An update added columns to a SecurityInsight table in Log Analytics, and Azure had not finished taking them in this run. The rows are there; only the values of the new columns are missing for this run (or a read of the table waited for them and gave up). The next run stores and reads them.",
+    "internalNote": "SI-LogIngest.ps1 ingest note 'not-stored' (the data collection rule was changed in this run and the new columns were not stored yet), or Invoke-SICorrelationSettledRead that waited SI_CorrelationFreshnessWaitSec for a new column and gave up (SI-CorrelationIngest.ps1). Run error class column-not-ready. Seen on the first run of a release that adds columns (3.1.16.1, 3.1.18: SI_Endpoint_Profile_CL PrivilegedLogon*). On runs after that it is a real problem: compare the DCR's stream columns with the table.",
+    "whoActs": "nobody",
+    "priority": "P4",
+    "opensTicket": false,
+    "action": "none",
+    "fixedIn": null,
+    "waitForFix": false,
+    "steps": [
+      {
+        "who": "nobody",
+        "text": "Nothing to do. The next run stores the new columns."
+      }
+    ],
+    "lesson": "A table change takes Log Analytics a while: the run that makes it says so, the next one has the columns.",
+    "since": null
+  },
+  {
     "code": "si-upl-0601",
     "title": "The run record could not be built",
     "causeClass": "too-large",
@@ -720,6 +745,31 @@
     "since": null
   },
   {
+    "code": "si-ra-0915",
+    "title": "A Risk Analysis run was built on a device or identity collection that was not complete",
+    "causeClass": "count-less",
+    "appliesTo": {
+      "capabilities": [],
+      "licences": []
+    },
+    "customerText": "The newest device or identity collection this Risk Analysis run read did not finish completely. A finding missing from this run is therefore treated as unknown, never as fixed: nothing is closed on it. The next run built on a complete collection counts as usual.",
+    "internalNote": "Get-SIUpstreamOutcome (SI-RunOutcome.ps1): the newest END record of a profiling engine (SI_RunHealth_CL) ended success-partial, so Risk Analysis says \"built on incomplete profile data\" and ends success-partial itself. Run error class upstream-partial (SI-ErrorClass.ps1); the code is sent by the run-fault rules (Resolve-SIRunFaultCode). The cause is that profile run's own warning -- read its run (on the first run of a release often si-col-0506: new columns not stored yet).",
+    "whoActs": "nobody",
+    "priority": "P4",
+    "opensTicket": false,
+    "action": "none",
+    "fixedIn": null,
+    "waitForFix": false,
+    "steps": [
+      {
+        "who": "nobody",
+        "text": "Nothing to do. When it comes back on every run, read the warning of the device or identity collection it names."
+      }
+    ],
+    "lesson": null,
+    "since": null
+  },
+  {
     "code": "si-cmdb-0701",
     "title": "No endpoints to send to the CMDB: the tenant has no active devices",
     "causeClass": "no-data-source",
@@ -766,6 +816,33 @@
       {
         "who": "nobody",
         "text": "Nothing to do. The next run confirms the missing devices or keeps them."
+      }
+    ],
+    "lesson": null,
+    "since": null
+  },
+  {
+    "code": "si-cmdb-0703",
+    "title": "The CMDB sync used a device snapshot that was not complete",
+    "causeClass": "count-less",
+    "appliesTo": {
+      "capabilities": [
+        "cmdb"
+      ],
+      "licences": []
+    },
+    "customerText": "The device collection the CMDB sync read did not finish completely. The devices in it were created and updated in the CMDB as usual; none of them was counted absent or retired on it. The next complete snapshot counts absences again by itself.",
+    "internalNote": "#891 Format-SICmdbSqlPartialText (SI-CmdbSqlSync.ps1): a kind's newest profile snapshot is not shown complete by its run-health END record (success-partial) -- FailedStep snapshot-incomplete, ExitReason success-partial, run error class upstream-partial. The cause is the profile run's own warning (its run record).",
+    "whoActs": "nobody",
+    "priority": "P4",
+    "opensTicket": false,
+    "action": "none",
+    "fixedIn": null,
+    "waitForFix": false,
+    "steps": [
+      {
+        "who": "nobody",
+        "text": "Nothing to do. The next complete snapshot counts absences again."
       }
     ],
     "lesson": null,
@@ -1407,6 +1484,31 @@
     "since": null
   },
   {
+    "code": "si-data-1406",
+    "title": "The database refused a sign-in because its token had expired",
+    "causeClass": "settings-unreachable",
+    "appliesTo": {
+      "capabilities": [],
+      "licences": []
+    },
+    "customerText": "A step of a long SecurityInsight run signed in to its database with a sign-in that had expired meanwhile, so that step could not finish this run. The next run signs in again and does it; support has been told.",
+    "internalNote": "Login failed for user '<token-identified principal>'. Token is expired. (Azure SQL 18456 with an expired Entra token): a connection opened with an access token read long before. Seen 3.1.8 si-datasync/view-context: Invoke-SIDataParallelRanges (SI-DataViewContext.ps1) started a range again after a stall with the token read when the call began; since 2026-11-20 every new range start and the watch's read ask the seam for a current token. Run error class sql-login.",
+    "whoActs": "product",
+    "priority": "P3",
+    "opensTicket": true,
+    "action": "support",
+    "fixedIn": null,
+    "waitForFix": false,
+    "steps": [
+      {
+        "who": "support",
+        "text": "Read the step's log: find the connection that used the expired sign-in and make it ask for a current token before it opens."
+      }
+    ],
+    "lesson": "A token read at the start of a long call must be asked for again for every connection opened later.",
+    "since": null
+  },
+  {
     "code": "si-out-1501",
     "title": "Data out is held: the collection is not trusted",
     "causeClass": "count-less",
@@ -1429,6 +1531,31 @@
       }
     ],
     "lesson": "A hold that repeats on every run stops the outputs as surely as a failure does -- it must reach support, never only a warning line in the log.",
+    "since": null
+  },
+  {
+    "code": "si-la-1701",
+    "title": "Log Analytics failed on its own side while a query ran",
+    "causeClass": "platform-timeout",
+    "appliesTo": {
+      "capabilities": [],
+      "licences": []
+    },
+    "customerText": "Log Analytics answered a query of this run with a failure on its own side (\"Something went wrong processing your query on the server\"). The step that sent it did not finish this run; the next run sends it again. Nothing of yours needs to change.",
+    "internalNote": "A PartialError / EngineError answer of Log Analytics (innererror \"Partial query failure ... ExecuteRemoteSubQuery failure ... StatusCode=Unavailable\") -- seen 3.1.30 si-flow/asset-datasync. Run error class platform-5xx (Get-SIErrorClass). Not retried in-run on purpose (Get-SITransientKind unchanged); repeated at one install on several runs = read the step and the workspace's health.",
+    "whoActs": "nobody",
+    "priority": "P4",
+    "opensTicket": false,
+    "action": "none",
+    "fixedIn": null,
+    "waitForFix": false,
+    "steps": [
+      {
+        "who": "nobody",
+        "text": "Nothing to do. The next run sends the query again."
+      }
+    ],
+    "lesson": null,
     "since": null
   }
 ]

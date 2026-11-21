@@ -113,11 +113,13 @@ OPTION (RECOMPILE);
         return new SqlQuery(text, FilterParams(f));
     }
 
-    /// The collections a person can open: complete ones, never past the published run (a newer one is not trusted yet).
+    /// The collections a person can open: complete ones, never past the published run (a newer one is not trusted yet), and
+    /// never one marked removed (owner 2026-11-19: a collection whose findings the retention removed is never listed -- only
+    /// its trend totals stay).
     public const string Collections = $"""
 SELECT TOP (@Top) CONVERT(nvarchar(64), col.CollectionId) AS CollectionId, col.CollectionTime, col.Kind, col.[Rows] AS RowTotal, CONVERT(nvarchar(64), col.RunId) AS RunId
 FROM sidata.Collection AS col
-WHERE col.Status = N'Complete' AND col.CollectionTime <= ISNULL({PublishedRun.DetailedTime}, col.CollectionTime)
+WHERE col.Status = N'Complete' AND col.RetiredAt IS NULL AND col.CollectionTime <= ISNULL({PublishedRun.DetailedTime}, col.CollectionTime)
 ORDER BY col.CollectionTime DESC;
 """;
 

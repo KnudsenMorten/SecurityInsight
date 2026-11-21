@@ -32,7 +32,7 @@ BeforeAll {
         $db | Add-Member -NotePropertyName Invoke -NotePropertyValue $inv
         $db
     }
-    function Row($id, [string]$json) { [pscustomobject]@{ RequestId = $id; EnvJson = $json; RequestedBy = 'admin@example.test' } }
+    function Row($id, [string]$json, [string]$BoundTo) { [pscustomobject]@{ RequestId = $id; EnvJson = $json; RequestedBy = 'admin@example.test'; BoundTo = $(if ($BoundTo) { $BoundTo } else { $null }) } }
     $script:Names = @('SI_FLOW_DRAIN', 'SI_FLOW_TRIGGER', 'SI_EXEMPTION_MAIL_ONLY', 'SI_AUDIT_CID', 'SI_SPN_APPID', 'SI_TEMPLATES_MODE')
 }
 
@@ -74,7 +74,7 @@ Describe 'SIv3-JobStartRequest: the job takes its own start request' {
     }
 
     It 'a start in flight (written, not yet bound) is waited for, then claimed' {
-        $db = New-FakeDb -Claim @(@(), @(), , @(Row 9 '{"SI_EXEMPTION_MAIL_ONLY":"1"}')) -InFlight @(1, 1)
+        $db = New-FakeDb -Claim @(@(), @(), , @(Row 9 '{"SI_EXEMPTION_MAIL_ONLY":"1"}' -BoundTo 'e2')) -InFlight @(1, 1)
         $slept = New-Object System.Collections.Generic.List[int]
         $r = Invoke-SIJobStartRequestClaim -Invoke $db.Invoke -Job 'caj-si-close-loop-mail' -Execution 'e2' -Sleep { param($s) $slept.Add($s) }.GetNewClosure()
         $r.Claimed | Should -BeTrue
@@ -129,6 +129,117 @@ Describe 'SIv3-JobStartRequest: the job takes its own start request' {
         $sql = Get-SIJobTriggerPendingSql
         $sql | Should -Match "AND Action <> N'start-env' ORDER BY RequestId"
         $sql | Should -Match "WHERE Action = N'start-env' AND AppliedUtc IS NULL AND RequestedUtc < DATEADD\(HOUR, -24"
+    }
+}
+
+Describe 'SIv3-JobStartRequest: the pipeline runner starts what a person asked for (#1292, SECURE-WEB-1)' {
+    BeforeAll {
+        # a fake database for the runner's pass: the pending rows, whether the take wins, every call recorded
+        function New-RunnerDb([object[]]$Pending = @(), [bool]$TakeWins = $true, [switch]$Throws) {
+            $db = [pscustomobject]@{ Calls = New-Object System.Collections.Generic.List[object]; Pending = @($Pending); TakeWins = $TakeWins }
+            $t = [bool]$Throws
+            $inv = { param($sql, $p, $mode)
+                $db.Calls.Add([pscustomobject]@{ Sql = $sql; P = $p; Mode = $mode })
+                if ($t) { throw "Invalid column name 'EnvJson'." }
+                if ($sql -match "SET Outcome = N'runner-starting'") { if ($db.TakeWins) { return , @([pscustomobject]@{ RequestId = $p.Id }) }; return @() }
+                if ($mode -eq 'reader') { return , @($db.Pending) }
+                1 }.GetNewClosure()
+            $db | Add-Member -NotePropertyName Invoke -NotePropertyValue $inv
+            $db
+        }
+        function Ask($id, [string]$job = 'caj-si-close-loop-mail', [string]$json = '{"SI_EXEMPTION_MAIL_ONLY":"1","SI_SNOW_VERIFY":"all","SI_SNOW_VERIFY_BY":"admin@example.test"}') {
+            [pscustomobject]@{ RequestId = $id; JobName = $job; EnvJson = $json; RequestedBy = 'admin@example.test' }
+        }
+        $script:Jobs = @('caj-si-flow', 'caj-si-close-loop-mail', 'caj-si-updater')
+    }
+
+    It 'starts the ServiceNow check as the runner: taken first, a plain start, then bound to the execution' {
+        $db = New-RunnerDb -Pending @(Ask 11)
+        $started = New-Object System.Collections.Generic.List[string]
+        $r = @(Invoke-SIJobRunnerStarts -Invoke $db.Invoke -Installed $script:Jobs -Start { param($j) $started.Add($j); 'caj-si-close-loop-mail-x1' }.GetNewClosure() -Running { param($j) $false })
+        $r[0].Outcome | Should -Be 'started'
+        $r[0].Detail | Should -Be 'caj-si-close-loop-mail-x1'
+        @($started) | Should -Be @('caj-si-close-loop-mail')
+        $sqls = @($db.Calls | ForEach-Object { $_.Sql })
+        $take = [array]::FindIndex($sqls, [Predicate[object]] { param($s) $s -match "SET Outcome = N'runner-starting'" })
+        $bind = [array]::FindIndex($sqls, [Predicate[object]] { param($s) $s -match 'SET ExecutionName = @Exec, Outcome = NULL' })
+        $take | Should -BeGreaterThan 0
+        $bind | Should -BeGreaterThan $take
+        ($db.Calls[$bind]).P.Exec | Should -Be 'caj-si-close-loop-mail-x1'
+        # bound like the web app's own start: the job's claim takes it by its execution name
+        (Get-SIJobStartRequestClaimSql) | Should -Match 'q\.ExecutionName = @Exec'
+    }
+
+    It 'only waiting runner-start rows are read; old or half-started ones are closed as expired first' {
+        $sql = Get-SIJobRunnerStartPendingSql
+        $sql | Should -Match "Outcome = N'expired'"
+        $sql | Should -Match "Outcome IN \(N'runner-start', N'runner-starting'\) AND RequestedUtc < DATEADD\(MINUTE, -@MaxAge"
+        $sql | Should -Match "AND ExecutionName IS NULL AND Outcome = N'runner-start' ORDER BY RequestId"
+        $db = New-RunnerDb
+        $null = Invoke-SIJobRunnerStarts -Invoke $db.Invoke -Installed $script:Jobs -Start { 'x' } -Running { $false }
+        $db.Calls[0].P.MaxAge | Should -Be 30
+    }
+
+    It 'NEGATIVE: a job that is not on the list, not installed, or values without the check are refused -- never started' {
+        foreach ($a in @((Ask 21 'caj-si-updater' '{"SI_SNOW_VERIFY":"all"}'), (Ask 22 'caj-si-flow' '{"SI_FLOW_FORCE":"1"}'), (Ask 23 'caj-si-close-loop-mail' '{"SI_EXEMPTION_MAIL_ONLY":"1"}'), (Ask 24 'caj-si-close-loop-mail' 'not json'))) {
+            $db = New-RunnerDb -Pending @($a)
+            $started = New-Object System.Collections.Generic.List[string]
+            $r = @(Invoke-SIJobRunnerStarts -Invoke $db.Invoke -Installed $script:Jobs -Start { param($j) $started.Add($j); 'x' }.GetNewClosure() -Running { $false })
+            $r[0].Outcome | Should -Be 'refused'
+            $started.Count | Should -Be 0
+            ($db.Calls | Where-Object { $_.P.Outcome -eq 'refused' }).Count | Should -Be 1
+        }
+        $db = New-RunnerDb -Pending @(Ask 25)
+        (@(Invoke-SIJobRunnerStarts -Invoke $db.Invoke -Installed @('caj-si-flow') -Start { 'x' } -Running { $false }))[0].Outcome | Should -Be 'refused'
+    }
+
+    It 'while the mail job runs, the request waits for a later wake-up (nothing taken, nothing started)' {
+        $db = New-RunnerDb -Pending @(Ask 31)
+        $started = New-Object System.Collections.Generic.List[string]
+        $r = @(Invoke-SIJobRunnerStarts -Invoke $db.Invoke -Installed $script:Jobs -Start { param($j) $started.Add($j); 'x' }.GetNewClosure() -Running { param($j) $true })
+        $r[0].Outcome | Should -Be 'waiting'
+        $started.Count | Should -Be 0
+        @($db.Calls | Where-Object { $_.Sql -match "SET Outcome = N'runner-starting'" }).Count | Should -Be 0
+        # the running check itself cannot be read: treated as running (never two side by side)
+        (@(Invoke-SIJobRunnerStarts -Invoke $db.Invoke -Installed $script:Jobs -Start { 'x' } -Running { throw 'ARM 500' }))[0].Outcome | Should -Be 'waiting'
+    }
+
+    It 'another wake-up took it first: not started twice' {
+        $db = New-RunnerDb -Pending @(Ask 41) -TakeWins $false
+        $started = New-Object System.Collections.Generic.List[string]
+        $r = @(Invoke-SIJobRunnerStarts -Invoke $db.Invoke -Installed $script:Jobs -Start { param($j) $started.Add($j); 'x' }.GetNewClosure() -Running { $false })
+        $r[0].Outcome | Should -Be 'taken-elsewhere'
+        $started.Count | Should -Be 0
+    }
+
+    It 'a start Azure refuses is closed as failed with the reason; a database that cannot be read never throws' {
+        $db = New-RunnerDb -Pending @(Ask 51)
+        $r = @(Invoke-SIJobRunnerStarts -Invoke $db.Invoke -Installed $script:Jobs -Start { throw 'ARM POST returned 403' } -Running { $false })
+        $r[0].Outcome | Should -Be 'failed'
+        $r[0].Detail | Should -Match '403'
+        ($db.Calls | Where-Object { $_.P.Outcome -eq 'failed' }).Count | Should -Be 1
+        $bad = New-RunnerDb -Throws
+        @(Invoke-SIJobRunnerStarts -Invoke $bad.Invoke -Installed $script:Jobs -Start { 'x' } -Running { $false }).Count | Should -Be 0
+    }
+
+    It 'a check the job takes before the bind lands is waited for (runner-starting counts as in flight)' {
+        (Get-SIJobStartRequestUnboundSql) | Should -Match "\(Outcome IS NULL OR Outcome = N'runner-starting'\)"
+    }
+
+    It 'NEGATIVE: a check handed back never turns the pipeline''s own mail step into an outbox-only check' {
+        $env = ConvertFrom-SIJobStartRequestEnv -EnvJson '{"SI_EXEMPTION_MAIL_ONLY":"1","SI_SNOW_VERIFY":"all","SI_SNOW_VERIFY_BY":"a","SI_AUDIT_CID":"c"}' -Job 'caj-si-close-loop-mail' -HandedBack
+        @($env.Env.Keys) | Should -Be @('SI_AUDIT_CID')
+        $bound = ConvertFrom-SIJobStartRequestEnv -EnvJson '{"SI_EXEMPTION_MAIL_ONLY":"1","SI_SNOW_VERIFY":"all"}' -Job 'caj-si-close-loop-mail'
+        $bound.Env['SI_SNOW_VERIFY'] | Should -Be 'all'
+        $bound.Env['SI_EXEMPTION_MAIL_ONLY'] | Should -Be '1'
+    }
+
+    It 'the runner makes these starts in every wake-up, a wake-up during a run too (before the housekeeping exit)' {
+        $src = Get-Content -Raw (Join-Path $script:SIRoot 'engine\flow\Invoke-SIJobFlowRun.ps1')
+        $pass = $src.IndexOf('$null = Invoke-SIJobRunnerStarts'); $exit = $src.IndexOf('if ($housekeepingOnly) {')
+        $pass | Should -BeGreaterThan 0
+        $pass | Should -BeLessThan $exit
+        $src | Should -Match "if \(\`$HostKind -eq 'Container' -and \`$proStore -and \`$armSeams\) \{\s+try \{\s+\`$jsr = "
     }
 }
 

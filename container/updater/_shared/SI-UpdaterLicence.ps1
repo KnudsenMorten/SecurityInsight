@@ -224,7 +224,9 @@ function Write-SIUpdaterAuditRow {
         lower-case domain.object.verb and is on the closed list (config\audit-actions.locked.json, checked by a test).
         THROWS on failure -- the caller logs it and carries on.
     #>
-    param([Parameter(Mandatory)]$Store, [Parameter(Mandatory)][string]$Action, [ValidateSet('ok', 'error', 'refused', 'held')][string]$Outcome = 'ok', [string]$Text)
+    param([Parameter(Mandatory)]$Store, [Parameter(Mandatory)][string]$Action, [ValidateSet('ok', 'error', 'refused', 'held')][string]$Outcome = 'ok', [string]$Text,
+          # SI_UPDATER_LICENCE_PULL (SI-UpdaterLicencePull.ps1): who acts, why (the control-plane reason) and on what
+          [string]$Actor = 'caj-si-updater (licence request)', [string]$Reason = 'automatic licence request', [string]$Target = 'Invardia licence request')
     if ($Action -notmatch '^[a-z][a-z0-9-]*\.[a-z][a-z0-9-]*\.[a-z][a-z0-9-]*$') { throw "audit action '$Action' is not lower-case domain.object.verb" }
     $sql = @'
 IF OBJECT_ID(N'cfg.AuditEvent') IS NULL
@@ -239,7 +241,8 @@ END
     # long opaque runs (a token, a key) never reach the trail
     $t = [regex]::Replace("$Text", '(?<![A-Za-z0-9_\-+=])(?=[A-Za-z0-9_\-+=]*[0-9])(?=[A-Za-z0-9_\-+=]*[A-Za-z])[A-Za-z0-9_\-+=]{40,}', '(hidden)')
     if ($t.Length -gt 1000) { $t = $t.Substring(0, 1000) }
-    $p = [ordered]@{ Action = $Action; Actor = 'caj-si-updater (licence request)'; ActorSource = 'job'; Target = 'Invardia licence request'; Reason = 'automatic licence request'
+    $rsn = "$Reason"; if ($rsn.Length -gt 400) { $rsn = $rsn.Substring(0, 400) }
+    $p = [ordered]@{ Action = $Action; Actor = $Actor; ActorSource = 'job'; Target = $Target; Reason = $rsn
                      Outcome = $Outcome; OutcomeText = $t; BeforeJson = $null; AfterJson = $null; CorrelationId = $null; WhatIf = $false; ScopeDomain = $null; ScopeDepartmentId = $null }
     $r = & $Store.Invoke $sql $p 'scalar'
     if ("$r" -eq 'Missing') { throw 'the Pro database has no audit trail table yet' }

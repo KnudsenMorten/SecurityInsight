@@ -109,15 +109,11 @@ $script:SIHeartbeatFields = @{
     # (Invardia's validator has taken the eight fields since its migration 118; owner: "i want data" / "i need to see it in my
     # backend via telemetry"). SI_Uplink_Send<Field> 'off' still turns a field off per install; then drop the switches.
     ConfirmedRings   = @{ Pipeline = @(0, 1, 2, 3); Jobs = @(0, 1, 2, 3); Sources = @(0, 1, 2, 3); Database = @(0, 1, 2, 3); Update = @(0, 1, 2, 3); Mail = @(0, 1, 2, 3); Warnings = @(0, 1, 2, 3); Security = @(0, 1, 2, 3)
-                         # REMOVE-ME (2026-10-26): Published -- Invardia's validator takes it since 1.0.593 (07f7aa4); RING 0 FIRST,
-                         # the other rings once ring 0's first value is checked. SI_Uplink_SendPublished 'off' still turns it off.
-                         Published = @(0)
-                         # REMOVE-ME (#1043, 2026-11-01): DataOut -- agreed with Invardia, which deploys its side first; RING 0 FIRST;
-                         # the other rings once ring 0's first value is checked.
-                         # SI_Uplink_SendDataOut 'on' / a ring list sends it earlier, 'off' turns it off.
-                         # 2026-11-02: ring 0's value checked by Invardia (an empty list -- no data-out output there); ring 1
-                         # (the pilot, the first real entries) on Invardia's ask
-                         DataOut = @(0, 1)
+                         # Published and DataOut: Invardia accepts both on EVERY ring (SI_HEARTBEAT_CONTRACT, Invardia
+                         # 2026-11-20), Pro and Community alike. SI_Uplink_SendPublished / SI_Uplink_SendDataOut 'off' still
+                         # turns one off per install. (Published was ring 0 only since 2026-10-26, DataOut rings 0-1 since 2026-11-02.)
+                         Published = @(0, 1, 2, 3)
+                         DataOut = @(0, 1, 2, 3)
                          # REMOVE-ME (framework rule 11g, 2026-11-05): BuildPool { tier, count, building, checkedUtc } -- a private
                          # install's image build pool. Invardia's wire contract is CLOSED (an unknown key drops the heartbeat), so it
                          # Invardia confirmed it live 2026-11-05 (1a3a21c3): every ring. Only an install that HAS an agent pool sends it.
@@ -143,7 +139,9 @@ $script:SIHeartbeatFields = @{
     # it is off such a run reads 'idle'; a heartbeat Invardia refuses with 'stopped' is sent again with 'idle'.
     # REMOVE-ME once Invardia takes it: move 'stopped' into PipelineStates and drop the switch.
     PipelineStoppedState = 'stopped'
-    PipelineStoppedRings = @()
+    # Invardia 2026-11-20: 'stopped' and an open Pipeline object are accepted today (packages/core/src/heartbeatstate.ts:81)
+    # -- on, on every ring; the per-install 'off' still turns it off
+    PipelineStoppedRings = @(0, 1, 2, 3)
     # the run states a stopped run ends in (SI-JobFlow: RunFinished minus Succeeded / Failed)
     PipelineStoppedRunStates = @('Stopped', 'Cancelled')
     JobResults       = @('succeeded', 'failed', 'stopped', 'running')
@@ -290,6 +288,14 @@ $script:SIHeartbeatFields = @{
     # >>> THE SWITCH: UpdateSendRunningImages. $false = the agreed five only.
     UpdateRunningImagesField = 'runningImages'
     UpdateSendRunningImages  = $true
+    # framework 8.18 (Invardia's contract, heartbeatstate Update.signal, SOFT; Invardia 2026-11-20: "the SAME existing shape, no
+    # new key"): the "Update now" mark this install's updater was STARTED on -- { raisedAt, startedUtc } from cfg.InstallState
+    # 'UpdateSignal', which the signal AND the head call (expedite) both write (engine\_shared\SI-UpdateNowSignal.ps1). Sent
+    # between the agreed five and runningImages while the mark is younger than UpdateSignalHours and its start is recorded
+    # (result starting / started); otherwise left out. >>> THE SWITCH: UpdateSendSignal. $false = never sent.
+    UpdateSignalField = 'signal'
+    UpdateSendSignal  = $true
+    UpdateSignalHours = 24
     # 2026-10-23: an update that waits for a pipeline run longer than this is a warning (it never cancels and never blocks)
     UpdateWaitsWarnHours = 24
     # 2026-10-25: a scheduled collection held back by a pipeline run is said for this long after it (cfg.InstallState 'CollectionHeld')
@@ -535,10 +541,17 @@ function Test-SIHeartbeatField {
             return ''
         }
         'Update' {
-            # the agreed five, then -- SEC-LANE-1 -- runningImages when present (the last key)
+            # the agreed five, then -- 8.18 -- signal when present, then -- SEC-LANE-1 -- runningImages when present (the last key)
             $upNames = @($c.Fields.Update)
-            if ($Value -and -not ($Value -is [string]) -and -not ($Value -is [System.Collections.IDictionary]) -and $Value.PSObject.Properties[$c.UpdateRunningImagesField]) { $upNames += $c.UpdateRunningImagesField }
+            $isObj = [bool]($Value -and -not ($Value -is [string]) -and -not ($Value -is [System.Collections.IDictionary]))
+            if ($isObj -and $Value.PSObject.Properties[$c.UpdateSignalField]) { $upNames += $c.UpdateSignalField }
+            if ($isObj -and $Value.PSObject.Properties[$c.UpdateRunningImagesField]) { $upNames += $c.UpdateRunningImagesField }
             $w = & $exact $Value $upNames 'Update'; if ($w) { return $w }
+            if ($Value.PSObject.Properties[$c.UpdateSignalField]) {
+                $sg = $Value.($c.UpdateSignalField)
+                $w = & $exact $sg @('raisedAt', 'startedUtc') 'Update.signal'; if ($w) { return $w }
+                foreach ($t in 'raisedAt', 'startedUtc') { if ($null -eq $sg.$t -or -not (& $isTime $sg.$t)) { return "Update.signal.$t is not ISO-8601 UTC" } }
+            }
             if ($Value.PSObject.Properties[$c.UpdateRunningImagesField]) { $w = Test-SIRunningImagesValue -Value $Value.($c.UpdateRunningImagesField); if ($w) { return ('Update.{0}' -f $w) } }
             foreach ($n in 'installed', 'available') { if ($null -ne $Value.$n -and -not ($Value.$n -is [string] -and $Value.$n -cmatch '^[0-9][0-9A-Za-z.+-]{0,63}$')) { return "Update.$n is not a version" } }
             if (-not (& $inList $Value.lastUpdaterResult $c.UpdateResults $true)) { return ("Update.lastUpdaterResult '{0}' is not in the list" -f $Value.lastUpdaterResult) }
@@ -710,7 +723,7 @@ IF OBJECT_ID(N'cfg.JobFlow') IS NOT NULL
     INSERT @r (K, Name, Txt) SELECT TOP (1) N'def', Mode, DefinitionJson FROM cfg.JobFlow WHERE FlowId = N'daily';
 IF OBJECT_ID(N'cfg.InstallState') IS NOT NULL
     INSERT @r (K, Name, T1, Txt) SELECT N'state', Name, UpdatedAt, Value FROM cfg.InstallState
-    WHERE Name IN (N'UpdateState', N'SecretHandover', N'MailRestriction', N'MailRestrictionAttestation', N'MailLastSent', N'MailLastFailed', N'CollectionHeld', N'OutsidePipeline', N'Housekeeping', N'StatisticsRefresh');
+    WHERE Name IN (N'UpdateState', N'UpdateSignal', N'SecretHandover', N'MailRestriction', N'MailRestrictionAttestation', N'MailLastSent', N'MailLastFailed', N'CollectionHeld', N'OutsidePipeline', N'Housekeeping', N'StatisticsRefresh');
 IF OBJECT_ID(N'cfg.ServiceNowCheck') IS NOT NULL
     INSERT @r (K, Name, T1, Txt, T2)
     SELECT N'snow', c.[Output], c.CheckedAt, c.Outcome,
@@ -1635,14 +1648,48 @@ function Get-SIHeartbeatUpdate {
     New-SIHeartbeatOrdered -Names $script:SIHeartbeatFields.Fields.Update -Values $v
 }
 
+function Get-SIHeartbeatUpdateSignal {
+    <#
+        PURE. framework 8.18: Update.signal = { raisedAt, startedUtc } -- the "Update now" mark this install's updater was
+        started on, from cfg.InstallState 'UpdateSignal' (the signal and the head call write it alike). $null when there is no
+        row, it does not parse, no start is recorded (result other than starting / started: not-newer, waiting, start-failed),
+        or the mark is older than UpdateSignalHours (or more than 5 minutes ahead of this clock).
+    #>
+    param([object[]]$Rows, [Parameter(Mandatory)][datetime]$NowUtc)
+    $c = $script:SIHeartbeatFields
+    $row = @(Get-SIHeartbeatRowsOf $Rows 'state' | Where-Object { [string](Get-SIHeartbeatRowValue $_ 'Name') -eq 'UpdateSignal' })[0]
+    if (-not $row) { return $null }
+    $o = $null; try { $o = [string](Get-SIHeartbeatRowValue $row 'Txt') | ConvertFrom-Json -ErrorAction Stop } catch { return $null }
+    if (-not $o -or -not $o.PSObject.Properties['raisedAt'] -or -not $o.PSObject.Properties['startedUtc']) { return $null }
+    if (-not $o.PSObject.Properties['result'] -or @('starting', 'started') -notcontains [string]$o.result) { return $null }
+    $r = ConvertTo-SIHeartbeatUtc $o.raisedAt; $s = ConvertTo-SIHeartbeatUtc $o.startedUtc
+    if (-not $r -or -not $s) { return $null }
+    $rd = [datetime]::Parse($r, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::AdjustToUniversal -bor [Globalization.DateTimeStyles]::AssumeUniversal)
+    $now = $NowUtc.ToUniversalTime()
+    if ($rd -lt $now.AddHours(-[double]$c.UpdateSignalHours) -or $rd -gt $now.AddMinutes(5)) { return $null }
+    [pscustomobject][ordered]@{ raisedAt = $r; startedUtc = $s }
+}
+
+function Add-SIHeartbeatUpdateSignal {
+    <# PURE. framework 8.18: Update with signal after its agreed five (-Signal: Get-SIHeartbeatUpdateSignal). No signal = Update
+       as it is (the key is left out, never sent empty). #>
+    param([Parameter(Mandatory)]$Update, $Signal)
+    if ($null -eq $Signal) { return $Update }
+    $o = [ordered]@{}
+    foreach ($n in @($script:SIHeartbeatFields.Fields.Update)) { $o[$n] = $Update.$n }
+    $o[$script:SIHeartbeatFields.UpdateSignalField] = $Signal
+    [pscustomobject]$o
+}
+
 function Add-SIHeartbeatUpdateRunningImages {
-    <# PURE. framework SEC-LANE-1: Update with runningImages after its agreed five (-Images: Get-SIRunningImages). No image =
-       Update as it is (the key is left out, never sent empty). #>
+    <# PURE. framework SEC-LANE-1: Update with runningImages after its agreed five -- and after signal when Update carries it
+       (-Images: Get-SIRunningImages). No image = Update as it is (the key is left out, never sent empty). #>
     param([Parameter(Mandatory)]$Update, [object[]]$Images = @())
     $imgs = @(@($Images) | Where-Object { $null -ne $_ })
     if (-not $imgs.Count) { return $Update }
     $o = [ordered]@{}
     foreach ($n in @($script:SIHeartbeatFields.Fields.Update)) { $o[$n] = $Update.$n }
+    if ($Update.PSObject.Properties[$script:SIHeartbeatFields.UpdateSignalField]) { $o[$script:SIHeartbeatFields.UpdateSignalField] = $Update.($script:SIHeartbeatFields.UpdateSignalField) }
     $o[$script:SIHeartbeatFields.UpdateRunningImagesField] = [object[]]$imgs
     [pscustomobject]$o
 }
@@ -2524,6 +2571,18 @@ function New-SIHeartbeatFields {
                 $inst = if ($hasInstalled) { $Installed } elseif (Get-Command -Name Get-SITelemetryReleaseVersion -ErrorAction SilentlyContinue) { Get-SITelemetryReleaseVersion } else { '' }
                 $cron = ''; if ($null -ne $armJobs) { $u = @($armJobs | Where-Object { $_.Key -eq 'updater' })[0]; if ($u) { $cron = $u.Cron } }
                 $uv = Get-SIHeartbeatUpdate -Rows @($CfgRows) -Installed $inst -UpdaterCron $cron -NowUtc $NowUtc
+                # framework 8.18: the "Update now" mark the updater was started on (signal, after the agreed five) -- in its own
+                # try: a value that does not pass leaves the key out, never the rest of Update
+                if ($null -ne $uv -and $c.UpdateSendSignal) {
+                    try {
+                        $sg = Get-SIHeartbeatUpdateSignal -Rows @($CfgRows) -NowUtc $NowUtc
+                        if ($null -ne $sg) {
+                            $us = Add-SIHeartbeatUpdateSignal -Update $uv -Signal $sg
+                            $why = Test-SIHeartbeatField -Name 'Update' -Value $us
+                            if (-not $why) { $uv = $us } else { $problems.Add(('the update-now signal was left out: {0}' -f $why)) }
+                        }
+                    } catch { $problems.Add(('the update-now signal could not be read ({0}) -- Update goes without it' -f $_.Exception.Message)) }
+                }
                 # framework SEC-LANE-1: the images the install RUNS (runningImages, after the agreed five) -- in its own try:
                 # a read or a value that does not pass leaves the key out, never the rest of Update
                 if ($null -ne $uv -and $c.UpdateSendRunningImages) {

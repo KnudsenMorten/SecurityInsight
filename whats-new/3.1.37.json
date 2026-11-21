@@ -1,0 +1,13 @@
+{
+  "version": "3.1.37",
+  "date": "2026-11-19",
+  "type": "fix-only",
+  "summary": "The Findings page lists only the runs whose findings are kept.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "Findings lists only kept runs",
+      "text": "The Findings page's collection picker lists only the runs whose findings are kept (the newest 3 by default), like every view."
+    }
+  ]
+}

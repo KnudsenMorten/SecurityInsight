@@ -288,8 +288,8 @@ Describe '4. GUARD: no provider in memory, no size picks a method, the reads sta
     }
     It 'the Azure reads take Resource Graph page by page and read the records from the stream''s index' -TestCases @(
         @{ f = 'engine\asset-profiling\discovery\Get-SIAzureContext.ps1'; must = "OnPage = { param(`$PageRows) & `$OnRows @(`$PageRows) }" }
-        @{ f = 'engine\asset-profiling\discovery\Get-SIMdcAssessmentSummary.ps1'; must = '-OnPage $take' }
-        @{ f = 'engine\asset-profiling\discovery\Get-SIMdcExposure.ps1'; must = '$null = & $take $rowsOfPage.ToArray()' }
+        @{ f = 'engine\asset-profiling\discovery\Get-SIMdcAssessmentSources.ps1'; must = '-OnPage $take' }
+        @{ f = 'engine\asset-profiling\discovery\Get-SIMdcExposure.ps1'; must = '$null = & $take @($exp[$i..' }
         @{ f = 'engine\asset-profiling\discovery\Get-SIDerivedSources.ps1'; must = 'foreach ($id in $s.AzureIndex.Keys) {'; perSubscription = $true }
     ) {
         $t = & $script:Read $f
@@ -303,6 +303,7 @@ Describe '4. GUARD: no provider in memory, no size picks a method, the reads sta
         @{ f = 'engine\asset-profiling\discovery\Get-SIAzureContext.ps1' }
         @{ f = 'engine\asset-profiling\discovery\Get-SIMdcExposure.ps1' }
         @{ f = 'engine\asset-profiling\discovery\Get-SIMdcAssessmentSummary.ps1' }
+        @{ f = 'engine\asset-profiling\discovery\Get-SIMdcAssessmentSources.ps1' }
         @{ f = 'engine\asset-profiling\discovery\Get-SIDerivedSources.ps1' }
     ) {
         $code = (& $script:Read $f) -split "`r?`n" | Where-Object { $_ -notmatch '^\s*#' }

@@ -382,6 +382,16 @@ pre { background: var(--code-bg); border: 1px solid var(--border); border-radius
 .notice { border-radius: var(--radius); padding: .7rem .9rem; margin: 0 0 14px; border: 1px solid var(--border); background: var(--surface-1); }
 .notice.ok { background: var(--good-bg); color: var(--good); border-color: transparent; }
 .notice.warn { background: var(--warning-bg); color: var(--warning); border-color: transparent; }
+/* owner 2026-11-19: a per-report "older data" notice is one slim line; its details fold open in place */
+.notice.slim { padding: .25rem .6rem; margin: 0 0 8px; font-size: .85rem; line-height: 1.4; }
+.notice.slim details.help { display: inline; margin: 0 0 0 .5rem; padding: 0; border: 0; background: none; }
+.notice.slim details.help > summary { display: inline; cursor: pointer; text-decoration: underline; }
+.notice.slim details.help[open] { display: block; margin: .3rem 0 0; }
+/* owner 2026-11-19: the task reports' filter is the standard row -- narrow cells, the data stays in view */
+details[data-task-dimensions] { margin: 0 0 8px; }
+details[data-task-dimensions] > summary { cursor: pointer; }
+details[data-task-dimensions] .filters { margin: .4rem 0 0; }
+details[data-task-dimensions] .filters > div { flex: 0 1 11rem; }
 .notice.error { background: var(--critical-bg); color: var(--critical); border-color: transparent; }
 /* framework PENDING-1: a BLOCKING item (waits for a person) -- the attention colour; an informational count (pending
    staged changes, tasks) keeps the warning colour, never this one */

@@ -21,7 +21,7 @@ anything that needs a person says so in plain words.
 | The Invardia support link | Sends SecurityInsight's health and run results to Invardia support, so support can see problems and updates can roll out. See [The Invardia support link](#the-invardia-support-link). | Every 15 minutes (it sends at most once per half hour) |
 | Configuration backup | A daily backup of every configuration record you made, in the SecurityInsight database; kept 90 days by default. | Daily, 18:00 UTC |
 | The updater | Keeps the install on its update ring. See [Updates and upgrades](upgrade). | Daily, 18:30 in the local time of the install's Azure region (Danish time when the region is not known) |
-| The web app and MCP server | Views, settings, approvals; the MCP server answers read-only questions from MCP clients. | Always on (the web app scales to zero) |
+| The web app and MCP server | Views, settings, approvals; the MCP server answers read-only questions from MCP clients inside the installation (on a new installation it is closed to the internet). | Always on (the web app scales to zero) |
 
 ## Where you watch it
 

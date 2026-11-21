@@ -322,9 +322,9 @@
     "AI_MaxAttempts": {
       "label": "AI call attempts",
       "purpose": "How many times Risk Analysis tries an AI request when the AI service times out, throttles or has a temporary failure.",
-      "defaultText": "4 attempts.",
+      "defaultText": "2 attempts: the first and one retry; never again after a refused request (HTTP 400).",
       "effect": "More attempts make the AI summary more likely to succeed under load, but a failing service makes the run take longer. Other errors fail at once regardless.",
-      "whenToChange": "Raise if AI summaries often fail on throttling or timeouts.",
+      "whenToChange": "There is no need: SecurityInsight never sends one AI request more than twice, and never resends a refused (HTTP 400) request.",
       "unit": "attempts",
       "advanced": true,
       "group": "AI"
@@ -873,6 +873,16 @@
       "whenToChange": "After a few real runs, set it to your observed cost per call.",
       "unit": "USD",
       "advanced": true,
+      "group": "AI"
+    },
+    "SI_AI_DailyTokenBudget": {
+      "label": "AI daily limit (tokens)",
+      "purpose": "Caps what AI can cost this install per day, whatever the runs do. It applies only when AI is switched on.",
+      "defaultText": "200,000 tokens a day -- at a large model's list price (about USD 11 / DKK 75 per million tokens) at most about USD 2 / DKK 15 a day",
+      "effect": "Every AI request of every engine counts against it. At the limit no further AI request is sent until the next UTC day: the runs go on, assets that were not asked are classified by rules only, and SecurityInsight writes one warning and raises one alert. Cost per day is at most this many tokens at your model's price.",
+      "whenToChange": "Raise it only when you have switched AI on, seen a few runs and want more AI answers per day; a large first run after switching on may need one day more.",
+      "unit": "tokens",
+      "advanced": false,
       "group": "AI"
     },
     "SI_AISummary_Leader": {
@@ -2360,10 +2370,10 @@
     },
     "SI_PrivilegeTierClassifier_RunAI": {
       "label": "AI for privilege tier catalog",
-      "purpose": "An override for ONE engine: whether the privilege tier classifier asks Azure OpenAI to tier new roles and permissions. It follows its own switch, not AI integration: it calls AI whenever the Azure OpenAI settings are set, unless this is off.",
-      "defaultText": "On.",
-      "effect": "Turning it off sends nothing to Azure OpenAI. The built-in roles, groups and permissions then take their tier from the daily classified catalog, which is downloaded (Privilege tier catalog source); your own custom roles keep the tier they had, and new ones are left unresolved for manual review. Removes AI cost for this engine.",
-      "whenToChange": "Only to keep AI out of the privilege tier classifier while it is used elsewhere; or turn it off if you tier new roles yourself.",
+      "purpose": "An override for ONE engine: whether the privilege tier classifier asks Azure OpenAI to tier new roles and permissions. It follows its own switch, not AI integration, and is off unless a person switches it on.",
+      "defaultText": "Off: AI is used only when a person switches it on.",
+      "effect": "When on, the classifier asks Azure OpenAI to tier new roles and permissions, at AI cost. Off (the default) sends nothing to Azure OpenAI: the built-in roles, groups and permissions take their tier from the daily classified catalog, which is downloaded (Privilege tier catalog source); your own custom roles keep the tier they had, and new ones are left unresolved for manual review. Removes AI cost for this engine.",
+      "whenToChange": "Switch it on only when you want AI to tier new roles and permissions here and accept its cost; the downloaded catalog covers the built-in ones.",
       "advanced": true,
       "group": "AI"
     },
@@ -5918,6 +5928,7 @@
       "description": "Switch AI on or off per feature. Each needs the Azure OpenAI connection.",
       "settings": [
         "SI_EnableAI",
+        "SI_AI_DailyTokenBudget",
         "SI_EnableAI_azure",
         "SI_EnableAI_endpoint",
         "SI_DisableAI",

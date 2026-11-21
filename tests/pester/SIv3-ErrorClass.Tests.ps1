@@ -29,7 +29,7 @@ Describe 'the closed list' {
     It 'is exactly the agreed list, in order, with unknown as the fallback' {
         @(Get-SIErrorClasses) | Should -Be @('graph-401', 'graph-403', 'defender-403', 'arm-403', 'kv-403', 'storage-403', 'sql-login', 'mi-unavailable',
             'throttled', 'platform-timeout', 'platform-5xx', 'kql-query-defect', 'table-missing', 'ingest-4xx', 'ingest-short-count', 'settings-error',
-            'config-missing', 'licence-invalid', 'ai-error', 'guard-refused', 'report-incomplete', 'out-of-memory', 'database-full', 'transient-sql', 'grant-missing', 'unknown')
+            'config-missing', 'licence-invalid', 'ai-error', 'guard-refused', 'report-incomplete', 'out-of-memory', 'database-full', 'transient-sql', 'grant-missing', 'upstream-partial', 'column-not-ready', 'unknown')
         Get-SIErrorClass -Message 'something nobody has seen before' | Should -Be 'unknown'
         Get-SIErrorClass -Message '' | Should -Be 'unknown'
         Get-SIErrorClass | Should -Be 'unknown'
@@ -85,6 +85,15 @@ Describe 'real failure texts -> their class' {
         @{ Class = 'out-of-memory'; Why = 'a Graph call that ran out of memory'; Text = "Response from https://graph.microsoft.com/v1.0/users: Exception calling ""GetString"" with ""1"" argument(s): ""Exception of type 'System.OutOfMemoryException' was thrown.""" }
         @{ Class = 'out-of-memory'; Why = 'the Discover stage''s own end text'; Text = "The discovery source 'EntraUsers' did not complete (si-col-0501: out of memory) -- this identity collection is NOT COMPLETE and stays on its last good collection: Exception of type 'System.OutOfMemoryException' was thrown." }
         @{ Class = 'out-of-memory'; Why = 'Container Apps killed it'; Text = 'Container si exited: OOMKilled (exit code 137)' }
+        # 2026-11-20 (Invardia run-monitor gaps: these reached Invardia as 'unknown'): SecurityInsight's own warning sentences
+        @{ Class = 'upstream-partial'; Why = 'DD1CE0D5: Risk Analysis built on a partial profile run (3.1.11 si-ra-detailed/ra-query)'; Text = "built on incomplete profile data: the newest endpoint profile run ended 'success-partial' -- findings missing from this run are unknown, not resolved" }
+        @{ Class = 'upstream-partial'; Why = '1B60BEDE: the CMDB sync on a partial snapshot (3.1.11 si-cmdb-sql/snapshot-incomplete)'; Text = "partial snapshot -- endpoint: the endpoint run that produced the snapshot ended 'success-partial'. The CIs in the snapshot were created and updated; none of its CIs was counted absent or retired this run (a CI missing from a snapshot that is not complete is unknown, never absent). No action needed: the next complete snapshot counts absences again." }
+        @{ Class = 'column-not-ready'; Why = 'A52FD36A / 523D91A7: the endpoint ingest note not-stored (3.1.16.1 / 3.1.18 si-endpoint/run)'; Text = "SI_Endpoint_Profile_CL: the data collection rule was changed in this run and Azure was not yet storing every column when the rows arrived: this run's values for PrivilegedLogonStatus, MostFrequentUserComputedTier, Computer, ComputerFqdn, UserLoggedOn are missing. The rows are there; the next run stores these columns." }
+        @{ Class = 'column-not-ready'; Why = '48774ED3: the correlation gave up waiting for a new column (its text quotes the service''s SEM0100 -- not a query defect)'; Text = "correlation: Log Analytics has not finished adding the new column 'PrivilegedLogonEvidence' to SI_Endpoint_Profile_CL after 600 s: every read of the table is refused while it names that column. Correlation does not use the column; the next run reads the table again. The service said: 'project' operator: Failed to resolve scalar expression named '[""PrivilegedLogonEvidence""]'" }
+        @{ Class = 'report-incomplete'; Why = '76E31E82: Risk Analysis'' incomplete-reports sentence (3.1.16 si-ra-detailed/ra-query, code si-ra-0913)'; Text = "2 report(s) incomplete -- their findings are unknown, not remediated: Device_BrowserExtensions_Detailed (not complete: a source went silent: DeviceTvmBrowserExtensions returned no rows (it had 103 row(s) on 2026-11-09 18:48 UTC) -- the report kept its last result, nothing of it closed)" }
+        @{ Class = 'platform-5xx'; Why = 'B6142C3C: Log Analytics failed on its own side (3.1.30 si-flow/asset-datasync)'; Text = 'PS>TerminatingError(): "{"error":{"code":"PartialError","message":"There were some errors when processing your query.","details":[{"code":"EngineError","message":"Something went wrong processing your query on the server.","innererror":{"code":"-2146233088","message":"Partial query failure: 0x80131500 (message: ExecuteRemoteSubQuery failure ===> Status(StatusCode=\"Unavailable\", Detail=\"Error con' }
+        @{ Class = 'sql-login'; Why = '83EC46B2: an expired token (3.1.8, the data sync''s prepared view columns)'; Text = "the prepared view columns failed: Exception calling ""Open"" with ""0"" argument(s): ""Login failed for user '<token-identified principal>'. Token is expired.""" }
+        @{ Class = 'settings-error'; Why = 'D38A715D: the settings database, a failed TLS handshake (3.1.11 si-flow/settings)'; Text = 'SecurityInsight Pro: the settings database srv/db could not be read -- the run stops rather than use other settings. Exception calling "Open" with "0" argument(s): "A connection was successfully established with the server, but then an error occurred during the pre-login handshake. (provider: SSL Provider, error: 31 - Encryption(ssl/tls) handsha' }
     ) {
         Get-SIErrorClass -Message $Text | Should -Be $Class
         @(Get-SIErrorClasses) | Should -Contain $Class
@@ -249,11 +258,11 @@ Describe 'the builders send nothing' {
         $isPro = { param($full) $rel = & $relOf $full; [bool](@($proPaths | Where-Object { $rel -eq $_ -or $rel.StartsWith($_ + '/') }).Count) }
         $callers = @(Get-ChildItem -LiteralPath $script:SIRoot -Recurse -File -Filter '*.ps1' | Where-Object { (& $relOf $_.FullName) -notmatch '(^|/)tests/' -and $_.Name -notin 'SI-Telemetry.ps1' -and -not (& $isPro $_.FullName) } |
             Where-Object { (Get-Content -Raw -LiteralPath $_.FullName) -match 'New-SITelemetry(RunRecord|Heartbeat)' } | ForEach-Object { $_.Name })
-        # the support grant (Community AND Pro) reports each grant / close on the uplink through the sender's own send (framework SECAUDIT-1a);
         # the status report job ships in BOTH editions since framework PRO-COMMUNITY-SAME (2026-11-11) -- it builds its record and
         # sends it ONLY through the sender (Send-SITelemetryRecordWithFallback), which sends nothing for a Community install without
-        # its "Connect this install to Invardia" yes (asserted below and in SIv3-ProCommunitySame)
-        @($callers | Sort-Object) | Should -Be @('Invoke-SISupportGrant.ps1', 'SI-HeartbeatJob.ps1', 'SI-TelemetrySend.ps1')
+        # its "Connect this install to Invardia" yes (asserted below and in SIv3-ProCommunitySame). Since 2026-11-20 the support
+        # grant job builds no record of its own: after an open / close it starts the status report job (SupportAccess, OPEN-01).
+        @($callers | Sort-Object) | Should -Be @('SI-HeartbeatJob.ps1', 'SI-TelemetrySend.ps1')
         $hb = Get-Content -Raw -LiteralPath ([IO.Path]::Combine($script:SIRoot, 'engine', '_shared', 'SI-HeartbeatJob.ps1'))
         $hb | Should -Match 'Send-SITelemetryRecordWithFallback'
         # NEGATIVE: the status report job never calls the network itself

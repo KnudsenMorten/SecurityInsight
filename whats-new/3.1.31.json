@@ -7,7 +7,7 @@
   "fixes": [
     {
       "title": "Task columns in the Tasks view",
-      "text": "Remediations > Tasks now shows Paths, Closed, Reopened, Highest weighted risk and Security domain by default, next to the other vulnerability columns. A layout you saved yourself stays as you saved it; reset the layout to get the new default."
+      "text": "Remediations > Tasks per asset shows Paths, Closed, Reopened, Highest weighted risk and Security domain by default, next to the other vulnerability columns. A layout you saved yourself stays; reset the layout to get the new default."
     }
   ]
 }

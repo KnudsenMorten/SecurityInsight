@@ -271,10 +271,17 @@ function Compare-SIDataHealthVulnerabilities {
             was patched (or the CVE otherwise resolved) since the collection. Defender's machine read reports only what is
             open NOW and carries no fixed-on time, so the stored finding itself (it was in the collection) is the proof that
             the change came after the collection;
-          * a MISSING CVE Defender published after the collection (-CollectionTime; the Defender item's Published) -- it did
-            not exist when the collection was made.
-        A missing CVE that existed at the collection's time (published before it, or no publication date) stays a real
-        miss: SecurityInsight never holds fewer findings than the source.
+          * a MISSING CVE that was NEW ON THE DEVICE after the collection (-CollectionTime) -- it was not on the device when
+            the collection was made. Judged (2026-11-20) by when Defender FIRST SAW the CVE on that device: the Defender
+            item's FirstSeen, else the first sighting a newer collection stored for it (-Newer: its SourceFirstDetected,
+            Defender's firstSeenTimestamp of the device-CVE pair). Only when neither is known, by the CVE's publication (the
+            item's Published) -- a browser CVE batch is published BEFORE Defender attaches it to a device hours later, so
+            the publication alone called those SI misses (one install, 2026-11-19: 12,288 "missing", all first seen after the
+            collection);
+          * a MISSING CVE a NEWER complete collection already holds for that device (-Newer) -- SI has it.
+        A missing CVE that was on the device at the collection's time (first seen before it -- or, with no first sighting,
+        published before it -- and in no newer collection) stays a real miss: SecurityInsight never holds fewer findings
+        than the source.
         Returns @{ Source = @{ Sampled; Found; Missing; Drift }; Reports = @(@{ Report; Sampled; Matched; Missing; Extra;
         Drift; FixedSince; NewSince }); Assets; NotRead; Problems }.
     #>
@@ -282,9 +289,21 @@ function Compare-SIDataHealthVulnerabilities {
           # CR2: { param([string]$Report, [string]$Cve, $LastModified) } -> would THAT report keep this CVE? (the report's own
           # exclusions: excluded CVEs, the CVE minimum age -- Test-RAInScopeFinding). Not given = every CVE is expected.
           [scriptblock]$InScope,
-          # #747: the stored collection's time (sidata.Collection.CollectionTime); not given = no missing CVE is drift
-          [AllowNull()]$CollectionTime)
+          # #747: the stored collection's time (sidata.Collection.CollectionTime); not given = no missing CVE is drift by time
+          [AllowNull()]$CollectionTime,
+          # 2026-11-20: the CVEs a NEWER complete collection holds for the sampled devices: @{ MdeId; Cve; FirstSeen } (FirstSeen:
+          # Defender's first sighting of the device-CVE pair as that collection stored it; may be empty). Not given = none.
+          [AllowEmptyCollection()][object[]]$Newer = @())
     $collAt = ConvertTo-SIDataHealthUtc $CollectionTime
+    $newerBy = @{}
+    foreach ($n in @($Newer)) {
+        if ($null -eq $n) { continue }
+        $nm = ([string](Get-SIDataHealthItem $n 'MdeId')).ToLowerInvariant(); $nc = ([string](Get-SIDataHealthItem $n 'Cve')).Trim().ToUpperInvariant()
+        if (-not $nm -or -not $nc) { continue }
+        if (-not $newerBy.ContainsKey($nm)) { $newerBy[$nm] = @{} }
+        $nf = ConvertTo-SIDataHealthUtc (Get-SIDataHealthItem $n 'FirstSeen')
+        if (-not $newerBy[$nm].ContainsKey($nc) -or ($null -ne $nf -and ($null -eq $newerBy[$nm][$nc] -or $nf -lt $newerBy[$nm][$nc]))) { $newerBy[$nm][$nc] = $nf }
+    }
     $byAsset = @{}
     foreach ($s in @($Stored)) {
         if ($null -eq $s) { continue }
@@ -308,16 +327,24 @@ function Compare-SIDataHealthVulnerabilities {
         $dset = New-Object 'System.Collections.Generic.HashSet[string]'
         $dmod = @{}
         $dnew = New-Object 'System.Collections.Generic.HashSet[string]'
+        $newerMine = @{}; if ($newerBy.ContainsKey($m)) { $newerMine = $newerBy[$m] }
         foreach ($c in @($Defender[$m])) {
-            # a CVE id, or @{ Cve; LastModified; Published } (LastModified: the date the report's minimum age is judged by;
-            # Published: when Defender published the CVE -- after the collection = it did not exist then)
-            $cv = ''; $lm = $null; $pb = $null
-            if ($c -is [string]) { $cv = $c } else { $cv = [string](Get-SIDataHealthItem $c 'Cve'); $lm = Get-SIDataHealthItem $c 'LastModified'; $pb = Get-SIDataHealthItem $c 'Published' }
+            # a CVE id, or @{ Cve; LastModified; Published; FirstSeen } (LastModified: the date the report's minimum age is
+            # judged by; FirstSeen: when Defender first saw the CVE on THIS device; Published: when the CVE was published)
+            $cv = ''; $lm = $null; $pb = $null; $fs = $null
+            if ($c -is [string]) { $cv = $c } else { $cv = [string](Get-SIDataHealthItem $c 'Cve'); $lm = Get-SIDataHealthItem $c 'LastModified'; $pb = Get-SIDataHealthItem $c 'Published'; $fs = Get-SIDataHealthItem $c 'FirstSeen' }
             $cv = $cv.Trim().ToUpperInvariant()
             if ($cv) {
                 [void]$dset.Add($cv); $dmod[$cv] = $lm
-                $pu = ConvertTo-SIDataHealthUtc $pb
-                if ($collAt -and $pu -and $pu -gt $collAt) { [void]$dnew.Add($cv) }
+                # new on the device after the collection: by Defender's first sighting on the device, else by the publication
+                $fu = ConvertTo-SIDataHealthUtc $fs
+                if ($null -eq $fu -and $newerMine.ContainsKey($cv)) { $fu = $newerMine[$cv] }
+                if ($collAt) {
+                    if ($null -ne $fu) { if ($fu -gt $collAt) { [void]$dnew.Add($cv) } }
+                    else { $pu = ConvertTo-SIDataHealthUtc $pb; if ($pu -and $pu -gt $collAt) { [void]$dnew.Add($cv) } }
+                }
+                # a newer complete collection already holds it on this device: SI has it -- drift, not a miss
+                if ($newerMine.ContainsKey($cv)) { [void]$dnew.Add($cv) }
             }
         }
         $keep = { param($rep, $cve) if (-not $InScope) { return $true }; try { [bool](& $InScope $rep $cve $dmod[$cve]) } catch { $true } }
@@ -332,7 +359,7 @@ function Compare-SIDataHealthVulnerabilities {
         $src.Found += $f; $src.Missing += ($expected.Count - $f); $src.Drift += $fd
         $realMiss = $expected.Count - $f - $fd
         if ($realMiss -gt 0) { $problems.Add([pscustomobject]@{ Key = $m; Name = $name; Problem = ('{0} vulnerability(ies) Defender reports are not in any report' -f $realMiss) }) }
-        if ($fd -gt 0) { $problems.Add([pscustomobject]@{ Key = $m; Name = $name; Problem = ('{0} vulnerability(ies) Defender published after the collection are not in any report yet (drift)' -f $fd) }) }
+        if ($fd -gt 0) { $problems.Add([pscustomobject]@{ Key = $m; Name = $name; Problem = ('{0} vulnerability(ies) new on the device after the collection (or already in a newer collection) are not in this collection''s reports (drift)' -f $fd) }) }
         foreach ($rep in @($mine.Keys)) {
             if (-not $reports.Contains($rep)) { $reports[$rep] = @{ Report = $rep; Sampled = 0L; Matched = 0L; Missing = 0L; Extra = 0L; Drift = 0L; FixedSince = 0L; NewSince = 0L } }
             $r = $reports[$rep]; $set = $mine[$rep]
@@ -340,10 +367,10 @@ function Compare-SIDataHealthVulnerabilities {
             # missing: what Defender reports that THIS report would keep (its own exclusions applied) and does not hold
             $mi = 0; $md = 0; foreach ($c in $dset) { if (-not $set.Contains($c) -and (& $keep $rep $c)) { $mi++; if ($dnew.Contains($c)) { $md++ } } }
             $r.Matched += $mt; $r.Extra += $ex; $r.Missing += $mi; $r.Sampled += ($mt + $ex + $mi)
-            # drift: every extra (fixed since the collection) + the missing CVEs published after it
+            # drift: every extra (fixed since the collection) + the missing CVEs new on the device after it (or in a newer collection)
             $r.FixedSince += $ex; $r.NewSince += $md; $r.Drift += ($ex + $md)
             if ($ex -gt 0) { $problems.Add([pscustomobject]@{ Key = $m; Name = $name; Problem = ('{0}: {1} vulnerability(ies) Defender no longer reports -- fixed since the collection (drift)' -f $rep, $ex) }) }
-            if ($md -gt 0) { $problems.Add([pscustomobject]@{ Key = $m; Name = $name; Problem = ('{0}: {1} vulnerability(ies) Defender published after the collection (drift)' -f $rep, $md) }) }
+            if ($md -gt 0) { $problems.Add([pscustomobject]@{ Key = $m; Name = $name; Problem = ('{0}: {1} vulnerability(ies) new on the device after the collection (or already in a newer collection) (drift)' -f $rep, $md) }) }
         }
     }
     [pscustomobject]@{
@@ -383,7 +410,7 @@ function Get-SIDataHealthDiffer {
 function Format-SIDataHealthDriftText {
     <#
         PURE (#747). The drift in words for the verdict's reason -- '' when there is none. A report: "N fixed since the
-        collection -- drift" (and "M published after the collection -- drift"); a source: "N changed in the source after the
+        collection -- drift" (and "M new on the device after the collection -- drift"); a source: "N changed in the source after the
         collection -- drift".
     #>
     param([long]$Drift = 0, [long]$FixedSince = -1, [long]$NewSince = 0, [string]$Kind = 'report')
@@ -392,9 +419,9 @@ function Format-SIDataHealthDriftText {
     if ($Kind -eq 'report') {
         if ($FixedSince -lt 0) { $FixedSince = $Drift - $NewSince }
         if ($FixedSince -gt 0) { $parts.Add(('{0} fixed since the collection -- drift' -f $FixedSince)) }
-        if ($NewSince -gt 0) { $parts.Add(('{0} published after the collection -- drift' -f $NewSince)) }
+        if ($NewSince -gt 0) { $parts.Add(('{0} new on the device after the collection -- drift' -f $NewSince)) }
     } elseif ($NewSince -gt 0) {
-        $parts.Add(('{0} published after the collection -- drift' -f $NewSince))
+        $parts.Add(('{0} new on the device after the collection -- drift' -f $NewSince))
     } else {
         $parts.Add(('{0} changed in the source after the collection -- drift' -f $Drift))
     }

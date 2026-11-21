@@ -1,0 +1,38 @@
+{
+  "version": "3.1.39",
+  "date": "2026-11-20",
+  "type": "feature",
+  "summary": "Defender for Cloud findings are read from two sources, so none go missing; long data syncs finish reliably.",
+  "new": [
+    {
+      "title": "Defender for Cloud read from two sources",
+      "text": "SecurityInsight reads your Defender for Cloud findings both from Azure Resource Graph and from Defender for Cloud itself, per subscription, and combines them. Findings that one source stops returning are still read from the other."
+    },
+    {
+      "title": "Support can load a licence edition",
+      "text": "Support can request a licence edition for your installation, or switch back to the previous licence, through the nightly update. Only a licence signed for your own tenant is ever installed."
+    }
+  ],
+  "fixes": [
+    {
+      "title": "New vulnerabilities counted correctly in data health",
+      "text": "Data health counts a vulnerability that Defender reports on a device after a collection as new, not as missing from SecurityInsight."
+    },
+    {
+      "title": "Long data syncs finish",
+      "text": "A long data sync keeps a valid sign-in to the database for its whole run, and a short service fault in Log Analytics is retried instead of ending the step."
+    },
+    {
+      "title": "Every failed run names its cause",
+      "text": "Each failed run reports a stable code that says what happened, so support sees the cause at once."
+    },
+    {
+      "title": "Collection picker and Findings page",
+      "text": "The collection picker shows each run's time and rows only, and the Findings page lists only the runs whose findings are kept."
+    },
+    {
+      "title": "ServiceNow checks of the task tables",
+      "text": "The ServiceNow check of the remediation task tables checks the connection, the table and its columns, without a false warning about measuring them."
+    }
+  ]
+}

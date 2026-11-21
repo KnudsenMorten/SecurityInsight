@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Create or update caj-si-updater: the nightly job that keeps a CONTAINER-hosted SecurityInsight on the
+    Create or update the updater job: the nightly job that keeps a CONTAINER-hosted SecurityInsight on the
     version its update ring approves (#160, operator ruling 2026-09-29: "Updater job").
 
 .DESCRIPTION
@@ -11,7 +11,7 @@
     Shows what it would do by default; -Apply makes the changes. Idempotent -- re-running updates in place.
 
       1. builds the updater image (container/updater) in the customer's registry: si-updater:v<VERSION>;
-      2. ensures a user-assigned identity (uami-si-updater) that Container Apps uses ONLY to resolve the two
+      2. ensures the updater identity (a user-assigned managed identity) that Container Apps uses ONLY to resolve the two
          Key Vault-referenced secrets and to pull the image -- every Azure action the updater takes is done
          as the SPN, by certificate;
       3. creates or updates the job: scheduled, one replica, the SPN's certificate as a Key Vault REFERENCE (or none
@@ -67,8 +67,8 @@ param(
     [ValidateSet('invardia', 'community', 'feed')][string]$Source = 'invardia',
     [string]$SpnClientId,                                      # the SPN's app id (not with -UseManagedIdentity)
     [Parameter(Mandatory)][string]$TenantId,
-    # 18:30 in the LOCAL time of the install's Azure region (owner 2026-10-21), as the zone's UTC ticks -- e.g. westeurope
-    # '30 16,17 * * *' (summer + winter), westus '30 1,2 * * *'; the updater ends the tick that is not 18:30 there
+    # 18:30 in the LOCAL time of the install's Azure region (owner 2026-10-21), as that time in UTC -- e.g. westeurope
+    # '30 16,17 * * *' (summer + winter), westus '30 1,2 * * *'; the updater ends the start that is not 18:30 there
     # (setup/_shared/SI-NightlySchedule.ps1). Not given: computed from -Region, else from the location of the Container Apps
     # environment (-EnvName), else of the resource group; a region not known = Danish time, said in one line. The job records
     # the zone (tags si-nightly-schedule + si-nightly-region + si-nightly-1900), so the update's one-time steps have nothing to move. A -Schedule
@@ -83,13 +83,15 @@ param(
     [string]$ProSqlDatabase,
     [string]$Block      = '',                    # capabilities this customer blocks, e.g. 'engine-image'
     [string]$JobName    = 'caj-si-updater',
+    # the updater identity's name: the guided install passes the name it gave the install; the default fits an install whose
+    # identities have not moved to the standard names yet
     [string]$IdentityName = 'uami-si-updater',
     # the Pro web app (its old Key Vault right is removed with -GrantSpnRoles: it hands secrets to the updater now)
     [string]$WebAppName = 'ca-si-management',
     # the Pro MCP server (CR5 step 1: recorded on the job with the web app's and the job's own name, SI_UPDATER_MCP_APP)
     [string]$McpAppName = 'ca-si-mcp',
-    # #350 / #222: the job signs in as its own user-assigned identity (uami-si-updater) -- no certificate in the vault, as PIM's
-    # ca-pim-update. -GrantSpnRoles then grants the IDENTITY what the SPN would get.
+    # #350 / #222: the job signs in as the updater identity (a user-assigned managed identity) -- no certificate in the vault,
+    # as PIM's update job. -GrantSpnRoles then grants the IDENTITY what the SPN would get.
     [switch]$UseManagedIdentity,
     [switch]$GrantSpnRoles,
     # #352: give the updater's identity its database rights on the Pro database (as the caller -- the server's Entra admin)

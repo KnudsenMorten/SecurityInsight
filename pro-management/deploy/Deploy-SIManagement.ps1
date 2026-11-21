@@ -143,7 +143,7 @@ param(
     # adds the SQL server's "Allow Azure services" rule (see step 5 for why per-IP rules do not work without a VNet)
     [switch]$SqlAllowAzureServices,
     [switch]$GrantSql,
-    # CR7 (framework 12.11g): put the web app behind the ONE shared sign-in front (FRAMEWORK/signin-front at the version
+    # CR7 (framework 12.11g): put the web app behind the ONE shared sign-in front (signin-front (retired; source deleted) at the version
     # pro-management\signin-front.pin.json pins) -- step 4d, SI-ManagementSigninFront.ps1. Default OFF: the web app signs
     # users in itself exactly as before. A web app already behind the front keeps it on a re-deploy without this switch.
     [switch]$SigninFront,

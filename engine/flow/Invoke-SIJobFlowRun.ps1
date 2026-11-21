@@ -149,9 +149,29 @@ if ($HostKind -eq 'Container') {
     $installed = @(Get-SIJobFlowVmInstalled -Root $siRoot -Flavour $Flavour)
 }
 
+# ---- CR8 step 2, SIGNED REQUESTS ENFORCED (framework 12.11f item 2, OPEN-04): FIRST, before anything acts -- the people's
+# changes verified against their signed Entra tokens (signature, issuer, audience, time, person). OBSERVE ONLY at every install
+# until a SuperAdmin there signs the adoption of the configuration the runner recorded (owner 2026-11-04, framework
+# REQUIREMENTS.md:64-65): what would be refused is reported, nothing is held. Once adopted, a change made in the web app
+# without a verified signed request HOLDS every NEW pipeline run (a running run is never stopped) and the web app's job
+# trigger / start requests wait; a resend into a connector without one is refused. On the audit trail. A failed check holds nothing.
+$signedHold = @{ Text = '' }
+if ($proStore -and -not $housekeepingOnly) {
+    try {
+        $sgr = Join-Path $siRoot 'engine/_shared/SI-SignedRequests.ps1'
+        if (Test-Path -LiteralPath $sgr) {
+            . $sgr
+            $sgTenant = @([string]$global:SI_SPN_TenantId, [string]$global:AzureTenantId, [string]$env:SI_TENANT_ID) | Where-Object { $_ } | Select-Object -First 1
+            $sgRes = Invoke-SISignedRequestEnforcement -Invoke $proStore.Invoke -TenantId ([string]$sgTenant) -Audience ([string]$global:SI_Web_SignInClientId) -Version $siVersion -Log $say
+            if ($sgRes -and $sgRes.Hold) { $signedHold.Text = [string]$sgRes.Hold }
+        }
+    } catch { & $say 'WARN' ('signed requests: not checked in this wake-up ({0})' -f $_.Exception.Message) }
+}
 # ---- CR8 (framework 12.11f item 1): the job trigger changes the web app ASKED for (it holds start-only rights on the jobs)
 # -- applied first, as this job's own identity, the trigger and tags only, read back, each row recorded. Never stops the run.
-if ($HostKind -eq 'Container' -and $proStore -and $armSeams -and -not $housekeepingOnly) {
+# They wait while a change without a verified signed request holds the pipeline (above).
+if ($signedHold.Text) { & $say 'INFO' 'job trigger and job start requests wait while the pipeline is held for a change without a verified signed request' }
+if ($HostKind -eq 'Container' -and $proStore -and $armSeams -and -not $housekeepingOnly -and -not $signedHold.Text) {
     try {
         $jtr = Join-Path $siRoot 'engine/_shared/SI-JobTriggerRequests.ps1'
         if (Test-Path -LiteralPath $jtr) {
@@ -160,17 +180,23 @@ if ($HostKind -eq 'Container' -and $proStore -and $armSeams -and -not $housekeep
         }
     } catch { & $say 'WARN' ('job trigger requests: not applied in this wake-up ({0})' -f $_.Exception.Message) }
 }
-# ---- CR8 step 2, OBSERVE ONLY (framework 12.11f item 2): the people's changes verified against their signed Entra tokens
-# (signature, issuer, audience, time, person) -- recorded and said; NOTHING is refused. Never stops the run.
-if ($proStore -and -not $housekeepingOnly) {
+# ---- #1292 (SECURE-WEB-1): the starts a person asked for that the web app cannot make itself (it holds no job right) --
+# today the connector page's ServiceNow check. Started here as this job's own identity with a plain start (no override)
+# and bound to the request, so the job takes its values (engine\_shared\SI-JobStartRequest.ps1). ALSO in a wake-up during a
+# run: the check is the mail job outbox-only, it sends nothing and never touches the running run; while the mail job itself
+# runs, the request waits for a later wake-up.
+if ($HostKind -eq 'Container' -and $proStore -and $armSeams -and -not $signedHold.Text) {
     try {
-        $sgr = Join-Path $siRoot 'engine/_shared/SI-SignedRequests.ps1'
-        if (Test-Path -LiteralPath $sgr) {
-            . $sgr
-            $sgTenant = @([string]$global:SI_SPN_TenantId, [string]$global:AzureTenantId, [string]$env:SI_TENANT_ID) | Where-Object { $_ } | Select-Object -First 1
-            $null = Invoke-SISignedRequestCheck -Invoke $proStore.Invoke -TenantId ([string]$sgTenant) -Audience ([string]$global:SI_Web_SignInClientId) -Log $say
+        $jsr = Join-Path $siRoot 'engine/_shared/SI-JobStartRequest.ps1'
+        if (Test-Path -LiteralPath $jsr) {
+            if (-not (Get-Command -Name Invoke-SIJobRunnerStarts -ErrorAction SilentlyContinue)) { . $jsr }
+            $rsSeams = $armSeams
+            $null = Invoke-SIJobRunnerStarts -Invoke $proStore.Invoke -Installed @($armSeams.List() | Where-Object { $_ -like 'caj-si-*' }) -Log $say `
+                -Start { param($j) $rsSeams.Start($j) } `
+                -Running { param($j) $ex = & $rsSeams.Arm 'GET' ('{0}/{1}/executions' -f $rsSeams.Base, $j) $null
+                           [bool]@(@($ex.value) | Where-Object { $_ -and [string]$_.properties.status -in 'Running', 'Processing' }).Count }
         }
-    } catch { & $say 'WARN' ('signed requests: not checked in this wake-up ({0})' -f $_.Exception.Message) }
+    } catch { & $say 'WARN' ('the starts people asked for: not made in this wake-up ({0}) -- the next one tries again' -f $_.Exception.Message) }
 }
 
 # ---- the definition ----
@@ -913,7 +939,9 @@ if ($HostKind -eq 'Container' -and $armSeams -and $armSeams.PSObject.Methods['Ex
 
 $drain = $null
 try {
-    $drain = Invoke-SIPipelineDrain -Definition $pipeDefinition -Control $control -LoadLast { $runStore.Load() } -RunOne $pipeRunOne -Request $pipeRequest -Holder $lockHolder -Log $say -UpdateRunning $updateRunning -CodeCurrent $codeCurrent -CloseCancelled $closeCancelled -UpdateWaits $updateWaits -StartUpdate $startUpdate
+    # OPEN-04: a change without a verified signed request holds every NEW run (the sentence said above); a resume never
+    $startHold = { [string]$signedHold.Text }.GetNewClosure()
+    $drain = Invoke-SIPipelineDrain -Definition $pipeDefinition -Control $control -LoadLast { $runStore.Load() } -RunOne $pipeRunOne -Request $pipeRequest -Holder $lockHolder -Log $say -UpdateRunning $updateRunning -CodeCurrent $codeCurrent -CloseCancelled $closeCancelled -UpdateWaits $updateWaits -StartUpdate $startUpdate -StartHold $startHold
 } catch {
     # #913: the pipeline lock could not be reached because Azure SQL answered a transient error for about a minute (the lock
     # calls retried it -- Invoke-SIPipelineLockCall). Nothing was started under it, so no run was affected: one WARN, a

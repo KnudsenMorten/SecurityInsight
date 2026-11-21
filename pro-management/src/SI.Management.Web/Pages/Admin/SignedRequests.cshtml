@@ -1,0 +1,57 @@
+@page
+@model SI.Management.Web.Pages.Admin.SignedRequestsModel
+@{
+    ViewData["Title"] = "Signed requests";
+}
+<h1>Signed requests</h1>
+<p class="lede">Every change a person makes here carries their signed Entra sign-in. The engine checks it before it acts on the change. Until a SuperAdmin adopts the configuration that exists now, SecurityInsight only reports what it would refuse.</p>
+@if (Model.Problem is not null) { <div class="notice error" role="alert" data-problem>@Model.Problem</div> }
+@if (Model.Error is not null) { <div class="notice error" role="alert">@Model.Error</div> }
+else if (!Model.Recorded)
+{
+    <div class="notice" role="status" data-not-recorded>Nothing is recorded yet. The pipeline runner records the current configuration at its next wake-up (every 5 minutes).</div>
+}
+else
+{
+    <section class="card" aria-labelledby="h-state" data-signed-state="@(Model.Adopted ? "enforce" : "observe")">
+        <h2 id="h-state">State</h2>
+        @if (Model.Adopted)
+        {
+            <p data-enforced>Enforced since @Model.AdoptedUtc?.ToString("yyyy-MM-dd HH:mm")Z (adopted by @Model.AdoptedBy). A change without a verified signed request holds new pipeline runs until it is undone or made again signed in.</p>
+        }
+        else
+        {
+            <p data-waiting><strong>@SI.Management.Web.Pages.Admin.SignedRequestsModel.Waiting</strong> - observe only since @Model.RecordedUtc?.ToString("yyyy-MM-dd HH:mm")Z. Nothing is held or refused now.</p>
+            <p data-would>In the last 14 days, @Model.WouldRefuse change(s) would have been refused (the audit trail lists them: signedrequest.change.would-refuse).</p>
+        }
+    </section>
+    <section class="card" aria-labelledby="h-recorded" data-recorded>
+        <h2 id="h-recorded">The recorded configuration</h2>
+        <p>Recorded hash: <code data-recorded-hash>@Model.RecordedHash</code></p>
+        <div class="table-wrap">
+            <table>
+                <thead><tr><th>Kind</th><th class="num">Rows</th><th>SHA-256</th></tr></thead>
+                <tbody>
+                    @foreach (var k in Model.Kinds) { <tr><td>@k.Name</td><td class="num">@k.Rows</td><td><code>@k.Sha256</code></td></tr> }
+                </tbody>
+            </table>
+        </div>
+        @if (!Model.Adopted && User.IsSuperAdmin())
+        {
+            <form method="post" asp-page-handler="Adopt" class="inline-form" data-adopt
+                  data-confirm-title="Adopt this configuration?" data-confirm="You adopt exactly the configuration recorded above, signed with your sign-in. After the engine has verified it, every change made in the web app must carry a verified signed request.">
+                <input type="hidden" name="Hash" value="@Model.RecordedHash" />
+                <button type="submit">Adopt the recorded configuration</button>
+            </form>
+        }
+    </section>
+    @if (Model.Requests.Count > 0)
+    {
+        <section class="card" aria-labelledby="h-requests" data-requests>
+            <h2 id="h-requests">Adoption requests</h2>
+            <ul>
+                @foreach (var r in Model.Requests) { <li>@r.By, @r.At?.ToString("yyyy-MM-dd HH:mm")Z: @(r.Decision ?? "waiting for the engine")@(r.Reason is null ? "" : " - " + r.Reason)</li> }
+            </ul>
+        </section>
+    }
+}

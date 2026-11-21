@@ -28,6 +28,7 @@
     { "slug": "servicenow-setup", "title": "Setting up ServiceNow for SecurityInsight", "order": 705, "file": "servicenow-setup.md" },
     { "slug": "servicenow-test-pack", "title": "Testing with the SecurityInsight test pack", "order": 706, "file": "servicenow-test-pack.md" },
     { "slug": "servicenow-troubleshooting", "title": "ServiceNow troubleshooting and FAQ", "order": 707, "file": "servicenow-troubleshooting.md" },
-    { "slug": "side-by-side",               "title": "SecurityInsight 3 beside 2.2",       "order": 19, "file": "side-by-side.md" }
+    { "slug": "side-by-side",               "title": "SecurityInsight 3 beside 2.2",       "order": 19, "file": "side-by-side.md" },
+    { "slug": "remediation-tasks",          "title": "Remediation tasks",                  "order": 20, "file": "remediation-tasks.md" }
   ]
 }

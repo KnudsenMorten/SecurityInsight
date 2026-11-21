@@ -221,6 +221,7 @@ public static class NavModel
         Group("Configuration", "Settings", "admin",
             new("/Admin/Settings/Index", "Settings", "admin"), new("/Admin/Settings/Email", "E-mail + links", "admin"), new("/Admin/Settings/Notifications", "Notifications", "admin"), new("/Admin/Settings/Reports", "Reports and alerts", "admin"), new("/Admin/Settings/ExportImport", "Export / Import", "superadmin")) with { Stage = Platform },
         new NavItem("Configuration", "/Admin/Access", "Access (roles + scopes)", "superadmin", Stage: Platform),
+        new NavItem("Configuration", "/Admin/SignedRequests", "Signed requests", "superadmin", Stage: Platform),
         Group("Configuration", "Departments (setup)", "admin",
             new("/Admin/Departments/Index", "Departments", "admin"), new("/Admin/Departments/Rules", "Department rules", "admin"),
             new("/Admin/Departments/Flows", "Remediation flows", "admin")) with { Stage = Platform },

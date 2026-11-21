@@ -1,0 +1,34 @@
+{
+  "version": "3.1.41",
+  "date": "2026-11-21",
+  "type": "feature",
+  "summary": "AI is off unless you switch it on, asks only about what changed, and stops at a daily limit you set; a stuck pipeline step no longer holds an update.",
+  "new": [
+    {
+      "title": "AI daily limit",
+      "text": "Configuration > Settings > AI has a daily limit in tokens, next to the AI switch, with what it costs per day. At the limit SecurityInsight sends no more AI requests that day and tells you once."
+    },
+    {
+      "title": "AI asks only about what changed",
+      "text": "With AI switched on, an asset is asked about only when the facts that decide its answer changed, 25 assets per request, with only those facts. Raw device data is never sent."
+    },
+    {
+      "title": "AI is off by default",
+      "text": "Every AI feature is off until a person switches it on in Settings, in both editions."
+    },
+    {
+      "title": "A stuck step no longer holds an update",
+      "text": "A pipeline step that has written nothing for far longer than it usually takes is stopped and reported, and the update follows when the run has ended. A step that still writes progress is never stopped."
+    }
+  ],
+  "fixes": [
+    {
+      "title": "The update moves itself early again",
+      "text": "The update's first step, pointing itself at the new release, works again instead of waiting until the end of the update."
+    },
+    {
+      "title": "AI requests are not repeated",
+      "text": "An AI request is tried at most twice, and a request the service refuses is not sent again."
+    }
+  ]
+}

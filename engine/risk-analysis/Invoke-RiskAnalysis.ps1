@@ -8811,7 +8811,11 @@ Rules:
             # status is a request defect and fails at once. A request message cannot be re-sent, so each
             # attempt builds its own.
             $response = $null; $__aiErr = ''
-            $__aiMax = if ($global:AI_MaxAttempts) { [int]$global:AI_MaxAttempts } else { 4 }
+            # OPENAI-CAP (owner 2026-11-21): at most 2 attempts (the first + one retry, a platform failure only -- never a
+            # 400), and the install's daily token budget is asked first (engine/_shared/SI-AiBudget.ps1)
+            $__aiMax = if ($global:AI_MaxAttempts -and [int]$global:AI_MaxAttempts -ge 1) { [Math]::Min(2, [int]$global:AI_MaxAttempts) } else { 2 }
+            if (-not (Get-Command -Name Test-SIAiBudgetOpen -ErrorAction SilentlyContinue)) { . (Join-Path (Split-Path -Parent $PSScriptRoot) '_shared/SI-AiBudget.ps1') }
+            if (-not (Test-SIAiBudgetOpen)) { throw (Get-SIAiBudgetRefusedText) }
             # #1257: the engine's own identity first (a bearer token); the key only as the fallback (said once); neither:
             # the AI summary fails alone with the plain message (the catch below), the report goes on without it
             $__aiAuth = Get-SIOpenAIAuthHeader
@@ -8909,6 +8913,8 @@ Rules:
             }
 
             $global:AI_SummaryText = ($sb.ToString() -replace "`r`n","`n" -replace "`r","`n").Trim()
+            # OPENAI-CAP: a streamed answer carries no usage block -- the request and the answer are counted by size
+            Add-SIAiBudgetUsage -Tokens ([long][Math]::Ceiling((([string]$body).Length + $global:AI_SummaryText.Length) / 3.0))
 
             # The whole summary, as ONE Write-Host call: the transcript records it as one block
             # instead of one line per token. This is what the operator actually reads.

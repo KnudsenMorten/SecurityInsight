@@ -17,6 +17,7 @@ BeforeDiscovery {
         @{ Rel = 'engine\asset-profiling\discovery\Get-DiscoveryFromAzureResources.ps1'; Min = 1 }
         @{ Rel = 'engine\asset-profiling\shared\AzureParentScopeCache.ps1';       Min = 3 }
         @{ Rel = 'engine\asset-profiling\shared\RuleIndexes.ps1';                 Min = 3 }
+        @{ Rel = 'engine\asset-profiling\discovery\Get-SIMdcAssessmentSources.ps1'; Min = 1 }
     )
 }
 

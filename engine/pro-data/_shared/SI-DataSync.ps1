@@ -78,6 +78,46 @@ $script:SIDataSyncParts = [ordered]@{
     ViewVersion         = @{ Name = 'the views'' data mark'; Step = 'views-mark' }
 }
 
+function Test-SIDataLaServerSideFailure {
+    <# PURE. Did Log Analytics fail on ITS OWN side ("Something went wrong processing your query on the server",
+       "ExecuteRemoteSubQuery failure ... Unavailable" -- a PartialError / EngineError answer)? -ErrorRecord: an ErrorRecord, an
+       exception or a text; its message, response body and error details are read. The pattern is SI-ErrorClass.ps1's
+       (Get-SIOwnWarningPatternsState), the one place it is written. #>
+    param([AllowNull()]$ErrorRecord)
+    if ($null -eq $ErrorRecord) { return $false }
+    if (-not (Get-Command -Name Get-SIOwnWarningPatternsState -ErrorAction SilentlyContinue)) { . ([System.IO.Path]::Combine($PSScriptRoot, '..', '..', '_shared', 'SI-ErrorClass.ps1')) }
+    $parts = New-Object System.Collections.Generic.List[string]
+    $parts.Add([string]$(if ($ErrorRecord -is [System.Management.Automation.ErrorRecord]) { $ErrorRecord.Exception.Message } elseif ($ErrorRecord -is [System.Exception]) { $ErrorRecord.Message } else { $ErrorRecord }))
+    try { if ($ErrorRecord -is [System.Management.Automation.ErrorRecord] -and $ErrorRecord.ErrorDetails) { $parts.Add([string]$ErrorRecord.ErrorDetails.Message) } } catch { }
+    try { if (Get-Command -Name Get-SIKqlErrorText -ErrorAction SilentlyContinue) { $parts.Add([string](Get-SIKqlErrorText -ErrorRecord $ErrorRecord)) } } catch { }
+    [bool](($parts -join ' | ') -match (Get-SIOwnWarningPatternsState).LogAnalyticsServerSide)
+}
+
+function Invoke-SIDataLaReadRetry {
+    <#
+        One read of the data sync from Log Analytics (-Read { } -> its answer), tried again when Log Analytics failed on its
+        OWN side (Test-SIDataLaServerSideFailure) -- working rule 4: a platform failure is retried in the run, a read is
+        idempotent. 2026-11-20 (Invardia B6142C3C / status hand-back 1F452EB2: at a large install the data sync's read got
+        "Something went wrong processing your query on the server ... ExecuteRemoteSubQuery failure ... Unavailable" after a
+        day of work, and the whole step failed on that one answer). -Waits: the pauses in seconds before each new attempt
+        (bounded); every other failure, and the last one, is thrown unchanged at once. -Log { param($Level, $Text) },
+        -Sleep { param($Seconds) } (tests).
+    #>
+    param([Parameter(Mandatory)][scriptblock]$Read, [int[]]$Waits = @(30, 60, 120), [scriptblock]$Log, [scriptblock]$Sleep)
+    if (-not $Sleep) { $Sleep = { param($s) Start-Sleep -Seconds $s } }
+    $try = 0
+    while ($true) {
+        try { return (& $Read) }
+        catch {
+            $e = $_
+            if ($try -ge @($Waits).Count -or -not (Test-SIDataLaServerSideFailure -ErrorRecord $e)) { throw }
+            $w = [int]@($Waits)[$try]; $try++
+            if ($Log) { try { & $Log 'WARN' ('Log Analytics failed on its own side for a read of the data sync ("Something went wrong processing your query on the server") -- reading again in {0} s (attempt {1} of {2})' -f $w, $try, @($Waits).Count) } catch { } }
+            if ($w -gt 0) { & $Sleep $w }
+        }
+    }
+}
+
 function Invoke-SIDataSyncCore {
     param(
         [Parameter(Mandatory)][scriptblock]$Query,

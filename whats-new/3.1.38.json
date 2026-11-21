@@ -1,0 +1,13 @@
+{
+  "version": "3.1.38",
+  "date": "2026-11-19",
+  "type": "feature",
+  "summary": "Support can switch off a report whose data source your licence does not include.",
+  "new": [
+    {
+      "title": "Reports switched off by support",
+      "text": "When a report's data source is not part of your licence, support can switch that report off for you, the same way an Admin does under Reports. The change is in the change log with who asked and why."
+    }
+  ],
+  "fixes": []
+}

@@ -439,6 +439,21 @@ function Get-SIResourceGroupTags {
     }
 }
 
+function Get-SIInstallOwnerTag {
+    <#
+        PURE. The "owner" tag of a new install's resource group (framework NAM-01: all 7 tags carry a value): -Given (the owner
+        the customer passes) when set; else -Account when the install was signed in by a PERSON (-AccountType 'User' or not
+        recorded -- the long-standing default); else '' (an app or managed identity is never an owner).
+    #>
+    param([AllowEmptyString()][AllowNull()][string]$Given, [AllowEmptyString()][AllowNull()][string]$Account, [AllowEmptyString()][AllowNull()][string]$AccountType)
+    if ("$Given".Trim()) { return "$Given".Trim() }
+    $t = "$AccountType".Trim()
+    if ($t -and $t -ne 'User') { return '' }
+    $a = "$Account".Trim()
+    if ($a -match '^[^@\s]+@[^@\s]+$') { return $a }
+    ''
+}
+
 function ConvertTo-SIAzCliTagArgs {
     <# PURE. The tags as az CLI arguments: --tags key=value ... (an empty value is passed as key=). #>
     param([Parameter(Mandatory)][System.Collections.IDictionary]$Tags)

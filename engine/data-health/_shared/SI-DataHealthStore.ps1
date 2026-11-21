@@ -154,6 +154,45 @@ FROM (
 '@.Replace('{MDEAPPLY}', (Get-SIDataHealthMdeRecordApply))
 }
 
+function Get-SIDataHealthRaNewerFindingsSql {
+    <# 2026-11-20 (the drift rule of check (b)): the CVEs the NEWEST complete Detailed collection made AFTER the judged one
+       (@CollectionId) holds for the sampled devices (@MdeIds: a JSON array), with Defender's first sighting of each
+       device-CVE pair as that collection stored it (SourceFirstDetected = the export's firstSeenTimestamp; may be NULL).
+       No newer complete collection = no rows. The same device record as the other two reads (Get-SIDataHealthMdeRecordApply). #>
+    @'
+SET NOCOUNT ON;
+DECLARE @j INT = TRY_CONVERT(INT, @CollectionId);
+DECLARE @jt DATETIME2(3) = (SELECT CollectionTime FROM sidata.Collection WHERE CollectionId = @j);
+DECLARE @n INT = (SELECT TOP (1) CollectionId FROM sidata.Collection WHERE Kind = N'Detailed' AND Status = N'Complete' AND @jt IS NOT NULL AND CollectionTime > @jt ORDER BY CollectionTime DESC);
+DECLARE @dev TABLE (MdeId NVARCHAR(64) NOT NULL PRIMARY KEY);
+INSERT @dev SELECT DISTINCT LOWER(LEFT([value], 64)) FROM OPENJSON(@MdeIds) WHERE [value] IS NOT NULL;
+SELECT d.MdeId, UPPER(f.Cve) AS Cve, MIN(f.SourceFirstDetected) AS FirstSeen, @n AS NewerCollectionId
+FROM sidata.Finding AS f
+{MDEAPPLY}
+JOIN @dev AS d ON d.MdeId = LOWER(COALESCE(mr.MdeId, f.RaAssetId))
+WHERE @n IS NOT NULL AND f.CollectionId = @n AND f.Cve LIKE N'CVE-%' AND f.CarriedFrom IS NULL
+GROUP BY d.MdeId, UPPER(f.Cve);
+'@.Replace('{MDEAPPLY}', (Get-SIDataHealthMdeRecordApply))
+}
+
+function Read-SIDataHealthNewerFindings {
+    <# The CVEs a newer complete collection holds for the sampled devices (Get-SIDataHealthRaNewerFindingsSql). BEST EFFORT:
+       a read that fails returns no rows and says so -- the drift rule then judges by the first sighting / publication only
+       (it can only call FEWER things drift, never more). Returns @{ Rows; Why }. #>
+    param([Parameter(Mandatory)][scriptblock]$Invoke, [AllowEmptyCollection()][string[]]$MdeIds = @(), [AllowNull()]$CollectionId,
+          [scriptblock]$Log = { param($level, $msg) })
+    $cid = $null; if ($null -ne $CollectionId -and "$CollectionId" -match '^\d+$') { $cid = [int]"$CollectionId" }
+    if ($null -eq $cid -or @($MdeIds).Count -eq 0) { return [pscustomobject]@{ Rows = @(); Why = '' } }
+    try {
+        $rows = @(Read-SIDataHealthRows -Invoke $Invoke -Sql (Get-SIDataHealthRaNewerFindingsSql) -Params @{ MdeIds = (ConvertTo-SIDataHealthJsonArray -Items $MdeIds); CollectionId = $cid })
+        return [pscustomobject]@{ Rows = $rows; Why = '' }
+    } catch {
+        $why = (([string]$_.Exception.Message) -split "`n")[0].Trim()
+        & $Log 'INFO' ('the newer collection''s findings could not be read ({0}) -- a missing CVE is judged by Defender''s first sighting, else its publication' -f $why)
+        return [pscustomobject]@{ Rows = @(); Why = $why }
+    }
+}
+
 function Test-SIDataHealthStoredFindingsComplete {
     <#
         PURE (#1185). Did the stored-findings read come back WHOLE? -Rows: what the reader returned; -MdeIds: the sampled

@@ -411,7 +411,8 @@ SELECT LOWER(CONVERT(varchar(64), {from}.TaskId, 2)) AS TaskId, {from}.AssetKey,
        {from}.Product, {from}.Version, {from}.Application, {from}.ApplicationPaths, {from}.FirstSeen, {from}.LastSeen, {from}.ClosedAt, {from}.ReopenCount,
        CASE WHEN {from}.InThisCollection = 1 THEN N'{RemediationTaskSql.SeenNow}' ELSE N'{RemediationTaskSql.SeenKept}' END AS Seen,
        {from}.CiOwner, {from}.CiDepartment, (SELECT dd.Name FROM cfg.Department AS dd WHERE dd.DepartmentId = {from}.DepartmentId) AS Department, {from}.SecurityDomain,
-       LOWER(CONVERT(varchar(64), {from}.TaskKeyHash, 2)) AS TaskGroup, {from}.Channel, {RatingText(from + ".RatingRank")} AS HighestRiskRating
+       LOWER(CONVERT(varchar(64), {from}.TaskKeyHash, 2)) AS TaskGroup, {from}.Channel, {RatingText(from + ".RatingRank")} AS HighestRiskRating,
+       {RemediationTaskSql.DetectedPaths(from)} AS DetectedPaths
 """;
 
     /// Remediations > Tasks per asset with dimensions chosen: the same columns as <see cref="RemediationTaskSql.Tasks"/>, every
@@ -451,7 +452,8 @@ SELECT LOWER(CONVERT(varchar(64), {from}.TaskId, 2)) AS TaskId, {from}.AssetKey,
             Source = $"""
 SELECT LOWER(CONVERT(varchar(64), l.TaskId, 2)) + N'|' + l.FindingKey AS LinkKey, LOWER(CONVERT(varchar(64), l.TaskId, 2)) AS TaskId, t.TaskName, t.Kind, t.State AS TaskState,
        COALESCE(t.AssetName, t.AssetKey, t.OwnerKey) AS AssetName, t.AssetKey, l.FindingKey, l.Cve AS CveId, l.Title, l.Severity, l.RiskScore,
-       l.Version, t.Application, t.ApplicationPaths, CASE WHEN l.InThisCollection = 1 THEN N'{RemediationTaskSql.SeenNow}' ELSE N'{RemediationTaskSql.SeenKept}' END AS Seen
+       l.Version, t.Application, t.ApplicationPaths, CASE WHEN l.InThisCollection = 1 THEN N'{RemediationTaskSql.SeenNow}' ELSE N'{RemediationTaskSql.SeenKept}' END AS Seen,
+       {RemediationTaskSql.DetectedPaths("t")} AS DetectedPaths
 FROM {from}
 JOIN sidata.RemediationTask AS t ON t.CollectionId = l.CollectionId AND t.TaskId = l.TaskId
 LEFT JOIN sidata.Ci AS c ON c.CiId = t.CiId

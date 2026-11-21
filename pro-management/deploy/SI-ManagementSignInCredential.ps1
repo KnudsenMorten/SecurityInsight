@@ -63,7 +63,7 @@ function Get-SIManagementCredentialSettings {
 
 # ===================================================================================================================
 # THE SIGN-IN PERMISSIONS, CONSENTED FOR THE WHOLE ORGANISATION (#616; CR7 consent, 2026-10-18).
-# The web app -- and the shared sign-in front (FRAMEWORK/signin-front) in front of it -- asks Entra for openid, profile,
+# The web app -- and the shared sign-in front (signin-front (retired; source deleted)) in front of it -- asks Entra for openid, profile,
 # offline_access (the front's refresh token; MSAL adds it) and User.Read (the front's RefreshScope). A tenant that does not let
 # users consent stops the first sign-in at "Approval required" unless ONE organisation-wide grant (consentType AllPrincipals)
 # on Microsoft Graph carries all four. New-SIManagementAppRegistration.ps1 step 2b gives it; installs registered before that

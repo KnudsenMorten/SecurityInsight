@@ -31,8 +31,11 @@
          and the exit code: 0 ok, 2 could not (not prepared, a database failed), 3 no consent, 4 bad request (only stale
          messages, an unknown key, a bad value). An EMPTY queue (#1154: another execution the scaler started took the
          request) is no request: exit 0 and no SUPPORT-GRANT line.
-    The uplink events support.granted / support.revoked / support.grant-failed go out only where SI_Uplink_SendSupportGrant
-    says so -- OFF until Invardia has agreed the wire (owner rule: an unknown key drops the section).
+    INVARDIA SEES THE CHANGE AT ONCE (Invardia 2026-11-20, OPEN-01): no event kind of its own -- the heartbeat's state field
+    SupportAccess { level, adminUntil, readUser, checkedUtc } (ConvertTo-SISupportAccessState), read from the install on
+    EVERY heartbeat; after an open or a close this job starts one extra heartbeat execution (Start-SISupportAccessHeartbeat),
+    and the heartbeat does the same after its sweep revoked an expired grant. (The earlier support.granted / revoked /
+    grant-failed uplink events and the setting that held them back are gone -- they never went out.)
 
     PURE except the seams. Strict-mode safe; PS 5.1 and 7.
 #>
@@ -259,11 +262,94 @@ function Get-SISupportGrantStatus {
                 $(if ($stand -eq '1') { ' -- the Support app holds db_owner outside a support grant' } else { '' })))
         } catch { $unknown++; $said.Add(('{0}: could not be read ({1})' -f $db, $_.Exception.Message)) }
     }
-    if (-not $rows.Count) { return [pscustomobject]@{ Wire = $null; Text = ('support grant: not known -- {0}' -f ($said.ToArray() -join '; ')); Rows = @() } }
+    if (-not $rows.Count) { return [pscustomobject]@{ Wire = $null; Text = ('support grant: not known -- {0}' -f ($said.ToArray() -join '; ')); Rows = @(); Unread = $unknown } }
     $ro = $(if ($missing) { $false } elseif ($unknown) { $null } else { $true })
     $wire = [ordered]@{ readOnly = $ro; jitOpen = $open; jitUntil = $(if ($until) { $until } else { $null }); jitLevel = $(if ($level) { $level } else { $null })
                         checkedUtc = (Format-SISupportGrantUtc $NowUtc) }
-    [pscustomobject]@{ Wire = $wire; Text = ('support grant: {0}' -f ($said.ToArray() -join '; ')); Rows = $rows.ToArray() }
+    # Unread: the databases that could not be read (an error, not "no procedures") -- the SupportAccess state is then left out
+    [pscustomobject]@{ Wire = $wire; Text = ('support grant: {0}' -f ($said.ToArray() -join '; ')); Rows = $rows.ToArray(); Unread = $unknown }
+}
+
+function ConvertTo-SISupportAccessState {
+    <#
+        PURE. Invardia 2026-11-20 (OPEN-01 / SECAUDIT-1a): the heartbeat's STATE field SupportAccess, read from the install
+        itself -- what the Invardia Support app holds NOW, never what was asked (-Status: Get-SISupportGrantStatus's answer).
+          SupportAccess { level: none | read | troubleshoot | setup   (required)
+                          adminUntil: ISO-8601 UTC                    (only while a troubleshoot / setup grant is open)
+                          readUser: bool                              (the standing read-only database user exists)
+                          checkedUtc: ISO-8601 UTC                    (required) }
+          troubleshoot / setup  a just-in-time grant is open (its level; adminUntil = its expiry, the latest over the databases)
+          read                  no grant open, and in every database that answered the Support app's user is there AND in
+                                its read-only role
+          none                  neither
+        Returns @{ Wire ([ordered] or $null); Why }. Wire is $null -- the field is LEFT OUT, never 'none' -- when the state
+        could not be read: no answer, a database that could not be read, or a grant open whose level or expiry is not
+        known. A database without the grant procedures is said in the status text and counts for nothing either way.
+    #>
+    param($Status)
+    $no = { param($why) [pscustomobject]@{ Wire = $null; Why = $why } }
+    if ($null -eq $Status -or $null -eq $Status.Wire) { return (& $no 'the Support app''s access could not be read') }
+    $unread = 0; if ($Status.PSObject.Properties['Unread']) { [void][int]::TryParse("$($Status.Unread)", [ref]$unread) }
+    if ($unread -gt 0) { return (& $no ('{0} database(s) could not be read' -f $unread)) }
+    $rows = @($Status.Rows | Where-Object { $null -ne $_ })
+    if (-not $rows.Count) { return (& $no 'no database answered') }
+    $w = $Status.Wire
+    $get = { param($k) if ($w -is [System.Collections.IDictionary]) { $w[$k] } elseif ($w.PSObject.Properties[$k]) { $w.$k } else { $null } }
+    $readUser = $true
+    foreach ($r in $rows) { if ((Get-SISupportGrantRowValue $r 'UserPresent') -ne '1' -or (Get-SISupportGrantRowValue $r 'ReadOnlyHeld') -ne '1') { $readUser = $false } }
+    $checked = [string](& $get 'checkedUtc')
+    if (-not $checked.Trim()) { return (& $no 'the time of the read is not known') }
+    $out = [ordered]@{ level = 'none' }
+    if ([bool](& $get 'jitOpen')) {
+        $lv = [string](& $get 'jitLevel')
+        if ($lv -notin @('troubleshoot', 'setup')) { return (& $no 'a support grant is open but its level is not known') }
+        $until = ''
+        try { $until = Format-SISupportGrantUtc (& $get 'jitUntil') } catch { $until = '' }
+        if (-not $until) { return (& $no 'a support grant is open but its expiry is not known') }
+        $out.level = $lv; $out.adminUntil = $until
+    } elseif ($readUser) { $out.level = 'read' }
+    $out.readUser = [bool]$readUser
+    $out.checkedUtc = $checked
+    [pscustomobject]@{ Wire = $out; Why = '' }
+}
+
+function Get-SISupportAccessLine {
+    <# PURE. The tick's words for SupportAccess: what was sent, or why it was left out. #>
+    param($State)
+    if ($null -eq $State) { return '' }
+    if ($null -eq $State.Wire) { return ('support access: not sent this time -- {0}' -f $State.Why) }
+    $w = $State.Wire
+    'support access: {0}{1}, read-only user {2}' -f $w.level, $(if ($w.Contains('adminUntil')) { ' until ' + $w.adminUntil } else { '' }), $(if ($w.readUser) { 'present' } else { 'not present in every database' })
+}
+
+function Start-SISupportAccessHeartbeat {
+    <#
+        Invardia 2026-11-20: right after a grant OPENS or CLOSES (or an expired one is revoked) the change must reach Invardia
+        within a minute -- the support grant job starts ONE extra execution of the heartbeat job (caj-si-heartbeat) with
+        SI_HEARTBEAT_EXTRA=support-access, the way the pipeline runner starts a job (its own container, every variable kept,
+        New-SIJobStartTemplate). That execution sends the heartbeat at once (no half-hour claim) with SupportAccess read
+        from the install. -Arm { param($Method, $Path, $Body) } (default Invoke-SIArm); -SubscriptionId / -ResourceGroup
+        (default the job's SI_JOBS_* / SI_FLOW_* variables). Returns @{ Started; Execution; Why }. NEVER throws.
+    #>
+    param([scriptblock]$Arm, [string]$SubscriptionId, [string]$ResourceGroup, [string]$Job = 'caj-si-heartbeat', [string]$ArmApi = '2025-07-01')
+    $res = { param($ok, $ex, $why) [pscustomobject]@{ Started = [bool]$ok; Execution = [string]$ex; Why = [string]$why } }
+    try {
+        if (-not $SubscriptionId) { $SubscriptionId = "$([Environment]::GetEnvironmentVariable('SI_JOBS_SUBSCRIPTIONID'))".Trim(); if (-not $SubscriptionId) { $SubscriptionId = "$([Environment]::GetEnvironmentVariable('SI_FLOW_SUBSCRIPTIONID'))".Trim() } }
+        if (-not $ResourceGroup) { $ResourceGroup = "$([Environment]::GetEnvironmentVariable('SI_JOBS_RESOURCEGROUP'))".Trim(); if (-not $ResourceGroup) { $ResourceGroup = "$([Environment]::GetEnvironmentVariable('SI_FLOW_RESOURCEGROUP'))".Trim() } }
+        if (-not $SubscriptionId -or -not $ResourceGroup) { return (& $res $false '' 'where the install''s jobs are is not known (SI_JOBS_SUBSCRIPTIONID / SI_JOBS_RESOURCEGROUP)') }
+        if (-not $Arm) {
+            if (-not (Get-Command -Name Invoke-SIArm -ErrorAction SilentlyContinue)) { return (& $res $false '' 'no Azure client is loaded') }
+            $Arm = { param($Method, $Path, $Body) Invoke-SIArm -Method $Method -Path $Path -ApiVersion $ArmApi -Body $Body }.GetNewClosure()
+        }
+        if (-not (Get-Command -Name New-SIJobStartTemplate -ErrorAction SilentlyContinue)) { . ([IO.Path]::Combine($PSScriptRoot, '..', '_shared', 'SI-UpdaterStart.ps1')) }
+        $path = '/subscriptions/{0}/resourceGroups/{1}/providers/Microsoft.App/jobs/{2}' -f $SubscriptionId, $ResourceGroup, $Job
+        $j = & $Arm 'GET' $path $null
+        if ($null -eq $j) { return (& $res $false '' ('{0} is not a job of this install' -f $Job)) }
+        $body = New-SIJobStartTemplate -Job $j -Env ([ordered]@{ SI_HEARTBEAT_EXTRA = 'support-access' }) -What $Job
+        $r = & $Arm 'POST' ($path + '/start') $body
+        $n = ''; if ($r) { if ($r.PSObject.Properties['name']) { $n = [string]$r.name }; if (-not $n -and $r.PSObject.Properties['id'] -and $r.id) { $n = ([string]$r.id -split '/')[-1] } }
+        & $res $true $n ''
+    } catch { & $res $false '' ([string]$_.Exception.Message) }
 }
 
 function Invoke-SISupportGrantJob {
@@ -273,7 +359,8 @@ function Invoke-SISupportGrantJob {
           -Receive    { } -> @(@{ Id; PopReceipt; Inserted; Text }) -- every message on the queue (read, not yet deleted)
           -Remove     { param($Message) } -- deletes one message; a failure is said, never a failed job
           -Say        { param([string]$Level, [string]$Text) }
-          -Report     { param($Event) } -- the uplink event (only called where the switch is on; never throws upward)
+          -Report     { param($Event) } -- called once after an open or a close (whatever its result; never for an empty queue
+                      or a bad request): the job script starts the extra SupportAccess heartbeat from it. Never throws upward.
         Returns @{ ExitCode; Result; Action; Level; Until; Line; Databases = @(rows) }. NEVER throws.
     #>
     param([Parameter(Mandatory)][System.Collections.IDictionary]$Databases, [Parameter(Mandatory)][scriptblock]$Receive, [scriptblock]$Remove,
@@ -399,14 +486,3 @@ function Get-SISupportGrantDatabases {
     $out
 }
 
-function Resolve-SIUplinkSupportGrantSwitch {
-    <# PURE. Do the support grant's uplink events go out (SI_Uplink_SendSupportGrant / SI_UPLINK_SENDSUPPORTGRANT)? OFF until
-       Invardia has agreed the wire: 'auto' confirms no ring. on / off / a ring list as every uplink switch. #>
-    param([AllowNull()]$Value = $global:SI_Uplink_SendSupportGrant, [AllowNull()][AllowEmptyString()][string]$EnvValue = $env:SI_UPLINK_SENDSUPPORTGRANT, [AllowNull()]$Ring)
-    $rn = -1; if ($null -ne $Ring -and "$Ring".Trim() -ne '') { if (-not [int]::TryParse("$Ring", [ref]$rn)) { $rn = -1 } }
-    $set = ''
-    foreach ($v in @($Value, $EnvValue)) { if ($null -eq $v) { continue }; if ($v -is [bool]) { $set = $(if ($v) { 'on' } else { 'off' }); break }; $s = ([string]$v).Trim().ToLowerInvariant(); if ($s) { $set = $s; break } }
-    if ($set -in 'on', 'true', 'yes', 'enabled') { return [pscustomobject]@{ On = $true; Reason = 'SI_Uplink_SendSupportGrant is on' } }
-    if ($set -match '^(ring\s*)?[0-3](\s*[,;]\s*(ring\s*)?[0-3])*$') { $rings = @([regex]::Matches($set, '[0-3]') | ForEach-Object { [int]$_.Value }); return [pscustomobject]@{ On = ($rn -ge 0 -and $rings -contains $rn); Reason = 'SI_Uplink_SendSupportGrant: rings ' + ($rings -join ', ') } }
-    [pscustomobject]@{ On = $false; Reason = 'SI_Uplink_SendSupportGrant waits until Invardia has agreed the support grant events' }
-}

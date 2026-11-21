@@ -1793,7 +1793,8 @@ function Invoke-SIPipelineDrain {
         replaced = it ends here and the next wake-up -- a new execution, on the installed version -- takes the queue (live
         2026-10-19: the run queued after the rc11 roll-out was run by a runner of 10-15, whose counts, causes and versions it
         reported for the new release).
-        Returns @{ Outcome = Busy | Idle | Ran | Blocked; Runs; Lock; Queued (what was put in the queue); UpdateStarted }.
+        Returns @{ Outcome = Busy | Idle | Ran | Blocked; Runs; Lock; Queued (what was put in the queue); UpdateStarted; Held (-StartHold's
+        sentence when it held the queue) }.
     #>
     param(
         [Parameter(Mandatory)]$Definition,
@@ -1809,6 +1810,10 @@ function Invoke-SIPipelineDrain {
         # live 2026-10-19: { param($Run) } -- the last run is CANCELLED (final): its steps still open are stopped and closed
         # (Close-SIJobFlowCancelledRun); a failing close never stops the wake-up
         [scriptblock]$CloseCancelled,
+        # OPEN-04 (framework 12.11f item 2): { } -> '' = nothing holds, else the plain sentence why NO NEW run starts (a change
+        # made in the web app without a verified signed request). Asked before every queued run; a resumed run is never held;
+        # what waits stays queued. A failing check holds nothing.
+        [scriptblock]$StartHold,
         [string]$Holder =('{0}:{1}:{2}' -f $env:COMPUTERNAME, $PID, ([guid]::NewGuid().ToString('n').Substring(0, 8))),
         [scriptblock]$Now = { [datetime]::UtcNow },
         [scriptblock]$Log = { param($Level, $Message) Write-Host ('[pipeline] {0}' -f $Message) },
@@ -1968,6 +1973,7 @@ function Invoke-SIPipelineDrain {
         if (& $handOff) {
             return [pscustomobject]@{ Outcome = $(if ($runs.Count) { 'Ran' } else { 'Busy' }); Runs = $runs.ToArray(); Lock = $lock; Queued = $queued.ToArray(); UpdateStarted = $hand.Started }
         }
+        $held = ''
         # 4b. the queue, oldest first
         $direct = @($queued | Where-Object { [long]$_.Id -eq 0 })   # an older Pro database: no queue table
         $n = 0
@@ -1983,6 +1989,17 @@ function Invoke-SIPipelineDrain {
             }
             # never a NEW run while an update waits: the update that waited for the run this execution just did goes first
             if ($runs.Count -gt 0 -and (& $handOff)) { break }
+            # OPEN-04: a change without a verified signed request holds every NEW run (never the resume above)
+            if ($StartHold) {
+                $hold = ''
+                try { $hold = [string](& $StartHold) } catch { $hold = '' }
+                if ($hold) {
+                    $nq = @(@(try { $Control.List() } catch { @() }) | Where-Object { $_.State -eq 'Queued' }).Count
+                    & $Log 'WARN' ('{0} ({1} request(s) wait in the queue)' -f $hold, $nq)
+                    $held = $hold
+                    break
+                }
+            }
             $req = $null
             if ($direct.Count) { $req = $direct[0]; $direct = @($direct | Select-Object -Skip 1) } else { $req = $Control.NextQueued() }
             if (-not $req) { break }
@@ -2033,5 +2050,5 @@ function Invoke-SIPipelineDrain {
     } finally {
         try { $Control.ReleaseLock($Holder) } catch { & $Log 'WARN' ('the pipeline lock could not be released ({0}) -- it frees itself when its heartbeat is {1} minutes old' -f $_.Exception.Message, $StaleAfterMinutes) }
     }
-    [pscustomobject]@{ Outcome = $outcome; Runs = $runs.ToArray(); Lock = $lock; Queued = $queued.ToArray(); UpdateStarted = $hand.Started }
+    [pscustomobject]@{ Outcome = $outcome; Runs = $runs.ToArray(); Lock = $lock; Queued = $queued.ToArray(); UpdateStarted = $hand.Started; Held = $held }
 }

@@ -44,6 +44,10 @@
                          first sign-in on the new web app (the old one redirects there until then). Web app names are
                          not aligned: 'missing' ONLY for a move back to ca-si-management that is under way and stuck;
                          'kept', 'held', a row without a target and a row that moved toward ca-si-web = n/a
+      sql-least-privilege  framework §12.23: the database setup job's least-privilege row 'DbJobSqlLeastPrivilege' { mode,
+                         state planned | applied | already | back | refused | not-ready | restored | restore-incomplete |
+                         failed, at, run, n } (setup\_shared\SI-SqlLeastPrivilege.ps1); applied / already = ok, back = n/a;
+                         left out while there is no row
     The Invardia Support app's own database access is NOT a step here: Invardia checks it itself from the heartbeat's
     supportSqlAccess (its step support-arm).
 
@@ -69,9 +73,11 @@ function Get-SISetupStepsContract {
             'db-job'            = @{ Title = 'The database setup job runs as its own identity'; How = 'support-app' }
             'signin-app-owner'  = @{ Title = 'The web sign-in app is owned by the install''s updater'; How = 'support-app' }
             'web-app-name'      = @{ Title = 'The web app runs under its standard name (ca-si-management)'; How = 'updater' }
+            # framework §12.23 (Invardia 2026-11-20): SQL least privilege switched on through the updater
+            'sql-least-privilege' = @{ Title = 'SQL least privilege: the job identities hold their own roles, not the broad ones'; How = 'updater' }
         }
         # the cfg.InstallState rows the checks read
-        StateNames = @('SecretHandover', 'UpdateState', 'MailRestriction', 'MailRestrictionAttestation', 'IdentityNames', 'DbJob', 'DbJobMembership', 'SignInAppOwner', 'WebAppName', 'SupportStanding')
+        StateNames = @('SecretHandover', 'UpdateState', 'MailRestriction', 'MailRestrictionAttestation', 'IdentityNames', 'DbJob', 'DbJobMembership', 'SignInAppOwner', 'WebAppName', 'SupportStanding', 'DbJobSqlLeastPrivilege')
         # an update error that names the updater's database rights (the same words Get-SIHeartbeatWarnings reads as si-upd-0802)
         DbRightsRx = '(?i)db_ddladmin|db_securityadmin|permission was denied|permission denied in database|CREATE TABLE permission|ALTER permission|not have permission'
         # a detail that looks like something to run is never sent (Invardia drops it too)
@@ -297,6 +303,27 @@ function Get-SISetupSteps {
                 default                 { 'Not moved yet (' + $st + '); the old web app keeps serving and the next update tries again.' }
             } }
             & $add (New-SISetupStep -Key 'web-app-name' -State $stepState -CheckedAt $at -Detail $detail)
+        }
+    } catch { }
+    try {
+        # sql-least-privilege (framework §12.23): the database setup job's own least-privilege row; no row = left out
+        $lp = ConvertFrom-SISetupStepJson ([string](Get-SISetupStepRowValue $StateRows 'DbJobSqlLeastPrivilege'))
+        if ($lp -and $lp.PSObject.Properties['state']) {
+            $at = ConvertTo-SISetupStepUtc $(if ($lp.PSObject.Properties['at']) { $lp.at } else { Get-SISetupStepRowValue $StateRows 'DbJobSqlLeastPrivilege' 'UpdatedAt' })
+            $cnt = if ($lp.PSObject.Properties['n']) { [int]$lp.n } else { 0 }
+            $st = "$($lp.state)".Trim().ToLowerInvariant()
+            $map = switch ($st) {
+                'applied'            { @('ok', ('Applied: {0} broad membership(s) removed; each identity read back with its own role.' -f $cnt)) }
+                'already'            { @('ok', 'In force: no broad membership is left; the replacement grants read back.') }
+                'planned'            { @('missing', ('Planned only: {0} broad membership(s) would be removed; not applied yet.' -f $cnt)) }
+                'back'               { @('n/a', 'Switched off again: the broad memberships are back, read back.') }
+                'refused'            { @('missing', 'The last request was refused; nothing changed.') }
+                'not-ready'          { @('missing', 'Nothing removed: the replacement role is not ready yet.') }
+                'restored'           { @('missing', 'A loss was found after the change; everything was restored and read back.') }
+                'restore-incomplete' { @('missing', 'A loss was found and the restore is not complete; Invardia support restores it.') }
+                default              { @('unknown', 'The last run did not complete; the next update tries again.') }
+            }
+            & $add (New-SISetupStep -Key 'sql-least-privilege' -State $map[0] -CheckedAt $at -Detail $map[1])
         }
     } catch { }
     $out.ToArray()

@@ -10,7 +10,9 @@
     exposure.internetExposed onto si_internet_exposed -- the only field the risk factor internet_exposed reads. A new
     or renamed assessment is a change HERE (or a mapping override), never a factor change.
 
-    REST only (Resource Graph through Search-SIAzGraph, engine/_shared/SI-AzRest.ps1); no PowerShell modules. Rights:
+    2026-11-20 -- TWO SOURCES: Resource Graph AND the ARM assessments API, combined per assessment (union,
+    Get-SIMdcAssessmentSources.ps1); a read that is not whole marks the pull incomplete, never "nothing exposed".
+    REST only (engine/_shared/SI-AzRest.ps1); no PowerShell modules. Rights:
     securityresources is readable with the Reader access the Azure collector already uses -- no new permission.
     Never throws into the profiler: a failed read is said and the pull is recorded incomplete (absence proves nothing).
     PowerShell 5.1: no ?. / ??, no ternary.
@@ -18,6 +20,8 @@
 
 # Azure access: plain REST, no PowerShell modules (engine/_shared/SI-AzRest.ps1) -- loaded here, so this file works however it is loaded.
 if (-not (Get-Command -Name Invoke-SIArm -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot '../../_shared/SI-AzRest.ps1') }
+# 2026-11-20: the assessments from Resource Graph AND the ARM assessments API, combined per assessment
+if (-not (Get-Command -Name Get-SIMdcAssessmentRows -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot 'Get-SIMdcAssessmentSources.ps1') }
 
 # Defender for Cloud assessments that mean "reachable from the internet" (assessment key = the assessment's name)
 $script:SIMdcInternetExposureAssessments = @(
@@ -62,7 +66,9 @@ function Invoke-SIMdcExposureCapture {
     .SYNOPSIS  Reads the internet-exposure assessments and hands each resource to the record capture (provider mdc).
                Returns the number of resources; 0 when the record capture is not loaded or the read failed.
     #>
-    param([string[]]$SubscriptionIds = @(), [scriptblock]$Query)
+    # -Query: test seam, the per-resource rows of Get-SIMdcExposureKql (both reads bypassed); -GraphQuery / -ArmGet: the
+    # seams of the two reads (Get-SIMdcAssessmentRows)
+    param([string[]]$SubscriptionIds = @(), [scriptblock]$Query, [scriptblock]$GraphQuery, [scriptblock]$ArmGet)
     if (-not (Get-Command -Name Add-SIRecordPart -ErrorAction SilentlyContinue)) { return 0 }
     $err = ''
     $n = 0
@@ -82,16 +88,15 @@ function Invoke-SIMdcExposureCapture {
     try {
         if ($Query) { $null = & $take @(& $Query (Get-SIMdcExposureKql)) }
         else {
-            $p = @{ Query = (Get-SIMdcExposureKql); First = 1000 }
-            if (@($SubscriptionIds).Count -gt 0) { $p['Subscription'] = $SubscriptionIds }
-            do {
-                $page = Search-SIAzGraph @p -ErrorAction Stop
-                $rowsOfPage = New-Object System.Collections.Generic.List[object]
-                foreach ($x in $page) { $rowsOfPage.Add($x) }
-                $null = & $take $rowsOfPage.ToArray()
-                $rowsOfPage = $null
-                $p['SkipToken'] = $page.SkipToken
-            } while ($p['SkipToken'])
+            # 2026-11-20: Resource Graph AND the ARM assessments API, combined per assessment (Get-SIMdcAssessmentSources.ps1)
+            # -- Resource Graph stopped answering for many free-plan subscriptions. Same rows as the query below gave.
+            $read = Get-SIMdcAssessmentRows -SubscriptionIds $SubscriptionIds -GraphQuery $GraphQuery -ArmGet $ArmGet
+            $exp = ConvertTo-SIMdcExposureRows -Rows @($read.Rows) -AssessmentKeys $script:SIMdcInternetExposureAssessments
+            # what WAS read is kept (union); an incomplete read is said and the pull recorded incomplete
+            if (-not $read.Complete) { $err = [string]$read.Error; if (-not $err) { $err = 'the Defender for Cloud assessments were not read completely' } }
+            $read = $null
+            for ($i = 0; $i -lt $exp.Length; $i += 1000) { $null = & $take @($exp[$i..([Math]::Min($i + 999, $exp.Length - 1))]) }
+            if ($err) { Write-Warning ('Defender for Cloud exposure: not read completely ({0}) -- the resources not read keep what they had; internet exposure also comes from the other providers.' -f $err) }
         }
     } catch { $err = [string]$_.Exception.Message; Write-Warning ('Defender for Cloud exposure: not read ({0}) -- internet exposure comes from the other providers this run.' -f $err) }
     $n = [int]$script:SIMdcExposureTaken

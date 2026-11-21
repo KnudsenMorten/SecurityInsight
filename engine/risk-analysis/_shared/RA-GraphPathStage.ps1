@@ -425,8 +425,8 @@ function Get-RAGpsWeight {
 # that changes, or a customer's own query of the same name, is not the one this port reproduces -- it runs as before.
 # tests\pester\SIv3-RaGraphStage.Tests.ps1 pins these against the locked query file.
 $script:RAGpsShapeHash = @{
-    Detailed = '1cf1659f08f6772b556b83754b67595f8f52533c471b82684ae08a086ccea76a'
-    Summary  = '27672b695d1b0000593e753e12863937765eb488bdc857ac5ae01df6690003dc'
+    Detailed = '4a6f0c0c12a88c8a7bdc200a4561ba50a66f6ea6e96a089b9b66067e5d38e2f8'
+    Summary  = 'e88d72cd2b7e324511dafc01d2c0a099bd7c40091ec886e1b084584ca3238261'
 }
 $script:RAGpsMatchLine = '| graph-match (Device)-[devEdge]->(CredOrIdent)-[bridge*0..3]->(Principal)-[role]->(RoleScope)-[inherit*0..2]->(AzureAsset)'
 # the columns a vulnerable-device row carries where the engine's slice filter reads its key (ExposureGraphNodes + the lets)
@@ -442,16 +442,20 @@ function Get-RAGpsRegion {
 
 function Get-RAGpsShapeText {
     <# PURE. The query text with what the engine writes per run replaced by a mark (the scope block, the CI lookups, the slice
-       filter, the weights, the data-out comment block), the // comments out and the white space folded. #>
+       filter, the weights), the data-out comment block left out whole, the // comments out and the white space folded.
+       #1303: the engine takes the data-out block out of every query before it sends it (Remove-RAOutBlock,
+       Invoke-RiskAnalysis.ps1) -- so the block is dropped here too, and the catalog's text (with it) and the text a slice
+       sends (without it) have the same shape. A mark for it made every real slice "not the one this port was written for". #>
     param([AllowEmptyString()][string]$Query)
     $q = ([string]$Query) -replace "`r", ''
     foreach ($pair in @(@('//__SI_SCOPE_BEGIN__', '//__SI_SCOPE_END__'), @('//__SI_CI_LINK_BEGIN__', '//__SI_CI_LINK_END__'), @('//__SI_CI_PEER_BEGIN__', '//__SI_CI_PEER_END__'),
                         @('//__BUCKET_FILTER_BEGIN__', '//__BUCKET_FILTER_END__'), @('//__WEIGHTED_FACTORS_BEGIN__', '//__WEIGHTED_FACTORS_END__'), @('//__SI_OUT_BEGIN__', '//__SI_OUT_END__'))) {
-        $a = $q.IndexOf($pair[0])
+        $a = $q.IndexOf($pair[0], [StringComparison]::Ordinal)
         if ($a -lt 0) { continue }
-        $b = $q.IndexOf($pair[1], $a)
+        $b = $q.IndexOf($pair[1], $a, [StringComparison]::Ordinal)
         if ($b -lt 0) { continue }
-        $q = $q.Substring(0, $a) + ' <' + $pair[0].Substring(4).Trim('_') + '> ' + $q.Substring($b + $pair[1].Length)
+        $mark = if ($pair[0] -eq '//__SI_OUT_BEGIN__') { ' ' } else { ' <' + $pair[0].Substring(4).Trim('_') + '> ' }
+        $q = $q.Substring(0, $a) + $mark + $q.Substring($b + $pair[1].Length)
     }
     $q = [regex]::Replace($q, '(?m)//[^\n]*$', '')
     return ([regex]::Replace($q, '\s+', ' ').Trim())
@@ -1320,9 +1324,17 @@ function Get-RAGraphStagePlan {
     $shape = Get-RAGpsQueryShape -Query $Query
     if (-not $shape.Ok) {
         $key = [string]$shape.Why
-        if (-not $script:RAGpsShapeSaid.ContainsKey($key) -and (Get-Command -Name Write-Info -ErrorAction SilentlyContinue)) {
+        if (-not $script:RAGpsShapeSaid.ContainsKey($key)) {
             $script:RAGpsShapeSaid[$key] = $true
-            Write-Info ('the attack-path query is asked of advanced hunting as before: {0}' -f $shape.Why)
+            # #1303: the run's graph is in the database and this query does not use it -- the heavy path runs again in every
+            # slice, which is what the stored graph exists to prevent: a WARNING, never a quiet INFO line
+            if ($null -ne $script:RAGpsSet) {
+                if (Get-Command -Name Write-Warn2 -ErrorAction SilentlyContinue) {
+                    Write-Warn2 ('the attack-path graph of this run is in the database, but this query does not use it and is asked of advanced hunting as before (every part builds the whole graph again): {0}' -f $shape.Why)
+                }
+            } elseif (Get-Command -Name Write-Info -ErrorAction SilentlyContinue) {
+                Write-Info ('the attack-path query is asked of advanced hunting as before: {0}' -f $shape.Why)
+            }
         }
         return $null
     }
@@ -1358,6 +1370,14 @@ function Invoke-RAGraphStageAnswer {
         $rows = ConvertTo-RAGpsSummaryRows -Paths $pr.Rows -Enrich $Data.Enrich -Link $Link -Weights $Plan.Weights -FinalIds $Plan.FinalIds
     }
     if ([long]$Plan.RowCount -gt 1) { $rows = @($rows | Where-Object { (Get-RAGpsRowSplitPart -Row $_ -RowCount $Plan.RowCount) -eq [long]$Plan.RowIndex }) }
+    # #1303: said once per report and process -- the proof in the run log that the slices use the stored graph
+    $__said = 'used|' + [string]$Plan.Grain
+    if (-not $script:RAGpsShapeSaid.ContainsKey($__said)) {
+        $script:RAGpsShapeSaid[$__said] = $true
+        if (Get-Command -Name Write-Info -ErrorAction SilentlyContinue) {
+            Write-Info ('the attack-path report ({0}): its slices use the stored graph of this run, joined in the database -- not advanced hunting' -f [string]$Plan.Grain)
+        }
+    }
     if ($Plan.Kind -eq 'rows') {
         if ($null -eq $script:RAGpsRun) { $script:RAGpsRun = @{ OtherPart = @{}; Said = $false } }
         $script:RAGpsRun.OtherPart[('{0}|{1}|{2}|{3}|{4}' -f $ReportName, $Plan.Count, $Plan.Index, $Plan.RowCount, $Plan.RowIndex)] = [long]$pr.OtherPart

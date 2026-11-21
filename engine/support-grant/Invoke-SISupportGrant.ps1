@@ -63,21 +63,17 @@ $receive = {
 }
 $remove = { param($m) Remove-SIQueueMessage -Account $account -Queue $queue -MessageId ([string]$m.Id) -PopReceipt ([string]$m.PopReceipt) }
 
-# the uplink events: only where SI_Uplink_SendSupportGrant says so (OFF until Invardia has agreed them)
-$report = $null
-try {
-    $ring = if ($global:SI_InstallRingFacts -and $global:SI_InstallRingFacts.PSObject.Properties['Ring']) { $global:SI_InstallRingFacts.Ring } else { $null }
-    if ((Resolve-SIUplinkSupportGrantSwitch -Ring $ring).On) {
-        $report = {
-            param($Event)
-            if (-not (Get-Command -Name Get-SITelemetryContext -ErrorAction SilentlyContinue)) { . (Join-Path $siRoot 'engine/_shared/SI-TelemetrySend.ps1') }
-            $ctx = Get-SITelemetryContext
-            if ($ctx.Mode -ne 'identified') { return }
-            $rec = ConvertTo-SITelemetryWire -Record (New-SITelemetryHeartbeat -Edition $ctx.Edition -Version $ctx.Version -Hosting $ctx.Hosting -RuntimeIdentity $ctx.RuntimeIdentity -LicenceState $ctx.LicenceState -Now ([datetime]::UtcNow) -TenantId $ctx.TenantId) -Mode $ctx.Mode -Now ([datetime]::UtcNow)
-            if ($rec) { $rec | Add-Member -NotePropertyName 'supportGrant' -NotePropertyValue $Event -Force; $null = Send-SITelemetryUplink -Record $rec -Endpoint $ctx.Endpoint -AccessCode $ctx.AccessCode -TimeoutSec 10 }
-        }
-    }
-} catch { $report = $null }
+# Invardia 2026-11-20 (OPEN-01): after an open or a close the heartbeat's SupportAccess state must reach Invardia within a
+# minute -- ONE extra execution of the heartbeat job, started the way the pipeline runner starts a job (SI_HEARTBEAT_EXTRA =
+# support-access: it sends at once, outside the half hour's claim, with the state read from the install). Never fails the job.
+$report = {
+    param($Event)
+    try {
+        $hb = Start-SISupportAccessHeartbeat
+        if ($hb.Started) { & $say 'INFO' ('support access: the heartbeat is sent now, so Invardia sees the change ({0})' -f $(if ($hb.Execution) { $hb.Execution } else { 'started' })) }
+        else { & $say 'INFO' ('support access: the extra heartbeat was not started ({0}) -- the next half-hourly heartbeat carries the change' -f $hb.Why) }
+    } catch { & $say 'INFO' ('support access: the extra heartbeat was not started ({0}) -- the next half-hourly heartbeat carries the change' -f $_.Exception.Message) }
+}
 
 $r = Invoke-SISupportGrantJob -Databases $dbs -Receive $receive -Remove $remove -NowUtc $nowUtc -Say $say -Report $report
 # THE line Invardia reads (ARM may not report the exit code) -- none for an empty queue (#1154: no request to answer)

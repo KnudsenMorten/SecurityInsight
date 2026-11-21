@@ -115,11 +115,18 @@ Describe 'the parity matrix: every VM launcher switch has a container mechanism'
     }
 
     It 'every setting-carried switch can travel: its setting name is not refused as a secret or container-owned' {
-        foreach ($n in 'WhatIfMode', 'SI_Trend_DryRun', 'SI_Trend_Grain', 'SI_Trend_Weeks', 'BuildSummaryByAI', 'AutoBucketCount', 'AutoBucketCache',
+        foreach ($n in 'WhatIfMode', 'SI_Trend_DryRun', 'SI_Trend_Grain', 'SI_Trend_Weeks', 'AutoBucketCount', 'AutoBucketCache',
                        'AutoBucketMax', 'ResetCache', 'ShowConfig', 'DebugQueryHash', 'Scope', 'SI_AssetLimit_Endpoint', 'SI_Sinks_PublicIp', 'SI_ForceFullRun_Azure') {
             $r = Get-SIConfigEnvArgs -Names @($n) -Globals @{ $n = 1 }
             @($r.EnvArgs).Count | Should -Be 1 -Because "$n must reach a container"
         }
+    }
+    It 'OPENAI-CAP (owner 2026-11-21): the AI switches reach a container ONLY through Settings (the Pro settings layer), never as a copied SI_CFG_ value' {
+        $r = Get-SIConfigEnvArgs -Names @('BuildSummaryByAI') -Globals @{ BuildSummaryByAI = $true }
+        @($r.EnvArgs).Count | Should -Be 0
+        @($r.Refused) | Should -Be @('BuildSummaryByAI')
+        # the settings layer is not narrowed by it: the container's ExcludeNames is the container-owned list only
+        (Get-Code 'container\Start-RiskAnalysisInContainer.ps1') | Should -Match 'Invoke-SIProSettingsLayer -Engine ''risk-analysis'' -ExcludeNames \$script:SIConfigProtected'
     }
 
     It 'every engine with a launcher config has its defaults loaded by the container' {
@@ -188,7 +195,8 @@ Describe 'the job''s Risk Analysis env vars win only when present -- precedence 
                                                                      SI_CFG_SI_RiskAnalysis_TableName_Summary = 'SI_RA_Custom' }, @{})
         $r.AutoBucketMax | Should -Be 2048
         $r.SendMail | Should -BeTrue
-        $r.BuildSummaryByAI | Should -BeTrue
+        # OPENAI-CAP (owner 2026-11-21): a copied config value never switches AI on -- only a person's Settings do
+        $r.BuildSummaryByAI | Should -BeFalse
         $r.TableSummary | Should -BeExactly 'SI_RA_Custom'
     }
     It 'a PRESENT job env var wins over the customer''s config' {

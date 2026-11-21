@@ -3,10 +3,11 @@ using Microsoft.Extensions.Options;
 
 namespace SI.Management.Web.Audit;
 
-/// CR8 step 2, OBSERVE ONLY (framework DOCS/REQUIREMENTS.md 12.11f item 2, SI #659): every change a person makes here is
-/// recorded in cfg.SignedRequest with the person's signed Entra token AS THE WEB APP RECEIVED IT and the time it was
-/// captured; the pipeline runner verifies it (engine\_shared\SI-SignedRequests.ps1) and records what it WOULD refuse.
-/// Nothing is refused yet, and the sign-in itself is not changed here:
+/// CR8 step 2, ENFORCED (framework 12.11f item 2, SI #659, OPEN-04): every change a person makes here is recorded in
+/// cfg.SignedRequest with the person's signed Entra token AS THE WEB APP RECEIVED IT and the time it was captured; the
+/// pipeline runner verifies it (engine\_shared\SI-SignedRequests.ps1) BEFORE it acts: after the install's cut-over a
+/// web-written configuration change without a verified row holds new pipeline runs (until it is undone or made again signed
+/// in), and a resend into a connector without one is refused. The sign-in itself is not changed here:
 ///   bearer   the token the shared sign-in front forwards (Authorization: Bearer, framework 12.11g);
 ///   session  the ID token kept with the sign-in session, when the sign-in keeps it;
 ///   platform-id / platform-access  with Microsoft's built-in authentication (SI_Web_BuiltInAuth on, and ONLY then): the
@@ -77,7 +78,7 @@ INSERT INTO cfg.SignedRequest (CorrelationId, Action, Actor, TokenSource, Token,
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            _log.LogWarning(ex, "the signed-request record of {Action} could not be written (observe only -- nothing is refused)", scope.Action);
+            _log.LogWarning(ex, "the signed-request record of {Action} could not be written -- the engine holds new pipeline runs until the change is made again or undone", scope.Action);
         }
     }
 }

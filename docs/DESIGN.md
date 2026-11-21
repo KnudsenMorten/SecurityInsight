@@ -431,6 +431,30 @@ Identity is **hard-disabled** regardless of the flag — identity tier is fully 
 
 When AI is on, it can only be invoked from **profile-phase** rules whose `detect.kind` is `aiClassify`. AI never runs inside the per-asset loop naively — the rule batches assets and submits one call per N. The same external-calls lint applies.
 
+**AI is off by default everywhere, and it can never run unbounded (owner decisions 2026-11-21, 3.1.41).** The owner:
+*"we dont use it except if i manually trigger it"*, *"make sure si fix ships in 3.1.41"* and, for the limit, *"make it in
+the settings"*. Before this, Classify asked AI about every asset on every run, one request per asset with the asset's whole
+raw data; one install made about 2,200 requests a day. Now:
+
+- **Only what changed is asked.** Each answer is kept under a hash of the fields that decide it (and the instruction
+  text). An asset whose deciding fields have not changed since the last answer is not asked again; a new or changed one is.
+  The answers are kept in the install's own storage, one file per engine part, and an answer not used for 30 days is dropped.
+- **Batches, and only the deciding fields.** Up to 25 assets go in one request, with one instruction block. Each asset sends
+  only its id, hint, sources, the names of the posture rules that matched, the cross-engine and Defender signals, and its
+  short plain facts. Raw device or resource data is never sent, and the instruction text describes exactly these fields.
+- **A daily limit per install (`SI_AI_DailyTokenBudget`, in Settings next to the AI switch).** Every AI request of every
+  engine first checks the tokens the install has used today (UTC). The default is 200,000 tokens a day, about USD 2 /
+  DKK 15 at a large model's list price. It is never unlimited: an empty, zero or invalid value means the default. At the
+  limit no more AI requests are sent that day. The run goes on, assets not asked are placed by rules, and SecurityInsight
+  writes one warning and raises one alert (`si.ai.daily-budget-reached`). Each engine part adds to its own daily record in
+  the install's storage, and the day's total is their sum, so a limit reached by one engine stops the others within a minute.
+  A record that cannot be read sends nothing.
+- **Two attempts at most.** A request is sent again only after a timeout, throttling or a service error (408 / 429 / 5xx),
+  and at most once more. A refused request (400) is a defect: it is logged and skipped, never resent.
+- **Off by default, switched on only by a person.** The AI switches (`SI_EnableAI`, the per-engine switches, the report-mail
+  AI summary and the privilege tier classifier's AI) are off by default in every edition and in the shipped samples. They are
+  switched on in Settings only, never by a copied configuration value.
+
 ### Provider contract (connectors)
 
 > 📌 `asset-profiling-providers/_manifest.schema.locked.json` refers to a `_PROVIDER_CONTRACT.md`.
@@ -1651,7 +1675,12 @@ devices were cut, so a slice at 1/256 still timed out at the largest tenants (a 
 of the two locked queries (`Get-RAGpsQueryShape`: a pinned hash of the text without the parts the engine writes per run; the
 slice filter read and checked to be cut on the device key; the weights block read back and rebuilt by its own generator; the
 excluded configuration ids, a row split, a count, a group count read) is answered from SQL; anything else -- a customer's own
-query of that name, a changed locked query -- runs as before (said once). **The read, once per run** (`Sync-RAGraphStage`, the
+query of that name, a changed locked query -- runs as before (said once; a WARNING when the run's graph is already in the
+database, because every part then builds the whole graph again). The shape leaves the generated data-out block out whole:
+the engine takes that block out of every query before it sends it (`Remove-RAOutBlock`), so the catalog's text and the text a
+part sends have the same shape (#1303: until 3.1.42 the shape kept a mark for it, so no part of a real run matched and every
+part was asked of advanced hunting as before). The first part answered from SQL says so once per report and process ("its
+slices use the stored graph of this run"). **The read, once per run** (`Sync-RAGraphStage`, the
 producer before its workers; a worker takes it from the manifest and never loads): S1 the query's node table (the vulnerable
 devices with their device key, CVSS and Exposure Graph risk factors exactly as `VulnerableDevices` / `_DeviceEnrichment`
 compute them; every identity, secret and Azure node), each node's category and label tests evaluated by the query engine
@@ -6081,7 +6110,7 @@ being built, it says so.
 | Status and support jobs | Pro | `caj-si-heartbeat` is the Invardia support link (health and run results to Invardia support); `caj-si-support-grant` opens and closes time-limited support access. |
 | Azure SQL database | Pro | Settings and their history, templates and your overrides, exemptions, access mappings, the identity ledger, vulnerability state, the provider records, the CIs and the findings the web app reads. |
 | Log Analytics workspace | both | What Risk Analysis's queries read (the profile tables, the CI table) and the run and troubleshooting tables (run health, guard events, tag activity). A copy of the records to Log Analytics is an option, off by default. |
-| Key Vault | both | Licence, install key, connector secrets, optional keys (Azure OpenAI, Shodan, SMTP), the keys that protect the web app's sign-in keys, magic-link key. |
+| Key Vault | both | Licence, install key, connector secrets, optional keys (Shodan, SMTP password), the key the web app's secret hand-over is encrypted with, the magic-link key when magic links are on. Azure OpenAI needs no key (SecurityInsight signs in with its own identities); a key an older setup entered stays here and is used only when that sign-in is refused. |
 | Storage account and container registry | both (registry: containers) | Run state, run logs and outputs, staging parts, the shard and work queues, shared customisation files; the container images. |
 
 Engines run on a Windows server (Task Scheduler; an Azure VM or an Azure Arc-enabled server) or as Azure Container
@@ -6770,6 +6799,49 @@ one-time code sent to the same mailbox, or an Entra sign-in as a B2B guest with 
 customer controls and revokes access in Entra and Conditional Access applies. Links are per person, short-lived,
 revocable, scoped to the department and audited; department owners may sign in either way.
 
+### A4a. Signed requests -- observe, one SuperAdmin-signed adoption, then enforced (OPEN-04)
+
+Framework §12.11f item 2 ("the engine verifies ... before acting ... existing desired state is adopted by one
+SuperAdmin-signed adoption commit") and the owner's answer of 2026-11-04 (framework REQUIREMENTS.md:64-65: "observe (log
+only) on rings 0/1, read the log, then ENFORCE ring by ring (0, 1, 2/3), each install with one SuperAdmin-signed adoption
+step"). Code: `engine/_shared/SI-SignedRequests.ps1` (`Invoke-SISignedRequestEnforcement`, called first at every wake-up
+of the pipeline runner), `pro-management/src/SI.Management.Web/Audit/AuditFilter.cs` (every mutating handler that ran
+records the person's token), `Pages/Admin/SignedRequests` (Configuration > Signed requests).
+
+1. **Record (the input of the adoption).** The runner's first wake-up on this version records, per enforced kind, the row
+   count and a SHA-256 over the rows (the catalog's recorded columns in their order, the rows in primary-key order, as JSON
+   with nulls), and the recorded hash over those lines (`cfg.SignedRequestEnforcement`, one audit row
+   `signedrequest.adoption.record`). From then on a later change to that state is visible: it is a journal row after the
+   record.
+2. **Observe** -- the default at every install until it is adopted. What would be refused is reported (audit
+   `signedrequest.change.would-refuse` once per commit with its counts per kind, one run-log line); nothing is held, no
+   resend is refused. The page says "Waiting for adoption by a SuperAdmin"; the heartbeat sends the shared any-product field
+   `SignedRequests` { mode, checked, wouldRefuse, refused, sinceUtc } (the counts since the record, or the adoption) plus
+   `adoptedUtc` and `waitingSince` -- on for every ring (Invardia 1.0.1165); `SI_Uplink_SendSignedRequests` off turns it off.
+3. **The adoption -- SI's form of the framework's adoption step.** A SuperAdmin presses *Adopt the recorded configuration*:
+   the request carries the recorded hash the page showed and, through the global audit filter, the person's own signed
+   token. The runner adopts only when that token verifies (signature, issuer, audience, time, person), the person is a
+   SuperAdmin (the app role in the token, or their own assignment on Configuration > Access) and the hash is EXACTLY the
+   recorded one; else the request is refused with the reason (`signedrequest.adoption.refuse`) and the install stays
+   observe. A verified adoption (`signedrequest.adoption.adopt`) starts enforcement at that install.
+4. **Enforced.** A web-written change after the record on a kind the engine acts on, without a verified signed request --
+   also a later write to an adopted row -- holds every NEW pipeline run (a running run is never stopped) until it is undone
+   or made again signed in; a resend into a connector without one is refused. "Web-written" is the database's word
+   (`cfg.ConfigJournal.WebWriter`), so the Invardia Support app, the updater and the engine are never refused.
+5. **Ring order.** The adoption button reaches ring 0 first with the release; rings 1 and 2/3 get it with the release
+   after Invardia has read ring 0's observe log. No extra switch.
+
+**What is checked**: setting, document (tagging, exclusions, weights, rules), exemption, connector, override, jobflow,
+remediationflow, template, cmdbservice, cmdblink, responsibilityrule, responsibilityoverride (journaled); resends and undos
+into a connector (`cfg.CollectionSend`). Not checked, each with its reason in `$script:SISignedNotEnforcedEntities`: web-app
+authorization (access, domain / category roles), saved views, guard acknowledgements, the web app's own management reports,
+and the department roster (also kept from department sign-in-link sessions, which carry no Entra token).
+
+**Why job trigger / start requests and Run now are not signed one by one**: they make no outside change themselves -- a
+Run now or a job start only starts SecurityInsight's own named jobs (allow-listed by name, SECURE-WEB-1), and a trigger
+request only changes when SecurityInsight's own jobs run; a run then acts only on the configuration whose changes were
+verified (an unsigned change holds every new run); and while a hold is on, the job trigger and job start requests wait
+too, so none of them can make the engine act on an unverified change.
 ### A4b. Time-limited support access
 
 Invardia support has no standing administrator right in your databases. Its Support app is an app registration you create
@@ -8173,7 +8245,8 @@ collection built before it (the base); the task rows of older collections are re
   table is not set is not set up: nothing is sent to it, never a failure. The vulnerable items' new columns stay off in 3.1.30
   (switched on per install through the updater); a column shipped ON BY DEFAULT ("soft") that the Import Set table does not
   have is left out of the send with one warning per run, never a hold of the push.
-- *ServiceNow*: two new outputs, OFF until an admin switches them on (`SI_DataOut_Outputs`): `servicenow-remediation-task` (one
+- *ServiceNow*: two new outputs, on with the ServiceNow data-out connector (`onWithServiceNow` in `config/data-out.locked.json`;
+  an Admin switches them off in `SI_DataOut_Outputs`): `servicenow-remediation-task` (one
   raw row per task, key `u_si_task_id`; table `SI_DataOut_ServiceNowTaskTable`) and `servicenow-remediation-task-finding` (one
   row per task and finding, `u_source_record_id` = the vulnerable item's own record id; table
   `SI_DataOut_ServiceNowTaskFindingTable`), each through its output map. They get the VULNERABLE-ITEM OUTPUT'S SCOPE (`vuln-servicenow`,
@@ -9950,7 +10023,20 @@ a waited-for run, or for its own second pass.
 
 **Nothing but a running run holds an update.** The run gate (`_shared/SI-UpdaterRunGate.ps1`) holds an update while a
 pipeline run has not ended, or one of its steps is still going, and the update lands between two runs. It never cancels
-a run. When the run records cannot be read, the update installs nothing until they can. Beyond that, what may stop or
+a run. When the run records cannot be read, the update installs nothing until they can.
+
+**A hung step no longer holds the update (3.1.41; Invardia's update rule, 2026-11-20, under the owner's standing rule that
+a large install's run that still logs is never stopped).** While the gate waits, the updater looks at each step of that run
+that has gone on past its bound. The bound is 10 times the usual length of that step (the median of its last successful
+runs), and never less than 120 minutes. Such a step is stopped only when all of these hold:
+- it has written no log line and no progress record since it started;
+- other runs' log lines still reach the workspace in that time, so the silence is real;
+- its usual length is known.
+
+The stop is read back, written as one warning line and raised as one alert (`si.pipeline.step-hung`, "the pipeline is
+stuck"). The gate is then asked again: once the run has ended, the update is installed, so one run never switches build
+partway. A step that writes log lines is never stopped, however long it runs. If its log lines, its progress or its usual
+length cannot be read, nothing is stopped. Beyond that, what may stop or
 delay a code roll is a short, named list: a manual deploy or a release that asks for quiet jobs (the waits above),
 Invardia's own `hold` action, the customer's opt-outs (`SI_UPDATER_BLOCK`, `SI_InvardiaUpdate_Enabled`), the **version rule**, and a
 failed database step. Nothing else does -- in particular not the install's guard mode: no updater file reads it, and an
@@ -10942,6 +11028,12 @@ runs every suite that covers the change) and the FEATURE release (the full suite
   check, the install). The rows are now kept for the process, keyed by every input file's path + size + write time (the
   template sources, the shipped config the validation reads, the code that builds them; `Get-SITemplateRowsCacheKey`);
   every caller gets its own copies; a caller's own `-Context` is never cached.
+
+**Product-page lines travel with the release (3.1.41; Invardia's hand-over rule, 2026-11-20).** Every release hands
+Invardia the plain-text list lines of the SecurityInsight product pages that this release changes. Each line is a
+replace, remove or insert of one existing item, checked against the live pages when the release is handed over. The whole
+set is applied or nothing is, and an empty list means no page changes. Plans, prices, licences, editions, terms and limits
+are never in it; those change only by the owner's approval.
 
 ### 13. No module needed for YAML or Microsoft Graph
 

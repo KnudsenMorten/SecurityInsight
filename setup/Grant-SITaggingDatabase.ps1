@@ -3,7 +3,7 @@
     SecurityInsight Pro -- ONE TIME: let asset tagging read its settings from the Pro database.
 
 .DESCRIPTION
-    Asset tagging (#236) runs under its OWN identity (default uami-securityinsight-tagging), separate from the read-only
+    Asset tagging (#236) runs under its OWN identity (asset tagging's identity), separate from the read-only
     collection identity, because it is the one engine that may write tags. Like every Pro engine it reads its settings from
     the Pro database at run start, so its identity needs a database user there with db_datareader -- nothing more. Installs
     made before this script lack that user, and their daily asset-tagging run stops at the settings check.
@@ -30,6 +30,7 @@ param(
     [Parameter(Mandatory)][string]$SqlServer,
     [Parameter(Mandatory)][string]$SqlDatabase,
     [string]$ResourceGroupName,
+    # asset tagging's identity name; the default fits an install whose identities have not moved to the standard names yet
     [string]$IdentityName = 'uami-securityinsight-tagging',
     [string]$ClientId,
     [string]$UserName,

@@ -2024,8 +2024,10 @@ ALTER TABLE cfg.JobTriggerRequest ADD CONSTRAINT CK_JobTriggerRequest_Actions CH
 -- CR8 step 2, OBSERVE ONLY (framework 12.11f item 2, SI #659): every change a person makes in the web app is recorded with
 -- the person's signed Entra token as the web app received it (Token, TokenSource bearer | session | none) and the time it
 -- was captured. The pipeline runner verifies it (signature against Entra's published keys, issuer, audience, issued <=
--- captured <= expires, the person) and records the verdict -- verified | would-refuse -- then CLEARS the token. Nothing is
--- refused yet: the engine only says what it would refuse. The web app inserts; the MCP server is denied any read.
+-- captured <= expires, the person) and records the verdict -- verified | refused (would-refuse before the install's
+-- cut-over, cfg.SignedRequestEnforcement) -- then CLEARS the token. ENFORCED (OPEN-04): a web-written configuration change
+-- without a verified row holds new pipeline runs until it is undone or saved again signed in (engine\_shared\
+-- SI-SignedRequests.ps1). The web app inserts; the MCP server is denied any read.
 IF OBJECT_ID('cfg.SignedRequest') IS NULL
 CREATE TABLE cfg.SignedRequest (
     Id              BIGINT          IDENTITY(1,1) NOT NULL CONSTRAINT PK_SignedRequest PRIMARY KEY,
@@ -2392,6 +2394,56 @@ CREATE INDEX IX_ConfigJournal_Commit ON cfg.ConfigJournal (CommitId);
 
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_ConfigJournal_Record' AND object_id = OBJECT_ID('cfg.ConfigJournal'))
 CREATE INDEX IX_ConfigJournal_Record ON cfg.ConfigJournal (Entity, EntityKey, JournalId);
+
+-- CR8 step 2, SIGNED REQUESTS ENFORCED (framework 12.11f item 2, OPEN-04): WHO WROTE a journal row is decided by the
+-- database, never by what the writer says -- 1 when the writing identity is the web app's (a member of si_audit_writer,
+-- and not db_owner / si_engine / si_updater: the Invardia Support app, the updater and the engine are never "the web app").
+-- The journal triggers do not name the column, so this default is evaluated for every row in the writer's own security
+-- context; the web app has no right on cfg.ConfigJournal to change it. The pipeline runner requires a verified signed
+-- request (cfg.SignedRequest, same CorrelationId = CommitId) for every web-written change after the cut-over below.
+IF COL_LENGTH('cfg.ConfigJournal', 'WebWriter') IS NULL
+ALTER TABLE cfg.ConfigJournal ADD WebWriter BIT NULL CONSTRAINT DF_ConfigJournal_WebWriter DEFAULT (CASE WHEN ISNULL(IS_ROLEMEMBER(N'si_audit_writer'), 0) = 1 AND ISNULL(IS_ROLEMEMBER(N'db_owner'), 0) = 0 AND ISNULL(IS_ROLEMEMBER(N'si_engine'), 0) = 0 AND ISNULL(IS_ROLEMEMBER(N'si_updater'), 0) = 0 THEN 1 ELSE 0 END);
+
+-- The install's ADOPTION (framework 12.11f item 2; owner 2026-11-04: "observe (log only) ... then ENFORCE ring by ring ...
+-- each install with one SuperAdmin-signed adoption step"). ONE row. The pipeline runner RECORDS the existing state at its
+-- first wake-up on this version (the newest journal / signed-request / resend ids, and per kind the row count + SHA-256 --
+-- Manifest, RecordedHash); the install stays OBSERVE ONLY (reports what it would refuse, refuses nothing) until a SuperAdmin
+-- signs the adoption of EXACTLY that recorded set (cfg.SignedRequestAdoption, below) and the runner has verified it --
+-- AdoptedUtc set = ENFORCED from then on. Written only by the pipeline runner; never removed.
+IF OBJECT_ID('cfg.SignedRequestEnforcement') IS NULL
+CREATE TABLE cfg.SignedRequestEnforcement (
+    Id                   INT             NOT NULL CONSTRAINT PK_SignedRequestEnforcement PRIMARY KEY CONSTRAINT CK_SignedRequestEnforcement_One CHECK (Id = 1),
+    FromJournalId        BIGINT          NOT NULL,
+    FromRequestId        BIGINT          NOT NULL,
+    FromCollectionSendId BIGINT          NOT NULL,
+    StartedUtc           DATETIME2(0)    NOT NULL CONSTRAINT DF_SignedRequestEnforcement_StartedUtc DEFAULT SYSUTCDATETIME(),
+    Version              NVARCHAR(64)    NULL,
+    Basis                NVARCHAR(1000)  NULL,
+    RecordedHash         NVARCHAR(64)    NULL,
+    Manifest             NVARCHAR(MAX)   NULL,
+    AdoptedUtc           DATETIME2(0)    NULL,
+    AdoptedBy            NVARCHAR(256)   NULL,
+    AdoptionId           BIGINT          NULL
+);
+
+-- A SuperAdmin's request to adopt the recorded set (Configuration > Signed requests): the hash they saw, who, and the
+-- request's correlation id -- its cfg.SignedRequest row carries their signed token. The pipeline runner decides it:
+-- adopted (verified token, a SuperAdmin, the hash = RecordedHash) or refused (the reason in plain words). The web app inserts.
+IF OBJECT_ID('cfg.SignedRequestAdoption') IS NULL
+CREATE TABLE cfg.SignedRequestAdoption (
+    AdoptionId      BIGINT          IDENTITY(1,1) NOT NULL CONSTRAINT PK_SignedRequestAdoption PRIMARY KEY,
+    RecordedHash    NVARCHAR(64)    NOT NULL,
+    RequestedBy     NVARCHAR(256)   NOT NULL,
+    RequestedUtc    DATETIME2(0)    NOT NULL CONSTRAINT DF_SignedRequestAdoption_RequestedUtc DEFAULT SYSUTCDATETIME(),
+    CorrelationId   NVARCHAR(64)    NULL,
+    DecidedUtc      DATETIME2(0)    NULL,
+    Decision        NVARCHAR(16)    NULL,
+    Reason          NVARCHAR(1000)  NULL
+);
+
+-- the runner finds a change's signed request by its correlation id (= the journal's CommitId, = the resend's CorrelationId)
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_SignedRequest_Correlation' AND object_id = OBJECT_ID('cfg.SignedRequest'))
+CREATE INDEX IX_SignedRequest_Correlation ON cfg.SignedRequest (CorrelationId) INCLUDE (Verdict);
 
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_ConfigJournal_Time' AND object_id = OBJECT_ID('cfg.ConfigJournal'))
 CREATE INDEX IX_ConfigJournal_Time ON cfg.ConfigJournal (CommittedUtc) INCLUDE (CommitId, InitiatedBy, Source);

@@ -63,7 +63,7 @@ knows that SecurityInsight ran.
 ### Create the staging status table
 
 Your SecurityInsight admin finds everything below on the ServiceNow data-out connector's page, under **For your
-ServiceNow team > Tables to create in ServiceNow**: the definition of all three tables with every column, the steps, a
+ServiceNow team > Tables to create in ServiceNow**: the definition of every table with every column, the steps, a
 **Copy** button and a JSON definition to download for each table. The test pack (**Download test pack**) holds the same
 columns and example rows (`rest/u_si_staging_status.json`).
 
@@ -227,8 +227,8 @@ once: `out_of_scope`, the `held` row of a record that left SecurityInsight's dat
 **What happens to the rows of the previous complete batch?** Nothing. SecurityInsight never deletes or changes anything
 in ServiceNow; it only adds rows through the Import Set API. What you imported from earlier batches stays as it is.
 
-**In which order do the two outputs arrive?** The CI batch first, then the vulnerable item batch of the same run
-(`u_si_source_run`). A vulnerable item whose CI is not delivered in a complete batch is held. Import the CI batch before
+**In which order do the CI and vulnerable item outputs arrive?** The CI batch first, then the vulnerable item batch of
+the same run (`u_si_source_run`). A vulnerable item whose CI is not delivered in a complete batch is held. Import the CI batch before
 the vulnerable item batch of the same run.
 
 **What if the end row cannot be written?** The batch stays `writing`, so your importer never imports it. The next sync
@@ -349,12 +349,18 @@ The push and the hand-off database use the same batch words, so one importer des
 
 ### The ServiceNow data-out connector
 
-One ServiceNow connector with direction **data-out** feeds both outputs:
+One ServiceNow connector with direction **data-out** feeds every ServiceNow output:
 
 | Output | What one row is | Its table setting |
 |---|---|---|
 | **ServiceNow CI hand-off** | One configuration item | *Data out: ServiceNow CI Import Set table* |
 | **ServiceNow vulnerable items** | One finding on one CI | *Data out: ServiceNow vulnerable item Import Set table* |
+| **ServiceNow remediation tasks** | One remediation task on one CI | *Data out: ServiceNow remediation task Import Set table* |
+| **ServiceNow remediation task links** | One task and a finding it resolves | *Data out: ServiceNow remediation task links Import Set table* |
+
+The two task outputs are on for every installation that sends to ServiceNow and send nothing until their table names
+are entered (*not set up*, with no error). Their columns are on [ServiceNow staging tables and
+columns](servicenow-columns#remediation-tasks-vimportremediationtask-task-staging-table).
 
 - **Switched on = it sends.** Switched off, nothing is sent and the run says so.
 - **Exactly one** data-out connector may be switched on. With two switched on, nothing is sent to either, and the check
@@ -398,5 +404,3 @@ told you left its data; CIs with the class public IP (the CI output sends device
   Your instance's REST rate limits and transaction quota apply.
 - **What a failure looks like:** the batch ends `failed` or `held` in the staging status table, and the run's line on
   *Configuration > Connectors > Runs* and the step's log say why. The next batch carries every record again.
-
-Verified against SecurityInsight 3.0.0.202610261957 on 2026-10-27.

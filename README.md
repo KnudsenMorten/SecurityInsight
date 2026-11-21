@@ -233,7 +233,8 @@ hand-off moved 12,271 real findings to ServiceNow in under three minutes.
 
 Ask in plain language, "what changed in the risk score this week?", and get an answer that shows the tool calls and
 queries behind it. Answers come only from SecurityInsight's own read-only tools. An MCP server gives AI assistants
-the same read-only tools, protected by Entra tokens.
+the same read-only tools, protected by Entra tokens. On a new installation the MCP server is closed to the internet and
+answers only inside the installation.
 
 <p align="center">
   <img src="docs/images/screenshots/ask-securityinsight.png" alt="Ask about your estate: an answer with the two tool calls and queries behind it" width="820">

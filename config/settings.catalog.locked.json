@@ -584,6 +584,7 @@
       "description": "Switch AI on or off per feature. Each needs the Azure OpenAI connection.",
       "settings": [
         "SI_EnableAI",
+        "SI_AI_DailyTokenBudget",
         "SI_EnableAI_azure",
         "SI_EnableAI_endpoint",
         "SI_DisableAI",
@@ -865,19 +866,19 @@
       "secret": false,
       "advanced": true,
       "default": null,
-      "defaultText": "4 attempts.",
-      "description": "Attempts for each AI call (default 4).",
+      "defaultText": "2 attempts: the first and one retry; never again after a refused request (HTTP 400).",
+      "description": "Attempts for each AI call (default 2, at most 2; a 400 is never retried).",
       "purpose": "How many times Risk Analysis tries an AI request when the AI service times out, throttles or has a temporary failure.",
       "effect": "More attempts make the AI summary more likely to succeed under load, but a failing service makes the run take longer. Other errors fail at once regardless.",
-      "whenToChange": "Raise if AI summaries often fail on throttling or timeouts.",
+      "whenToChange": "There is no need: SecurityInsight never sends one AI request more than twice, and never resends a refused (HTTP 400) request.",
       "unit": "attempts",
       "info": {
         "what": "How many times Risk Analysis tries an AI request when the AI service times out, throttles or has a temporary failure.",
         "whenChanged": "More attempts make the AI summary more likely to succeed under load, but a failing service makes the run take longer. Other errors fail at once regardless.",
         "risk": "Affects whether and how AI is used: when AI is used, asset data is sent to YOUR Azure OpenAI deployment, and it costs per call. Reversible at once; results already produced stay.",
         "requires": "Nothing else.",
-        "default": "4 attempts.",
-        "recommended": "Keep the default. Change it when: Raise if AI summaries often fail on throttling or timeouts.",
+        "default": "2 attempts: the first and one retry; never again after a refused request (HTTP 400).",
+        "recommended": "Keep the default. Change it when: There is no need: SecurityInsight never sends one AI request more than twice, and never resends a refused (HTTP 400) request.",
         "docUrl": "https://invardia.com/docs/si/settings/AI_MaxAttempts/"
       }
     },
@@ -1503,8 +1504,8 @@
       "effect": "Moves when the daily mail is sent. A time before the close-loop finishes mails yesterday's state. An invalid value falls back to 10:45. Takes effect when setup is run again.",
       "whenToChange": "Only to fit recipients' working hours; keep it after the close-loop run.",
       "licensedFeature": "servicenow-connector",
-      "patternHint": "HH:mm, UTC",
       "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$",
+      "patternHint": "HH:mm, UTC",
       "card": "Daily vulnerability mail",
       "hint": "HH:mm. Takes effect when setup runs again.",
       "needs": "Mail_CloseLoop_Daily_SendMail",
@@ -2455,6 +2456,33 @@
       }
     },
     {
+      "name": "SI_AI_DailyTokenBudget",
+      "label": "AI daily limit (tokens)",
+      "group": "AI",
+      "type": "int",
+      "engines": [],
+      "edition": "community",
+      "secret": false,
+      "advanced": false,
+      "default": 200000,
+      "defaultText": "200,000 tokens a day -- at a large model's list price (about USD 11 / DKK 75 per million tokens) at most about USD 2 / DKK 15 a day",
+      "description": "Hard daily limit on the Azure OpenAI tokens all engines of this install may use per UTC day. At the limit no more AI requests are sent that day; one warning and one alert. Default 200000; 0, empty or invalid = the default (never unlimited).",
+      "purpose": "Caps what AI can cost this install per day, whatever the runs do. It applies only when AI is switched on.",
+      "effect": "Every AI request of every engine counts against it. At the limit no further AI request is sent until the next UTC day: the runs go on, assets that were not asked are classified by rules only, and SecurityInsight writes one warning and raises one alert. Cost per day is at most this many tokens at your model's price.",
+      "whenToChange": "Raise it only when you have switched AI on, seen a few runs and want more AI answers per day; a large first run after switching on may need one day more.",
+      "unit": "tokens",
+      "card": "Where AI is used",
+      "info": {
+        "what": "Caps what AI can cost this install per day, whatever the runs do. It applies only when AI is switched on.",
+        "whenChanged": "Every AI request of every engine counts against it. At the limit no further AI request is sent until the next UTC day: the runs go on, assets that were not asked are classified by rules only, and SecurityInsight writes one warning and raises one alert. Cost per day is at most this many tokens at your model's price.",
+        "risk": "A higher limit allows more AI requests per day to YOUR Azure OpenAI deployment, at its price per token; a lower one stops AI sooner and leaves more assets to the rules. It applies only when AI is switched on. Reversible at once.",
+        "requires": "Nothing else.",
+        "default": "200,000 tokens a day -- at a large model's list price (about USD 11 / DKK 75 per million tokens) at most about USD 2 / DKK 15 a day",
+        "recommended": "Keep the default (200,000 tokens a day).",
+        "docUrl": "https://invardia.com/docs/si/settings/SI_AI_DailyTokenBudget/"
+      }
+    },
+    {
       "name": "SI_AISummary_Leader",
       "label": "Leading report for AI summary",
       "group": "Risk Analysis -- mails and executive view",
@@ -2737,8 +2765,8 @@
       "effect": "When a source (for example Defender, Entra or Azure) returns more than this share more or fewer objects than in the previous run, the previous collection of that source is kept for the CMDB and vulnerability hand-off, and a guard event is raised (mail and Operations > Guards (safety checks)). The hold ends by itself on the next run that is back within the limit, or once when an Admin releases it.",
       "whenToChange": "Raise it if your estate legitimately changes a lot between runs; lower it to be warned of smaller changes.",
       "unit": "%",
-      "min": 1,
       "max": 100,
+      "min": 1,
       "card": "Asset properties",
       "info": {
         "what": "How much the full asset metadata collected from one source may change from one run to the next before the hand-off of that source is held.",
@@ -3949,8 +3977,8 @@
       "purpose": "The size (Azure SQL service objective) of the Pro database. Allowed values: S1, S2, S3, S4, S6, S7, S9, S12. Empty = the product's rule.",
       "effect": "Every update sets the Pro database to this size, raising or LOWERING it, by one online change (no data loss; open connections reconnect once). Never below S1. A database on Premium, vCore or in an elastic pool is left as it is. The identity database is not affected: it stays S1. A smaller size costs less but makes pages and the nightly writes slower.",
       "whenToChange": "Only when support advises it -- for example S2 for a small install whose database is mostly idle.",
-      "patternHint": "S1, S2, S3, S4, S6, S7, S9 or S12; empty = the product's rule",
       "pattern": "^[Ss](1|2|3|4|6|7|9|12)$",
+      "patternHint": "S1, S2, S3, S4, S6, S7, S9 or S12; empty = the product's rule",
       "info": {
         "what": "The size (Azure SQL service objective) of the Pro database. Allowed values: S1, S2, S3, S4, S6, S7, S9, S12. Empty = the product's rule.",
         "whenChanged": "Every update sets the Pro database to this size, raising or LOWERING it, by one online change (no data loss; open connections reconnect once). Never below S1. A database on Premium, vCore or in an elastic pool is left as it is. The identity database is not affected: it stays S1. A smaller size costs less but makes pages and the nightly writes slower.",
@@ -4165,8 +4193,8 @@
       "effect": "Every update sets the web app to this CPU, raising or lowering it, with memory twice the CPU unless Web app memory says otherwise. The sign-in front next to it keeps its own 0.25 CPU / 0.5 GiB; together they stay within 4 CPU / 8 GiB.",
       "whenToChange": "Only when support advises it -- the web app normally uses a small part of 2 CPU.",
       "unit": "CPU",
-      "patternHint": "0.5 to 4 in steps of 0.25; empty = the product's size",
       "pattern": "^(0\\.5|0\\.75|[1-3](\\.(0|25|5|75))?|4(\\.0)?)$",
+      "patternHint": "0.5 to 4 in steps of 0.25; empty = the product's size",
       "info": {
         "what": "The CPU of the web app's own container: 0.5 to 4, in steps of 0.25. Empty = the product's size.",
         "whenChanged": "Every update sets the web app to this CPU, raising or lowering it, with memory twice the CPU unless Web app memory says otherwise. The sign-in front next to it keeps its own 0.25 CPU / 0.5 GiB; together they stay within 4 CPU / 8 GiB.",
@@ -4193,8 +4221,8 @@
       "effect": "Every update sets the web app to this memory. Azure takes memory as twice the CPU, so a memory set alone also sets the CPU to half of it.",
       "whenToChange": "Rarely; set Web app CPU instead.",
       "unit": "GiB",
-      "patternHint": "1Gi to 8Gi in steps of 0.5Gi; empty = twice the CPU",
       "pattern": "^([1-8](\\.(0|5))?)(Gi)?$",
+      "patternHint": "1Gi to 8Gi in steps of 0.5Gi; empty = twice the CPU",
       "info": {
         "what": "The memory of the web app's own container, for example 4Gi. Empty = twice the web app's CPU.",
         "whenChanged": "Every update sets the web app to this memory. Azure takes memory as twice the CPU, so a memory set alone also sets the CPU to half of it.",
@@ -4299,8 +4327,8 @@
       "effect": "A lower value rebuilds every CI more often (a longer correlation run on those days); 0 rebuilds every CI on every run, as before. A full reconcile that finds a CI the daily builds should have changed says so in the run log.",
       "whenToChange": "Set 0 while support investigates a CI that looks out of date; otherwise keep the default.",
       "unit": "days",
-      "min": 0,
       "max": 365,
+      "min": 0,
       "card": "Daily pipeline",
       "info": {
         "what": "The CI build (correlation) rebuilds only the CIs whose input changed since their last build: a record new, changed, moved or gone, a link state, a time threshold, an identity anchor or a manual override. Every CI is rebuilt (a full reconcile) when the last full build is this many days old; also at once when the data model, rules, mappings or CMDB change, and after a build that failed.",
@@ -9175,8 +9203,8 @@
       "effect": "More minutes fill the detail sooner (about 250-300 users a minute, depending on how much Microsoft throttles); fewer leave more of the tick idle. A slice that is still running is never started twice.",
       "whenToChange": "Raise it to fill a large tenant faster the first time; lower it to keep the job's runs short.",
       "unit": "minutes",
-      "min": 1,
       "max": 25,
+      "min": 1,
       "card": "Users' sign-in methods in full",
       "needs": "SI_Identity_SignInMethodsPerUser",
       "info": {
@@ -9205,8 +9233,8 @@
       "effect": "Lower: details are fresher, and more of each 15-minute slice goes to reading users again (at 150,000 users and 90 days, about 1,700 users a day). Higher: fewer reads. A user whose registered methods changed is read again at once, whatever this is.",
       "whenToChange": "Lower it when you rely on the device names and app versions being recent; raise it on a very large tenant.",
       "unit": "days",
-      "min": 1,
       "max": 365,
+      "min": 1,
       "card": "Users' sign-in methods in full",
       "needs": "SI_Identity_SignInMethodsPerUser",
       "info": {
@@ -9576,8 +9604,8 @@
       "effect": "The next data sync averages the days from first detection to remediation of the CVE findings remediated in this window; the label says the number in force.",
       "whenToChange": "A longer window gives a steadier number, a shorter one shows a recent change sooner.",
       "unit": "days",
-      "min": 1,
       "max": 3650,
+      "min": 1,
       "card": "Key figure windows",
       "info": {
         "what": "Which fixed vulnerabilities the key figure \"Mean time to fix\" averages: those remediated within this many days before the collection.",
@@ -9605,8 +9633,8 @@
       "effect": "The next data sync counts the CVE findings first detected, and the CVE findings remediated, within this many days before the collection; the labels say the number in force. Collections already figured keep the window they were worked out with; an update works the newest ones out again.",
       "whenToChange": "Your management reports per quarter or per sprint (for example 90 or 14).",
       "unit": "days",
-      "min": 1,
       "max": 3650,
+      "min": 1,
       "card": "Key figure windows",
       "info": {
         "what": "The window of the key figures \"Vulnerabilities opened in the last N days\" and \"Vulnerabilities fixed in the last N days\" (the Executive overview, the Executive report and the management mail).",
@@ -9634,8 +9662,8 @@
       "effect": "The next data sync counts the privileged accounts whose last sign-in (Entra ID sign-in activity) is older than this many days before the collection; the label says the number in force.",
       "whenToChange": "Your access review calls an admin account stale sooner (for example 30 or 45 days).",
       "unit": "days",
-      "min": 1,
       "max": 3650,
+      "min": 1,
       "card": "Key figure windows",
       "info": {
         "what": "When the key figure \"Privileged accounts without a sign-in for N days\" counts an enabled, active privileged account: its last sign-in is longer ago than this.",
@@ -10093,17 +10121,17 @@
       "purpose": "How SecurityInsight sends every mail: sharedMailbox = an Office 365 shared mailbox through Microsoft Graph as SecurityInsight's own identity (recommended); smtp = your own SMTP relay; none = no mail.",
       "effect": "Every mail (reports, safety-check alerts, close-loop, exemption, governance and digest mails, licence notices) goes this way. With sharedMailbox SecurityInsight sends only once it has verified that Mail.Send is restricted to the shared mailbox.",
       "whenToChange": "Set up with Settings > E-mail > Set up mail, or setup\\Set-SIMail.ps1.",
+      "valueLabels": {
+        "sharedMailbox": "Shared mailbox (Office 365) -- recommended",
+        "smtp": "SMTP relay (your own mail server)",
+        "none": "No mail"
+      },
       "editor": "radio",
       "values": [
         "sharedMailbox",
         "smtp",
         "none"
       ],
-      "valueLabels": {
-        "sharedMailbox": "Shared mailbox (Office 365) -- recommended",
-        "smtp": "SMTP relay (your own mail server)",
-        "none": "No mail"
-      },
       "card": "Mail",
       "hint": "The shared mailbox is recommended: no password to keep, and Exchange lets SecurityInsight send only as that one mailbox.",
       "info": {
@@ -10345,8 +10373,8 @@
       "purpose": "The time of day a new install's daily pipeline (Collect, Correlate, Deliver) starts, in the pipeline's time zone.",
       "effect": "The pipeline starts at this local time every day; summer time moves the time in UTC, never the local time. A pipeline already stored on Operations > Jobs or in config\\job-flow.custom.json keeps its own time -- change that one there.",
       "whenToChange": "When the collection should run at another time of day, for example to finish before the working day starts.",
-      "patternHint": "HH:mm, local time",
       "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$",
+      "patternHint": "HH:mm, local time",
       "card": "Daily pipeline",
       "info": {
         "what": "The time of day a new install's daily pipeline (Collect, Correlate, Deliver) starts, in the pipeline's time zone.",
@@ -10465,8 +10493,8 @@
       "effect": "A lower value rebuilds (and sends the AI requests) more often; 0 rebuilds on every run, as before. A catalog that left items untiered is always rebuilt on the next run.",
       "whenToChange": "Set 0 to rebuild every run, for example while you test new tiering prompts; raise it to cut AI calls further.",
       "unit": "days",
-      "min": 0,
       "max": 365,
+      "min": 0,
       "card": "AI spending",
       "info": {
         "what": "How long the privilege tier classifier keeps its catalog while nothing it is made from changed. Every run reads the Entra role definitions, the API permission catalog and the Azure role definitions (seconds); when they, the engine and the AI settings are the same as for the last complete catalog and that catalog is younger than this, the AI pass is skipped and the catalog is kept.",
@@ -10489,22 +10517,24 @@
       "edition": "community",
       "secret": false,
       "advanced": true,
-      "default": true,
-      "defaultText": "On.",
-      "description": "Master switch. $true (default) runs all 4 AI categories; $false short-circuits to the static built-in tier map.",
-      "purpose": "An override for ONE engine: whether the privilege tier classifier asks Azure OpenAI to tier new roles and permissions. It follows its own switch, not AI integration: it calls AI whenever the Azure OpenAI settings are set, unless this is off.",
-      "effect": "Turning it off sends nothing to Azure OpenAI. The built-in roles, groups and permissions then take their tier from the daily classified catalog, which is downloaded (Privilege tier catalog source); your own custom roles keep the tier they had, and new ones are left unresolved for manual review. Removes AI cost for this engine.",
-      "whenToChange": "Only to keep AI out of the privilege tier classifier while it is used elsewhere; or turn it off if you tier new roles yourself.",
+      "default": false,
+      "defaultText": "Off: AI is used only when a person switches it on.",
+      "description": "Master switch, off by default. $true runs all 4 AI categories; $false (default) uses the downloaded catalog or the static built-in tier map.",
+      "purpose": "An override for ONE engine: whether the privilege tier classifier asks Azure OpenAI to tier new roles and permissions. It follows its own switch, not AI integration, and is off unless a person switches it on.",
+      "effect": "When on, the classifier asks Azure OpenAI to tier new roles and permissions, at AI cost. Off (the default) sends nothing to Azure OpenAI: the built-in roles, groups and permissions take their tier from the daily classified catalog, which is downloaded (Privilege tier catalog source); your own custom roles keep the tier they had, and new ones are left unresolved for manual review. Removes AI cost for this engine.",
+      "whenToChange": "Switch it on only when you want AI to tier new roles and permissions here and accept its cost; the downloaded catalog covers the built-in ones.",
       "card": "Where AI is used",
       "info": {
-        "what": "An override for ONE engine: whether the privilege tier classifier asks Azure OpenAI to tier new roles and permissions. It follows its own switch, not AI integration: it calls AI whenever the Azure OpenAI settings are set, unless this is off.",
-        "whenOn": "On is the default: it works as described under \"What it does\".",
-        "whenOff": "Turning it off sends nothing to Azure OpenAI. The built-in roles, groups and permissions then take their tier from the daily classified catalog, which is downloaded (Privilege tier catalog source); your own custom roles keep the tier they had, and new ones are left unresolved for manual review. Removes AI cost for this engine.",
-        "risk": "With the Azure OpenAI settings set, new role and permission names are sent to YOUR Azure OpenAI deployment, and each call costs; off leaves new ones untiered for manual review. Reversible at once.",
+        "what": "An override for ONE engine: whether the privilege tier classifier asks Azure OpenAI to tier new roles and permissions. It follows its own switch, not AI integration, and is off unless a person switches it on.",
+        "whenOn": "When on, the classifier asks Azure OpenAI to tier new roles and permissions, at AI cost. Off (the default) sends nothing to Azure OpenAI: the built-in roles, groups and permissions take their tier from the daily classified catalog, which is downloaded (Privilege tier catalog source); your own custom roles keep the tier they had, and new ones are left unresolved for manual review. Removes AI cost for this engine.",
+        "whenOff": "AI is used only when a person switches it on.",
+        "risk": "On sends new role and permission names to YOUR Azure OpenAI deployment, and each call costs (within the AI daily limit); off (the default) leaves new custom ones untiered for manual review. Reversible at once.",
         "requires": "Read by: privilege-tier-classifier.",
-        "default": "On.",
-        "recommended": "Keep the default; turn it off only to keep AI out of this engine.",
-        "docUrl": "https://invardia.com/docs/si/settings/SI_PrivilegeTierClassifier_RunAI/"
+        "default": "Off: AI is used only when a person switches it on.",
+        "recommended": "Off (the default); on only when you want AI to tier new custom roles and accept its cost.",
+        "docUrl": "https://invardia.com/docs/si/settings/SI_PrivilegeTierClassifier_RunAI/",
+        "confirmWhen": "on",
+        "confirm": "When on, the classifier asks Azure OpenAI to tier new roles and permissions, at AI cost. Off (the default) sends nothing to Azure OpenAI: the built-in roles, groups and permissions take their tier from the daily classified catalog, which is downloaded (Privilege tier catalog source); your own custom roles keep the tier they had, and new ones are left unresolved for manual review. Removes AI cost for this engine. On sends new role and permission names to YOUR Azure OpenAI deployment, and each call costs (within the AI daily limit); off (the default) leaves new custom ones untiered for manual review. Reversible at once."
       }
     },
     {
@@ -11064,8 +11094,8 @@
       "effect": "Lower warns about smaller drops; higher only about large ones. A warning never blocks anything.",
       "whenToChange": "Raise it when the number of assets moves a lot from day to day on purpose.",
       "unit": "%",
-      "min": 1,
       "max": 100,
+      "min": 1,
       "card": "Data-quality warnings",
       "info": {
         "what": "When the assets of a source (Defender for Endpoint, Entra ID, Azure, public IPs) or the active CIs fall this many percent or more below the median of the last 3 runs, it is shown as a data-quality warning.",
@@ -11093,8 +11123,8 @@
       "effect": "Lower warns about smaller drops in fill; higher only about large ones. A warning never blocks anything.",
       "whenToChange": "Lower it if you want to hear early about owners or factors going missing.",
       "unit": "points",
-      "min": 1,
       "max": 100,
+      "min": 1,
       "card": "Data-quality warnings",
       "info": {
         "what": "When the share of rows that carry a key value -- the probability and consequence risk factors, the tier, the SQL tag, and the CIs' asset type and owner -- falls this many percentage points or more below the median of the last 3 runs, it is shown as a data-quality warning.",
@@ -11178,8 +11208,8 @@
       "effect": "Lower warns about smaller drops; higher only about large ones. A report at 0 rows always warns. A warning never blocks anything.",
       "whenToChange": "Raise it when your reports shrink a lot on purpose (a large remediation round).",
       "unit": "%",
-      "min": 1,
       "max": 100,
+      "min": 1,
       "card": "Data-quality warnings",
       "info": {
         "what": "When a Risk Analysis report has 0 rows, or falls this many percent or more below the median of the last 3 runs, it is shown as a data-quality warning -- the sign of a query that suddenly returns nothing.",
@@ -11207,8 +11237,8 @@
       "effect": "Lower warns about smaller moves between tiers; higher only about large ones. A warning never blocks anything.",
       "whenToChange": "Raise it while you re-tier your estate on purpose.",
       "unit": "%",
-      "min": 1,
       "max": 100,
+      "min": 1,
       "card": "Data-quality warnings",
       "info": {
         "what": "When the active CIs in a tier (0 to 3) change by this share of all active CIs or more compared with the median of the last 3 runs -- or the CIs about to retire rise by it -- it is shown as a data-quality warning. The typical cause: a customised rule that moved all servers to one tier.",
@@ -11401,8 +11431,8 @@
       "effect": "Sets the due date of every critical finding. A finding past its due date is shown as overdue on the CI page, the service views and the trend. 0 = critical findings have no due date.",
       "whenToChange": "Set it to the deadline your security policy gives critical findings.",
       "unit": "days",
-      "min": 0,
       "max": 3650,
+      "min": 0,
       "info": {
         "what": "How many days a critical finding has to be fixed, counted from when it was first found (or found again after it was fixed).",
         "whenChanged": "Sets the due date of every critical finding. A finding past its due date is shown as overdue on the CI page, the service views and the trend. 0 = critical findings have no due date.",
@@ -11429,8 +11459,8 @@
       "effect": "Sets the due date of every high finding. A finding past its due date is shown as overdue. 0 = high findings have no due date.",
       "whenToChange": "Set it to the deadline your security policy gives high findings.",
       "unit": "days",
-      "min": 0,
       "max": 3650,
+      "min": 0,
       "info": {
         "what": "How many days a high finding has to be fixed, counted from when it was first found (or found again after it was fixed).",
         "whenChanged": "Sets the due date of every high finding. A finding past its due date is shown as overdue. 0 = high findings have no due date.",
@@ -11457,8 +11487,8 @@
       "effect": "Sets the due date of every low finding. A finding past its due date is shown as overdue. 0 = low findings have no due date.",
       "whenToChange": "Set it to the deadline your security policy gives low findings.",
       "unit": "days",
-      "min": 0,
       "max": 3650,
+      "min": 0,
       "info": {
         "what": "How many days a low finding has to be fixed, counted from when it was first found (or found again after it was fixed).",
         "whenChanged": "Sets the due date of every low finding. A finding past its due date is shown as overdue. 0 = low findings have no due date.",
@@ -11485,8 +11515,8 @@
       "effect": "Sets the due date of every medium finding. A finding past its due date is shown as overdue. 0 = medium findings have no due date.",
       "whenToChange": "Set it to the deadline your security policy gives medium findings.",
       "unit": "days",
-      "min": 0,
       "max": 3650,
+      "min": 0,
       "info": {
         "what": "How many days a medium finding has to be fixed, counted from when it was first found (or found again after it was fixed).",
         "whenChanged": "Sets the due date of every medium finding. A finding past its due date is shown as overdue. 0 = medium findings have no due date.",
@@ -11949,8 +11979,8 @@
       "effect": "Lower makes delivery wait sooner; higher lets mails and ticket updates go out longer on older data. 0 means delivery never waits for a source. The calculation always goes on, and nothing is closed or retired because a source is down.",
       "whenToChange": "Raise it when a source is known to be down for longer and the mails should keep going out meanwhile.",
       "unit": "days",
-      "min": 0,
       "max": 365,
+      "min": 0,
       "card": "Data-quality warnings",
       "info": {
         "what": "When the collection of one source (identities, Azure resources, endpoints, the public IP scan) fails, the run goes on with that source's last good collection and says how old it is. When a source has had no good collection for this many days or more, delivery waits: no mail is sent and no ticket is changed until that source collects again.",
@@ -12223,8 +12253,8 @@
       "effect": "0: such a finding is a risk from day one in both views. A higher number gives it a grace (its age: the source's first-seen, else SI's first detection); a finding with no date always counts.",
       "whenToChange": "Your cloud team has an agreed time to fix recommendations (for example 30 days).",
       "unit": "days",
-      "min": 0,
       "max": 3650,
+      "min": 0,
       "card": "Protection score",
       "info": {
         "what": "How many days a Very High or High finding on a cloud resource that is not a patch (an Azure / Defender for Cloud recommendation, an attack path) may be open before it counts in the \"within Accepted Lifecycle\" view.",
@@ -12252,8 +12282,8 @@
       "effect": "0: such a finding is a risk from day one in both views. A higher number gives it a grace like a patch's (its age: the source's first-seen, else SI's first detection); a finding with no date always counts.",
       "whenToChange": "Your process accepts a time to fix configuration findings too (for example 14 days).",
       "unit": "days",
-      "min": 0,
       "max": 3650,
+      "min": 0,
       "card": "Protection score",
       "info": {
         "what": "How many days a Very High or High device finding that is NOT a patch (a configuration, an attack path, a vulnerability with no vendor fix) may be open before it counts in the \"within Accepted Lifecycle\" view.",
@@ -12281,8 +12311,8 @@
       "effect": "0: such a finding is a risk from day one in both views. A higher number gives it a grace (its age: the source's first-seen, else SI's first detection); a finding with no date always counts.",
       "whenToChange": "Your identity team has an agreed time to fix (for example 7 days).",
       "unit": "days",
-      "min": 0,
       "max": 3650,
+      "min": 0,
       "card": "Protection score",
       "info": {
         "what": "How many days a Very High or High identity finding (MFA, roles, sign-ins, attack paths -- anything that is not a patch) may be open before it counts in the \"within Accepted Lifecycle\" view.",
@@ -12310,8 +12340,8 @@
       "effect": "0: such a finding is a risk from day one in both views. A higher number gives it a grace (its age: the source's first-seen, else SI's first detection); a finding with no date always counts.",
       "whenToChange": "Your network team has an agreed time to close exposures.",
       "unit": "days",
-      "min": 0,
       "max": 3650,
+      "min": 0,
       "card": "Protection score",
       "info": {
         "what": "How many days a Very High or High finding on a public IP that is not a patch (an open port, an exposed service) may be open before it counts in the \"within Accepted Lifecycle\" view.",
@@ -14549,8 +14579,8 @@
       "effect": "Lower: the writers make room for the web app sooner, and a full run takes longer on a busy database. Higher: the writers keep their pace until the database is closer to its limit. A value that is not a number from 1 to 100 uses 85.",
       "whenToChange": "Lower it if the web app is slow during the daily run; raise it if the run must finish sooner and nobody uses the web app then.",
       "unit": "percent",
-      "min": 1,
       "max": 100,
+      "min": 1,
       "card": "Database write pace",
       "needs": "SI_SqlPacing_Enabled",
       "info": {
@@ -14579,8 +14609,8 @@
       "effect": "Between this and the busy mark a writer keeps the pause it has. Must be below the busy mark; a value at or above it uses the busy mark minus 15.",
       "whenToChange": "Rarely. Lower it if the writers speed up and slow down again and again.",
       "unit": "percent",
-      "min": 0,
       "max": 99,
+      "min": 0,
       "card": "Database write pace",
       "needs": "SI_SqlPacing_Enabled",
       "info": {
@@ -15358,8 +15388,8 @@
       "purpose": "The update ring this installation belongs to: 0 = development, 1 = internal test, 2 = early release, 3 = broad. It is shown in the header (UPDATE RING) and recorded with the installation, so the ring is known from the day it is installed -- also before the updater job has run.",
       "effect": "The header shows this ring and setup records it as the installation's ring. Once the updater job has run, the header shows the ring the updater actually updated by -- which ring an installation receives releases on is decided by the update service, not by this setting.",
       "whenToChange": "Once, when the installation's ring is not shown, or was recorded wrongly at install time.",
-      "min": 0,
       "max": 3,
+      "min": 0,
       "card": "Licence and updates",
       "info": {
         "what": "The update ring this installation belongs to: 0 = development, 1 = internal test, 2 = early release, 3 = broad. It is shown in the header (UPDATE RING) and recorded with the installation, so the ring is known from the day it is installed -- also before the updater job has run.",
@@ -15441,8 +15471,8 @@
       "effect": "When fewer of the open records are still reported, the run looks like a partial collection and closes nothing. 0 switches this check off; 1 forbids every close.",
       "whenToChange": "Lower it if your estate legitimately shrinks a lot between runs.",
       "licensedFeature": "servicenow-connector",
-      "min": 0,
       "max": 1,
+      "min": 0,
       "card": "Vulnerability connector checks",
       "needs": "SI_Guard_VulnConnectorCollapse_Enabled",
       "info": {
@@ -15501,8 +15531,8 @@
       "whenToChange": "Raise it if your patch rounds regularly fix more than this share at once.",
       "licensedFeature": "servicenow-connector",
       "unit": "%",
-      "min": 0,
       "max": 100,
+      "min": 0,
       "card": "Vulnerability connector checks",
       "needs": "SI_Guard_VulnConnectorCloseCeiling_Enabled",
       "info": {

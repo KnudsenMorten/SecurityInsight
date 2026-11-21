@@ -2,7 +2,7 @@
 <#
     SECURITYINSIGHT PRO -- THE WEB APP BEHIND THE ONE SHARED SIGN-IN FRONT (CR7, framework DOCS/REQUIREMENTS.md 12.11g). PURE.
 
-    The front is FRAMEWORK/signin-front -- ONE component PIM and SecurityInsight both build from one source path, pinned by
+    The front is signin-front (retired; source deleted) -- ONE component PIM and SecurityInsight both build from one source path, pinned by
     version (pro-management\signin-front.pin.json). It runs as a SIDECAR container in the SAME Container App revision as the
     web app and is the only container the ingress reaches; the web app listens on 127.0.0.1:<upstream port> and verifies the
     front's token on every request (SI.Management.Web, Auth\SigninFront.cs, switch SI_Web_SigninFront).
@@ -106,23 +106,21 @@ function Resolve-SISigninFrontSource {
     <#
         PURE (reads the disk). Where the component's source is, for -SIRoot -- ONE build path for Pro and Community
         (framework PRO-COMMUNITY-SAME, SI #1207):
-          the release    <SIRoot>\pro-management\signin-front\   the pinned tree (FRAMEWORK/signin-front {src, VERSION} at the
+          the release    <SIRoot>\pro-management\signin-front\   the pinned tree (signin-front (retired; source deleted) {src, VERSION} at the
                                                                   pin), carried by the solution folder itself, so the Pro
                                                                   package and the public Community release carry it at the
                                                                   same place; Publish-SIRelease.ps1 (both editions) and
                                                                   Publish-SICommunityRelease.ps1 refuse a release where it is
                                                                   not exactly the pin (Add-SIReleaseSigninFront /
                                                                   Test-SISigninFrontCarried)
-          the repository <SIRoot>\..\..\FRAMEWORK\signin-front\  (SOLUTIONS\SecurityInsight -> the repo root), at the pin
-        There is no other copy and no other source.
+        There is no other copy and no other source (Invardia 2026-11-20: the shared front's source folder is deleted from the
+        repository -- the front is retired fleet-wide; a release carries no pin, so nothing resolves a source).
         It is usable only when its VERSION is the pinned version and it has its Dockerfile.
-        Returns @{ Ok; Path; BuildPath; Version; Why; Source ('release' / 'framework' / '') }.
+        Returns @{ Ok; Path; BuildPath; Version; Why; Source ('release' / '') }.
     #>
     param([Parameter(Mandatory)][string]$SIRoot, [Parameter(Mandatory)]$Pin)
-    $fw = [IO.Path]::GetFullPath([IO.Path]::Combine($SIRoot, '..', '..', ($Pin.component -replace '/', [IO.Path]::DirectorySeparatorChar)))
     $cands = @(
-        @{ P = [IO.Path]::Combine($SIRoot, 'pro-management', 'signin-front'); S = 'release' },
-        @{ P = $fw; S = 'framework' }
+        @{ P = [IO.Path]::Combine($SIRoot, 'pro-management', 'signin-front'); S = 'release' }
     )
     $why = New-Object System.Collections.Generic.List[string]
     foreach ($cand in $cands) {
@@ -131,7 +129,7 @@ function Resolve-SISigninFrontSource {
         $vf = [IO.Path]::Combine($c, 'VERSION')
         $v = if (Test-Path -LiteralPath $vf) { ([IO.File]::ReadAllText($vf)).Trim() } else { '' }
         if ($v -ne [string]$Pin.version) { $why.Add(('{0} is version "{1}", not the pinned {2}' -f $c, $v, $Pin.version)); continue }
-        # the image's build context (README: FRAMEWORK/signin-front/src) and its Dockerfile inside it
+        # the image's build context (the pin's context) and its Dockerfile inside it
         $ctx = $(if ($Pin.PSObject.Properties['context'] -and "$($Pin.context)".Trim()) { [IO.Path]::Combine($c, "$($Pin.context)".Trim()) } else { $c })
         if (-not (Test-Path -LiteralPath ([IO.Path]::Combine($ctx, [string]$Pin.dockerfile)))) { $why.Add(('{0} has no {1}' -f $ctx, $Pin.dockerfile)); continue }
         return [pscustomobject]@{ Ok = $true; Path = $c; BuildPath = $ctx; Version = $v; Why = ''; Source = $cand.S }

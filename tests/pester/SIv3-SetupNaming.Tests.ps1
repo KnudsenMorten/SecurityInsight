@@ -147,6 +147,16 @@ Describe 'the resource group tags' {
         (ConvertTo-SIAzCliTagArgs -Tags $t) | Should -Contain 'owner='
         (ConvertTo-SIAzTagHashtable -Tags $t)['hosting'] | Should -BeExactly 'vm'
     }
+    It 'a guided install''s owner tag: the owner given, else the person who signed in -- never an app (framework NAM-01)' {
+        Get-SIInstallOwnerTag -Given 'secops' -Account 'admin@contoso.example' -AccountType 'User' | Should -BeExactly 'secops'
+        Get-SIInstallOwnerTag -Given '' -Account 'admin@contoso.example' -AccountType 'User' | Should -BeExactly 'admin@contoso.example'
+        Get-SIInstallOwnerTag -Given '' -Account 'admin@contoso.example' -AccountType '' | Should -BeExactly 'admin@contoso.example'
+        Get-SIInstallOwnerTag -Given '' -Account '0c1d2e3f-aaaa-bbbb-cccc-000000000001' -AccountType 'ServicePrincipal' | Should -BeExactly ''
+        Get-SIInstallOwnerTag -Given '' -Account 'not-a-person' -AccountType 'User' | Should -BeExactly ''
+        $gi = [IO.File]::ReadAllText((Join-Path $script:SIRoot 'setup\_shared\SI-GuidedInstall.ps1'))
+        $gi | Should -Match 'Get-SIInstallOwnerTag -Given \(\[string\]\$v\[''owner''\]\) -Account \(\[string\]\$ctx\.Facts\[''account''\]\)'
+        $gi | Should -Match '-Tenant \$tenantTag -Owner \$ownerTag'
+    }
     It 'no personal address is baked into shipped code as an owner' {
         foreach ($f in 'setup\_shared\SI-SetupNaming.ps1', 'config\setup-unattended.sample.json', 'setup\install-parameters.json') {
             Read-SI $f | Should -Not -Match '(?i)owner[^\r\n]{0,40}[a-z0-9._-]+@[a-z0-9.-]+\.[a-z]{2,}' -Because "$f must not default the owner to a person"

@@ -40,5 +40,3 @@ To test in a developer or sub-production instance:
    rows per output, mode `test`, which your importer must skip.
 
 What each case should do in ServiceNow is on [Handling records and states](servicenow-records-and-states).
-
-Verified against SecurityInsight 3.0.0.202610261957 on 2026-10-27.

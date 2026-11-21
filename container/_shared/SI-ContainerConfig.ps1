@@ -35,15 +35,24 @@ $script:SIConfigProtected = @(
     'SI_WorkspaceResourceId', 'SI_DceName', 'SI_DcrResourceGroup',
     'OpenAI_apiKey', 'OpenAI_endpoint', 'OpenAI_deployment', 'OpenAI_apiVersion',
     'SI_License', 'SHODAN_ApiKey', 'SI_Shodan_ApiKey',
-    # The internal platform framework (FUNCTIONS\AutomateITPS) exists only on an internal VM -- never in a container.
+    # The internal platform framework module exists only on an internal VM -- never in a container.
     # Live 2026-10-02: an internal install's AutomationFramework = $true travelled as SI_CFG_AutomationFramework and
     # the tier classifier failed in the container looking for that module.
     'AutomationFramework'
 )
 
+# OPENAI-CAP (owner 2026-11-21): the AI switches never travel as a copied SI_CFG_ value -- AI runs only when a PERSON
+# switches it on in the Settings (the Pro settings database, which still applies them). A config file's SI_EnableAI or
+# BuildSummaryByAI = $true is how the internal install's engines called Azure OpenAI on every run unasked.
+$script:SIConfigPassthroughRefused = @(
+    'SI_EnableAI', 'SI_EnableAI_endpoint', 'SI_EnableAI_azure', 'SI_EnableAI_identity', 'SI_EnableAI_publicip',
+    # (the container jobs' own AI-summary setting is setup-only: setup turns it into the job's SI_RA_BUILD_SUMMARY_BY_AI)
+    'BuildSummaryByAI', 'SI_PrivilegeTierClassifier_RunAI'
+)
+
 # Known NON-secret settings whose names happen to match the secret filter below (a token LIMIT, a tenant id). Exact names
 # only -- the filter stays broad for everything else, so a new name that looks like a credential is still refused.
-$script:SIConfigNotSecret = @('AI_MaxTokens', 'AI_MaxTokensPerRequest', 'OpenAI_MaxTokensPerRequest', 'SI_IdentityTokenTenantId')
+$script:SIConfigNotSecret = @('AI_MaxTokens', 'AI_MaxTokensPerRequest', 'OpenAI_MaxTokensPerRequest', 'SI_IdentityTokenTenantId', 'SI_AI_DailyTokenBudget')
 
 function Test-SIConfigNameIsSecret {
     <# A name that holds a credential never travels as a plain env var. Deliberately broad; only the exact names in
@@ -121,7 +130,7 @@ function Get-SIConfigEnvArgs {
     $refused = New-Object System.Collections.Generic.List[string]
     $missing = New-Object System.Collections.Generic.List[string]
     foreach ($n in @($Names | Where-Object { $_ -and @($Ignore) -notcontains $_ } | Select-Object -Unique)) {
-        if ((Test-SIConfigNameIsSecret -Name $n) -or ($script:SIConfigProtected -contains $n)) { $refused.Add($n); continue }
+        if ((Test-SIConfigNameIsSecret -Name $n) -or ($script:SIConfigProtected -contains $n) -or ($script:SIConfigPassthroughRefused -contains $n)) { $refused.Add($n); continue }
         if (-not $Globals.ContainsKey($n)) { $missing.Add($n); continue }
         $envArgs.Add(('{0}{1}={2}' -f $script:SIConfigEnvPrefix, $n, (ConvertTo-SIConfigEnvValue -Value $Globals[$n])))
     }
@@ -226,7 +235,7 @@ function Import-SIConfigFromEnv {
         if (-not ([string]$k).StartsWith($script:SIConfigEnvPrefix, [StringComparison]::OrdinalIgnoreCase)) { continue }
         $name = ([string]$k).Substring($script:SIConfigEnvPrefix.Length)
         if (-not $name -or $name -notmatch '^[A-Za-z_][A-Za-z0-9_]*$') { $refused.Add($name); continue }
-        if ((Test-SIConfigNameIsSecret -Name $name) -or ($script:SIConfigProtected -contains $name)) { $refused.Add($name); continue }
+        if ((Test-SIConfigNameIsSecret -Name $name) -or ($script:SIConfigProtected -contains $name) -or ($script:SIConfigPassthroughRefused -contains $name)) { $refused.Add($name); continue }
         Set-Variable -Name $name -Scope Global -Value (ConvertFrom-SIConfigEnvValue -Text ([string]$Environment[$k]))
         $applied.Add($name)
     }

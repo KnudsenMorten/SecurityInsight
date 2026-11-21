@@ -17,7 +17,9 @@ namespace SI.Management.Web.Licensing;
 /// THE SPLIT (#480, "free = see your risk, Pro = work on it"): free = the collection, the CIs, Risk Analysis and every
 /// view of it, settings, jobs, run health, the risk index, rules and outputs. Paid = governance (exemptions, departments,
 /// tasks, security owners), the CMDB and its connectors (with the vulnerability close-loop), mail alerts and management
-/// summary mails, the role and scope mapping, the audit trail, templates with rings, and the AI chat.
+/// summary mails, templates with rings, and the AI chat. CORE SECURITY IS IN BOTH (owner 2026-11-04, framework section 0,
+/// OPEN-26): the role and scope mapping (/Admin/Access) and the audit trail viewer (/Admin/History) are never paid;
+/// <see cref="Access"/> / <see cref="Audit"/> stay named only so an older link to their "part of Pro" page still reads.
 /// </summary>
 public static class ProFeatures
 {
@@ -65,8 +67,6 @@ public static class ProFeatures
         ["/Connectors"] = CmdbConnectors,
         ["/Admin/Settings/Reports"] = Alerts,
         ["/Admin/Settings/Notifications"] = Alerts,
-        ["/Admin/Access"] = Access,
-        ["/Admin/History"] = Audit,
         ["/Templates"] = Templates,
         ["/Admin/Deviations"] = Templates,
         ["/Chat"] = Ai,

@@ -134,5 +134,3 @@ with the guided install described on this page.
 
 **Do I need Pro to run 3?** No. Community is SecurityInsight 3 without the paid features. The licence decides which
 features are on.
-
-Verified against SecurityInsight 3.0.0.202610261957 on 2026-10-27

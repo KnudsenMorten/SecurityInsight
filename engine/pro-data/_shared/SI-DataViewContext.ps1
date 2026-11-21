@@ -554,12 +554,22 @@ function Invoke-SIDataParallelRanges {
     $pool.Open()
     $jobs = New-Object System.Collections.Generic.List[object]
     $rangeScript = if ($RangeRunner) { $RangeRunner } else { $work.ToString() }
+    # A CURRENT TOKEN FOR EVERY CONNECTION (2026-11-20, Invardia run-monitor 83EC46B2: "the prepared view columns failed: Login
+    # failed for user '<token-identified principal>'. Token is expired."): a range started again after a stall or a brief
+    # network failure, and the watch's read of the request views, can come an hour or more after the call began -- each takes
+    # the seam's token NOW (-ConnectionInfo hands out a current one), never the one read when the call started. Not readable =
+    # the one read at the start, as before.
+    $current = {
+        try { $f = & $ConnectionInfo; if ($f -and "$($f.ConnectionString)".Trim()) { return $f } } catch { }
+        $info
+    }
     $start = {
         # $try: the watchdog's attempt (a stall); $net: the retries after a brief network failure so far (#1181)
         param($i, $try, $net)
         $r = $Ranges[$i]; $app = '{0}-{1}-{2}-{3}' -f $tag, $i, $try, [int]$net
+        $now = if ([int]$try -le 1 -and [int]$net -eq 0) { $info } else { & $current }
         $ps = [powershell]::Create(); $ps.RunspacePool = $pool
-        $null = $ps.AddScript($rangeScript).AddArgument([string]$info.ConnectionString).AddArgument([string]$info.AccessToken).AddArgument($Sql).AddArgument($CollectionId).AddArgument([long]$r[0]).AddArgument([long]$r[1]).AddArgument($more).AddArgument($UpperName).AddArgument($app).AddArgument($live).AddArgument($lockMs)
+        $null = $ps.AddScript($rangeScript).AddArgument([string]$now.ConnectionString).AddArgument([string]$now.AccessToken).AddArgument($Sql).AddArgument($CollectionId).AddArgument([long]$r[0]).AddArgument([long]$r[1]).AddArgument($more).AddArgument($UpperName).AddArgument($app).AddArgument($live).AddArgument($lockMs)
         [pscustomobject]@{ I = $i; Try = $try; Net = [int]$net; App = $app; Ps = $ps; Ar = $ps.BeginInvoke(); Since = [datetime]::UtcNow; StallSince = $null; Wait = ''; Cancelled = $false; CancelledAt = $null }
     }
     try {
@@ -633,8 +643,9 @@ function Invoke-SIDataParallelRanges {
             # what the ranges still out are waiting on, from the database's own views (a separate connection)
             $seen = @{}
             try {
-                $b = New-Object System.Data.SqlClient.SqlConnectionStringBuilder([string]$info.ConnectionString); $b['Application Name'] = "$tag-watch"
-                $wc = New-Object System.Data.SqlClient.SqlConnection($b.ConnectionString); if ($info.AccessToken) { $wc.AccessToken = [string]$info.AccessToken }
+                $wi = & $current
+                $b = New-Object System.Data.SqlClient.SqlConnectionStringBuilder([string]$wi.ConnectionString); $b['Application Name'] = "$tag-watch"
+                $wc = New-Object System.Data.SqlClient.SqlConnection($b.ConnectionString); if ($wi.AccessToken) { $wc.AccessToken = [string]$wi.AccessToken }
                 try {
                     $wc.Open(); $q = $wc.CreateCommand(); $q.CommandTimeout = 30   # limit-ok: the watch's own read of the request views; a slow read is skipped this minute, never the work
                     $q.CommandText = @"

@@ -48,7 +48,7 @@ $script:WebWriteGrants = @(
     @{ Object = 'cfg.GuardEvent';              Verbs = 'INSERT' }
     @{ Object = 'cfg.GuardRelease';            Verbs = 'INSERT, UPDATE' }
     @{ Object = 'cfg.InstallKeyClaimAgainRequest'; Verbs = 'EXECUTE' }      # Settings > Updates: claim the install key again (one row, never the table)
-    @{ Object = 'cfg.WebAppSignedInRecord';    Verbs = 'EXECUTE' }      # the first sign-in on this web app, for the updater's move to ca-si-web (one row, never the table)
+    @{ Object = 'cfg.WebAppSignedInRecord';    Verbs = 'EXECUTE' }      # the first sign-in on this web app, for the updater's move of the web app to ca-si-management (one row, never the table)
     @{ Object = 'cfg.GuardStrictEndSet';       Verbs = 'EXECUTE' }      # CR4: a SuperAdmin ends the stricter period of the safety checks early (one row, never the table)
     @{ Object = 'cfg.DataHealthOverrideSet';   Verbs = 'EXECUTE' }      # CR2: a SuperAdmin lets one data-out channel through while the data is Unhealthy (never the table)
     @{ Object = 'cfg.FlowRunCancelSet';        Verbs = 'EXECUTE' }      # #700: Operations > Jobs cancels the RUNNING run (its run, queue request and lock; one run, never the table)
@@ -56,7 +56,8 @@ $script:WebWriteGrants = @(
     @{ Object = 'cfg.JobFlow';                 Verbs = 'INSERT, UPDATE' }
     @{ Object = 'cfg.PipelineQueue';           Verbs = 'INSERT, UPDATE' }   # #306: Run now requests + Cancel
     @{ Object = 'cfg.JobTriggerRequest';       Verbs = 'INSERT, UPDATE' }   # CR8: a job's trigger change, applied by the pipeline runner (start-only rights on the jobs); #931: a start's own values, bound to the execution after the start
-    @{ Object = 'cfg.SignedRequest';           Verbs = 'INSERT' }           # CR8 step 2 (observe only): each change with the person's signed token
+    @{ Object = 'cfg.SignedRequest';           Verbs = 'INSERT' }           # CR8 step 2: each change with the person's signed token
+    @{ Object = 'cfg.SignedRequestAdoption';   Verbs = 'INSERT' }           # OPEN-04: a SuperAdmin's signed adoption of the recorded set
     @{ Object = 'cfg.PendingSecret';           Verbs = 'INSERT, DELETE' }   # the secret hand-over: ciphertext only; a new paste replaces the one still waiting
     @{ Object = 'cfg.MgmtReport';              Verbs = 'INSERT, UPDATE' }
     @{ Object = 'cfg.PivotView';               Verbs = 'INSERT, UPDATE' }

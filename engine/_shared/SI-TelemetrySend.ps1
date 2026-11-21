@@ -478,7 +478,9 @@ function Get-SITelemetryOptionalFields { @('wave', 'releaseMode', 'components', 
                                           # #1264 (framework DOCS-FRESH): the docs' live version stamped at build time (Invardia 1.0.1085)
                                           'docsVersion',
                                           # #1266 TRANSIENT-RETRY-1 (Invardia 1.0.1093): a validator without it never costs the failure itself
-                                          'Retry') }
+                                          'Retry',
+                                          # OPEN-04: the shared any-product SignedRequests (PIM's shape + SI's soft adoptedUtc / waitingSince) -- behind its own switch
+                                          'SignedRequests') }
 # (EndedUtc -- RUN-MONITOR-STALE-1 -- is NOT on this list: it rides on EVERY run record and Invardia took it server-first, so
 #  a refused record is never sent a second time only to drop it, and a kept record goes again exactly as it was built)
 
@@ -671,7 +673,7 @@ function Send-SITelemetryRecordWithFallback {
     foreach ($n in $opt) { $Record.PSObject.Properties.Remove($n) }
     $r2 = & $Transport $Record $Context.Endpoint $Context.AccessCode $TimeoutSec
     if ("$($r2.Status)" -ne 'ok') { return [pscustomobject]@{ Result = $r2; Record = $Record; Held = $false } }
-    if (@($opt | Where-Object { $_ -notin @('wave', 'releaseMode', 'components', 'evidence', 'Collections', 'runProgress', 'Pipeline', 'Jobs', 'Sources', 'Database', 'Update', 'Mail', 'Warnings', 'Security', 'Published', 'DataOut', 'supportSqlAccess', 'build', 'setupSteps', 'UplinkBacklog', 'docsVersion', 'Retry') }).Count) {
+    if (@($opt | Where-Object { $_ -notin @('wave', 'releaseMode', 'components', 'evidence', 'Collections', 'runProgress', 'Pipeline', 'Jobs', 'Sources', 'Database', 'Update', 'Mail', 'Warnings', 'Security', 'Published', 'DataOut', 'supportSqlAccess', 'build', 'setupSteps', 'UplinkBacklog', 'docsVersion', 'Retry', 'SignedRequests') }).Count) {
         if (-not $global:SI_UplinkCausesWarned) { $global:SI_UplinkCausesWarned = $true; Write-SIUplinkDiag ("Invardia did not take the Invardia support link's report with the report causes / capability fields ({0}) -- it was sent without them" -f (ConvertTo-AitUplinkRedacted -Text $first)) }
     }
     if (-not $hadRelease) { return [pscustomobject]@{ Result = $r2; Record = $Record; Held = $false } }
@@ -1400,6 +1402,20 @@ function Send-SITelemetryRunEnd {
                 if ($head) { $runArgs.ErrorMessage += ('. First cause: {0}' -f $head) }
             }
         }
+        # 2026-11-20 (Invardia run-monitor alignment gaps, framework 8.16: "every product warning needs a stable code"): a run
+        # fault SecurityInsight words itself (Get-SIRunFaultRules) carries its catalogue code -- as a Reports[] item (below)
+        # and, identified, in front of the text (Invardia takes the first code in the text before the items' codes, so a run
+        # whose items carry other codes still has ONE stable code). Not for a run whose code is already known (FailureCode)
+        # nor for a Risk Analysis run with reports not complete (its reports' items are its codes). Never fatal.
+        $runFaultCode = ''
+        if ($exit -ne 'success' -and $null -eq $incN) {
+            try {
+                if (-not ($RunContext.PSObject.Properties['FailureCode'] -and "$($RunContext.FailureCode)".Trim())) { $runFaultCode = Resolve-SIRunFaultCode -Text $msg }
+                if ($runFaultCode -and $runArgs.ContainsKey('ErrorMessage') -and [string]$runArgs.ErrorMessage -notmatch '\bsi-[a-z]{2,8}-\d{4}\b') {
+                    $runArgs.ErrorMessage = '{0}: {1}' -f $runFaultCode, [string]$runArgs.ErrorMessage
+                }
+            } catch { $runFaultCode = '' }
+        }
         # the steps this run finished well (StepsOk): a later ok report closes the tickets of the steps it lists
         $sok = @(Get-SITelemetryStepsOk -RunContext $RunContext -ExitReason $exit -FailedStep $(if ($runArgs.ContainsKey('FailedStep')) { [string]$runArgs.FailedStep } else { '' }))
         if ($sok.Count) { $runArgs.StepsOk = [string[]]$sok }
@@ -1424,6 +1440,13 @@ function Send-SITelemetryRunEnd {
             if ($RunContext.PSObject.Properties['FailureCode'] -and "$($RunContext.FailureCode)".Trim()) {
                 $causeItems = @($causeItems) + @(ConvertTo-SIUplinkFailureItem -Code ([string]$RunContext.FailureCode) -Job ([string]$RunContext.Engine) -Step ([string]$RunContext.FailedStep) `
                                                    -Text $ErrorMessage -Identified:(-not $anon) -Version (Get-SITelemetryReleaseVersion) -Region (Get-SIUplinkRegion))
+            }
+        } catch { }
+        # 2026-11-20: the run's own fault code (Resolve-SIRunFaultCode above) is its own item, once
+        try {
+            if ($runFaultCode -and -not @(@($causeItems) | Where-Object { $_ -and [string]$_.Code -eq $runFaultCode }).Count) {
+                $causeItems = @($causeItems) + @(ConvertTo-SIUplinkFailureItem -Code $runFaultCode -Job ([string]$RunContext.Engine) -Step ([string]$step) `
+                                                   -Text $msg -Identified:(-not $anon) -Version (Get-SITelemetryReleaseVersion) -Region (Get-SIUplinkRegion))
             }
         } catch { }
         # #1227 (owner 2026-11-12): a SCOPED NOTE of a rule / tier source (the run stayed whole, so it is not a failure of the

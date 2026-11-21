@@ -148,7 +148,7 @@ $global:OpenAI_deployment          = '<deployment-name>'
 $global:OpenAI_apiVersion          = '2025-01-01-preview'
 $global:OpenAI_MaxTokensPerRequest = 16384
 $global:OpenAI_apiKey              = '<aoai-api-key>'   # OR leave blank + use KV pull in section 9
-$global:BuildSummaryByAI           = $true
+$global:BuildSummaryByAI           = $false   # AI is off by default: a person switches it on in the Settings
 
 # ============================================================================
 # 8. PUBLICIP / SHODAN  (only if you run the publicip engine)

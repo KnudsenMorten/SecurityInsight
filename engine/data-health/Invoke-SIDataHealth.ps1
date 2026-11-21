@@ -49,6 +49,7 @@ if (-not (Get-Command -Name New-SIDataSqlInvoke -ErrorAction SilentlyContinue)) 
 if (-not (Get-Command -Name Invoke-SIPagedRest -ErrorAction SilentlyContinue)) { . (Join-Path $siRoot 'engine\asset-profiling\shared\Invoke-SIPagedRest.ps1') }
 if (-not (Get-Command -Name Get-SIGraphToken -ErrorAction SilentlyContinue)) { . (Join-Path $siRoot 'auth\Get-SIGraphToken.ps1') }
 if (-not (Get-Command -Name Resolve-SIAzurePlacement -ErrorAction SilentlyContinue)) { . (Join-Path $siRoot 'engine\data-model\SI-AzureChildren.ps1') }
+if (-not (Get-Command -Name Get-SIMdcAssessmentRows -ErrorAction SilentlyContinue)) { . (Join-Path $siRoot 'engine\asset-profiling\discovery\Get-SIMdcAssessmentSources.ps1') }
 
 if (-not $global:SI_SPN_TenantId       -and $global:HighPriv_Modern_TenantID)                    { $global:SI_SPN_TenantId       = [string]$global:HighPriv_Modern_TenantID }
 if (-not $global:SI_SPN_AppId          -and $global:HighPriv_Modern_ApplicationID_Azure)         { $global:SI_SPN_AppId          = [string]$global:HighPriv_Modern_ApplicationID_Azure }
@@ -121,8 +122,17 @@ $sources = @{
         $scope = Get-SIAzureCiScope
         # Changed (#747): the newest status change of the resource's assessments -- a count that differs because an assessment
         # changed after the collection is drift, not a defect
-        $q = "securityresources | where type =~ 'microsoft.security/assessments' | extend ResourceId = tolower(tostring(properties.resourceDetails.Id)), Status = tostring(properties.status.code), StatusChanged = todatetime(properties.status.statusChangeDate) | where isnotempty(ResourceId) | summarize Unhealthy = countif(Status =~ 'Unhealthy'), Changed = max(StatusChanged) by ResourceId"
-        foreach ($r in @(Search-SIResourceGraph -Query $q)) {
+        # 2026-11-20: the SAME combined read as the collection -- Resource Graph AND the ARM assessments API, union per
+        # assessment (Get-SIMdcAssessmentSources.ps1). Resource Graph answering 0 while the API has rows is a source-read
+        # gap at Microsoft (said), and the check judges the combined data. A read that is not whole is NOT a read.
+        $read = Get-SIMdcAssessmentRows -NoCache
+        if (-not $read.Complete) { throw ('the Defender for Cloud assessments were not read completely: {0}' -f [string]$read.Error) }
+        $gap = Format-SIMdcSourceGapText -Subscriptions @($read.GraphEmptySubscriptions)
+        if ($gap) { & $log 'INFO' $gap }
+        # the same per-subscription rule as the collection: the API failed but Resource Graph answered = complete, said
+        foreach ($w in @($read.Warnings)) { if ($w) { & $log 'WARN' ([string]$w) } }
+        $hr = ConvertTo-SIMdcHealthRows -Rows @($read.Rows)
+        foreach ($r in $hr) {
             $pl = Resolve-SIAzurePlacement -Id ([string]$r.ResourceId) -Type '' -Object $null -Scope $scope
             if ($pl.Action -ne 'record') { continue }
             [pscustomobject]@{ Key = 'mdc:' + [string]$r.ResourceId; Name = ([string]$r.ResourceId -split '/')[-1]; Created = $null; Modified = $r.Changed; Values = @{ unhealthy = $r.Unhealthy } }
@@ -138,8 +148,12 @@ $defender = {
         try {
             $r = Invoke-SIPagedRest -Url ('https://api.securitycenter.microsoft.com/api/machines/{0}/vulnerabilities' -f $id) -Token $tok -SourceLabel 'Defender machine vulnerabilities'
             # the CVE, the date the report's minimum age is judged by (the vulnerability's last update, else its publication),
-            # and its publication (#747: published after the stored collection = it did not exist then -- drift, not a miss)
-            $out[$id] = $(if ($r.Complete) { , @($r.Rows | Where-Object { $_ -and [string]$_.id } | ForEach-Object { [pscustomobject]@{ Cve = [string]$_.id; LastModified = $(if ($_.updatedOn) { $_.updatedOn } else { $_.publishedOn }); Published = $_.publishedOn } }) } else { $null })
+            # its publication, and -- when the answer carries it -- when Defender first saw it on THIS device (2026-11-20: the
+            # drift rule judges by that first sighting; else by the first sighting a newer collection stored; only then by
+            # the publication -- Compare-SIDataHealthVulnerabilities)
+            $out[$id] = $(if ($r.Complete) { , @($r.Rows | Where-Object { $_ -and [string]$_.id } | ForEach-Object {
+                $fs = $null; foreach ($fn in 'firstSeenTimestamp', 'firstSeen', 'firstDetected') { $pp = $_.PSObject.Properties[$fn]; if ($pp -and $pp.Value) { $fs = $pp.Value; break } }
+                [pscustomobject]@{ Cve = [string]$_.id; LastModified = $(if ($_.updatedOn) { $_.updatedOn } else { $_.publishedOn }); Published = $_.publishedOn; FirstSeen = $fs } }) } else { $null })
         } catch { $out[$id] = $null }
     }
     $out

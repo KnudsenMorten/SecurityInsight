@@ -114,6 +114,23 @@ Describe 'the parallel field fill: a brief network failure is tried again, the f
         $all | Should -Match 'range 2 of the field fill still could not reach the database after 4 attempt\(s\) -- given up for this run'
         $sw.Elapsed.TotalSeconds | Should -BeLessThan 60 -Because 'bounded: three pauses of one second'
     }
+    It '83EC46B2 (Token is expired): a range started again takes the seam''s CURRENT token, never the one read when the call began' {
+        $st = @{ N = 0 }
+        # every ask hands out a newer token: 't', 'tt', 'ttt', ... (the watch asks too, so only "longer than the first" is fixed)
+        $ci = { $st.N++; @{ ConnectionString = 'Server=tcp:127.0.0.1,1;Database=x;Connect Timeout=1;Pooling=false'; AccessToken = ('t' * $st.N) } }.GetNewClosure()
+        # the fake range answers the length of the token it was given; range 2 fails once with a brief network failure
+        $runner = @"
+param([string]`$Cs, [string]`$Token, [string]`$Text, [long]`$Cid, [long]`$After, [long]`$Upto, [hashtable]`$More, [string]`$UpName, [string]`$App, [hashtable]`$Live, [long]`$LockMs)
+if (`$App -match '-1-1-0$') { throw '$($script:NoHost.Replace("'", "''"))' }
+[pscustomobject]@{ N = [long]`$Token.Length; Ms = 1L }
+"@
+        $res = @(Invoke-SIDataParallelRanges -ConnectionInfo $ci -Sql 'x' -CollectionId 1 -Ranges @(@(0, 10), @(10, 20), @(20, 40)) -Log { param($l, $t) } -WatchSeconds 1 -RetryWaits @(1) -RangeRunner $runner | ForEach-Object { $_ })
+        [long]$res[0].N | Should -Be 1 -Because 'a first start uses the token read when the call began'
+        [long]$res[2].N | Should -Be 1
+        [long]$res[1].N | Should -BeGreaterThan 1 -Because 'the range started again asked the seam for its token again'
+        $d = (Get-Command Invoke-SIDataParallelRanges).Definition
+        $d | Should -Match '\$wi = & \$current' -Because 'the watch''s own read of the request views signs in with a current token too'
+    }
     It 'WIRING: the decision is the shared classification; the watchdog is kept; the field fill hands its log on' {
         $d = (Get-Command Invoke-SIDataParallelRanges).Definition
         $d | Should -Match 'Get-SIDataRangeRetryWait -ErrorRecord \$rangeErr'

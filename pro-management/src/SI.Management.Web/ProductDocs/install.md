@@ -80,12 +80,15 @@ The wizard gives you one command. Open Azure Cloud Shell (PowerShell), signed in
 it. The install signs in with your browser session, needs no PowerShell module, and reports each step to the
 installation page on invardia.com as it starts and ends.
 
-When a feature you switched on needs a key (Azure OpenAI, Shodan, an SMTP password), Cloud Shell asks for it. The key
-goes straight into the install's Key Vault. It is never written to a configuration file and never reported.
+When a feature you switched on needs a key (Shodan, an SMTP password), Cloud Shell asks for it. The key goes straight
+into the install's Key Vault. It is never written to a configuration file and never reported. AI needs no key:
+SecurityInsight signs in to your Azure OpenAI resource with its own identities, once you or your support partner give
+them the role Cognitive Services OpenAI User on it. With AI on, Cloud Shell also offers an optional Azure OpenAI key;
+press Enter to skip it.
 
 ### What the install does
 
-![What the guided install creates: in one resource group a Container Apps environment with the engine jobs, the pipeline runner, the updater, the web app behind its sign-in front and the MCP server; an Entra-only Azure SQL server with the Pro database and the identity ledger; Log Analytics, storage, Key Vault and a container registry; one managed identity per role; and in Entra ID the sign-in app registration, the SQL admin group and the read-only permissions](images/install-resources.png)
+![What the guided install creates: in one resource group a Container Apps environment with the engine jobs, the pipeline runner, the updater, the web app with Microsoft's built-in sign-in and the MCP server; an Entra-only Azure SQL server with the Pro database and the identity ledger; Log Analytics, storage, Key Vault and a container registry; one managed identity per role; and in Entra ID the sign-in app registration, the SQL admin group and the read-only permissions](images/install-resources.png)
 
 First it checks, and changes nothing:
 
@@ -114,7 +117,7 @@ Then it installs, one step at a time:
 | Database server and tables | An Entra-only Azure SQL server, its databases, one least-privilege role per component and the certificate-signed grant procedure that later updates use. SQL auditing to your workspace, kept 90 days. See [SQL access](sql-access). |
 | Configuration templates | The default templates (reports, rules, risk index). |
 | Settings | Your answers as settings in the database. Records the install's update ring, its tenant and its resource names. |
-| SecurityInsight web app | The web app, its MCP server and their Entra sign-in. The sign-in uses no secret and no certificate. |
+| SecurityInsight web app | The web app, its MCP server and their Entra sign-in. The sign-in uses no secret and no certificate. The MCP server is closed to the internet: it answers only inside the installation, and running the install again never opens it. |
 | The updater | The nightly job that keeps the install on its update ring. See [Releases, rings and waves](releases). |
 | Invardia Support access | Only when you chose a support level. |
 | First run | Starts the first pipeline run. |

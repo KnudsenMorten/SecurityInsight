@@ -6,7 +6,7 @@ using Microsoft.IdentityModel.Tokens;
 namespace SI.Management.Web.Auth;
 
 /// <summary>
-/// The shared sign-in front (framework section 12.11g, CR7): ONE sign-in component, FRAMEWORK/signin-front, runs as a
+/// The shared sign-in front (framework section 12.11g, CR7): ONE sign-in component, signin-front (retired; source deleted), runs as a
 /// sidecar container in the SAME Container App revision as this web app and is the only container the ingress reaches.
 /// It signs the user in (code flow + PKCE, the web app's managed identity as a federated credential -- no secret), strips
 /// every inbound identity header and sends exactly one <c>Authorization: Bearer &lt;ID token&gt;</c> on each request.

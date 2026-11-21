@@ -37,6 +37,31 @@
                                          'ControlPlaneOutputs'); the same value on a later update writes nothing, so a
                                          column an Admin switches off in the web app stays off. "off" removes ONLY a column
                                          row the update itself wrote (UpdatedBy = the update) -- never an Admin's own row.
+      SI_UPDATER_REPORTS                 a compact JSON object switching shipped Risk Analysis reports off or on again (owner
+                                         2026-11-19: a report whose source the install has no licence for is switched off
+                                         through the updater): { "<ReportName>": "off" | "on", ... }. ALLOW-LIST, derived
+                                         from what the release ships: a report named in risk-analysis-detection\
+                                         RiskAnalysis_Queries_Locked.yaml and not required by SecurityInsight (config\
+                                         template-mandatory.locked.json). Written through the web app's OWN item statement
+                                         (ItemOverrideRepository.WriteSql: the cfg.ItemOverride row of Kind 'rareport', key
+                                         'report/<name>' that an Admin's "Report it" off writes -- State 'disable'), with
+                                         its change-log row, and READ BACK. "on" removes ONLY a 'disable' row the update
+                                         itself wrote -- an Admin's own row is kept. Needs a usable reason (as the outputs).
+                                         ONCE PER VALUE (cfg.InstallState 'ControlPlaneReports').
+      SI_UPDATER_LICENCE_PULL            request:pro-business | request:pro-enterprise | request:previous (Invardia
+                                         2026-11-20): a licence request of that edition filed ONCE with the normal knock (no
+                                         licence id is ever sent), then pulled on each update until Invardia delivers; or
+                                         SI-License-Previous restored -- verified offline (a trusted signer, this tenant, valid
+                                         today, the edition asked for), the one in force kept as SI-License-Previous, read
+                                         back, audited, needs a usable reason, ONCE PER VALUE (cfg.InstallState
+                                         'ControlPlaneLicencePullRequest' while it waits, 'ControlPlaneLicencePull' once
+                                         done). Run by the updater's licence step, not
+                                         here: container\updater\_shared\SI-UpdaterLicencePull.ps1.
+      SI_UPDATER_SQL_LEAST_PRIVILEGE     plan | apply | off (framework section 12.23, Invardia 2026-11-20) -- NOT written by this
+                                         step: the update hands it to the database setup job caj-si-dbinit, which does the
+                                         work as the install's SQL admin (setup\_shared\SI-SqlLeastPrivilege.ps1; the
+                                         updater's side: container\updater\_shared\SI-UpdaterDatabase.ps1
+                                         Get-SIUpdaterSqlLpInput / Complete-SIUpdaterSqlLp). Needs a usable reason.
       SI_UPDATER_CONTROLPLANE_REASON     WHO asked and WHY -- Invardia sets it as '<person>: <why>'. REQUIRED for every
                                          change of what is sent (an output column on OR off, "output": on OR off): without a
                                          usable one (Test-SIControlPlaneReason: empty, one word, too short or a generic word
@@ -62,6 +87,9 @@ function Get-SIControlPlaneNames {
         IdentityMoveMode = 'SI_UPDATER_STATE_IDENTITYMOVEMODE'
         Settings         = 'SI_UPDATER_SETTINGS'
         Outputs          = 'SI_UPDATER_OUTPUTS'
+        Reports          = 'SI_UPDATER_REPORTS'
+        LicencePull      = 'SI_UPDATER_LICENCE_PULL'
+        SqlLeastPrivilege = 'SI_UPDATER_SQL_LEAST_PRIVILEGE'
         OutputsSetting   = 'SI_DataOut_Outputs'
         Reason           = 'SI_UPDATER_CONTROLPLANE_REASON'
         ChangedBy        = 'the update (control-plane value)'
@@ -578,6 +606,155 @@ function Invoke-SIControlPlaneOutputs {
     [pscustomobject]@{ Applied = $applied.ToArray(); Already = $already.ToArray(); Kept = $kept.ToArray(); Refused = $refusedAll.ToArray(); Failed = $failed.ToArray(); Lines = $lines.ToArray() }
 }
 
+# =====================================================================================================================
+#  SI_UPDATER_REPORTS -- a shipped report switched off / on again (owner 2026-11-19)
+# =====================================================================================================================
+
+function Get-SIControlPlaneReportAllowList {
+    <#
+        What SI_UPDATER_REPORTS may switch -- DERIVED from what this release ships, never free text. -SIRoot: the release's
+        SecurityInsight folder. Returns @{ Reports (HashSet of the shipped report names, case-sensitive as shipped);
+        Required (report name -> the reason SecurityInsight requires it: a 'rareport' control of
+        config\template-mandatory.locked.json, which also refuses an Admin's switch-off) }.
+    #>
+    param([Parameter(Mandatory)][string]$SIRoot)
+    $names = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
+    $yaml = [IO.Path]::Combine($SIRoot, 'risk-analysis-detection', 'RiskAnalysis_Queries_Locked.yaml')
+    if (Test-Path -LiteralPath $yaml) {
+        # the report entries sit under 'Reports:' as '  - ReportName: <name>'; the templates under 'ReportTemplates:'
+        $section = ''
+        foreach ($line in [IO.File]::ReadAllLines($yaml)) {
+            if ($line -match '^(\S[^:]*):\s*$') { $section = $Matches[1].Trim(); continue }
+            if ($section -ceq 'Reports' -and $line -match '^\s*-\s*ReportName:\s*[''"]?([A-Za-z0-9_]{1,100})[''"]?\s*$') { [void]$names.Add($Matches[1]) }
+        }
+    }
+    $required = @{}
+    $mfile = [IO.Path]::Combine($SIRoot, 'config', 'template-mandatory.locked.json')
+    if (Test-Path -LiteralPath $mfile) {
+        $doc = ConvertFrom-Json -InputObject ([IO.File]::ReadAllText($mfile))
+        foreach ($c in @($doc.Controls)) {
+            if ($c -and [string]$c.Kind -ceq 'rareport' -and [string]$c.ItemKey -like 'report/*') { $required[([string]$c.ItemKey).Substring(7)] = [string]$c.Reason }
+        }
+    }
+    [pscustomobject]@{ Reports = $names; Required = $required }
+}
+
+function ConvertFrom-SIControlPlaneReports {
+    <#
+        PURE (over -Allow). SI_UPDATER_REPORTS -> @{ Items (@{ Report; On } per accepted switch); Refused (one line per
+        refusal) }. Refused: JSON that does not parse or is not ONE object (nothing applied), a report this release does not
+        ship, a report SecurityInsight requires (switched off), a value that is not "on" / "off".
+    #>
+    param([AllowNull()][AllowEmptyString()][string]$Json, [Parameter(Mandatory)]$Allow)
+    $n = Get-SIControlPlaneNames
+    $items = New-Object System.Collections.Generic.List[object]
+    $refused = New-Object System.Collections.Generic.List[string]
+    $out = { [pscustomobject]@{ Items = $items.ToArray(); Refused = $refused.ToArray() } }
+    $text = "$Json".Trim()
+    if (-not $text) { return (& $out) }
+    $shape = '{0} must be ONE JSON object {{ "<ReportName>": "off" | "on" }} -- nothing from it is applied' -f $n.Reports
+    if (-not $text.StartsWith('{')) { $refused.Add($shape); return (& $out) }
+    $obj = $null
+    try { $obj = ConvertFrom-SIControlPlaneJson -Text $text } catch { $refused.Add(('{0} is not valid JSON ({1}) -- nothing from it is applied' -f $n.Reports, (([string]$_.Exception.Message) -split "`n")[0].Trim())); return (& $out) }
+    if ($null -eq $obj -or $obj -isnot [System.Management.Automation.PSCustomObject]) { $refused.Add($shape); return (& $out) }
+    foreach ($p in @($obj.PSObject.Properties)) {
+        $name = [string]$p.Name
+        if (-not $Allow.Reports.Contains($name)) { $refused.Add(('{0}: {1} is not a report this release ships (a custom report is switched in the web app); not applied' -f $n.Reports, $name)); continue }
+        $v = if ($p.Value -is [string]) { $p.Value.Trim().ToLowerInvariant() } else { '' }
+        if ($v -notin 'on', 'off') { $refused.Add(('{0}: {1} must be "off" or "on"; not applied' -f $n.Reports, $name)); continue }
+        if ($v -eq 'off' -and $Allow.Required.ContainsKey($name)) { $refused.Add(('{0}: {1} is required by SecurityInsight and cannot be switched off{2}; not applied' -f $n.Reports, $name, $(if ($Allow.Required[$name]) { ' -- ' + $Allow.Required[$name] } else { '' }))); continue }
+        $items.Add([pscustomobject]@{ Report = $name; On = ($v -eq 'on') })
+    }
+    & $out
+}
+
+function Read-SIControlPlaneReportRow {
+    <# One report's cfg.ItemOverride row (Kind 'rareport', key 'report/<name>'): @{ State; UpdatedBy } or $null. Throws on a SQL error. #>
+    param([Parameter(Mandatory)]$Store, [Parameter(Mandatory)][string]$Report)
+    $rows = @(& $Store.Invoke (Get-SIProOutputColumnReadSql) ([ordered]@{ Kind = 'rareport'; Key = 'report/' + $Report }) 'reader' | ForEach-Object { $_ } | Where-Object { $_ })
+    if (-not $rows.Count) { return $null }
+    $r = $rows[0]
+    $get = { param($k) if ($r -is [System.Collections.IDictionary]) { $r[$k] } else { $r.$k } }
+    $s = & $get 'State'; $u = & $get 'UpdatedBy'
+    if ($null -eq $s -or $s -is [System.DBNull]) { return $null }
+    [pscustomobject]@{ State = [string]$s; UpdatedBy = $(if ($null -eq $u -or $u -is [System.DBNull]) { $null } else { [string]$u }) }
+}
+
+function Write-SIControlPlaneReportRow {
+    <# The web app's own item statement (ItemOverrideRepository.WriteSql) for one report: 'disable' or 'inherit'. Returns 'Saved' | 'Missing'. #>
+    param([Parameter(Mandatory)]$Store, [Parameter(Mandatory)][string]$Report, [Parameter(Mandatory)][ValidateSet('disable', 'inherit')][string]$State, [string]$Reason = '')
+    $n = Get-SIControlPlaneNames
+    $p = [ordered]@{ Kind = 'rareport'; Key = 'report/' + $Report; State = $State; Body = $null; Format = 'json'; By = $n.ChangedBy; Reason = $Reason }
+    $rows = @(& $Store.Invoke (Get-SIProOutputColumnWriteSql) $p 'reader' | ForEach-Object { $_ } | Where-Object { $_ })
+    $o = $null
+    if ($rows.Count) { $x = $rows[0]; $o = $(if ($x -is [System.Collections.IDictionary]) { $x['Outcome'] } else { $x.Outcome }) }
+    if ([string]$o -eq 'Missing') { return 'Missing' }
+    if ([string]$o -ne 'Saved') { throw 'the report write returned no outcome' }
+    'Saved'
+}
+
+function Invoke-SIControlPlaneReports {
+    <#
+        SI_UPDATER_REPORTS -> each accepted switch written through the web app's own item statement, READ BACK:
+          off  = State 'disable' (what an Admin's "Report it" off writes); a report switched off already = nothing written;
+          on   = the update's own 'disable' row removed (back to the shipped report); a report that is on = nothing written;
+                 a report an Admin switched off (UpdatedBy is not the update) is KEPT off.
+        Every change needs -Reason naming who asked and why (Test-SIControlPlaneReason) -- else nothing is written for it,
+        refused in ONE warning line. ONCE PER VALUE (cfg.InstallState 'ControlPlaneReports'), recorded when nothing failed and
+        nothing waited for a reason. Returns @{ Applied; Already; Kept; Refused; Failed; Lines }. Needs Get-SIProOutputColumnWriteSql.
+    #>
+    param([Parameter(Mandatory)]$Store, [AllowEmptyString()][string]$Json, [Parameter(Mandatory)]$Allow, [string]$Reason)
+    $n = Get-SIControlPlaneNames
+    $lines = New-Object System.Collections.Generic.List[string]
+    $applied = New-Object System.Collections.Generic.List[string]; $already = New-Object System.Collections.Generic.List[string]; $failed = New-Object System.Collections.Generic.List[string]
+    $kept = New-Object System.Collections.Generic.List[string]; $needWho = New-Object System.Collections.Generic.List[string]
+    $err = { param($e) (([string]$e.Exception.Message) -split "`n")[0] }
+    $hash = Get-SIControlPlaneValueHash -Json $Json
+    $stateName = 'ControlPlaneReports'
+    $prev = $null
+    try { $prev = Read-SIControlPlaneInstallState -Store $Store -Name $stateName } catch { $prev = $null; $lines.Add(('WARNING: control-plane value: whether {0} was applied before could not be read ({1}) -- it is applied now' -f $n.Reports, (& $err $_))) }
+    if ($prev -and $prev -ceq $hash) {
+        $lines.Add(('control-plane value: {0} is the value already applied -- nothing written (a change made since in the web app is kept)' -f $n.Reports))
+        return [pscustomobject]@{ Applied = @(); Already = @('reports'); Kept = @(); Refused = @(); Failed = @(); Lines = $lines.ToArray() }
+    }
+    $whoWhy = Test-SIControlPlaneReason -Reason $Reason
+    $rsn = "$Reason".Trim(); if ($rsn.Length -gt 400) { $rsn = $rsn.Substring(0, 400) }
+    $plan = ConvertFrom-SIControlPlaneReports -Json $Json -Allow $Allow
+    $refusedAll = New-Object System.Collections.Generic.List[string]; foreach ($r in @($plan.Refused)) { $refusedAll.Add([string]$r); $lines.Add('WARNING: control-plane value: ' + $r) }
+    foreach ($it in @($plan.Items)) {
+        $name = $it.Report
+        try {
+            $cur = Read-SIControlPlaneReportRow -Store $Store -Report $name
+            $isOff = ($cur -and $cur.State -eq 'disable')
+            if (-not $it.On) {
+                if ($isOff) { $already.Add($name); $lines.Add(('control-plane value: the report {0} is switched off already -- nothing written' -f $name)); continue }
+                if ($whoWhy) { $needWho.Add(('{0} off' -f $name)); continue }
+                if ((Write-SIControlPlaneReportRow -Store $Store -Report $name -State disable -Reason $rsn) -eq 'Missing') { $failed.Add($name); $lines.Add(('WARNING: control-plane value: the report {0} not switched off -- this database has no cfg.ItemOverride table yet; the next update tries again' -f $name)); continue }
+                $back = Read-SIControlPlaneReportRow -Store $Store -Report $name
+                if ($back -and $back.State -eq 'disable') { $applied.Add($name); $lines.Add(('control-plane value: the report {0} switched OFF -- left out of every report template from the next run (from {1}; read back, in the change log)' -f $name, $n.Reports)) }
+                else { $failed.Add($name); $lines.Add(('WARNING: control-plane value: the report {0} was switched off but does not read back -- the next update tries again' -f $name)) }
+            } else {
+                if (-not $isOff) { $already.Add($name); $lines.Add(('control-plane value: the report {0} is on already -- nothing written' -f $name)); continue }
+                if ([string]$cur.UpdatedBy -cne $n.ChangedBy) { $kept.Add($name); $lines.Add(('control-plane value: the report {0} is kept off -- it was switched off in the web app{1}, and "on" removes only a switch-off the update wrote itself' -f $name, $(if ($cur.UpdatedBy) { ' by ' + $cur.UpdatedBy } else { '' }))); continue }
+                if ($whoWhy) { $needWho.Add(('{0} on' -f $name)); continue }
+                if ((Write-SIControlPlaneReportRow -Store $Store -Report $name -State inherit -Reason $rsn) -eq 'Missing') { $failed.Add($name); continue }
+                $back = Read-SIControlPlaneReportRow -Store $Store -Report $name
+                if ($null -eq $back) { $applied.Add($name); $lines.Add(('control-plane value: the report {0} switched ON again -- back to the shipped report (from {1}; read back, in the change log)' -f $name, $n.Reports)) }
+                else { $failed.Add($name); $lines.Add(('WARNING: control-plane value: the report {0} was switched on but does not read back -- the next update tries again' -f $name)) }
+            }
+        } catch { $failed.Add($name); $lines.Add(('WARNING: control-plane value: the report {0} not switched ({1}) -- the next update tries again' -f $name, (& $err $_))) }
+    }
+    if ($needWho.Count) {
+        $msg = ('{0}: {1} not switched -- every report switch needs {2} to name who asked and why (''<person>: <why>''); {3}' -f $n.Reports, ($needWho -join ', '), $n.Reason, $whoWhy)
+        $refusedAll.Add($msg); $lines.Add('WARNING: control-plane value: ' + $msg)
+    }
+    if ($failed.Count -eq 0 -and $needWho.Count -eq 0) {
+        try { Write-SIControlPlaneInstallState -Store $Store -Name $stateName -Value $hash }
+        catch { $lines.Add(('WARNING: control-plane value: that {0} was applied could not be recorded ({1}) -- the next update compares again' -f $n.Reports, (& $err $_))) }
+    }
+    [pscustomobject]@{ Applied = $applied.ToArray(); Already = $already.ToArray(); Kept = $kept.ToArray(); Refused = $refusedAll.ToArray(); Failed = $failed.ToArray(); Lines = $lines.ToArray() }
+}
+
 function Invoke-SIDefaultTaskOutputs {
     <#
         THE TASK OUTPUTS ON BY DEFAULT (owner 2026-11-17), for an install made before: at an install that sends to ServiceNow (its
@@ -666,7 +843,8 @@ function Invoke-SIControlPlaneValues {
         $modeVal = & $read $n.IdentityMoveMode
         $setVal = & $read $n.Settings
         $outVal = & $read $n.Outputs
-        if (-not $modeVal -and -not $setVal -and -not $outVal) { $out.Lines = $siCpStepLines.ToArray(); return $out }
+        $repVal = & $read $n.Reports
+        if (-not $modeVal -and -not $setVal -and -not $outVal -and -not $repVal) { $out.Lines = $siCpStepLines.ToArray(); return $out }
         $why = & $read $n.Reason
         $reason = if ($why) { $why } else { 'a control-plane value on the updater job {0}' -f $UpdaterJob }
         if ($reason.Length -gt 400) { $reason = $reason.Substring(0, 400) }
@@ -698,6 +876,22 @@ function Invoke-SIControlPlaneValues {
                 if ($null -eq $Catalog) { $Catalog = @(Get-SISettingsCatalog -SIRoot $SIRoot) }
                 $out.Outputs = Invoke-SIControlPlaneOutputs -Store $Store -Json $outVal -Allow (Get-SIControlPlaneOutputAllowList -SIRoot $SIRoot) -Catalog $Catalog -Reason $why -StandardReason ('a control-plane value on the updater job {0}' -f $UpdaterJob)
                 foreach ($l in @($out.Outputs.Lines)) { & $say $l }
+            }
+        }
+        if ($repVal) {
+            # owner 2026-11-19: a shipped report switched off / on again, through the web app's own item statement
+            if (-not (Get-Command -Name Get-SIProOutputColumnWriteSql -ErrorAction SilentlyContinue)) {
+                $f = [IO.Path]::Combine($SIRoot, 'engine', 'pro-settings', 'SI-OutputColumnWrite.ps1')
+                if (Test-Path -LiteralPath $f) { . $f }
+            }
+            if (-not (Get-Command -Name Get-SIProOutputColumnWriteSql -ErrorAction SilentlyContinue)) { & $say ('WARNING: control-plane value: {0} not applied -- this release carries no item writer' -f $n.Reports) }
+            else {
+                $allowR = Get-SIControlPlaneReportAllowList -SIRoot $SIRoot
+                if ($allowR.Reports.Count -eq 0) { & $say ('WARNING: control-plane value: {0} not applied -- this release carries no report catalog' -f $n.Reports) }
+                else {
+                    $out | Add-Member -NotePropertyName Reports -NotePropertyValue (Invoke-SIControlPlaneReports -Store $Store -Json $repVal -Allow $allowR -Reason $why) -Force
+                    foreach ($l in @($out.Reports.Lines)) { & $say $l }
+                }
             }
         }
     } catch { & $say ('WARNING: control-plane values: not applied ({0}) -- the next update tries again' -f (([string]$_.Exception.Message) -split "`n")[0]) }

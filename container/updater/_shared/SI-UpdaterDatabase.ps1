@@ -572,6 +572,98 @@ function Test-SIUpdaterDbJobSignInFailure {
     [bool]((Test-SIDbInitLoginRefused -Message $why) -or $why -match '(?i)could not sign in')
 }
 
+function Get-SIUpdaterSqlLpEnv {
+    <# PURE. @{ <Name> = the value } -- from -Env first, else the process (the input Test-SIEngineLeastPrivilegeSetup /
+       Test-SIGrantProcedureSetup take). #>
+    param([hashtable]$Env = @{}, [Parameter(Mandatory)][string]$Name)
+    $v = if ($Env -and $Env.ContainsKey($Name)) { [string]$Env[$Name] } else { [string][Environment]::GetEnvironmentVariable($Name) }
+    @{ $Name = $v }
+}
+
+function Get-SIUpdaterSqlLpInput {
+    <#
+        framework §12.23 (Invardia 2026-11-20), the updater's side BEFORE the run of the database setup job: the switches in
+        force (cfg.InstallState 'SqlLeastPrivilege'), SI_UPDATER_SQL_LEAST_PRIVILEGE and its reason (SI_UPDATER_CONTROLPLANE_
+        REASON, Test-SIControlPlaneReason), decided by Get-SISqlLpDecision; the names the install recorded for its identities
+        (the principals, the install record, the identity-names row) for SI_DBINIT_SQLLP_NAMES. Needs the release's
+        SI-SqlLeastPrivilege.ps1 loaded by the caller (none = @{ Decision = $null }: today's path). NEVER throws.
+        Returns @{ Decision; Switches; Names; Reason }.
+    #>
+    param($Store, [hashtable]$Env = @{}, [bool]$EnvEngineOn, [bool]$EnvSignedOn, [object[]]$Principals = @(), [string]$SIRoot = '')
+    $out = [pscustomobject]@{ Decision = $null; Switches = $null; Names = ''; Reason = '' }
+    try {
+        if (-not (Get-Command -Name Get-SISqlLpDecision -ErrorAction SilentlyContinue)) { return $out }
+        $sn = Get-SISqlLpNames
+        $get = { param($k) if ($Env -and $Env.ContainsKey($k)) { "$($Env[$k])".Trim() } else { "$([Environment]::GetEnvironmentVariable($k))".Trim() } }
+        $sw = ConvertFrom-SISqlLpSwitches -Value ''
+        try { $sw = ConvertFrom-SISqlLpSwitches -Value ([string](Get-SIDbInitProp (@(& $Store.Invoke (Get-SIDbInitRecordReadSql -Name $sn.Switches) @{} 'reader' | ForEach-Object { $_ } | Where-Object { $null -ne $_ }) | Select-Object -First 1) @('Value'))) }
+        catch { Write-UpdLog ('WARNING: SQL least privilege: the switches in force could not be read ({0}) -- this update uses the job''s own switches' -f $_.Exception.Message) }
+        $mode = & $get $sn.Variable
+        $reason = & $get 'SI_UPDATER_CONTROLPLANE_REASON'
+        $problem = ''
+        if ($mode) { $problem = if (Get-Command -Name Test-SIControlPlaneReason -ErrorAction SilentlyContinue) { [string](Test-SIControlPlaneReason -Reason $reason) } else { 'this release cannot check the reason' } }
+        $d = Get-SISqlLpDecision -ModeValue $mode -ReasonProblem $problem -Switches $sw -EnvEngineOn $EnvEngineOn -EnvSignedOn $EnvSignedOn
+        # the names this install recorded for its identities: the principals' own, the install record's, the identity-names row's
+        $names = New-Object System.Collections.Generic.List[string]
+        foreach ($p in @($Principals)) { $nm = [string](Get-SIDbInitProp $p @('name')); if ($nm) { $names.Add($nm) } }
+        if (Get-Command -Name Get-SIInstallNameCandidates -ErrorAction SilentlyContinue) {
+            foreach ($role in 'webIdentity', 'mcpIdentity', 'updaterIdentity', 'taggingIdentity') { try { foreach ($x in @(Get-SIInstallNameCandidates -Role $role -Env $Env)) { $names.Add([string]$x) } } catch { } }
+        }
+        if ($d.Mode) {
+            try {
+                $idn = [string](Get-SIDbInitProp (@(& $Store.Invoke (Get-SIDbInitRecordReadSql -Name 'IdentityNames') @{} 'reader' | ForEach-Object { $_ } | Where-Object { $null -ne $_ }) | Select-Object -First 1) @('Value'))
+                if ($idn) { $o = $idn | ConvertFrom-Json -ErrorAction Stop; if ($o.PSObject.Properties['roles']) { foreach ($rp in @($o.roles.PSObject.Properties)) { if ($rp.Value -and $rp.Value.PSObject.Properties['name']) { $names.Add([string]$rp.Value.name) } } } }
+            } catch { }
+        }
+        $joined = (@($names | Where-Object { $_ -match '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$' } | Select-Object -Unique) -join ';')
+        if ($joined.Length -gt 2000) { $joined = $joined.Substring(0, 2000) }
+        $why = [regex]::Replace([regex]::Replace("$reason", '[\x00-\x1F]', ' '), '\s+', ' ').Trim(); if ($why.Length -gt 200) { $why = $why.Substring(0, 197) + '...' }
+        $out.Decision = $d; $out.Switches = $sw; $out.Names = $joined; $out.Reason = $why
+        $out
+    } catch { Write-UpdLog ('WARNING: SQL least privilege: not decided ({0}) -- the job''s own switches are used' -f $_.Exception.Message); $out }
+}
+
+function Complete-SIUpdaterSqlLp {
+    <#
+        framework §12.23, the updater's side AFTER a run of the database setup job that SUCCEEDED: the job's least-privilege
+        row for THIS run (cfg.InstallState 'DbJobSqlLeastPrivilege') said in one line ($global:SI_UpdaterSqlLp for the run's
+        report; the heartbeat's setup step sql-least-privilege reads the row), then the switches in force written when they
+        change (Get-SISqlLpNextSwitches: 'off' both off; an apply that read back = engine role only on; a switch ON on this
+        job = kept on). NEVER throws, never fails the update. Returns @{ State; Line; Wrote }.
+    #>
+    param($Store, [Parameter(Mandatory)]$Lp, [string]$Run = '', [bool]$EnvEngineOn, [bool]$EnvSignedOn, [datetime]$NowUtc = [datetime]::UtcNow)
+    $o = [pscustomobject]@{ State = ''; Line = ''; Wrote = $false }
+    try {
+        $sn = Get-SISqlLpNames
+        $state = ''
+        if ($Lp.Decision.Mode) {
+            $row = $null
+            try { $row = ConvertFrom-SIDbInitRecordValue -Value ([string](Get-SIDbInitProp (@(& $Store.Invoke (Get-SIDbInitRecordReadSql -Name $sn.Record) @{} 'reader' | ForEach-Object { $_ } | Where-Object { $null -ne $_ }) | Select-Object -First 1) @('Value'))) } catch { $row = $null }
+            if ($row -and $row.PSObject.Properties['run'] -and [string]$row.run -eq $Run -and $Run) {
+                $state = [string]$row.state
+                $o.Line = Get-SISqlLpRecordLine -Record $row
+            } else {
+                $o.Line = ('WARNING: SQL least privilege ({0}): the database setup job recorded no result for this run -- the installed version''s job does not do it yet; the update after the engine image carries it does' -f $Lp.Decision.Mode)
+            }
+            Write-UpdLog $o.Line
+            $global:SI_UpdaterSqlLp = [pscustomobject]@{ Run = $Run; Mode = $Lp.Decision.Mode; State = $state; Line = $o.Line }
+        }
+        $o.State = $state
+        $next = Get-SISqlLpNextSwitches -Decision $Lp.Decision -Switches $Lp.Switches -EnvEngineOn $EnvEngineOn -EnvSignedOn $EnvSignedOn -JobState $state
+        if ($next.Write) {
+            try {
+                $null = & $Store.Invoke (Get-SIDbInitRecordSql -Name $sn.Switches) @{ Value = (New-SISqlLpSwitchesValue -EngineRoleOnly $next.EngineRoleOnly -SignedGrants $next.SignedGrants -By 'updater' -NowUtc $NowUtc); Version = $null; By = 'caj-si-updater' } 'nonquery'
+                $back = ConvertFrom-SISqlLpSwitches -Value ([string](Get-SIDbInitProp (@(& $Store.Invoke (Get-SIDbInitRecordReadSql -Name $sn.Switches) @{} 'reader' | ForEach-Object { $_ } | Where-Object { $null -ne $_ }) | Select-Object -First 1) @('Value')))
+                if ($back.Present -and $back.EngineRoleOnly -eq $next.EngineRoleOnly -and $back.SignedGrants -eq $next.SignedGrants) {
+                    $o.Wrote = $true
+                    Write-UpdLog ('SQL least privilege: the switches in force are now engine role only {0}, signed grants {1} (cfg.InstallState {2}, read back) -- every later update hands them to the database setup job' -f $next.EngineRoleOnly, $next.SignedGrants, $sn.Switches)
+                } else { Write-UpdLog ('WARNING: SQL least privilege: the switches were written but do not read back -- the next update tries again') }
+            } catch { Write-UpdLog ('WARNING: SQL least privilege: the switches could not be recorded ({0}) -- the next update tries again' -f $_.Exception.Message) }
+        }
+    } catch { Write-UpdLog ('WARNING: SQL least privilege: the result could not be read ({0})' -f $_.Exception.Message) }
+    $o
+}
+
 function Invoke-SIUpdaterDbJob {
     <#
         Framework SEC-08 (Invardia DESIGN ch 12, points 2, 5, 7, 9, 10) and §4.5 SQL-ADMIN-GROUP G2-G5: THE DATABASE SETUP JOB
@@ -602,7 +694,9 @@ function Invoke-SIUpdaterDbJob {
     #>
     param([Parameter(Mandatory)][string]$SIRoot, $Store, [Parameter(Mandatory)][string]$ResourceGroup, [Parameter(Mandatory)][string]$SubscriptionId,
           [scriptblock]$Arm, [scriptblock]$Lists, [scriptblock]$Sleep = { param($s) Start-Sleep -Seconds $s }, [int]$TimeoutSeconds = 1500,
-          [scriptblock]$Graph, [scriptblock]$GraphRoles, [int[]]$SettleWaits = @(300, 600, 900), [scriptblock]$Now = { [datetime]::UtcNow })
+          [scriptblock]$Graph, [scriptblock]$GraphRoles, [int[]]$SettleWaits = @(300, 600, 900), [scriptblock]$Now = { [datetime]::UtcNow },
+          # the job's environment read before the process's own (a test seam: SI_UPDATER_SQL_LEAST_PRIVILEGE, the switches)
+          [hashtable]$Env = @{})
     $res = { param($ok, $a, $why) [pscustomobject]@{ Ok = $ok; Action = $a; Reason = $why } }
     try {
         if (-not $Store -or -not $Store.Invoke) { return (& $res $true 'skipped' 'no Pro database on this install') }
@@ -612,6 +706,9 @@ function Invoke-SIUpdaterDbJob {
         # G5a (#1253): the updater never adds a group member -- the add-and-wait policy (SI-GroupMemberAdd.ps1) is not loaded here
         # the release's two install switches (SI_Setup_SignedGrantProcedure, SI_Setup_EngineLeastPrivilege) -- pure files
         foreach ($f in 'SI-GrantProcedure.ps1', 'SI-EngineGrants.ps1') { $p = [IO.Path]::Combine($SIRoot, 'engine', 'pro-settings', $f); if (Test-Path -LiteralPath $p) { . $p } }
+        # framework §12.23 (Invardia 2026-11-20): SQL least privilege through the updater, and the who-asked rule of every
+        # control-plane value -- the release's own files, dot-sourced HERE so the helpers below see them
+        foreach ($f in 'SI-SqlLeastPrivilege.ps1', 'SI-ControlPlaneValues.ps1') { $p = [IO.Path]::Combine($SIRoot, 'setup', '_shared', $f); if (Test-Path -LiteralPath $p) { . $p } }
         $n = Get-SIDbInitNames
         if (-not $Arm) { $Arm = { param([string]$Method, [string]$Path, $Body) Invoke-SIUpdaterArm -Method $Method -Path $Path -Body $Body -AllowNotFound:($Method -eq 'GET') } }
         if (-not $Lists) {
@@ -634,8 +731,13 @@ function Invoke-SIUpdaterDbJob {
                             -UpdaterJob @((& $nm 'updater' 'caj-si-updater')) -TaggingIdentity @((& $nm 'taggingIdentity' 'uami-securityinsight-tagging'), 'id-si-tagging'))
         if (-not @($principals | Where-Object { $_.component -eq 'engine' }).Count) { $why = 'WARNING: the database setup job: the engine identity was not found on the engine jobs -- checked again at the next update'; Write-UpdLog $why; return (& $res $true 'not-ready' $why) }
         $signed = $false; $roleOnly = $false
-        try { if (Get-Command -Name Test-SIGrantProcedureSetup -ErrorAction SilentlyContinue) { $signed = [bool](Test-SIGrantProcedureSetup) } } catch { }
-        try { if (Get-Command -Name Test-SIEngineLeastPrivilegeSetup -ErrorAction SilentlyContinue) { $roleOnly = [bool](Test-SIEngineLeastPrivilegeSetup) } } catch { }
+        try { if (Get-Command -Name Test-SIGrantProcedureSetup -ErrorAction SilentlyContinue) { $signed = [bool](Test-SIGrantProcedureSetup -Env (Get-SIUpdaterSqlLpEnv -Env $Env -Name 'SI_Setup_SignedGrantProcedure')) } } catch { }
+        try { if (Get-Command -Name Test-SIEngineLeastPrivilegeSetup -ErrorAction SilentlyContinue) { $roleOnly = [bool](Test-SIEngineLeastPrivilegeSetup -Env (Get-SIUpdaterSqlLpEnv -Env $Env -Name 'SI_Setup_EngineLeastPrivilege')) } } catch { }
+        # framework §12.23 (Invardia 2026-11-20): GAP 1 -- the switches in force are kept in the store, so an update never adds
+        # the broad roles back once least privilege is on; GAP 2 -- SI_UPDATER_SQL_LEAST_PRIVILEGE handed to the job
+        $lp = Get-SIUpdaterSqlLpInput -SIRoot $SIRoot -Store $Store -Env $Env -EnvEngineOn $roleOnly -EnvSignedOn $signed -Principals $principals
+        $envEngineOn = $roleOnly; $envSignedOn = $signed
+        if ($lp.Decision) { $roleOnly = [bool]$lp.Decision.EngineRoleOnly; $signed = [bool]$lp.Decision.SignedGrants; foreach ($l in @($lp.Decision.Lines)) { Write-UpdLog $l } }
         $server = if ($Store.PSObject.Properties['Server'] -and $Store.Server) { [string]$Store.Server } else { '' }
         if (-not $server) { $why = 'WARNING: the database setup job: the database server is not known to this run -- checked again at the next update'; Write-UpdLog $why; return (& $res $true 'not-ready' $why) }
         $db = if ($Store.PSObject.Properties['Database'] -and $Store.Database) { [string]$Store.Database } else { $n.ProDatabase }
@@ -698,6 +800,14 @@ function Invoke-SIUpdaterDbJob {
             $webSw = Test-SIUpdaterWebSwitched -Arm $Arm -WebAppId ('/subscriptions/{0}/resourceGroups/{1}/providers/Microsoft.App/containerApps/{2}' -f $SubscriptionId, $ResourceGroup, (& $nm 'web' 'ca-si-management'))
             if ($webSw.Switched -eq $true) { $extra['SI_DBINIT_SIGNIN_DROP'] = '1' }
         }
+        # framework §12.23: the least-privilege mode for THIS run (only with a usable reason), the install's recorded names
+        $global:SI_UpdaterSqlLp = $null
+        if ($lp.Decision -and $lp.Decision.Mode) {
+            $extra['SI_DBINIT_SQLLP'] = $lp.Decision.Mode
+            if ($lp.Names) { $extra['SI_DBINIT_SQLLP_NAMES'] = $lp.Names }
+            if ($lp.Reason) { $extra['SI_DBINIT_SQLLP_REASON'] = $lp.Reason }
+            Write-UpdLog ('SQL least privilege: {0} handed to the database setup job {1} ({2}={0}; engine role only {3}, signed grants {4})' -f $lp.Decision.Mode, $n.Job, (Get-SISqlLpNames).Variable, $roleOnly, $signed)
+        }
         $settle = @($SettleWaits | Where-Object { $_ -gt 0 })
         $try = 0
         while ($true) {
@@ -724,6 +834,8 @@ function Invoke-SIUpdaterDbJob {
                     }
                 }
                 if ($so.ClientId) { $null = Invoke-SIUpdaterSupportStanding -Store $Store -Graph $Graph -Arm $Arm -SubscriptionId $SubscriptionId -ResourceGroup $ResourceGroup -Server $server -ClientId $so.ClientId -Run $r.Run -NowUtc (& $Now) -SIRoot $SIRoot }
+                # framework §12.23: the job's least-privilege result for THIS run (its own row), said; the switches kept (gap 1)
+                if ($lp.Decision) { $null = Complete-SIUpdaterSqlLp -Store $Store -Lp $lp -Run $r.Run -EnvEngineOn $envEngineOn -EnvSignedOn $envSignedOn -NowUtc (& $Now) }
                 return (& $res $true 'ok' ('every identity read back (execution {0})' -f $r.Execution))
             }
             if (-not ($fresh -and (Test-SIUpdaterDbJobSignInFailure -Mine $mine -Record $after))) { break }

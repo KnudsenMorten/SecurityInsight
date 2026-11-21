@@ -6,7 +6,7 @@
   "new": [
     {
       "title": "Remediation tasks per asset",
-      "text": "Findings are grouped into tasks to do on each asset: an update, a software upgrade per version, a library bundled in another program (with all its paths), or a configuration change. See Remediations > Tasks and Task findings, with export."
+      "text": "Findings are grouped into tasks on each asset: an update, a software upgrade per version, a bundled library (with all its paths), or a configuration change. See Remediations > Tasks per asset; a task opens its findings. Both export."
     },
     {
       "title": "Tasks to ServiceNow",

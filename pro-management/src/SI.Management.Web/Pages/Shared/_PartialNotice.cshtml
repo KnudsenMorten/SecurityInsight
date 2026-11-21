@@ -9,6 +9,10 @@
     var perReport = mark.PerReport && reports.Count > 0;
     var line = perReport ? Model.Line() : default;
 }
+@* owner 2026-11-19 ("get rid of it", asked many times): a per-report mark shows NO notice on the pages -- the collection
+   picker still says "older data" and Run health > Reports lists every report of the run. A whole-collection partial
+   mark (the run did not finish at all) still shows. *@
+@if (perReport) { return; }
 <div class="notice warn" role="status" data-partial-collection="@mark.CollectionId"><span class="badge warn">@mark.Badge</span>
 @if (!perReport)
 {

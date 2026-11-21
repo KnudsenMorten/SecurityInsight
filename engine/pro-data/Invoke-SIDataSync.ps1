@@ -120,7 +120,8 @@ $wsId = Resolve-SIV3WorkspaceId
 # never also held as one text and as a second copy of its tables (that is what ran a large install out of memory).
 $query = {
     param([string]$kql)
-    $answer = Invoke-SILaQuery -WorkspaceId $wsId -Query $kql -Wait 600 -RowsOnly -ErrorAction Stop
+    # Log Analytics failing on its own side is read again, a bounded number of times (Invoke-SIDataLaReadRetry, rule 4)
+    $answer = Invoke-SIDataLaReadRetry -Read { Invoke-SILaQuery -WorkspaceId $wsId -Query $kql -Wait 600 -RowsOnly -ErrorAction Stop } -Log { param($l, $m) Write-DataWarn $m }
     # An answer the service CUT because it was too large says so beside the rows it did send. That is a FAILED read, never a
     # shorter result (#639, working rule 4: what was not read is UNKNOWN, never absent -- a cut object map or profile table
     # would make assets look gone). A read taken in pages (its query keys the rows: _pk) is taken again in smaller pages by

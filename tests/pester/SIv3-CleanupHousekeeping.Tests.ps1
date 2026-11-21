@@ -529,7 +529,8 @@ Describe '#1063 (3.0.30): a flow wake-up DURING a run (FlowBusy) reaches the cle
         $exit = $r.IndexOf("if (`$housekeepingOnly) {`n") ; if ($exit -lt 0) { $exit = $r.IndexOf("if (`$housekeepingOnly) {`r`n") }
         $clean | Should -BeGreaterThan 0; $exit | Should -BeGreaterThan $clean
         $exit | Should -BeLessThan $r.IndexOf("Mode -eq 'schedules' -and -not `$pipeRequest")
-        $r | Should -Match ([regex]::Escape("if (`$HostKind -eq 'Container' -and `$proStore -and `$armSeams -and -not `$housekeepingOnly)"))
+        # OPEN-04: the trigger requests also wait while a change without a verified signed request holds the pipeline
+        $r | Should -Match ([regex]::Escape("if (`$HostKind -eq 'Container' -and `$proStore -and `$armSeams -and -not `$housekeepingOnly -and -not `$signedHold.Text)"))
         $r | Should -Match ([regex]::Escape("if (`$proStore -and -not `$housekeepingOnly)"))
         $r | Should -Match ([regex]::Escape("[string]`$global:SI_ProSqlDatabase -and -not `$housekeepingOnly)"))
         # a request (Run now, a stage, a step, from a step, a cancel) is never housekeeping-only

@@ -19,6 +19,10 @@
                      (every statement through Invoke-InvardiaSupportSql), with a rollback record;
       every update   container\updater\_shared\SI-UpdaterDatabase.ps1 only CHECKS (Get-SIEngineAccessDrift): a warning,
                      never a block, never a grant.
+      the product path (Invardia 2026-11-20, framework §12.23): SI_UPDATER_SQL_LEAST_PRIVILEGE = plan | apply | off on the
+                     updater job; the database setup job caj-si-dbinit removes the engine's broad roles ONLY after this
+                     role's grants read back (Test-SIEngineCutoverReady), snapshot / diff / restore on any loss
+                     (setup\_shared\SI-SqlLeastPrivilege.ps1). The switches then stay on for every later update.
 
     THE INVENTORY (Get-SIEngineSqlReference) reads the engine's own code -- engine\, container\ (not the updater) and
     launcher\ -- for every statement on a product table, view or procedure, with its file and line. What runs under ANOTHER
@@ -122,7 +126,11 @@ $script:SIEngineObjectGrants = @(
     @{ Object = 'cfg.RaBucketReset';           Verbs = 'SELECT, UPDATE' }           # a reset is consumed by the run
     @{ Object = 'cfg.RaSourceAccept';          Verbs = 'SELECT, UPDATE' }           # #902: an Admin's acceptance of an empty source -- read by the run, cleared when the source has rows again
     @{ Object = 'cfg.JobTriggerRequest';       Verbs = 'SELECT, UPDATE' }           # CR8: the pipeline runner applies a job trigger request and records it
-    @{ Object = 'cfg.SignedRequest';           Verbs = 'SELECT, UPDATE' }           # CR8 step 2: the pipeline runner verifies the signed tokens (observe only) and clears them
+    @{ Object = 'cfg.SignedRequest';           Verbs = 'SELECT, UPDATE' }           # CR8 step 2: the pipeline runner verifies the signed tokens and clears them
+    @{ Object = 'cfg.SignedRequestEnforcement'; Verbs = 'SELECT, INSERT, UPDATE' }  # OPEN-04: the install's recorded set, and its adoption once verified
+    @{ Object = 'cfg.SignedRequestAdoption';    Verbs = 'SELECT, UPDATE' }          # OPEN-04: a SuperAdmin's adoption request, decided by the runner
+    @{ Object = 'cfg.CmdbService';             Verbs = 'SELECT' }                   # OPEN-04: the recorded set's row count + SHA-256 of the service models
+    @{ Object = 'cfg.ConfigJournal';           Verbs = 'SELECT' }                   # OPEN-04: which web-written changes carry no verified signed request (never a write: see NeverGranted)
     @{ Object = 'cfg.RaBucketState';           Verbs = 'SELECT, INSERT, UPDATE, DELETE' }
     @{ Object = 'cfg.ReleaseScope';            Verbs = 'SELECT, UPDATE' }           # CR3: a run counts its components' good daily runs (the updater writes the rows)
     @{ Object = 'cfg.ReportMail';              Verbs = 'SELECT, UPDATE' }
@@ -515,6 +523,27 @@ function Get-SIEngineSqlReference {
             $win = $t.Substring($m.Index, [Math]::Min(3000, $t.Length - $m.Index))
             $mm = [regex]::Match($win, "(?i)$obj\s+(?:AS\s+)?$a\b")
             if ($mm.Success) { & $add $m.Index $m.Groups[1].Value.ToUpperInvariant() $mm.Groups['s'].Value $mm.Groups['o'].Value }
+        }
+    }
+    # OPEN-04: the signed-request observe step reads the TABLE of every enforced entity by name from
+    # config\config-entities.locked.json (Get-SISignedRequestManifestSql: the row count + SHA-256 of the recorded set) -- a
+    # read no regex over the code can see. Each table is a SELECT the engine needs, at the line of the statement.
+    $srRel = 'engine/_shared/SI-SignedRequests.ps1'
+    $srPath = [IO.Path]::Combine($SIRoot, 'engine', '_shared', 'SI-SignedRequests.ps1')
+    $cePath = [IO.Path]::Combine($SIRoot, 'config', 'config-entities.locked.json')
+    if ((Test-Path -LiteralPath $srPath) -and (Test-Path -LiteralPath $cePath)) {
+        $sr = [IO.File]::ReadAllText($srPath)
+        $lm = [regex]::Match($sr, '(?s)\$script:SISignedEnforcedEntities\s*=\s*@\((?<l>[^)]*)\)')
+        $sm = [regex]::Match($sr, 'SELECT COUNT_BIG\(\*\) AS N, CONVERT')
+        if ($lm.Success -and $sm.Success) {
+            $kinds = @([regex]::Matches($lm.Groups['l'].Value, "'([a-z]+)'") | ForEach-Object { $_.Groups[1].Value })
+            $line = ([regex]::Matches($sr.Substring(0, $sm.Index), "`n")).Count + 1
+            $ce = [IO.File]::ReadAllText($cePath).TrimStart([char]0xFEFF) | ConvertFrom-Json
+            foreach ($e in @($ce.entities | Where-Object { $kinds -contains [string]$_.entity })) {
+                if ([string]$e.table -match '^cfg\.[A-Za-z]+$') {
+                    $out.Add([pscustomobject]@{ File = $srRel; Line = $line; Function = 'Get-SISignedRequestManifestSql'; Verb = 'SELECT'; Object = ('cfg.' + ([string]$e.table).Substring(4)); Permission = 'SELECT' })
+                }
+            }
         }
     }
     , @($out | Sort-Object File, Line, Object, Permission -Unique)

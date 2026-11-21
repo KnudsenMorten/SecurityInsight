@@ -68,6 +68,13 @@ COPY config/settings.catalog.locked.json /si/config/
 COPY engine/pro-settings/SI-OutputColumnWrite.ps1 /si/engine/pro-settings/
 COPY data-model/outputs/ /si/data-model/outputs/
 COPY config/data-out.locked.json /si/config/
+# ... and SI_UPDATER_REPORTS (owner 2026-11-19): the shipped report catalog and the mandatory controls the allow-list is
+# derived from (the item writer is SI-OutputColumnWrite.ps1 above)
+COPY risk-analysis-detection/RiskAnalysis_Queries_Locked.yaml /si/risk-analysis-detection/
+COPY config/template-mandatory.locked.json /si/config/
+# SI_UPDATER_LICENCE_PULL (container/updater/_shared/SI-UpdaterLicencePull.ps1, in ./_shared above): the licence client and
+# the framework verifier with its two trusted signers (engine/_shared above), the licence setter (setup/ above) and the
+# control-plane reason / once-per-value helpers (setup/_shared/SI-ControlPlaneValues.ps1) -- nothing more to copy
 # After an automatic licence request the updater mails the result with the transports the guard mails use.
 COPY engine/risk-analysis/_shared/RA-Mail.ps1 /si/engine/risk-analysis/_shared/
 

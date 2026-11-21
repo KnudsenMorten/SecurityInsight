@@ -423,8 +423,8 @@ $global:SI_StorageAccount = '<storage-account-name>'
 # ============================================================================
 # Read by: launcher/privilege-tier-classifier/* + engine/privilege-tier-classifier/
 
-# Master switch. $true (default) runs all 4 AI categories; $false short-circuits
-# to the static built-in tier map.
+# Master switch, off by default. $true runs all 4 AI categories; $false (default) uses
+# the downloaded catalog or the static built-in tier map.
 # $global:SI_PrivilegeTierClassifier_RunAI = $false
 
 # Days a catalog is kept while its inputs are unchanged. Each run collects the role
@@ -492,6 +492,10 @@ $global:SI_StorageAccount = '<storage-account-name>'
 
 # Per-call cost estimate (USD). Default 0.01. Tune after observing actuals.
 # $global:SI_AI_CostPerCallEstimate = 0.012
+
+# Hard daily limit on the Azure OpenAI tokens all engines of this install may use per UTC day. At the limit no more AI
+# requests are sent that day; one warning and one alert. Default 200000; 0, empty or invalid = the default (never unlimited).
+# $global:SI_AI_DailyTokenBudget = 200000
 
 # Dump AI request/response payloads to disk (debug only; verbose I/O).
 # $global:SI_DumpAIPayload = $true
@@ -1246,8 +1250,8 @@ $global:SI_StorageAccount = '<storage-account-name>'
 # $global:SI_BucketLateRetries = 3
 # Default bucket count for the Detailed run before adaptive bucketing takes over (default 2).
 # $global:SI_AutoBucketDefaultDetailed = 2
-# Attempts for each AI call (default 4).
-# $global:AI_MaxAttempts = 4
+# Attempts for each AI call (default 2, at most 2; a 400 is never retried).
+# $global:AI_MaxAttempts = 2
 # Patch cycle: a finding whose fix was released (or, without one dated update, that was first detected) more than this many
 # days before the collection is Catch-up, else In monthly cycle (default 30; exactly 30 is still in the cycle).
 # $global:SI_PatchCycle_CatchUpDays = 30
@@ -5939,6 +5943,23 @@ $global:SI_StorageAccount = '<storage-account-name>'
 # Azure OpenAI: whether AI is used, for what, and how much it may spend.
 # ----------------------------------------------------------------------------------------------------
 #
+# AI daily limit (tokens)  [SI_AI_DailyTokenBudget]  (tokens)
+#   What it is for:   Caps what AI can cost this install per day, whatever the runs do. It applies only when AI is
+#                     switched on.
+#   Default:          200,000 tokens a day -- at a large model's list price (about USD 11 / DKK 75 per million tokens)
+#                     at most about USD 2 / DKK 15 a day
+#   If you change it: Every AI request of every engine counts against it. At the limit no further AI request is sent
+#                     until the next UTC day: the runs go on, assets that were not asked are classified by rules only,
+#                     and SecurityInsight writes one warning and raises one alert. Cost per day is at most this many
+#                     tokens at your model's price.
+#   When to change:   Raise it only when you have switched AI on, seen a few runs and want more AI answers per day; a
+#                     large first run after switching on may need one day more.
+#   Risk:             A higher limit allows more AI requests per day to YOUR Azure OpenAI deployment, at its price per
+#                     token; a lower one stops AI sooner and leaves more assets to the rules. It applies only when AI
+#                     is switched on. Reversible at once.
+#   Recommended:      Keep the default (200,000 tokens a day).
+#   More info:        https://invardia.com/docs/si/settings/SI_AI_DailyTokenBudget/
+#
 # AI integration  [SI_EnableAI]
 #   What it is for:   ONE switch for AI: on = AI for every engine that has an AI step (the endpoint and Azure engines
 #                     classify the assets their rules cannot place). It needs the Azure OpenAI endpoint, deployment
@@ -6058,13 +6079,15 @@ $global:SI_StorageAccount = '<storage-account-name>'
 # AI call attempts  [AI_MaxAttempts]  (advanced, attempts)
 #   What it is for:   How many times Risk Analysis tries an AI request when the AI service times out, throttles or has
 #                     a temporary failure.
-#   Default:          4 attempts.
+#   Default:          2 attempts: the first and one retry; never again after a refused request (HTTP 400).
 #   If you change it: More attempts make the AI summary more likely to succeed under load, but a failing service makes
 #                     the run take longer. Other errors fail at once regardless.
-#   When to change:   Raise if AI summaries often fail on throttling or timeouts.
+#   When to change:   There is no need: SecurityInsight never sends one AI request more than twice, and never resends
+#                     a refused (HTTP 400) request.
 #   Risk:             Affects whether and how AI is used: when AI is used, asset data is sent to YOUR Azure OpenAI
 #                     deployment, and it costs per call. Reversible at once; results already produced stay.
-#   Recommended:      Keep the default. Change it when: Raise if AI summaries often fail on throttling or timeouts.
+#   Recommended:      Keep the default. Change it when: There is no need: SecurityInsight never sends one AI request
+#                     more than twice, and never resends a refused (HTTP 400) request.
 #   More info:        https://invardia.com/docs/si/settings/AI_MaxAttempts/
 #
 # AI cost per call estimate  [SI_AI_CostPerCallEstimate]  (engine: identity, advanced, USD)
@@ -6082,19 +6105,20 @@ $global:SI_StorageAccount = '<storage-account-name>'
 #
 # AI for privilege tier catalog  [SI_PrivilegeTierClassifier_RunAI]  (engine: privilege-tier-classifier, advanced)
 #   What it is for:   An override for ONE engine: whether the privilege tier classifier asks Azure OpenAI to tier new
-#                     roles and permissions. It follows its own switch, not AI integration: it calls AI whenever the
-#                     Azure OpenAI settings are set, unless this is off.
-#   Default:          On.
-#   If you change it: Turning it off sends nothing to Azure OpenAI. The built-in roles, groups and permissions then
-#                     take their tier from the daily classified catalog, which is downloaded (Privilege tier catalog
+#                     roles and permissions. It follows its own switch, not AI integration, and is off unless a person
+#                     switches it on.
+#   Default:          Off: AI is used only when a person switches it on.
+#   If you change it: When on, the classifier asks Azure OpenAI to tier new roles and permissions, at AI cost. Off
+#                     (the default) sends nothing to Azure OpenAI: the built-in roles, groups and permissions take
+#                     their tier from the daily classified catalog, which is downloaded (Privilege tier catalog
 #                     source); your own custom roles keep the tier they had, and new ones are left unresolved for
 #                     manual review. Removes AI cost for this engine.
-#   When to change:   Only to keep AI out of the privilege tier classifier while it is used elsewhere; or turn it off
-#                     if you tier new roles yourself.
-#   Risk:             With the Azure OpenAI settings set, new role and permission names are sent to YOUR Azure OpenAI
-#                     deployment, and each call costs; off leaves new ones untiered for manual review. Reversible at
-#                     once.
-#   Recommended:      Keep the default; turn it off only to keep AI out of this engine.
+#   When to change:   Switch it on only when you want AI to tier new roles and permissions here and accept its cost;
+#                     the downloaded catalog covers the built-in ones.
+#   Risk:             On sends new role and permission names to YOUR Azure OpenAI deployment, and each call costs
+#                     (within the AI daily limit); off (the default) leaves new custom ones untiered for manual
+#                     review. Reversible at once.
+#   Recommended:      Off (the default); on only when you want AI to tier new custom roles and accept its cost.
 #   More info:        https://invardia.com/docs/si/settings/SI_PrivilegeTierClassifier_RunAI/
 #
 # AI for the Azure engine  [SI_EnableAI_azure]  (engine: azure, advanced)

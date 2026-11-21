@@ -63,6 +63,8 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot '_shared/SI-UpdaterCore.ps1')
 . (Join-Path $PSScriptRoot '_shared/SI-UpdateFeed.ps1')
 . (Join-Path $PSScriptRoot '_shared/SI-UpdaterLicence.ps1')
+# SI_UPDATER_LICENCE_PULL (Invardia 2026-11-20): support asks for a licence of an EDITION (or the one kept before) through the update
+. (Join-Path $PSScriptRoot '_shared/SI-UpdaterLicencePull.ps1')
 # #350: the deploy-lock check (a manual deploy marks the updater job) -- used by the Invardia path
 . (Join-Path $PSScriptRoot '_shared/SI-UpdateChannel.ps1')
 . (Join-Path $PSScriptRoot '_shared/SI-UpdaterChannel.ps1')
@@ -72,6 +74,10 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot '_shared/SI-UpdaterFastRoll.ps1')
 # 2026-10-23: the run gate -- nothing changes the install while a pipeline run is going; the wait is handed to caj-si-flow
 . (Join-Path $PSScriptRoot '_shared/SI-UpdaterRunGate.ps1')
+# ROLL-HUNG-1 (framework, 2026-11-20): a step of the awaited run that is HUNG (10x its usual length, 120 min, no log line since
+# its start) is stopped so the roll goes on; a run that logs is never stopped. A missing file = the wait as before.
+$siHungStep = Join-Path $PSScriptRoot '_shared/SI-UpdaterHungStep.ps1'
+if (Test-Path -LiteralPath $siHungStep) { . $siHungStep }
 # #750 (b): the roll steps both editions share (pre-roll, post-roll, self-retry, the state row, the running release)
 . (Join-Path $PSScriptRoot '_shared/SI-UpdaterRollSteps.ps1')
 # IMAGE-PRUNE (owner 2026-11-12): after a healthy update, the install's own registry keeps only this release + the one before
@@ -120,6 +126,10 @@ if ($siAutoRoot -and (Test-Path -LiteralPath ([IO.Path]::Combine($siAutoRoot, 'e
 # rule that an earlier update counts only while it shows one. A missing file = the old rule (every running one counts).
 if ($siAutoRoot -and (Test-Path -LiteralPath ([IO.Path]::Combine($siAutoRoot, 'engine', '_shared', 'SI-ExecutionLiveness.ps1')))) {
     try { . ([IO.Path]::Combine($siAutoRoot, 'engine', '_shared', 'SI-ExecutionLiveness.ps1')) } catch { }
+}
+# ROLL-HUNG-1: a step's newest sign of progress (cfg.StepProgress / cfg.StepPhaseTime) -- the query only
+if ($siAutoRoot -and -not (Get-Command -Name Get-SIStepProgressLastSql -ErrorAction SilentlyContinue) -and (Test-Path -LiteralPath ([IO.Path]::Combine($siAutoRoot, 'engine', '_shared', 'SI-StepPhase.ps1')))) {
+    try { . ([IO.Path]::Combine($siAutoRoot, 'engine', '_shared', 'SI-StepPhase.ps1')) } catch { }
 }
 # #308: the install's update ring, recorded in the Pro database whenever this run resolves one (engine/_shared/SI-InstallRing.ps1).
 if ($siAutoRoot -and (Test-Path -LiteralPath ([IO.Path]::Combine($siAutoRoot, 'engine', '_shared', 'SI-InstallRing.ps1')))) {
@@ -232,6 +242,10 @@ function Close-SIUpdaterBuildPool {
 # #521 NO az CLI: SecurityInsight's own REST token client (/si/setup/_shared/SI-UpdateRest.ps1). The image's own steps call
 # ARM through Invoke-SIUpdaterArm; the release's build / roll libraries take the seam itself (Get-SIUpdaterRest).
 $script:SIUpdaterArmApi = '2025-07-01'   # Microsoft.App jobs / containerApps: the fast roll's own api-version (one schema)
+# ... and kept GLOBAL too: the release's setup\Invoke-SIContainerUpdate.ps1 (another script) calls this file's functions for the
+# early self-move, and there $script: is THAT script's scope -- the default below was empty ("Cannot bind argument to parameter
+# 'ApiVersion' because it is an empty string", every release since 3.1.30; the move then waited for the run's end).
+$global:SIUpdaterArmApi = $script:SIUpdaterArmApi
 
 function Get-SIUpdaterRest {
     <# The REST seam of this run (setup/_shared/SI-UpdateRest.ps1) -- after Connect-SIUpdaterRest. Tests replace it. #>
@@ -254,7 +268,7 @@ function Invoke-SIUpdaterArm {
         (default: the Container Apps one). -List: every item (nextLink). -AllowNotFound: a 404 is $null. Anything else that
         is not a success THROWS '<what> failed: HTTP <code>: <what Azure said>'.
     #>
-    param([string]$Method = 'GET', [Parameter(Mandatory)][string]$Path, [string]$ApiVersion = $script:SIUpdaterArmApi, $Body, [switch]$AllowNotFound, [switch]$List)
+    param([string]$Method = 'GET', [Parameter(Mandatory)][string]$Path, [string]$ApiVersion = $(if ($script:SIUpdaterArmApi) { $script:SIUpdaterArmApi } else { $global:SIUpdaterArmApi }), $Body, [switch]$AllowNotFound, [switch]$List)
     $rest = Get-SIUpdaterRest
     $uri = Get-SIArmUri -Path $Path -ApiVersion $ApiVersion
     if ($List) { return @(Get-SIRestList -Rest $rest -Uri $uri) }
@@ -478,6 +492,10 @@ function Invoke-SIUpdaterOpenAIRightsStep {
         $jobs = @((& $Arm 'GET' ($rgId + '/providers/Microsoft.App/jobs') $api.Apps $null).value)
         $apps = @((& $Arm 'GET' ($rgId + '/providers/Microsoft.App/containerApps') $api.Apps $null).value)
         if ($null -eq $SettingRows) { $SettingRows = @((Read-SIUpdaterAiSettingRows -Store $Store).Rows) }
+        # OPENAI-CAP (owner 2026-11-21): with AI switched OFF in the settings nothing is checked and no support step is said --
+        # an endpoint left in the settings must never read as "give the engine the AI role" (internal 3.1.41: it did)
+        $aiOn = @($SettingRows | Where-Object { [string]$_.Name -eq 'SI_EnableAI' } | Where-Object { "$($_.ValueJson)".Trim('"', ' ') -match '^(?i:true|1)$' }).Count -gt 0
+        if (-not $aiOn) { Write-UpdLog 'Azure OpenAI rights: AI is off in the settings -- not checked'; return $null }
         $endpoint = Resolve-SIOpenAIEndpointSetting -SettingRows $SettingRows -Jobs $jobs -Apps $apps
         if (-not $endpoint) { return $null }
         $principals = @(Get-SIOpenAIRightsPrincipals -Jobs $jobs -Apps $apps -WebAppName (Get-SIUpdaterInstallName -Role web -Env $Env))
@@ -628,6 +646,9 @@ function Set-SIUpdaterImage {
 
 $script:SIUpdaterBusyWaitMinutes = 10
 $script:SIUpdaterBusyPollSeconds = 15
+# global too, for the same reason as $global:SIUpdaterArmApi (the early self-move runs from the release's own script)
+$global:SIUpdaterBusyWaitMinutes = $script:SIUpdaterBusyWaitMinutes
+$global:SIUpdaterBusyPollSeconds = $script:SIUpdaterBusyPollSeconds
 
 function Test-SIUpdaterOperationInProgress {
     <# PURE. #911: is an ARM refusal "another operation is in progress on this resource" (HTTP 409 ContainerAppOperationInProgress
@@ -645,7 +666,8 @@ function Invoke-SIUpdaterPatchWhenFree {
         waited. Any other error is thrown at once. -Sleep / -Now / -Log are seams.
     #>
     param([Parameter(Mandatory)][string]$Name, [Parameter(Mandatory)][scriptblock]$Read, [Parameter(Mandatory)][scriptblock]$Patch,
-          [double]$WaitMinutes = $script:SIUpdaterBusyWaitMinutes, [int]$PollSeconds = $script:SIUpdaterBusyPollSeconds,
+          [double]$WaitMinutes = $(if ($script:SIUpdaterBusyWaitMinutes) { $script:SIUpdaterBusyWaitMinutes } else { $global:SIUpdaterBusyWaitMinutes }),
+          [int]$PollSeconds = $(if ($script:SIUpdaterBusyPollSeconds) { $script:SIUpdaterBusyPollSeconds } else { $global:SIUpdaterBusyPollSeconds }),
           [scriptblock]$Sleep = { param($s) Start-Sleep -Seconds $s }, [scriptblock]$Now = { [datetime]::UtcNow }, [scriptblock]$Log = { param($m) Write-UpdLog $m })
     $t0 = & $Now; $tries = 0
     while ($true) {
@@ -1570,6 +1592,15 @@ function Invoke-SIUpdaterCore {
     $connRoute = (Resolve-SIUpdaterUpdateRoute -HasLicence $false -Edition (Get-SIUpdaterInstallEdition -SubscriptionId $sub -ResourceGroup $rg) -Source (& $connGet 'SI_UPDATER_SOURCE')).Route
     $licenceAsk = Test-SIUpdaterInvardiaConnected -Route $connRoute -Get $connGet
     $global:SI_UpdaterConnected = $licenceAsk
+    # SI_UPDATER_LICENCE_PULL = request:pro-business | request:pro-enterprise | request:previous (Invardia 2026-11-20): a licence
+    # request of that edition filed ONCE, then pulled on each update until Invardia delivers; installed only when it verifies
+    # offline (trusted signer, this tenant, valid today, the edition asked for), the one before kept as SI-License-Previous,
+    # read back, audited, once per value. No licence id is ever sent.
+    # BEFORE the licence request below, so that step sees the licence in force. Never fails the run (one warning line).
+    if ($updMode -ne 'post-roll' -and (Get-Command -Name Invoke-SIUpdaterLicencePull -ErrorAction SilentlyContinue)) {
+        $null = Invoke-SIUpdaterLicencePull -Env $Env -Store $proStore -SubscriptionId $sub -Connected $licenceAsk -Log { param($m) Write-UpdLog $m } `
+                    -Switch $(if ($switches) { $switches['SI_LicenseRequest_Auto'] } else { $null })
+    }
     if ($updMode -eq 'post-roll') { $lr = $null }   # #1262: the post-roll run asks for no licence (see below)
     elseif (-not $licenceAsk) { Write-UpdLog ('licence request: ' + (Get-SIInvardiaConnectSkipText -What 'no licence request')); $lr = $null }
     else {

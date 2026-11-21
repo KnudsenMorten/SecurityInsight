@@ -8,7 +8,7 @@
     script stays as a fallback: run it only when Invardia support asks for it.
 
     CR7 (framework DOCS/REQUIREMENTS.md 12.11g). The web app's users sign in through the ONE sign-in front SecurityInsight
-    and PIM share (FRAMEWORK/signin-front, the version pro-management\signin-front.pin.json pins): code flow + PKCE, the
+    and PIM share (signin-front (retired; source deleted), the version pro-management\signin-front.pin.json pins): code flow + PKCE, the
     web app's managed identity as a federated credential on the SAME app registration (no secret, no certificate), an 8 h
     session, the security headers. The front runs as a second container in the SAME revision as the web app and is the only
     one the ingress reaches; the web app listens on 127.0.0.1 only and verifies the front's token on every request.

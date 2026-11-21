@@ -59,8 +59,8 @@
 .PARAMETER ManagementGroupId
     The management group, with -CollectionScope managementGroup.
 .PARAMETER AiClassification
-    Switch: AI classification and summaries with your own Azure OpenAI (-OpenAiEndpoint, -OpenAiDeployment; the key is
-    asked for in the shell).
+    Switch: AI classification and summaries with your own Azure OpenAI (-OpenAiEndpoint, -OpenAiDeployment; no key is
+    needed: SecurityInsight signs in with its own identities, and a key the shell offers is optional).
 .PARAMETER OpenAiEndpoint
     With -AiClassification: https://<name>.openai.azure.com/
 .PARAMETER OpenAiDeployment

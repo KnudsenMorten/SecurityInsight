@@ -50,9 +50,9 @@
 .EXAMPLE
     .\Grant-SIIdentity.ps1 -AppId <application (client) id> -SubscriptionId <subscription id> -WorkspaceResourceId <workspace resource id> -AllowSchemaCreate -Apply
 .EXAMPLE
-    .\Grant-SIIdentity.ps1 -IdentityName uami-securityinsight-tagging -IdentityResourceGroup rg-si -Tagging -Apply
+    .\Grant-SIIdentity.ps1 -IdentityName <asset tagging's identity> -IdentityResourceGroup <resource group> -Tagging -Apply
 .EXAMPLE
-    .\Grant-SIIdentity.ps1 -IdentityName uami-securityinsight -IdentityResourceGroup rg-si -SubscriptionId <subscription id> -Only SecurityAlert.Read.All,AccessReview.Read.All -Apply
+    .\Grant-SIIdentity.ps1 -IdentityName <the engine identity> -IdentityResourceGroup <resource group> -SubscriptionId <subscription id> -Only SecurityAlert.Read.All,AccessReview.Read.All -Apply
 
 .LINK
     https://invardia.com/docs/si/scripts/Grant-SIIdentity/
@@ -76,7 +76,7 @@ param(
     [switch]$AllowSchemaCreate,
     # #236: the asset-tagging plan (writes) instead of the read-only collection plan -- for asset tagging's own identity
     [switch]$Tagging,
-    # #446: the Pro web app's own identity (uami-si-management): read-only Microsoft Graph for names, the people picker and
+    # #446: the Pro web app's own identity: read-only Microsoft Graph for names, the people picker and
     # the enterprise application's role holders. Needs no config file; give -SubscriptionId with -IdentityName.
     [switch]$WebApp,
     [string[]]$TaggingScopes,

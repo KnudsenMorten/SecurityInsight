@@ -15,7 +15,7 @@ step's log, and (for a batch) in `u_si_reason` of the staging status table. Each
 | `no ServiceNow data-out connector is switched on` / `is set up` | No data-out connector, or it is switched off | Set one up and switch it on |
 | `ServiceNow data-out connectors are switched on:` | Two or more switched on; nothing is sent to any | Switch all but one off |
 | `the ServiceNow data-out connector … is not valid:` | The connector's settings have a problem | Fix what the message lists |
-| `no Import Set table is set` | The output's table setting is empty | Set *Data out: ServiceNow CI (or vulnerable item) Import Set table* |
+| `no Import Set table is set` | The output's table setting is empty | Set that output's table on the ServiceNow connector page: *Data out: ServiceNow CI*, *vulnerable item*, *remediation task* or *remediation task links Import Set table*. The two task outputs show *not set up* until then, with no error |
 | `names no API key and no user and password` | No credential chosen | Choose an API key, or a user and a password |
 | `a user needs a password, and a password needs a user` | Half a credential | Set both, or choose an API key |
 | `names an API key and a user / password` | Both ways named (a warning) | Choose one; the API key is used |
@@ -129,5 +129,3 @@ route*: the next sync sends every record in scope as `new`, mode `resync`.
 **Settings of an earlier ServiceNow push still hold values.** SecurityInsight ignores them; the update says once in its
 log which of them still hold a value (*the older ServiceNow push was removed*), and leaves them in place. Nothing is
 deleted.
-
-Verified against SecurityInsight 3.0.0.202610261957 on 2026-10-27.

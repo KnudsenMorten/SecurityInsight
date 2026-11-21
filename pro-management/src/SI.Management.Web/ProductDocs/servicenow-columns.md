@@ -7,22 +7,30 @@ ServiceNow field it maps to, and an example. What your importer does with each v
 
 ## The ServiceNow push
 
-The ServiceNow data-out connector writes to three import set tables on your instance:
+The ServiceNow data-out connector writes to five import set tables on your instance:
 
 | Table (suggested name) | Output | One row per |
 |---|---|---|
 | `u_si_ci_import` | ServiceNow CI hand-off (`servicenow-ci`) | CI in scope, every sync |
 | `u_si_vuln_import` | ServiceNow vulnerable items (`servicenow-vulnerable-item`) | Vulnerable item in scope (CI and finding), open or closed, every sync |
-| `u_si_staging_status` | Both | Batch state change: `writing`, then `complete`, `failed` or `held`; plus `feedback` rows |
+| A name you choose | ServiceNow remediation tasks (`servicenow-remediation-task`) | Remediation task on a CI (see [Remediation tasks](remediation-tasks)), when its values change |
+| A name you choose | ServiceNow remediation task links (`servicenow-remediation-task-finding`) | Task and finding it resolves, when its values change |
+| `u_si_staging_status` | All four | Batch state change: `writing`, then `complete`, `failed` or `held`; plus `feedback` rows |
 
-Your SecurityInsight admin sets the names: *Data out: ServiceNow CI Import Set table*, *Data out: ServiceNow vulnerable
-item Import Set table* and *Data out: ServiceNow staging status table* (`u_si_staging_status` when not set). Each must be
-a custom (`u_…`) or scoped (`x_…`) import set table; the staging status table must be a table of its own.
+Your SecurityInsight admin sets the names on the ServiceNow connector page: *Data out: ServiceNow CI Import Set table*,
+*Data out: ServiceNow vulnerable item Import Set table*, *Data out: ServiceNow remediation task Import Set table*, *Data
+out: ServiceNow remediation task links Import Set table* and *Data out: ServiceNow staging status table*
+(`u_si_staging_status` when not set). Each must be a custom (`u_…`) or scoped (`x_…`) import set table; the staging
+status table must be a table of its own.
+
+The two task outputs are on for every installation that sends to ServiceNow. They send nothing until their table names
+are entered: until then they show as *not set up*, with no error. An admin can switch them off.
 
 *Configuration > Connectors > Fields sent* shows the columns in force for each output (an admin can rename, move or remove
 a content column; the contract's columns are always sent) and offers **ServiceNow schema (JSON)** and **ServiceNow team
-pack (Excel)** to build the staging tables from. The connector page offers the JSON definition of all three tables under
-*For your ServiceNow team > Tables to create in ServiceNow*.
+pack (Excel)** to build the staging tables from. The connector page offers the JSON definition of the tables under
+*For your ServiceNow team > Tables to create in ServiceNow*, and **Verify table schema** checks every table you entered:
+each column present, missing, too short or of the wrong type, and which new columns can be switched on.
 
 ## The hand-off database
 
@@ -34,7 +42,9 @@ JDBC data source into an import set. SecurityInsight holds no ServiceNow credent
 - **The Pro database** (the default). The views `vImportCi`, `vImportCiKeyValue`, `vImportCiRelation`, `vProposedCi`,
   `vImportVulnerableItem` and `vImportBatch`. The CI, tag, relation and proposed CI rows are updated in place by each
   run. `vImportVulnerableItem` carries `u_si_batch_id`, the batch of the SQL vulnerability connector that last changed
-  the record; `vImportBatch` lists the batches of the CMDB SQL connector and the SQL vulnerability connector.
+  the record; `vImportBatch` lists the batches of the CMDB SQL connector and the SQL vulnerability connector. The views
+  `vImportRemediationTask` and `vImportRemediationTaskFinding` hold the remediation tasks and their links for the newest
+  collection whose tasks are built; each returns rows only while its output is switched on.
 - **A hand-off database of your own.** Add a connector on **Configuration > Connectors > Setup** with kind **sql** and
   direction **cmdb**, and give its `server` and `database`. That database holds `vImportCi`, `vImportCiKeyValue`,
   `vImportCiRelation` and `vProposedCi`, each with the batch columns (and the CI view with owner and department), plus
@@ -49,6 +59,8 @@ JDBC data source into an import set. SecurityInsight holds no ServiceNow credent
 | `snowstage.vImportCiRelation` | parent, child and type | A VM's OS and data disks, network interfaces and user-assigned identities, present or removed |
 | `snowstage.vProposedCi` | CI | CIs no CMDB CI is known to match, with the evidence. A report; nothing is created from it |
 | `snowstage.vImportVulnerableItem` | CI and finding | Every finding on a CI, open or closed with the reason (Pro database only) |
+| `snowstage.vImportRemediationTask` | CI and task | The remediation tasks, open or closed with the reason (Pro database only) |
+| `snowstage.vImportRemediationTaskFinding` | task and finding | Which findings each task resolves (Pro database only) |
 | `snowstage.vImportBatch` | batch | The batches and their states (see [Batches](#batches-vimportbatch)) |
 
 ### Batches in a database of your own
@@ -268,9 +280,77 @@ Nothing is created from this report. Whether a class may be created is your IRE 
 **The push adds** `u_row_hash` and `u_source_run`, then the contract's columns `u_action`, `u_si_batch_id`,
 `u_si_cleared`, `u_si_reason` and `u_si_replaces`.
 
+#### Optional vulnerable item fields
+
+Fourteen more fields can be sent with each vulnerable item. They are off by default. Switch each on under
+*Configuration > Connectors > Fields sent* (or ask your support partner) once your staging table has the column; a field
+your table lacks is left out with one warning per run, and the rest of the row still goes.
+
+| Column | Meaning |
+|---|---|
+| `u_si_security_domain` | The finding's security domain |
+| `u_si_category` | Its category |
+| `u_si_subcategory` | Its subcategory |
+| `u_si_report` | The SecurityInsight report that found it |
+| `u_si_risk_score` | Its risk score |
+| `u_si_risk_rating` | Its risk rating |
+| `u_si_tier` | The CI's tier |
+| `u_si_fix_update_kb` | The security update (KB) that fixes a CVE, when known |
+| `u_si_affected_vendor` | The affected software's vendor |
+| `u_si_affected_product` | The affected software |
+| `u_si_security_grouping_parent` | The one fix that resolves the finding, empty when no source names one |
+| `u_si_security_grouping_name` | The name of that fix |
+| `u_si_security_grouping_kind` | The kind of fix: a security update, a software upgrade, a configuration change, a cloud recommendation, an identity rule or review, or an attack path |
+| `u_si_detection_excepted` | Set when an Admin marked the software detection a false positive on this server (see [Exemptions](exemptions#false-positive-on-this-server)) |
+
+### Remediation tasks (vImportRemediationTask, task staging table)
+
+One row per CI and task. The key is `u_si_task_id`. A task is sent only when at least one of its findings is a
+vulnerable item ServiceNow receives.
+
+| Column | Filled | Meaning |
+|---|---|---|
+| `u_si_task_id` | always | The task's key on this CI |
+| `u_si_correlation_id` | always | The CI key, the same as on the CI rows |
+| `u_asset_name` | when known | The asset the task is on |
+| `u_cmdb_ci` | when known | The CI's id in your CMDB when SecurityInsight knows it |
+| `u_task` | always | What to do, for example the update or the upgrade with its version |
+| `u_task_kind` | always | `security-update`, `software-upgrade`, `bundled-upgrade`, `configuration`, `cloud-recommendation`, `identity-rule`, `identity-review`, `attack-path` or `other` |
+| `u_product`, `u_product_version` | when known | The product and the version the task upgrades |
+| `u_application`, `u_application_paths` | when known | For a bundled library: the application that bundles it, and every path of that copy |
+| `u_findings`, `u_cves` | always | How many findings and CVEs the task resolves |
+| `u_severity`, `u_risk_score` | when known | The highest severity and risk score of its findings |
+| `u_tier` | when known | The CI's tier |
+| `u_owner`, `u_department` | when known | The CI's owner and department |
+| `u_state` | always | Open or closed |
+| `u_close_reason`, `u_closed_at` | when known | Why and when it closed: fixed, exempted, asset retired, report changed, task changed, or out of scope |
+| `u_first_seen`, `u_last_seen`, `u_changed_at` | always | When the task was first and last seen, and when its row last changed |
+| `u_source` | always | Always `SecurityInsight` |
+| `u_row_hash`, `u_source_run` | always | The row's fingerprint, and the collection the row was built from |
+| `u_action`, `u_si_batch_id`, `u_si_cleared` | | As on the vulnerable items. A reopened task lists `u_close_reason` and `u_closed_at` in `u_si_cleared` |
+
+### Remediation task links (vImportRemediationTaskFinding, task links staging table)
+
+One row per task and finding it resolves. One finding can belong to several tasks.
+
+| Column | Filled | Meaning |
+|---|---|---|
+| `u_si_task_id` | always | The task |
+| `u_si_correlation_id` | always | The CI key |
+| `u_vulnerability` | always | The finding id, as on the vulnerable item |
+| `u_source_record_id` | always | The vulnerable item's own stable id, so the link finds it |
+| `u_cve` | when known | The CVE |
+| `u_title`, `u_severity` | when known | The finding's name and severity |
+| `u_product_version` | when known | The version this link is about |
+| `u_in_collection` | always | Whether the finding was seen in the collection the row was built from |
+| `u_source`, `u_row_hash`, `u_source_run`, `u_changed_at` | always | As on the tasks |
+| `u_action`, `u_si_batch_id`, `u_si_cleared` | | As on the tasks |
+
+Every date is UTC, as on the vulnerable items, and long values are sent whole.
+
 ### The contract's columns
 
-On every row of both push outputs:
+On every row of the CI and vulnerable item push outputs:
 
 | Column | Type | Filled | Meaning | Example |
 |---|---|---|---|---|
@@ -286,13 +366,13 @@ Create each column at least as long as the ServiceNow schema (JSON) of its table
 
 ### The staging status table (u_si_staging_status)
 
-One table for both outputs. Each batch writes one row per state change. What your importer does with each state is on
+One table for every output. Each batch writes one row per state change. What your importer does with each state is on
 [Knowing when a sync is complete](servicenow-sync-complete).
 
 | Column | Label | Type | Max length | Meaning |
 |---|---|---|---|---|
 | `u_si_batch_id` | Batch id | String | 100 | The batch: `<SecurityInsight run id>:<output>`. The same value is on every data row of the batch and on each status row of the batch |
-| `u_si_output` | Output | String | 40 | `servicenow-ci` or `servicenow-vulnerable-item` |
+| `u_si_output` | Output | String | 40 | `servicenow-ci`, `servicenow-vulnerable-item`, `servicenow-remediation-task` or `servicenow-remediation-task-finding` |
 | `u_si_state` | State | String | 16 | `writing`, `complete`, `failed` or `held`; or `feedback` (information only, never a batch state) |
 | `u_si_connector` | Connector | String | 100 | The SecurityInsight connector that sent the batch |
 | `u_si_target_table` | Target staging table | String | 80 | The staging table the batch's data rows were sent to |
@@ -356,5 +436,3 @@ vulnerability connector (`u_output` = `servicenow-vulnerable-item`):
 | `u_disappeared_cis` | int | always | Active CIs of the previous batch this run did not see (carried with their state, not dropped) |
 | `u_previous_batch_id` | nvarchar(64) | when known | The complete batch this one was compared with |
 | `u_reason` | nvarchar(1000) | when known | The counts of a complete batch, or why a batch was held |
-
-Verified against SecurityInsight 3.0.0.202610261957 on 2026-10-27.

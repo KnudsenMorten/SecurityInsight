@@ -1,0 +1,22 @@
+{
+  "version": "3.1.42",
+  "date": "2026-11-21",
+  "type": "feature",
+  "summary": "The attack-path reports to Azure complete at the largest installations: every part is answered from the graph stored once per run.",
+  "new": [
+    {
+      "title": "Alert at the AI daily limit",
+      "text": "When the AI daily limit is reached, Invardia receives an alert as well as the warning in the run log, so support sees it at once."
+    }
+  ],
+  "fixes": [
+    {
+      "title": "Attack-path reports use the stored graph",
+      "text": "The two reports on devices with high-severity vulnerabilities that allow lateral movement to Azure answer every part from the graph SecurityInsight stores once per run, so they complete at the largest installations."
+    },
+    {
+      "title": "AI roles left alone while AI is off",
+      "text": "With AI switched off, the update leaves the Azure OpenAI roles of the engine and web identities alone and does not mention them."
+    }
+  ]
+}

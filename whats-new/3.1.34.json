@@ -1,0 +1,21 @@
+{
+  "version": "3.1.34",
+  "date": "2026-11-19",
+  "type": "fix-only",
+  "summary": "Task views show where a product was detected and every task column; the standard filter; Verify on the ServiceNow connector works again.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "Where it needs fixing",
+      "text": "Tasks per asset and Task findings show the detected paths: where the product was found on the asset. Every task column is shown by default."
+    },
+    {
+      "title": "One filter on the task views",
+      "text": "The task views filter with the grid's own filter, like every other view. The task reports' filter is one compact row, and the note about reports with older data is one slim line."
+    },
+    {
+      "title": "Verify on the ServiceNow connector",
+      "text": "Verify starts the ServiceNow check again: SecurityInsight's pipeline job starts it within 5 minutes, and the result shows on the connector page."
+    }
+  ]
+}

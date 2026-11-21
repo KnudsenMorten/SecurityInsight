@@ -149,7 +149,8 @@ if ([bool]$global:AutomationFramework) {
 # stops emitting [WARN] AI_ChunkSize / AI_MaxRetries / AI_MaxTokens lines on
 # every batch when the launcher's locked config doesn't override them.
 if (-not $global:AI_ChunkSize  -or [int]$global:AI_ChunkSize  -lt 1) { $global:AI_ChunkSize  = 50 }
-if (-not $global:AI_MaxRetries -or [int]$global:AI_MaxRetries -lt 1) { $global:AI_MaxRetries = 5 }
+# OPENAI-CAP (owner 2026-11-21): at most 2 attempts per AI request (the first + one retry, a platform failure only)
+if (-not $global:AI_MaxRetries -or [int]$global:AI_MaxRetries -lt 1 -or [int]$global:AI_MaxRetries -gt 2) { $global:AI_MaxRetries = 2 }
 if (-not $global:AI_MaxTokens  -or [int]$global:AI_MaxTokens  -lt 1) { $global:AI_MaxTokens  = 16384 }
 
 # Output goes to v2.2/privilege-tier-catalog/ (the dedicated cross-engine catalog
@@ -989,6 +990,8 @@ $itemsJson
         }
         catch {
             Write-Log "  [$label] attempt $attempt failed: $($_.Exception.Message)" "WARN"
+            # OPENAI-CAP: a 400 (a bug in the request), a refused sign-in or the daily limit is never sent again
+            if ((Get-Command -Name Test-SIOpenAIRetryable -ErrorAction SilentlyContinue) -and -not (Test-SIOpenAIRetryable $_)) { break }
             if ($attempt -lt $maxRetries) {
                 # A throttled service says how long to wait; honour it. Otherwise back off
                 # exponentially -- a fixed 3s let three attempts land inside one throttle window.

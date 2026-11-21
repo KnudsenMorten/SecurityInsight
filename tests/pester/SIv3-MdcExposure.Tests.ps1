@@ -38,7 +38,7 @@ Describe 'the Defender for Cloud exposure query' {
     }
     It 'uses REST Resource Graph only (no PowerShell module)' {
         $t = [IO.File]::ReadAllText((Join-Path $script:SIRoot 'engine\asset-profiling\discovery\Get-SIMdcExposure.ps1'))
-        $t | Should -Match 'Search-SIAzGraph'
+        $t | Should -Match 'Get-SIMdcAssessmentRows -SubscriptionIds \$SubscriptionIds'
         $t | Should -Not -Match 'Search-AzGraph|Import-Module|Get-AzSecurity'
     }
 }

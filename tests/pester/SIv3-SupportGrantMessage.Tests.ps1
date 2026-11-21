@@ -227,11 +227,8 @@ Describe 'THE JOB (fake databases)' {
         (Get-SISupportGrantStatus -Databases ([ordered]@{ pro = (& $script:NewDb 'pro' @{ Status = $ok }).Seam; ledger = (& $script:NewDb 'ledger' @{ Status = $unsigned }).Seam }) -NowUtc $script:Now).Wire.readOnly | Should -BeFalse -Because 'a role without signed procedures cannot open a session'
         (Get-SISupportGrantStatus -Databases ([ordered]@{ pro = (& $script:NewDb 'pro' @{ Status = $ok }).Seam }) -NowUtc $script:Now).Wire.readOnly | Should -BeTrue
     }
-    It 'the uplink events are OFF until Invardia agrees them (auto = no ring; on / a ring list turns them on)' {
-        (Resolve-SIUplinkSupportGrantSwitch -Value $null -EnvValue '' -Ring 0).On | Should -BeFalse
-        (Resolve-SIUplinkSupportGrantSwitch -Value 'auto' -EnvValue '' -Ring 0).On | Should -BeFalse
-        (Resolve-SIUplinkSupportGrantSwitch -Value 'on' -EnvValue '' -Ring 2).On | Should -BeTrue
-        (Resolve-SIUplinkSupportGrantSwitch -Value '0' -EnvValue '' -Ring 0).On | Should -BeTrue
-        (Resolve-SIUplinkSupportGrantSwitch -Value '0' -EnvValue '' -Ring 1).On | Should -BeFalse
+    It 'no switch holds the change back any more (Invardia 2026-11-20): the SupportAccess heartbeat replaces the support.* events' {
+        Get-Command -Name Resolve-SIUplinkSupportGrantSwitch -ErrorAction SilentlyContinue | Should -BeNullOrEmpty
+        Get-Command -Name Start-SISupportAccessHeartbeat -ErrorAction SilentlyContinue | Should -Not -BeNullOrEmpty
     }
 }

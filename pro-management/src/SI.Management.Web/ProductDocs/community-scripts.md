@@ -36,7 +36,9 @@ In Container Apps, a pipeline job does the same with one job per engine.
   Endpoint application permissions. A grant script makes these grants, or prints them for someone who can.
 - Someone who can grant application permissions (Privileged Role Administrator or Global Administrator) and assign
   roles on those scopes, once, during install.
-- Optional: an Azure OpenAI deployment (AI tier classification and the AI summary), a Shodan key (public IP exposure),
+- Optional: an Azure OpenAI deployment (AI tier classification and the AI summary; no key is needed: SecurityInsight
+  signs in with its own identity, once you or your support partner give that identity the role Cognitive Services
+  OpenAI User on the Azure OpenAI resource), a Shodan key (public IP exposure),
   an SMTP server (the report mail), a CMDB CSV file (business services and criticality).
 
 ## Install

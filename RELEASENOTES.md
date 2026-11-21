@@ -13,6 +13,97 @@ SecurityInsight Pro and the Pro trial install from invardia.com, never from GitH
 [invardia.com/trial](https://invardia.com/trial/), and your installation page there gives your two lines.
 <!-- /install lines -->
 
+## v3.1.42 — the attack-path reports to Azure complete at the largest installations
+
+### New
+- **Alert at the AI daily limit.** When the AI daily limit is reached, Invardia receives an alert as well as the warning in
+  the run log, so support sees it at once.
+
+### Fixes
+- **Attack-path reports use the stored graph.** The two reports on devices with high-severity vulnerabilities that allow
+  lateral movement to Azure answer every part from the graph SecurityInsight stores once per run, so they complete at the
+  largest installations. A part that cannot use the stored graph is said as a warning in the run log.
+- With AI switched off, the update leaves the Azure OpenAI roles of the engine and web identities alone and does not
+  mention them.
+
+## v3.1.41 — AI is off unless you switch it on, asks only about what changed, and stops at a daily limit
+
+### New
+- **AI daily limit.** *Configuration > Settings > AI* has a daily limit in tokens next to the AI switch, with what it
+  costs per day. At the limit SecurityInsight sends no more AI requests that day and tells you once.
+- **AI asks only about what changed.** With AI switched on, an asset is asked about only when the facts that decide its
+  answer changed, 25 assets per request, with only those facts. Raw device data is never sent.
+- **AI is off by default.** Every AI feature is off until a person switches it on in Settings, in both editions.
+- **A stuck step no longer holds an update.** A pipeline step that has written nothing for far longer than it usually takes
+  is stopped and reported, and the update follows when the run has ended. A step that still writes progress is never stopped.
+
+### Fixes
+- The update's first step, pointing itself at the new release, works again instead of waiting until the end of the update.
+- An AI request is tried at most twice, and a request the service refuses is not sent again.
+- Every deck the tools build opens in PowerPoint.
+## v3.1.40 — every change is checked against the signed sign-in of the person who made it
+
+### New
+- **Signed changes.** The engine checks the signed sign-in of the person behind every web app change before it acts.
+  SecurityInsight first only observes; once a SuperAdmin adopts the configuration on *Configuration > Signed requests*,
+  an unverified change is held and explained.
+- **Access and History in both editions.** *Configuration > Access* and *Configuration > History* are part of the
+  Community edition too. Every security control is the same in both editions.
+- **Narrower database rights, step by step.** Support can narrow each component's database rights to exactly its job,
+  through the nightly update: first a plan that changes nothing, then the change, read back, and a way back.
+
+## v3.1.39 — Defender for Cloud from two sources; long data syncs finish
+
+### New
+- **Defender for Cloud read from two sources.** SecurityInsight reads your Defender for Cloud findings both from Azure
+  Resource Graph and from Defender for Cloud itself, per subscription, and combines them. Findings that one source stops
+  returning are still read from the other.
+- **Support can load a licence edition.** Support can request a licence edition for your installation, or switch back to
+  the previous licence, through the nightly update. Only a licence signed for your own tenant is ever installed.
+
+### Fixes
+- **New vulnerabilities counted correctly in data health.** Data health counts a vulnerability that Defender reports on a
+  device after a collection as new, not as missing from SecurityInsight.
+- **Long data syncs finish.** A long data sync keeps a valid sign-in to the database for its whole run, and a short service
+  fault in Log Analytics is retried instead of ending the step.
+- **Every failed run names its cause.** Each failed run reports a stable code that says what happened.
+- **Collection picker and Findings page.** The collection picker shows each run's time and rows only; the Findings page
+  lists only the runs whose findings are kept.
+- **ServiceNow checks of the task tables.** They check the connection, the table and its columns, without a false warning.
+## v3.1.38 — support can switch off a report whose data source your licence does not include
+
+### New
+- **Reports switched off by support.** When a report's data source is not part of your licence, support can switch that
+  report off for you, the same way an Admin does under Reports. The change is in the change log with who asked and why.
+
+## v3.1.37 — the Findings page lists only the runs whose findings are kept
+
+### Fixes
+- **Findings lists only kept runs.** The Findings page's collection picker lists only the runs whose findings are kept (the
+  newest 3 by default), like every view.
+
+## v3.1.36 — the collection picker no longer says older data
+
+### Fixes
+- **Collection picker without older data.** The collection picker shows each run's time and rows only; Run health >
+  Reports lists every report of the run.
+
+## v3.1.35 — task views open from every task report; no older-data note on the pages
+
+### Fixes
+- **Task views open from the task reports.** Opening Tasks per asset or Task findings from a task report (a product, a
+  group, an action) shows the tasks with their detected paths.
+- **No older-data note on the pages.** When some reports of a run show older data, the pages no longer show a note
+  about it; the collection picker still says "older data", and Run health > Reports lists every report.
+## v3.1.34 — task views show where to fix; one filter; Verify on the ServiceNow connector works again
+
+### Fixes
+- **Detected paths in the task views.** Tasks per asset and Task findings show where the product was found on the
+  asset (the disk paths from Microsoft Defender), so you know where it needs fixing. Every task column is shown by default.
+- **One filter on the task views.** Tasks per asset and Task findings filter with the grid's own filter, like every other
+  view; the task reports' filter is one compact row. The note about reports with older data is one slim line.
+- **Verify on the ServiceNow connector page starts the check again.** SecurityInsight's pipeline job starts it within 5
+  minutes and the result shows on the page.
 ## v3.1.33 — security update of the base images; the earlier sign-in component removed
 
 ### Security
@@ -59,8 +150,8 @@ SecurityInsight Pro and the Pro trial install from invardia.com, never from GitH
 
 ### Changed
 
-- **Remediations > Tasks shows the task's own columns.** Paths, Closed, Reopened, Highest weighted risk and Security domain
-  are now shown by default (before, they were only in the export), and they stand with the other vulnerability columns: the
+- **Remediations > Tasks per asset shows the task's own columns.** Paths, Closed, Reopened, Highest weighted risk and
+  Security domain are shown by default, and they stand with the other vulnerability columns: the
   weighted risk next to the risk score, the security domain next to the tier, the paths next to the application, the closed
   date and reopen count with the other dates. A layout you saved yourself stays as you saved it; reset the layout to get the
   new default.
@@ -71,7 +162,7 @@ SecurityInsight Pro and the Pro trial install from invardia.com, never from GitH
 
 - **Remediation tasks, on by default.** SI now groups findings into tasks an admin can act on: one per vulnerability per
   asset (split by software version), one per application for a library bundled inside other programs (all its paths
-  listed, in full), and one per configuration setting. Pages: Remediations > Tasks and Task findings, with export.
+  listed, in full), and one per configuration setting. Page: Remediations > Tasks per asset (a task's findings open from its row), with export.
   Department owners see the tasks of their own findings.
   - A task closes as "fixed" only when its findings are proven gone; a version change with the finding still there closes
     it as "task changed".
@@ -98,10 +189,10 @@ SecurityInsight Pro and the Pro trial install from invardia.com, never from GitH
   accepts columns written in another case.
 - **Where software was found.** Every software finding keeps the full path on every drive and the application it belongs
   to, so a wrong conclusion (for example web-server files in a user folder on a file server) can be seen and corrected.
-- **False positive on this server.** An Admin can mark a software detection as a false positive for one server (Assets >
-  Software exceptions), with a reason, audited and reversible.
+- **False positive on this server.** An Admin can mark a software detection as a false positive for one server (Assets &
+  services > Assets (CIs) > Software detection exceptions), with a reason, audited and reversible.
 - **Tenant name search from SI's own data.** People and group pickers search what SI already collected, with no result
-  limit; a name not yet collected is looked up by the engine. The web app holds no directory permission.
+  limit; a name not yet collected is looked up by the engine. The pickers no longer read the directory from the web app.
 - **Plainer warning mails.** Data-quality notices now say what happened, whether anything was lost, and whether you need to
   do anything.
 - **Faster and leaner at large installations.** The vulnerability step and the software-evidence join use a fixed amount of

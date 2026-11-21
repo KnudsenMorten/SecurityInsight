@@ -23,7 +23,7 @@ var builder = WebApplication.CreateBuilder(args);
 
 // ---- Sign-in: Entra (Microsoft.Identity.Web), app roles SuperAdmin + Admin + Viewer (Reader) + Wallboard ----------
 var azureAd = builder.Configuration.GetSection("AzureAd");
-// CR7 (framework 12.11g): behind the ONE shared sign-in front (FRAMEWORK/signin-front) the front signs the user in and this
+// CR7 (framework 12.11g): behind the ONE shared sign-in front (signin-front (retired; source deleted)) the front signs the user in and this
 // app verifies the front's token on every request, listening on 127.0.0.1 only (Auth/SigninFront.cs). OFF (the default):
 // the in-app sign-in below, exactly as before.
 // SECURE-WEB-1: Microsoft's built-in Container Apps authentication in front of this app -- the platform signs the user in
@@ -193,6 +193,8 @@ builder.Services.AddRazorPages(o =>
     o.Conventions.AuthorizePage("/Admin/RunHealth/Reports", Policies.Management);
     // role and scope assignment: SuperAdmin (on top of the folder's Admin)
     o.Conventions.AuthorizePage("/Admin/Access", Policies.SuperAdmin);
+    // OPEN-04: the signed-request state and the SuperAdmin's signed adoption of the recorded configuration
+    o.Conventions.AuthorizePage("/Admin/SignedRequests", Policies.SuperAdmin);
     // the guided mail setup (Exchange RBAC for Applications / SMTP relay): SuperAdmin
     o.Conventions.AuthorizePage("/Admin/Settings/MailSetup", Policies.SuperAdmin);
     o.Conventions.AuthorizeFolder("/Changes", Policies.Change);
@@ -268,7 +270,7 @@ builder.Services.AddRazorPages(o =>
 builder.Services.AddSingleton(_ => SI.Management.Web.Audit.AuditActions.Default);
 builder.Services.AddSingleton<SI.Management.Web.Audit.AuditHealth>();
 builder.Services.AddSingleton<SI.Management.Web.Audit.IAuditWriter, SI.Management.Web.Audit.SqlAuditWriter>();
-// CR8 step 2 (observe only): each change with the person's signed token, verified by the pipeline runner -- nothing refused yet
+// CR8 step 2, ENFORCED (OPEN-04): each change with the person's signed token, verified by the pipeline runner before it acts
 builder.Services.AddSingleton<SI.Management.Web.Audit.ISignedRequestWriter, SI.Management.Web.Audit.SqlSignedRequestWriter>();
 // #302 (AUDIT-1.1): who asked for a change a job carries out -- recorded at commit, read by the jobs' audit writer
 builder.Services.AddSingleton<SI.Management.Web.Audit.IChangeAttributionWriter, SI.Management.Web.Audit.SqlChangeAttributionWriter>();

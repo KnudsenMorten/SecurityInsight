@@ -1,0 +1,21 @@
+{
+  "version": "3.1.40",
+  "date": "2026-11-20",
+  "type": "security",
+  "summary": "Every change in the web app is checked against the signed sign-in of the person who made it; Access and History are in both editions.",
+  "new": [
+    {
+      "title": "Signed changes",
+      "text": "The engine checks the signed sign-in of the person behind every web app change before it acts. SecurityInsight first only observes; once a SuperAdmin adopts the configuration on Configuration > Signed requests, an unverified change is held and explained."
+    },
+    {
+      "title": "Access and History in both editions",
+      "text": "Configuration > Access (roles and scopes for people and groups) and Configuration > History (the audit trail) are part of the Community edition too. Every security control is the same in both editions."
+    },
+    {
+      "title": "Narrower database rights, step by step",
+      "text": "Support can narrow each component's database rights to exactly its job, through the nightly update: first a plan that changes nothing, then the change, read back, and a way back."
+    }
+  ],
+  "fixes": []
+}

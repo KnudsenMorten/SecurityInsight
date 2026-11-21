@@ -59,6 +59,16 @@ function Get-SIErrorClassesState {
     # 3.0.30: the web app's identity has no grant on its Key Vault key (the updater only checks it; setup makes it) -- the
     # customer's action with the command, never arm-403 (that is a real 403 answer). Set by the caller, never derived from a text.
     'grant-missing',
+    # 2026-11-20 (Invardia run-monitor gaps, framework 8.16 "every product warning needs a stable code and a known error
+    # class"): two causes SecurityInsight's OWN warnings name, which reached Invardia as 'unknown' --
+    #   upstream-partial   the run was built on a source run that itself ended 'success-partial' (Risk Analysis "built on
+    #                      incomplete profile data", the CMDB sync "partial snapshot --"): the cause is that source run's own
+    #                      warning, this run only says what it did not count because of it
+    #   column-not-ready   Log Analytics had not finished taking a column change SecurityInsight made in the same run (the
+    #                      data collection rule was changed and new columns were not stored yet; a correlation read that
+    #                      waited for a new column and gave up): the next run stores / reads them
+    'upstream-partial',
+    'column-not-ready',
     'unknown'
 ) }
     , $script:SIErrorClasses
@@ -347,6 +357,10 @@ function Get-SIErrorClass {
     # ---- ingestion --------------------------------------------------------------------------------------------------
     if ($t -match '(?i)wrote fewer rows than it carried|fewer rows than (were )?(sent|posted|expected)|short count|rows? (were )?(lost|dropped) (at|during) ingest|accepted \d+ of \d+ rows') { return 'ingest-short-count' }
 
+    # ---- SecurityInsight's own sentence for a column Log Analytics has not finished taking (before the query rules: the
+    # correlation's give-up sentence quotes the service's "Failed to resolve scalar expression", which is not a query defect)
+    if ($t -match (Get-SIOwnWarningPatternsState).ColumnNotReady) { return 'column-not-ready' }
+
     # ---- Log Analytics / advanced hunting: the query and the tables -------------------------------------------------
     # #876: a 'union' leaf says "table expression", a 'where' leaf "table or column expression" -- both: the table is not there
     if ($t -match "Failed to resolve table (?:or column )?expression named \\?['""]?([A-Za-z0-9_]+)") {
@@ -400,5 +414,38 @@ function Get-SIErrorClass {
         'timeout'     { return 'platform-timeout' }
         'unavailable' { return 'platform-5xx' }
     }
+    # Log Analytics failed on its own side (a PartialError / EngineError answer: "Something went wrong processing your query
+    # on the server", "ExecuteRemoteSubQuery failure ... Unavailable") -- the platform's, never a query defect. Only here,
+    # never in Get-SITransientKind: what is retried in-run stays exactly what it was.
+    if ($t -match (Get-SIOwnWarningPatternsState).LogAnalyticsServerSide) { return 'platform-5xx' }
+
+    # ---- SecurityInsight's OWN warning sentences: they classify only a text nothing above recognised (a real failure named
+    # in the same text always wins -- first match wins) -------------------------------------------------------------------
+    if ($t -match (Get-SIOwnWarningPatternsState).ReportsIncomplete) { return 'report-incomplete' }
+    if ($t -match (Get-SIOwnWarningPatternsState).UpstreamPartial) { return 'upstream-partial' }
     'unknown'
 }
+
+function Get-SIOwnWarningPatternsState {
+    <#
+        The value of $script:SIOwnWarningPatterns, made on first use in the scope that reads it. The ONE place the sentences
+        SecurityInsight writes itself are recognised (the classifier above and the run fault codes, Resolve-SIRunFaultCode in
+        SI-UplinkCauses.ps1, read the same patterns -- a reworded sentence is one edit here and its tests):
+          UpstreamPartial         Risk Analysis' Get-SIUpstreamOutcome (SI-RunOutcome.ps1) / the CMDB sync's
+                                  Format-SICmdbSqlPartialText (SI-CmdbSqlSync.ps1)
+          ColumnNotReady          the endpoint ingest note 'not-stored' (SI-LogIngest.ps1) / the correlation's settled read
+                                  that gave up (Invoke-SICorrelationSettledRead, SI-CorrelationIngest.ps1)
+          ReportsIncomplete       Format-RAIncompleteReports (RA-RowCountGuard.ps1)
+          LogAnalyticsServerSide  the Log Analytics answer for a failure on its own side
+    #>
+    if ($null -eq $script:SIOwnWarningPatterns) { $script:SIOwnWarningPatterns = [pscustomobject]@{
+        UpstreamPartial        = '(?i)\bbuilt on incomplete profile data\b|\bpartial snapshot -- '
+        UpstreamProfile        = '(?i)\bbuilt on incomplete profile data\b'
+        UpstreamSnapshot       = '(?i)\bpartial snapshot -- '
+        ColumnNotReady         = '(?i)Azure was not yet storing every column when the rows arrived|Log Analytics has not finished adding the new column'
+        ReportsIncomplete      = '(?i)\breport\(s\) incomplete -- their findings are unknown'
+        LogAnalyticsServerSide = '(?i)Something went wrong processing your query on the server|ExecuteRemoteSubQuery failure'
+    } }
+    $script:SIOwnWarningPatterns
+}
+$script:SIOwnWarningPatterns = $null; $null = Get-SIOwnWarningPatternsState

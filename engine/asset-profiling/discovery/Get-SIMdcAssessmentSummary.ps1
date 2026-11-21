@@ -4,6 +4,11 @@
     (owner 2026-10-11, "Both, in two steps" -- step 2: record capture, summarised per resource rather than one record per
     assessment row).
 
+    2026-11-20 -- TWO SOURCES: the assessments are read from Resource Graph AND the ARM assessments API and combined per
+    assessment (Get-SIMdcAssessmentSources.ps1; Resource Graph stopped answering for many free-plan subscriptions), then
+    summarised HERE (ConvertTo-SIMdcAssessmentSummaryRows) into the shape the query below defines -- the query text stays
+    the shape's definition and the -Query test seam's input.
+
     ONE Azure Resource Graph query (securityresources, type microsoft.security/assessments), summarised INSIDE the query
     to one row per assessed resource: how many assessments, how many unhealthy and per severity, the oldest first
     evaluation and the newest status change among the unhealthy ones, and the TOP unhealthy ones -- id (the assessment
@@ -22,6 +27,7 @@
 
 if (-not (Get-Command -Name Invoke-SIArm -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot '../../_shared/SI-AzRest.ps1') }
 if (-not (Get-Command -Name Invoke-SIArgPaged -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot 'Invoke-SIArgPaged.ps1') }
+if (-not (Get-Command -Name Get-SIMdcAssessmentRows -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot 'Get-SIMdcAssessmentSources.ps1') }
 
 $script:SIMdcAssessmentTop = 5
 
@@ -105,9 +111,11 @@ function Invoke-SIMdcAssessmentSummaryCapture {
     .SYNOPSIS  Reads the assessment summary of every assessed resource and hands each to the record capture (provider
                mdc, parts 'resource' and 'assessments'). Returns the number of resources; 0 when the record capture is not
                loaded or the read failed. Never throws.
-    .PARAMETER Query  test seam: { param($Kql) } -> rows (the whole answer).
+    .PARAMETER Query       test seam: { param($Kql) } -> the SUMMARISED rows (the whole answer); both reads are bypassed.
+    .PARAMETER GraphQuery  test seam of the Resource Graph read (one row per assessment) -- Get-SIMdcAssessmentRows.
+    .PARAMETER ArmGet      test seam of the ARM assessments API page read -- Get-SIMdcAssessmentRows.
     #>
-    param([string[]]$SubscriptionIds = @(), [scriptblock]$Query)
+    param([string[]]$SubscriptionIds = @(), [scriptblock]$Query, [scriptblock]$GraphQuery, [scriptblock]$ArmGet)
     if (-not (Get-Command -Name Add-SIRecordPart -ErrorAction SilentlyContinue)) { return 0 }
     $err = ''; $complete = $true
     # Defender for Cloud assesses far more than the resource types that become CIs (subnets, disks, subscriptions ...). The
@@ -136,9 +144,20 @@ function Invoke-SIMdcAssessmentSummaryCapture {
         $kql = Get-SIMdcAssessmentSummaryKql
         if ($Query) { $null = & $take @(& $Query $kql) }
         else {
-            $page = Invoke-SIArgPaged -Query $kql -SourceLabel 'Defender for Cloud assessments per resource' -SubscriptionIds $SubscriptionIds -OnPage $take -WarningAction SilentlyContinue
-            $complete = [bool]$page.Complete
-            if (-not $complete) { $err = [string]$page.Error }
+            # 2026-11-20: Resource Graph AND the ARM assessments API, combined per assessment (Get-SIMdcAssessmentSources.ps1),
+            # summarised here into the shape the Resource Graph summary gave -- the record parts stay as they were
+            $read = Get-SIMdcAssessmentRows -SubscriptionIds $SubscriptionIds -GraphQuery $GraphQuery -ArmGet $ArmGet
+            $complete = [bool]$read.Complete
+            if (-not $complete) { $err = [string]$read.Error }
+            $gap = Format-SIMdcSourceGapText -Subscriptions @($read.GraphEmptySubscriptions)
+            if ($gap -and (Get-Command -Name Write-SIInfo -ErrorAction SilentlyContinue)) { Write-SIInfo ('   ' + $gap) }
+            if ($read.Note) { Write-Warning ('Defender for Cloud assessments per resource: ' + [string]$read.Note) }
+            # a subscription the API failed for but Resource Graph answered: complete, said once here (the exposure read shares the read)
+            foreach ($w in @($read.Warnings)) { if ($w) { Write-Warning ([string]$w) } }
+            # #727 page by page: the resources go to the record capture a page at a time
+            $sum = ConvertTo-SIMdcAssessmentSummaryRows -Rows @($read.Rows) -Top $script:SIMdcAssessmentTop
+            $read = $null
+            for ($i = 0; $i -lt $sum.Length; $i += 1000) { $null = & $take @($sum[$i..([Math]::Min($i + 999, $sum.Length - 1))]) }
         }
     } catch { $err = [string]$_.Exception.Message; $complete = $false }
     if ($err) { Write-Warning ('Defender for Cloud assessments per resource: not read completely ({0}) -- the resources not read keep their previous summary; the findings in Risk Analysis are not affected.' -f $err) }

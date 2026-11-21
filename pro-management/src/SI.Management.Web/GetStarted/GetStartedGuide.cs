@@ -232,7 +232,7 @@ public static class GetStartedGuide
             "/Admin/Settings?q=OpenAI", "Open Settings", Ai, Fields: [AiSwitch, "OpenAI_endpoint", "OpenAI_deployment", "OpenAI_apiKey"]),
     };
 
-    /// The steps of a paid feature (Licensing/ProFeatures.cs): the licence itself, the role mapping, the CMDB, the connectors.
+    /// The steps of a paid feature (Licensing/ProFeatures.cs): the licence itself, the CMDB, the connectors (the role mapping is core security, in both versions -- OPEN-26).
     /// Without a Pro licence they are not steps of this install (the free version, owner 2026-10-18) -- never red, never counted.
     public static bool IsProStep(GetStartedStep s) =>
         s.Id == "licence" || SI.Management.Web.Licensing.ProFeatures.ForPage(s.Href.Split('?', '#')[0]) is not null;

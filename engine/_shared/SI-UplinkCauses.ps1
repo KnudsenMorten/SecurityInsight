@@ -87,7 +87,8 @@ function Get-SIUplinkCausesState {
     HoldFieldsSwitch      = 'SI_Uplink_SendHoldFields'
     # Invardia's validator takes them since 1.0.592 (716b371, 2026-10-26): RING 0 FIRST (internal), the other rings once
     # Invardia has checked internal's first held item on its environment page
-    HoldFieldsRings       = @(0)
+    # Invardia 2026-11-20: the held classes with Held / KeptAgeHours / HeldRuns in Reports[] are accepted -- every ring
+    HoldFieldsRings       = @(0, 1, 2, 3)
     HoldOffEscalatedClass = 'count-less'
 } }
     , $script:SIUplinkCauses
@@ -297,6 +298,46 @@ function Resolve-SIReportCauseCode {
         if ($g) { return $g }
     } catch { }
     (Get-SIUplinkCausesState).UnknownCode
+}
+
+function Get-SIRunFaultRules {
+    <#
+        PURE. 2026-11-20 (Invardia run-monitor alignment gaps; framework 8.16: "every product warning needs a stable code and a
+        known error class"): the catalogue code of each run fault SecurityInsight words ITSELF and that reached Invardia
+        without one (a step's own warning / failure, outside a Risk Analysis report). Ordered: the first rule that matches
+        the run's text gives the code. Each Pattern is a regex; a pattern of SI's own sentences comes from
+        Get-SIOwnWarningPatternsState (SI-ErrorClass.ps1), the one place they are recognised. A run whose code is already
+        known (RunContext.FailureCode) never uses these.
+    #>
+    $p = $null
+    if (Get-Command -Name Get-SIOwnWarningPatternsState -ErrorAction SilentlyContinue) { $p = Get-SIOwnWarningPatternsState }
+    $rules = New-Object System.Collections.Generic.List[object]
+    # the settings database could not be read (the Pro settings layer stops the run) -- the catalogue's si-set-0401
+    $rules.Add([pscustomobject]@{ Key = 'settings-unreadable'; Code = 'si-set-0401'; Pattern = '(?i)SecurityInsight Pro: the settings database .*could not be read' })
+    # Azure SQL refused the run's sign-in because its access token had expired during the run
+    $rules.Add([pscustomobject]@{ Key = 'sql-token-expired'; Code = 'si-data-1406'; Pattern = '(?i)Login failed for user[^|]*Token is expired' })
+    if ($p) {
+        # Log Analytics failed on its own side (PartialError / EngineError)
+        $rules.Add([pscustomobject]@{ Key = 'la-server-side'; Code = 'si-la-1701'; Pattern = [string]$p.LogAnalyticsServerSide })
+        # Log Analytics had not finished taking a column change made in the same run
+        $rules.Add([pscustomobject]@{ Key = 'column-not-ready'; Code = 'si-col-0506'; Pattern = [string]$p.ColumnNotReady })
+        # built on a profile run that itself ended 'success-partial' (Risk Analysis) / a partial snapshot (CMDB sync)
+        $rules.Add([pscustomobject]@{ Key = 'upstream-profile-partial'; Code = 'si-ra-0915'; Pattern = [string]$p.UpstreamProfile })
+        $rules.Add([pscustomobject]@{ Key = 'upstream-snapshot-partial'; Code = 'si-cmdb-0703'; Pattern = [string]$p.UpstreamSnapshot })
+    }
+    $rules.ToArray()
+}
+
+function Resolve-SIRunFaultCode {
+    <# PURE. The catalogue code of a run's own fault text (Get-SIRunFaultRules, first match), '' when no rule knows it.
+       Never throws. #>
+    param([AllowNull()][AllowEmptyString()][string]$Text)
+    try {
+        $t = [string]$Text
+        if (-not $t.Trim()) { return '' }
+        foreach ($r in @(Get-SIRunFaultRules)) { if ($r.Pattern -and $t -match $r.Pattern) { return [string]$r.Code } }
+    } catch { }
+    ''
 }
 
 function ConvertTo-SIUplinkDetail {

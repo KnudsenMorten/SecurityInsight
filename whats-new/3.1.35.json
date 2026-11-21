@@ -1,0 +1,17 @@
+{
+  "version": "3.1.35",
+  "date": "2026-11-19",
+  "type": "fix-only",
+  "summary": "Task views open from every task report; the older-data note is gone from the pages.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "Task views open from the task reports",
+      "text": "Opening Tasks per asset or Task findings from a task report (a product, a group, an action) shows the tasks with their detected paths."
+    },
+    {
+      "title": "No older-data note on the pages",
+      "text": "When some reports of a run show older data, the pages no longer show a note about it; the collection picker still says older data, and Run health > Reports lists every report."
+    }
+  ]
+}

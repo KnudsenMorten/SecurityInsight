@@ -9,7 +9,10 @@
 
     Real-Azure mode: calls the Azure OpenAI deployment configured in
     $global:OpenAI_endpoint / OpenAI_deployment / OpenAI_apiKey /
-    OpenAI_apiVersion. One asset per call (batch optimisation lands later).
+    OpenAI_apiVersion. OPENAI-CAP (owner 2026-11-21): only new or changed assets
+    are asked (answer cache by a hash of the deciding fields), 25 per request,
+    with the deciding fields only (shared\SI-ClassifyAi.ps1); the install's daily
+    token budget stops it (engine\_shared\SI-AiBudget.ps1).
     JSON-mode response, deterministic temperature.
 
     Mock mode: deterministic rule-based stand-in (Exchange -> T1, DC -> T0,
@@ -52,15 +55,13 @@ ONLY valid JSON (no commentary, no markdown fences) with exactly these keys:
                     explaining the tier choice. Each posture-rule hit MUST appear
                     here. Reason is one short sentence.
 
-PROPERTIES JSON SOURCE:
-  When EG has ingested the device, Properties carries Microsoft's curated
-  device posture view (rawData): onboardingStatus, sensorHealthState,
-  antivirusEnabled, asrRules, lastSeenTime, exposureScore, criticality,
-  businessApplicationName, deviceCategory, osPlatform, osVersion, etc.
-  Treat onboardingStatus != "Onboarded" as a T3 hint; antivirusEnabled
-  = false on a server is a T1+ red flag.
+FACTS:
+  Facts holds the device's short plain values as collected (for example
+  the device name, OS platform and version, device category, machine group,
+  onboarding status, antivirus state). Treat an onboarding status other than
+  "Onboarded" as a T3 hint; antivirus off on a server is a T1+ red flag.
 
-CROSS-ENGINE / SIGNAL-MAP SIGNALS:
+CROSS-ENGINE / SIGNAL-MAP SIGNALS (in Signals, when present):
   XENG_AppGroup / XENG_AppType / XENG_AppGroupConfidence  -- AI cluster name
                               (e.g. "DCFleet-EU" / DomainControllerCluster).
                               Use as SI_Group = "group:<XENG_AppGroup>" when
@@ -228,32 +229,22 @@ CROSS-ENGINE SIGNALS (when XENG_* fields present in the payload):
                                  sparse -- a resource in a "Database" cluster
                                  with sensitive data tags should escalate.
 
-PROPERTY SOURCE NOTE:
-  AZ_Posture is a hashtable of dot-paths chosen per-type by an AI metaprofile
-  pass. These are the SECURITY-RELEVANT properties for THIS resource type.
-  AZ_FpMeta is the broader stable-config set; you may use it for context but
-  AZ_Posture is your primary tier-driver. AZ_Posture being sparse means the
-  type genuinely has few security-relevant properties (e.g. a public IP
-  resource); look at tags + cross-engine signals + naming for tier.
+POSTURE, TAGS AND FACTS:
+  Posture holds the SECURITY-RELEVANT settings of THIS resource type (for
+  example publicNetworkAccess, allowSharedKeyAccess, purge protection) and is
+  your primary tier driver. Tags holds the resource's tags. Facts holds its
+  short plain values (type, name, resource group, subscription, location).
+  Sparse Posture means the type has few security-relevant settings (e.g. a
+  public IP); then look at Tags, Signals and naming for the tier.
 
-EG ENRICHMENT:
+DEFENDER SIGNALS (in Signals, when present):
   EG_ExposureScore / EG_Criticality / EG_BusinessApp / EG_HandlesSensitiveData
        -- Defender's own inferred signals. Treat EG_Criticality='Critical'
           as a strong T1+ signal; EG_HandlesSensitiveData=true escalates
           data stores to T1+. Cite in SI_Tier_Proofs.Reason.
-  XENG_CriticalityScore -- precomputed signal-map sum (see general note in
-                           the endpoint/identity prompts).
+  XENG_CriticalityScore -- precomputed signal-map sum: >=80 push T0/T1;
+                           40-79 consider T1/T2; <40 baseline T2/T3.
   XENG_AppGroup         -- AI-clustered application name. Use as SI_Group.
-
-PROPERTIES JSON SOURCE:
-  Properties is the verbatim EG NodeProperties.rawData blob -- Microsoft's
-  curated security view for THIS Azure resource type. It carries fields
-  like publicNetworkAccess, allowSharedKeyAccess, encryption.*, networkAcls.*,
-  enablePurgeProtection, etc. -- specific to the type (NodeLabel).
-  Look at the actual fields present in Properties to drive your tier
-  decision. This replaces the per-type AI metaprofile call
-  for resources EG has ingested. ARG-fallback assets still use the
-  AZ_Posture / AZ_FpMeta projections from the metaprofile cache.
 '@
 
 function Get-SISystemPromptForEngine {
@@ -270,92 +261,40 @@ function Get-SISystemPromptForEngine {
     return $script:SI_SystemPrompt_endpoint_default
 }
 
-function Invoke-SIOpenAIClassify {
+function Invoke-SIOpenAIClassifyBatch {
+    <#
+        OPENAI-CAP (owner 2026-11-21): ONE Azure OpenAI request for up to 25 assets (SI-ClassifyAi.ps1 builds each item from
+        the deciding fields only). Returns AssetId -> verdict for the assets the answer covers; THROWS the service's error
+        (the caller decides on one more try: never after a 400) or the daily-limit refusal.
+    #>
     [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)][hashtable]$AssetPayload,
-        [Parameter()][ValidateSet('endpoint','identity','azure')][string]$Engine = 'endpoint'
-    )
-
-    $sys = Get-SISystemPromptForEngine -Engine $Engine
-    # Get-SIOpenAIApiVersion (the api-version fallback, #257) lives beside the AI gate, which also loads the AI sign-in
-    # (Invoke-SIOpenAIChat, #1257).
+    param([Parameter(Mandatory)][object[]]$Items, [ValidateSet('endpoint','identity','azure')][string]$Engine = 'endpoint', [string]$Instruction = '')
     if (-not (Get-Command -Name Get-SIOpenAIApiVersion -ErrorAction SilentlyContinue) -or -not (Get-Command -Name Invoke-SIOpenAIChat -ErrorAction SilentlyContinue)) {
         . (Join-Path (Split-Path -Parent $PSScriptRoot) 'shared\Test-SIAIEnabled.ps1')
     }
-
-    $userJson =$AssetPayload | ConvertTo-Json -Depth 8 -Compress
-
-    # Token-limit guard: AOAI rejects with 400 when prompt > deployment's
-    # context window. EG payloads can be 100KB+ when an asset has many
-    # related vulnerabilities/recommendations attached. ~3 chars/token rule
-    # of thumb -> 200KB user prompt = ~67k tokens, blows past gpt-4-32k.
-    # Cap at 60KB user content (≈20k tokens) and log when we trim.
-    $maxUserChars = 60000
-    if ($userJson.Length -gt $maxUserChars) {
-        Write-Warning ('  AOAI payload {0:N0} chars > {1:N0} cap -- trimming Metadata + PostureHits' -f $userJson.Length, $maxUserChars)
-        # Trim the two heaviest fields first; keep AssetId/Engine/Hint/Sources intact.
-        $trimmed = @{
-            Engine       = $AssetPayload.Engine
-            AssetId      = $AssetPayload.AssetId
-            Sources      = $AssetPayload.Sources
-            Hint         = $AssetPayload.Hint
-            Metadata     = '<trimmed: payload exceeded token budget>'
-            # 🔒 The Metadata replacement above already announces itself with '<trimmed: ...>'.
-            # This slice did not, so the model saw a 20-item list as if it were the whole set and
-            # could classify an asset on partial posture evidence while reporting full confidence.
-            # Same disclosure treatment: the payload states what was cut.
-            PostureHits  = @($AssetPayload.PostureHits | Select-Object -First 20)
-            PostureHitsTrimmed = $(if (@($AssetPayload.PostureHits).Count -gt 20) {
-                    'showing 20 of {0} posture hits -- classification is based on a SUBSET' -f @($AssetPayload.PostureHits).Count
-                } else { '' })
-        }
-        $userJson = $trimmed | ConvertTo-Json -Depth 8 -Compress
-    }
-
+    if (-not (Get-Command -Name Get-SIClassifyBatchInstruction -ErrorAction SilentlyContinue)) { . (Join-Path (Split-Path -Parent $PSScriptRoot) 'shared\SI-ClassifyAi.ps1') }
+    if (-not $Instruction) { $Instruction = (Get-SISystemPromptForEngine -Engine $Engine) + (Get-SIClassifyBatchInstruction) }
+    $userJson = @{ Items = @($Items) } | ConvertTo-Json -Depth 8 -Compress
     $body = @{
         messages = @(
-            @{ role = 'system'; content = $sys },
+            @{ role = 'system'; content = $Instruction },
             @{ role = 'user';   content = $userJson }
         )
         temperature     = 0.0
         response_format = @{ type = 'json_object' }
     } | ConvertTo-Json -Depth 6 -Compress
-
-    # opt-in AI payload dump for prompt tuning. Set
-    # $global:SI_DumpAIPayload=$true (or env SI_DUMP_AI_PAYLOAD=1) and every
-    # AI call writes <TEMP>\si-ai-dumps\<engine>-<safe-assetid>.json with the
-    # system + user message + AOAI body sent. Prints the full path so operators
-    # can open + diff to find irrelevant fields bloating the prompt.
-    $dumpEnabled = $global:SI_DumpAIPayload -or `
-                   ([Environment]::GetEnvironmentVariable('SI_DUMP_AI_PAYLOAD') -in '1','true','True','yes')
+    $dumpEnabled = $global:SI_DumpAIPayload -or ([Environment]::GetEnvironmentVariable('SI_DUMP_AI_PAYLOAD') -in '1','true','True','yes')
     if ($dumpEnabled) {
         $dumpDir = Join-Path ([System.IO.Path]::GetTempPath()) 'si-ai-dumps'
         if (-not (Test-Path $dumpDir)) { New-Item -ItemType Directory -Path $dumpDir | Out-Null }
-        $safeId = ([string]$AssetPayload.AssetId) -replace '[^A-Za-z0-9._-]','_'
-        $dumpPath = Join-Path $dumpDir ('{0}-{1}.json' -f $Engine, $safeId)
-        $dump = @{
-            Engine        = $Engine
-            AssetId       = $AssetPayload.AssetId
-            UserJsonChars = $userJson.Length
-            SystemPrompt  = $sys
-            UserPayload   = $AssetPayload
-            UserJsonRaw   = $userJson
-        } | ConvertTo-Json -Depth 12
-        Set-Content -Path $dumpPath -Value $dump -Encoding utf8
-        Write-SIInfo ('  AI payload dump -> {0} ({1:N0} chars)' -f $dumpPath, $userJson.Length)
+        $dumpPath = Join-Path $dumpDir ('{0}-batch-{1}.json' -f $Engine, ([string]$Items[0].AssetId -replace '[^A-Za-z0-9._-]','_'))
+        Set-Content -Path $dumpPath -Value $body -Encoding utf8
+        Write-SIInfo ('  AI payload dump -> {0} ({1:N0} chars, {2} asset(s))' -f $dumpPath, $body.Length, @($Items).Count)
     }
-
-    $url = ('{0}/openai/deployments/{1}/chat/completions?api-version={2}' -f `
-            $global:OpenAI_endpoint.TrimEnd('/'),
-            $global:OpenAI_deployment,
-            (Get-SIOpenAIApiVersion))
-
-    # #1257: the engine's own identity first, the key only as the fallback (engine/_shared/SI-OpenAIAuth.ps1)
+    $url = ('{0}/openai/deployments/{1}/chat/completions?api-version={2}' -f $global:OpenAI_endpoint.TrimEnd('/'), $global:OpenAI_deployment, (Get-SIOpenAIApiVersion))
     $resp = Invoke-SIOpenAIChat -Uri $url -Body $body
-
-    $content = $resp.choices[0].message.content
-    return ($content | ConvertFrom-Json)
+    $answer = [string]$resp.choices[0].message.content | ConvertFrom-Json
+    ConvertFrom-SIClassifyBatchAnswer -Answer $answer -AssetIds @($Items | ForEach-Object { [string]$_.AssetId })
 }
 
 function Invoke-SIClassify {
@@ -386,6 +325,26 @@ function Invoke-SIClassify {
     $useAI = ($RunContext.StorageContext.Mode -ne 'Mock') -and (Test-SIAIEnabled -Engine $RunContext.Engine)
     if (-not $useAI) {
         Write-SIInfo ('AI integration DISABLED for engine={0} -- deterministic-only classification (opt in via $global:SI_EnableAI = $true)' -f $RunContext.Engine)
+    }
+    # OPENAI-CAP: the answer cache, the queue of new / changed assets and the batch instruction
+    if (-not (Get-Command -Name Get-SIClassifyAiItem -ErrorAction SilentlyContinue)) { . (Join-Path (Split-Path -Parent $PSScriptRoot) 'shared\SI-ClassifyAi.ps1') }
+    $aiQueue = New-Object System.Collections.ArrayList
+    $aiUsed = @{}; $aiCache = @{}; $aiStore = $null
+    $aiInstruction = ''
+    if ($useAI) {
+        $aiInstruction = (Get-SISystemPromptForEngine -Engine $RunContext.Engine) + (Get-SIClassifyBatchInstruction)
+        $aiStore = if ($global:SI_ClassifyAnswerStore -is [hashtable]) { $global:SI_ClassifyAnswerStore }
+                   else { New-SIClassifyAnswerStore -Writer ('shard{0}' -f [int]$RunContext.ShardIndex) -Account $(if ($RunContext.StorageContext.Mode -ne 'Mock') { [string]$RunContext.StorageContext.AccountName } else { '' }) }
+        try { $aiCache = & $aiStore.Read $RunContext.Engine; if (-not ($aiCache -is [hashtable])) { $aiCache = @{} } }
+        catch { Write-Warning ('Classify: the AI answer cache could not be read ({0}) -- every asset for AI is asked this run' -f $_.Exception.Message); $aiCache = @{} }
+    }
+    function ConvertTo-SIClassifyVerdict {
+        param($V)
+        $h = @{}
+        if ($V -is [System.Collections.IDictionary]) { foreach ($k in $V.Keys) { $h[[string]$k] = $V[$k] } }
+        elseif ($V) { foreach ($p in $V.PSObject.Properties) { $h[$p.Name] = $p.Value } }
+        $h.Remove('AssetId')
+        $h
     }
 
     $classified = New-Object System.Collections.ArrayList
@@ -762,62 +721,21 @@ function Invoke-SIClassify {
                 SI_Tier_Proofs = @(@{ Source='Cheap-path'; ProofLabel='DisabledUser'; ProofWeight=80; Reason='Account disabled -- cannot sign in.' })
             }
         }
-        # dropped revalidated path. Cadence (Stage Collect) is
-        # the only skip mechanism; every record reaching Classify gets
-        # either the deterministic short-circuit (above) or a fresh AI call.
+        # OPENAI-CAP (owner 2026-11-21): an asset for AI is first looked up in the answer cache by the hash of its deciding
+        # fields (engine/asset-profiling/shared/SI-ClassifyAi.ps1); only a new or changed asset is queued, and the queue is
+        # asked in batches after this loop (25 a request). Its verdict is filled in there.
         elseif ($useAI) {
-            if (($aiSpent + $aiCostPerCall) -gt $aiBudget) {
-                $capped++
-                $status  = 'budget-capped'
-                $verdict = @{
-                    SI_Tier        = 2
-                    SI_ServiceType = 'Unknown'
-                    SI_ServiceName = $r.AssetId
-                    SI_Group       = 'unknown'
-                    SI_Tier_Proofs = @(@{ Source='Budget'; ProofLabel='budget-capped'; ProofWeight=0; Reason='AI spend cap reached for this run' })
-                }
+            $aiItem = Get-SIClassifyAiItem -Record $r -Engine $RunContext.Engine
+            $aiHash = Get-SIClassifyItemHash -Item $aiItem -Engine $RunContext.Engine -Instruction $aiInstruction
+            if ($aiCache.ContainsKey($aiHash) -and $aiCache[$aiHash].v) {
+                $reused++
+                $status  = 'ai-cached'
+                $verdict = ConvertTo-SIClassifyVerdict $aiCache[$aiHash].v
+                $aiUsed[$aiHash] = @{ v = $aiCache[$aiHash].v; at = [datetime]::UtcNow.ToString('o') }
             } else {
-                $hasExch = ($r.PostureHits | Where-Object { $_.Label -eq 'ServiceType=ExchangeServer' }).Count -gt 0
-                $hasDc   = ($r.PostureHits | Where-Object { $_.Label -eq 'ServiceType=DomainController' }).Count -gt 0
-
-                $payload = @{
-                    Engine       = $RunContext.Engine
-                    AssetId      = $r.AssetId
-                    Sources      = $r.Sources
-                    Hint         = $r.Hint
-                    Metadata     = $r.Metadata
-                    PostureHits  = $r.PostureHits
-                }
-                try {
-                    $verdict = Invoke-SIOpenAIClassify -AssetPayload $payload -Engine $RunContext.Engine
-                    # Coerce SI_Tier to int -- AI may return "T0" or 0 depending on prompt + temperature.
-                    $verdict.SI_Tier = ConvertTo-SITierInt $verdict.SI_Tier
-                    if ($null -eq $verdict.SI_Tier) { $verdict.SI_Tier = 2 }   # safety floor
-                    $aiCalls++
-                    $aiSpent += $aiCostPerCall
-                } catch {
-                    # Surface the AOAI response body -- 'Bad Request' alone hides the real
-                    # cause (token-limit overflow, content-filter trip, schema rejection).
-                    $msg  = $_.Exception.Message
-                    $body = if ($_.ErrorDetails -and $_.ErrorDetails.Message) { $_.ErrorDetails.Message } else { '' }
-                    Write-Warning ('Classify AI call failed for {0} -- {1}' -f $r.AssetId, $msg)
-                    if ($body) { Write-Warning ('  AOAI body: {0}' -f $body) }
-                    $errored++
-                    $status = 'error'
-                    # Cheap fallback so the row still ships
-                    $tier = if ($hasDc) { 0 } elseif ($hasExch) { 1 } else { 2 }
-                    # 'Unknown', never a guess: this used to say 'Workstation' for EVERY engine, so a failed AI call
-                    # labelled data collection rules, key vaults and domain controllers 'Workstation' (found live
-                    # 2026-10-10). The asset type itself now comes from the classification (SI-ProfileClassification.ps1).
-                    $svc  = if ($hasDc) { 'DomainController' } elseif ($hasExch) { 'ExchangeServer' } else { 'Unknown' }
-                    $verdict = @{
-                        SI_Tier        = $tier
-                        SI_ServiceType = $svc
-                        SI_ServiceName = $r.AssetId
-                        SI_Group       = 'fallback'
-                        SI_Tier_Proofs = $r.PostureHits
-                    }
-                }
+                $status  = 'ai-pending'
+                $verdict = $null
+                [void]$aiQueue.Add(@{ Index = $classified.Count; Item = $aiItem; Hash = $aiHash; Record = $r })
             }
         }
         elseif (-not $verdict) {
@@ -942,7 +860,7 @@ function Invoke-SIClassify {
         # writes are pure overhead + transcript noise from 400s on identity
         # rows with large role/permission JSON.
         # A dry run (#257) never writes the cache: it would make the next REAL run skip what this one saw.
-        if ($global:SI_FingerprintCache_Enabled -eq $true -and -not [bool]$RunContext.WhatIf) {
+        if ($global:SI_FingerprintCache_Enabled -eq $true -and -not [bool]$RunContext.WhatIf -and $null -ne $verdict) {
             try {
                 $verdictJson = $verdict | ConvertTo-Json -Compress -Depth 8
                 # Azure Tables string-property limit: 32,768 UTF-16 chars
@@ -979,6 +897,70 @@ function Invoke-SIClassify {
                 Write-Warning ('Fingerprint cache write failed for {0} -- {1} (continuing)' -f $r.AssetId, $msg)
             }
         }
+    }
+
+    # ---- OPENAI-CAP: the new / changed assets, asked in batches ---------------------------------------------------------
+    # One request per batch of up to 25 (Get-SIClassifyBatchSize). The run's spend cap (MaxAiSpendPerRun, per REQUEST now)
+    # and the install's daily token budget (Invoke-SIOpenAIChat) both stop it; what is not asked gets the same fallback
+    # verdicts as before ('budget-capped' / 'error'), never a guess. A request is sent at most twice
+    # (Get-SIOpenAIMaxAttempts), and never again after a 400 (Test-SIOpenAIRetryable).
+    $fallback = {
+        param($Rec, [string]$Why)
+        $hasExch = (@($Rec.PostureHits) | Where-Object { $_.Label -eq 'ServiceType=ExchangeServer' }).Count -gt 0
+        $hasDc   = (@($Rec.PostureHits) | Where-Object { $_.Label -eq 'ServiceType=DomainController' }).Count -gt 0
+        # 'Unknown', never a guess (2026-10-10: a failed AI call used to label every asset 'Workstation')
+        @{
+            SI_Tier        = $(if ($hasDc) { 0 } elseif ($hasExch) { 1 } else { 2 })
+            SI_ServiceType = $(if ($hasDc) { 'DomainController' } elseif ($hasExch) { 'ExchangeServer' } else { 'Unknown' })
+            SI_ServiceName = $Rec.AssetId
+            SI_Group       = 'fallback'
+            SI_Tier_Proofs = $(if ($Why -eq 'budget-capped') { @(@{ Source='Budget'; ProofLabel='budget-capped'; ProofWeight=0; Reason='AI spend cap reached for this run' }) } else { $Rec.PostureHits })
+        }
+    }
+    $setRow = { param($Q, $V, [string]$St) $row = $classified[$Q.Index]; $row.Verdict = $V; $row.SI_Classify_Status = $St }
+    if ($aiQueue.Count) {
+        $size = Get-SIClassifyBatchSize
+        $maxTry = if (Get-Command -Name Get-SIOpenAIMaxAttempts -ErrorAction SilentlyContinue) { Get-SIOpenAIMaxAttempts } else { 2 }
+        for ($b = 0; $b -lt $aiQueue.Count; $b += $size) {
+            $batch = @($aiQueue[$b..([Math]::Min($b + $size, $aiQueue.Count) - 1)])
+            if (($aiSpent + $aiCostPerCall) -gt $aiBudget) {
+                foreach ($q in $batch) { $capped++; & $setRow $q (& $fallback $q.Record 'budget-capped') 'budget-capped' }
+                continue
+            }
+            $answers = $null; $lastErr = $null
+            for ($try = 1; $try -le $maxTry -and $null -eq $answers; $try++) {
+                try {
+                    $answers = Invoke-SIOpenAIClassifyBatch -Items @($batch | ForEach-Object { $_.Item }) -Engine $RunContext.Engine -Instruction $aiInstruction
+                    $aiCalls++; $aiSpent += $aiCostPerCall
+                } catch {
+                    $lastErr = $_
+                    $retry = (Get-Command -Name Test-SIOpenAIRetryable -ErrorAction SilentlyContinue) -and (Test-SIOpenAIRetryable $_)
+                    if (-not $retry) { break }
+                }
+            }
+            if ($null -eq $answers) {
+                $msg = if ($lastErr) { $lastErr.Exception.Message } else { 'no answer' }
+                $body = if ($lastErr -and $lastErr.ErrorDetails -and $lastErr.ErrorDetails.Message) { $lastErr.ErrorDetails.Message } else { '' }
+                Write-Warning ('Classify AI request failed for {0} asset(s) ({1} ... ) -- {2}' -f $batch.Count, $batch[0].Record.AssetId, $msg)
+                if ($body) { Write-Warning ('  AOAI body: {0}' -f $(if ($body.Length -gt 500) { $body.Substring(0, 500) } else { $body })) }
+                foreach ($q in $batch) { $errored++; & $setRow $q (& $fallback $q.Record 'error') 'error' }
+                continue
+            }
+            foreach ($q in $batch) {
+                $a = $answers[[string]$q.Item.AssetId]
+                if (-not $a) { $errored++; & $setRow $q (& $fallback $q.Record 'error') 'error'; continue }
+                $v = ConvertTo-SIClassifyVerdict $a
+                $v.SI_Tier = ConvertTo-SITierInt $v.SI_Tier
+                if ($null -eq $v.SI_Tier) { $v.SI_Tier = 2 }   # safety floor
+                & $setRow $q $v 'ai'
+                $aiUsed[$q.Hash] = @{ v = $v; at = [datetime]::UtcNow.ToString('o') }
+            }
+        }
+    }
+    # the answers used or made in this run go back into the cache (a dry run never writes it: #257)
+    if ($useAI -and $aiStore -and -not [bool]$RunContext.WhatIf -and $aiUsed.Count) {
+        try { & $aiStore.Write $RunContext.Engine (Select-SIClassifyAnswersToKeep -Read $aiCache -Used $aiUsed) }
+        catch { Write-Warning ('Classify: the AI answer cache could not be saved ({0}) -- the next run asks these assets again' -f $_.Exception.Message) }
     }
 
     if ($classified.Count -gt 0) {

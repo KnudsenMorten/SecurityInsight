@@ -2698,7 +2698,10 @@ function Get-SIInstallStepTable {
         if ($existing) { return (New-SIInstallResult -State $state -Message ('Using the existing resource group {0}.{1}' -f $n.ResourceGroup, $note)) }
         $tenantTag = [string]$v['tenantId']
         try { $tn = Invoke-SIInstallAz -Ctx $ctx -Command 'Get-SITenant' -Arguments ([ordered]@{ TenantId = [string]$v['tenantId']; ErrorAction = 'Stop' }); if ("$(Get-SIInstallProp $tn 'DefaultDomain')".Trim()) { $tenantTag = [string](Get-SIInstallProp $tn 'DefaultDomain') } } catch { }
-        $tags = Get-SIResourceGroupTags -Ring 'prod' -Edition $ctx.Edition -Hosting 'ca' -Tenant $tenantTag -Owner ([string]$v['owner'])
+        # framework NAM-01 (Invardia's check 2026-11-20: a new install's resource group had an empty "owner" tag): the owner the
+        # customer gives, else the PERSON who signed in for the install (never an app's id, never a name baked into code)
+        $ownerTag = Get-SIInstallOwnerTag -Given ([string]$v['owner']) -Account ([string]$ctx.Facts['account']) -AccountType ([string]$ctx.Facts['accountType'])
+        $tags = Get-SIResourceGroupTags -Ring 'prod' -Edition $ctx.Edition -Hosting 'ca' -Tenant $tenantTag -Owner $ownerTag
         try {
             $null = Invoke-SIInstallAz -Ctx $ctx -Command 'New-SIAzResourceGroup' -Arguments ([ordered]@{ Name = $n.ResourceGroup; Location = [string]$v['location']; Tag = (ConvertTo-SIAzTagHashtable -Tags $tags); ErrorAction = 'Stop' })
         } catch {

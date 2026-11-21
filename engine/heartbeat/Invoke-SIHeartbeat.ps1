@@ -71,10 +71,15 @@ if ([string]$global:SI_ProSqlServer -and [string]$global:SI_ProSqlDatabase) {
     } catch { $dataInvoke = $null }
 }
 
-$r = Send-SIHeartbeatTick -RunStore $runStore -DataInvoke $dataInvoke -ClaimInvoke $proInvoke
+# Invardia 2026-11-20 (OPEN-01): THE EXTRA HEARTBEAT -- the support grant job started this execution right after a grant opened
+# or closed (SI_HEARTBEAT_EXTRA = support-access): the heartbeat goes at once, outside the half hour's claim, so the change of
+# SupportAccess lands within a minute. Nothing else of the tick runs in it (the regular ticks keep their own schedule).
+$extra = ("$([Environment]::GetEnvironmentVariable('SI_HEARTBEAT_EXTRA'))".Trim().ToLowerInvariant() -eq 'support-access')
+$r = Send-SIHeartbeatTick -RunStore $runStore -DataInvoke $dataInvoke -ClaimInvoke $proInvoke -Extra:$extra
 # ONE plain line per tick (live 2026-10-16: a tick that sent nothing must never be silent): what happened, the endpoint's
 # host, the mode, Invardia's answer or the error, and which optional fields rode along (Get-SIHeartbeatTickLine)
 & $say $(if ($r.Status -in @('failed', 'error')) { 'WARN' } else { 'INFO' }) ('Invardia support link: {0}' -f $(if ("$($r.Reason)".StartsWith("$($r.Status)")) { $r.Reason } else { '{0} -- {1}' -f $r.Status, $r.Reason }))
+if ($extra) { exit 0 }
 
 # #1021 THE SUPPORT GRANT SWEEP -- on EVERY tick: a just-in-time grant of the Invardia Support app that is past its maxUntil is
 # revoked (the signed procedure cfg.SupportGrantSweep removes only what an EXPIRED grant added; never the read-only access).
@@ -86,6 +91,12 @@ try {
         if ($sgDbs.Count) {
             $sg = Invoke-SISupportGrantSweep -Databases $sgDbs -By 'caj-si-heartbeat'
             foreach ($l in @($sg.Lines)) { & $say $(if ($l -match 'failed|WARNING') { 'WARN' } else { 'INFO' }) ('support access: {0}' -f $l) }
+            # Invardia 2026-11-20: an expired grant was revoked just now -- the new SupportAccess goes at once (one extra
+            # heartbeat in this execution, outside the half hour's claim), not with the next half hour's
+            if ([int]$sg.Closed -gt 0) {
+                $rx = Send-SIHeartbeatTick -RunStore $runStore -DataInvoke $dataInvoke -ClaimInvoke $proInvoke -Extra
+                & $say $(if ($rx.Status -in @('failed', 'error')) { 'WARN' } else { 'INFO' }) ('Invardia support link (support access changed): {0}' -f $(if ("$($rx.Reason)".StartsWith("$($rx.Status)")) { $rx.Reason } else { '{0} -- {1}' -f $rx.Status, $rx.Reason }))
+            }
         }
     }
 } catch { & $say 'INFO' ('support access: the expired-grant sweep could not run ({0})' -f $_.Exception.Message) }

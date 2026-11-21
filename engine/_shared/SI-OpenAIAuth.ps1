@@ -304,6 +304,10 @@ function Invoke-SIOpenAIChat {
     if (-not (Get-Command -Name Test-SIOpenAIEndpoint -ErrorAction SilentlyContinue)) { . (Join-Path (Split-Path -Parent $PSScriptRoot) 'asset-profiling/shared/Test-SIAIEnabled.ps1') }
     $why = Test-SIOpenAIEndpoint -Endpoint $Uri
     if ($why) { throw ('Azure OpenAI is not called, no credential is sent: {0}' -f $why) }
+    # OPENAI-CAP (owner 2026-11-21): the install's daily token budget is asked FIRST -- at the budget nothing is sent
+    # (engine/_shared/SI-AiBudget.ps1: one warning, one alert, AI starts again the next UTC day)
+    if (-not (Get-Command -Name Test-SIAiBudgetOpen -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot 'SI-AiBudget.ps1') }
+    if (-not (Test-SIAiBudgetOpen)) { throw (Get-SIAiBudgetRefusedText) }
     $auth = Get-SIOpenAIAuthHeader
     if ($auth.Mode -eq 'None') { throw $auth.Reason }
     # #1269: what this run already learned about the deployment's parameters, applied before the first send
@@ -315,7 +319,8 @@ function Invoke-SIOpenAIChat {
         foreach ($k in @($auth.Headers.Keys)) { $h[$k] = $auth.Headers[$k] }
         $p = @{ Method = 'Post'; Uri = $Uri; Headers = $h; Body = $send; ErrorAction = 'Stop' }
         if ($TimeoutSec -gt 0) { $p['TimeoutSec'] = $TimeoutSec }
-        try { return (Invoke-RestMethod @p) }
+        $resp = $null
+        try { $resp = Invoke-RestMethod @p }
         catch {
             $code = Get-SIOpenAIErrorStatus $_
             if ($auth.Mode -eq 'ManagedIdentity' -and (Test-SIOpenAIAuthRefused -StatusCode $code)) {
@@ -336,5 +341,29 @@ function Invoke-SIOpenAIChat {
             }
             throw
         }
+        # OPENAI-CAP: what this answer cost counts against today's budget
+        Add-SIAiBudgetUsage -Tokens (Get-SIAiResponseTokens -Response $resp -Body $send)
+        return $resp
     }
+}
+
+function Test-SIOpenAIRetryable {
+    <#
+        PURE. OPENAI-CAP (owner 2026-11-21): may a caller send the SAME request again after this failure? Only a 408 / 429 /
+        5xx or no answer at all (a network failure); never a 400 (a bug in the request: logged and skipped), never an
+        auth refusal, never the daily limit. Callers make at most 2 attempts (Get-SIOpenAIMaxAttempts).
+    #>
+    param($ErrorRecord)
+    $msg = ''
+    try { $msg = [string]$ErrorRecord.Exception.Message } catch { }
+    if ($msg -match '^AI daily limit reached') { return $false }
+    $code = 0
+    try { $code = [int](Get-SIOpenAIErrorStatus $ErrorRecord) } catch { $code = 0 }
+    if ($code -eq 0) { return ($msg -notmatch 'could not run|is not called') }
+    return ($code -in 408, 429 -or $code -ge 500)
+}
+
+function Get-SIOpenAIMaxAttempts {
+    <# PURE. OPENAI-CAP: the most sends of one AI request by any caller (the first + one retry). #>
+    2
 }

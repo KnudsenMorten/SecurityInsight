@@ -4,6 +4,13 @@ Every identity SecurityInsight creates or uses, every permission it holds, and w
 and no identity is shared between components with different jobs. No identity holds a secret or a certificate: each
 runtime component signs in with its own managed identity.
 
+Each identity holds exactly the rights its job needs. The rights normal operation needs are given at install and read
+back. The update removes a right an identity no longer uses, and reads that back too. A few rare, powerful rights are
+never held: when a rare change needs one, your support partner gives it on demand for that change only (see [Rights
+given only on demand](#rights-given-only-on-demand)). Settings are changed only through the update: a support partner
+sets a value on the update job, and the update applies it, reads it back and records it in the change log, never by a
+direct database change.
+
 The engines check their own permissions at the start of every run. A missing permission is shown in *Get Started >
 Permissions* and on the run's health record with the command that fixes it; the rest of the run goes on.
 
@@ -15,7 +22,7 @@ Permissions* and on the run's health record with the command that fixes it; the 
 |---|---|---|---|
 | `id-si-engine` | User-assigned managed identity | Every engine job: collection, correlation, Risk Analysis, data sync, connectors, verification, data health, the pipeline | As long as the install |
 | `id-si-web` | User-assigned managed identity | The web app: reads the database, writes the decisions people make, starts named jobs | As long as the install |
-| `id-si-mcp` | User-assigned managed identity | The MCP server: read-only answers to MCP clients | As long as the install |
+| `id-si-mcp` | User-assigned managed identity | The MCP server: read-only answers to MCP clients. On a new installation the MCP server is closed to the internet and answers only inside the installation. | As long as the install |
 | `id-si-updater` | User-assigned managed identity | The updater: licence, signed releases, image build, database schema, rolling the jobs | As long as the install |
 | `id-si-tagging` | User-assigned managed identity | Asset tagging, only when you opt in | Until you remove asset tagging |
 | *SecurityInsight* | Entra app registration (sign-in) | Users' sign-in to the web app and bearer tokens for the MCP server. No secret, no certificate: the web app's identity is its federated credential. No assignment required: SecurityInsight decides who has access, on its *Access* page. | As long as the install |
@@ -72,6 +79,7 @@ the names an existing install shows.
 | AcrPull | SecurityInsight's container registry | Pull its image (no registry password) |
 | Key Vault Secrets User | SecurityInsight's Key Vault | Read the licence and the keys of the features you switched on |
 | Container Apps Jobs Contributor | The install's resource group | The pipeline starts its steps and gives a job the longest run limit when it was stopped at its limit |
+| Cognitive Services OpenAI User (optional) | Your Azure OpenAI resource, only when AI is switched on | The AI summary, AI classification and AI privilege tiers sign in to Azure OpenAI with this identity, so no key is needed. You or your support partner give this role; SecurityInsight never gives it to itself. Each update checks it and says plainly when it is missing. |
 
 ### Other
 
@@ -86,9 +94,10 @@ the names an existing install shows.
 |---|---|---|
 | Container registry | AcrPull | Pull its image |
 | Log Analytics workspace | Log Analytics Reader | The Jobs page reads the jobs' console logs |
-| The named SecurityInsight jobs | Container Apps Jobs Operator | Start a job (*Run now*). It cannot change a job, its image or its schedule. |
+| The install's resource group | Container Apps Jobs Reader | The Jobs page lists the jobs and their runs. It holds no right to start, stop or change a job: *Run now* on the pipeline, a stage or a step is a request the pipeline takes up. |
+| SecurityInsight's storage account, its sign-in token container only | Storage Blob Data Contributor | Microsoft's built-in sign-in keeps its sign-in tokens there |
 | SecurityInsight database | The role `si_web` | Read the views; write only the tables people's decisions go to. See [SQL access](sql-access). |
-| Azure OpenAI resource (optional) | Cognitive Services OpenAI User | The chat, when AI is switched on |
+| Azure OpenAI resource (optional) | Cognitive Services OpenAI User | The web chat signs in to Azure OpenAI with this identity when AI is switched on, so no key is needed. You or your support partner give this role; SecurityInsight never gives it to itself. |
 | Key Vault (optional) | Key Vault Secrets User | The magic-link signing key, only when magic links are on |
 | Microsoft Graph (granted by the guided install) | User.ReadBasic.All, GroupMember.Read.All, Application.Read.All, all read only | The names of people and groups on the *Access* page; finding a person or group by name when you add access; a person's groups when their sign-in token lists too many; who holds a role on the SecurityInsight application. When the person installing may not grant them, the install says so and finding people by name stays off until an Entra administrator runs `Grant-SIIdentity -WebApp`. |
 
@@ -111,7 +120,22 @@ secret you paste is handed encrypted to the updater, which stores it in the Key 
 | Key Vault | Key Vault Secrets Officer | Keep the licence, the install key and the update state |
 | Key Vault | Key Vault Crypto Officer | The key the web app's secret hand-over is encrypted with (it never leaves the vault) |
 | SecurityInsight database | The role `si_updater`: DDL to apply a release's schema, and EXECUTE on the signed grant procedure | Apply the release's database changes without any admin. See [SQL access](sql-access). |
-| Microsoft Graph (application permissions, granted by setup) | GroupMember.Read.All, Application.Read.All | Read whether the database setup job is still a member of SecurityInsight's SQL admin group (role-assignable). Read only: the updater never changes that membership. The guided install sets it, and the support partner restores it through the Support app if it is missing. Never RoleManagement.ReadWrite.Directory, and no longer the PIM-for-Groups permissions or the group's PIM policy read (an update takes them off). |
+| The install's resource group | Role Based Access Control Administrator | Give the rights SecurityInsight's own identities need inside the resource group, and remove the ones they no longer use. Your support partner gives this role through the Invardia Support app; until then, a right the update cannot give is said as a support step. |
+| Microsoft Graph (application permissions, granted by setup) | GroupMember.Read.All, Application.Read.All, Directory.Read.All | Read whether the database setup job is still a member of SecurityInsight's SQL admin group (role-assignable), read the sign-in app, and read the tenant's size for the database tier. Read only: the updater never changes that membership. The guided install sets it, and the support partner restores it through the Support app if it is missing. Never RoleManagement.ReadWrite.Directory, and no longer the PIM-for-Groups permissions or the group's PIM policy read (an update takes them off). |
+| Microsoft Graph (application permission, granted by setup) and the sign-in app registration | Application.ReadWrite.OwnedBy, as an owner of the sign-in app only | Keep the sign-in app's redirect addresses and its sign-in settings current. It reaches only the app it owns, and the updater can never give this right to itself. |
+
+### Rights given only on demand
+
+The updater does not hold these rights. A rare change needs one of them; when the update meets that change, it says
+which step your support partner (through the Invardia Support app) or you take, and nothing fails.
+
+| Right | The rare change it is for |
+|---|---|
+| Reader on the subscription or a management group | Find a resource outside the install's resource group, for example when an identity is moved to its new name |
+| Microsoft Graph AppRoleAssignment.ReadWrite.All | Copy the read-only application permissions to an identity's new name |
+| Microsoft Graph Group.ReadWrite.All | Rename SecurityInsight's SQL admin group |
+| Microsoft Graph DelegatedPermissionGrant.ReadWrite.All | Consent, for your organisation, to the sign-in app's own scope |
+| Owner of the sign-in app's enterprise application | Change whether the sign-in app requires an assignment |
 
 ## Asset tagging's identity (opt-in)
 

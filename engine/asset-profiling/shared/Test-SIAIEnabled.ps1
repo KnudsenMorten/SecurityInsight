@@ -29,6 +29,19 @@
 # #1257: the AI sign-in (the engine's identity first, the key only as the fallback) -- every AI caller loads this file
 if (-not (Get-Command -Name Invoke-SIOpenAIChat -ErrorAction SilentlyContinue)) { . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) '_shared/SI-OpenAIAuth.ps1') }
 
+function Test-SIAIMasterSwitchOff {
+    <# PURE. $true when the tenant-wide AI switch is set OFF (SI_EnableAI = false, as a bool or as the text "false" / "0").
+       #1304 (Invardia 2026-11-21): AI switched off WINS over every other AI switch -- every SI_EnableAI_<engine>, the
+       report-mail AI summary (BuildSummaryByAI) and the tier classifier's RunAI. Not set ($null / empty) is not "off":
+       a per-engine opt-in still decides then. #>
+    param([AllowNull()]$Value = $global:SI_EnableAI)
+    if ($null -eq $Value) { return $false }
+    if ($Value -is [bool]) { return (-not $Value) }
+    $t = "$Value".Trim().Trim('"').Trim()
+    if (-not $t) { return $false }
+    return ($t -match '^(?i:false|0|no|off)$')
+}
+
 function Test-SIAIEnabled {
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$Engine)
@@ -54,6 +67,9 @@ function Test-SIAIEnabled {
     if ([bool](Get-Variable -Name $disablePerEngine -ValueOnly -Scope Global -ErrorAction SilentlyContinue)) {
         return $false
     }
+
+    # #1304: AI switched off for the whole install wins over a per-engine opt-in (SI_EnableAI_<engine> = true)
+    if (Test-SIAIMasterSwitchOff) { return $false }
 
     # Opt-in: tenant-wide OR per-engine.
     $enablePerEngine = "SI_EnableAI_$Engine"

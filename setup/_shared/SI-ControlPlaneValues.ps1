@@ -78,7 +78,26 @@
 function Get-SIControlPlaneSettingAllowList {
     <# PURE. THE settings an operator may set through SI_UPDATER_SETTINGS on the updater job. A constant: a setting is added
        here in code (with its reason in SI REQUIREMENTS #1270), never by configuration. #>
-    @('OpenAI_endpoint', 'OpenAI_deployment', 'OpenAI_apiVersion', 'SI_EnableAI')
+    @('OpenAI_endpoint', 'OpenAI_deployment', 'OpenAI_apiVersion', 'SI_EnableAI') + @(Get-SIControlPlaneOffOnlyList)
+}
+
+function Get-SIControlPlaneOffOnlyList {
+    <# PURE. #1304 (Invardia 2026-11-21): the AI switches the update may switch OFF through SI_UPDATER_SETTINGS -- never on.
+       A value other than false is refused. Each is written false at EVERY scope where a stored row is not false (a
+       per-engine switch lives at scope 'engine:<name>'); no row at all = already off (the default), nothing written. So
+       the fleet is cleaned without an ops SQL write (#1270). A constant, changed in code only. #>
+    @('BuildSummaryByAI', 'SI_EnableAI_azure', 'SI_EnableAI_endpoint', 'SI_EnableAI_identity', 'SI_PrivilegeTierClassifier_RunAI')
+}
+
+function Read-SIControlPlaneSettingRows {
+    <# Every stored row of one setting, any scope: @{ Scope; ValueJson } each. Throws on a SQL error. #>
+    param([Parameter(Mandatory)]$Store, [Parameter(Mandatory)][string]$Name)
+    foreach ($r in @(& $Store.Invoke "SET NOCOUNT ON; SELECT Scope, ValueJson FROM cfg.Setting WHERE Name = @Name;" ([ordered]@{ Name = $Name }) 'reader' | ForEach-Object { $_ })) {
+        if (-not $r) { continue }
+        $s = if ($r -is [System.Collections.IDictionary]) { $r['Scope'] } else { $r.Scope }
+        $v = if ($r -is [System.Collections.IDictionary]) { $r['ValueJson'] } else { $r.ValueJson }
+        [pscustomobject]@{ Scope = [string]$s; ValueJson = $(if ($null -eq $v -or $v -is [System.DBNull]) { $null } else { [string]$v }) }
+    }
 }
 
 function Get-SIControlPlaneNames {
@@ -158,7 +177,10 @@ function ConvertFrom-SIControlPlaneSettings {
         }
         $why = Test-SISettingValue -Setting $s -Value $value
         if ($why) { $refused.Add(('{0}: {1} {2}; not applied' -f $n.Settings, $canon, $why)); continue }
-        $items.Add([pscustomobject]@{ Name = $canon; Value = $value; Json = (ConvertTo-SIJsonText $value) })
+        # #1304: an AI switch may only be switched OFF this way
+        $offOnly = @(@(Get-SIControlPlaneOffOnlyList) | Where-Object { $_ -ieq $canon }).Count -gt 0
+        if ($offOnly -and -not ($value -is [bool] -and -not $value)) { $refused.Add(('{0}: {1} may only be switched off this way (false), never on; not applied' -f $n.Settings, $canon)); continue }
+        $items.Add([pscustomobject]@{ Name = $canon; Value = $value; Json = (ConvertTo-SIJsonText $value); OffOnly = $offOnly })
     }
     & $out
 }
@@ -231,6 +253,25 @@ function Invoke-SIControlPlaneSettings {
     foreach ($r in @($plan.Refused)) { $lines.Add('WARNING: control-plane value: ' + $r) }
     $applied = New-Object System.Collections.Generic.List[string]; $already = New-Object System.Collections.Generic.List[string]; $failed = New-Object System.Collections.Generic.List[string]
     foreach ($it in @($plan.Items)) {
+        if ($it.OffOnly) {
+            # #1304: switched off at every scope that holds it on; no row = off by default
+            try {
+                $on = @(Read-SIControlPlaneSettingRows -Store $Store -Name $it.Name | Where-Object { $null -eq $_.ValueJson -or (ConvertTo-SIControlPlaneJsonKey $_.ValueJson) -cne $it.Json })
+                if (-not $on.Count) { $already.Add($it.Name); $lines.Add(('control-plane value: {0} is already off at every scope -- nothing written' -f $it.Name)); continue }
+                $bad = @()
+                foreach ($row in $on) {
+                    $null = Set-SIProSetting -Store $Store -Catalog $Catalog -Name $it.Name -Scope $row.Scope -Action Set -Value $it.Value -ChangedBy $n.ChangedBy -Reason $Reason
+                    $back = @(Read-SIControlPlaneSettingRows -Store $Store -Name $it.Name | Where-Object { $_.Scope -eq $row.Scope })[0]
+                    if ($back -and (ConvertTo-SIControlPlaneJsonKey $back.ValueJson) -ceq $it.Json) {
+                        $lines.Add(('control-plane value: {0} [{1}] {2} -> {3} (from {4}; read back, in the change log)' -f $it.Name, $row.Scope, $row.ValueJson, $it.Json, $n.Settings))
+                    } else { $bad += $row.Scope; $lines.Add(('WARNING: control-plane value: {0} [{1}] was written but does not read back as {2} -- the next update tries again' -f $it.Name, $row.Scope, $it.Json)) }
+                }
+                if ($bad.Count) { $failed.Add($it.Name) } else { $applied.Add($it.Name) }
+            } catch {
+                $failed.Add($it.Name); $lines.Add(('WARNING: control-plane value: {0} not applied ({1}) -- the next update tries again' -f $it.Name, (([string]$_.Exception.Message) -split "`n")[0]))
+            }
+            continue
+        }
         try {
             $before = Read-SIControlPlaneSetting -Store $Store -Name $it.Name -Scope $n.Scope
             if ($null -ne $before -and (ConvertTo-SIControlPlaneJsonKey $before) -ceq $it.Json) {

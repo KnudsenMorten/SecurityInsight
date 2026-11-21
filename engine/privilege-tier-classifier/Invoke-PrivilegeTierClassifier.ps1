@@ -851,8 +851,10 @@ function Invoke-AISingleChunk {
             [PSCustomObject]@{ Name = $_.Name; Tier = 99; Reason = 'Not in the downloaded catalog; building with AI is not chosen.'; Unresolved = $true }
         }
     }
-    if ($global:SI_PrivilegeTierClassifier_RunAI -eq $false) {
-        Write-Log "[$label] AI is turned off (SI_PrivilegeTierClassifier_RunAI = `$false) -- nothing sent; known tiers are kept from the previous catalog." "INFO"
+    # #1304: AI switched off for the whole install (SI_EnableAI = false) wins over this engine's own switch too
+    $ptcAiOffAll = ("$($global:SI_EnableAI)".Trim().Trim('"') -match '^(?i:false|0|no|off)$')
+    if ($global:SI_PrivilegeTierClassifier_RunAI -eq $false -or $ptcAiOffAll) {
+        Write-Log ("[$label] AI is turned off ({0}) -- nothing sent; known tiers are kept from the previous catalog." -f $(if ($ptcAiOffAll) { 'SI_EnableAI = false' } else { 'SI_PrivilegeTierClassifier_RunAI = false' })) "INFO"
         return $Chunk | ForEach-Object {
             [PSCustomObject]@{ Name = $_.Name; Tier = 99; Reason = 'AI turned off for this engine. Manual review required.'; Unresolved = $true }
         }

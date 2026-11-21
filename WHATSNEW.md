@@ -1,5 +1,19 @@
 # What's new in SecurityInsight
 
+## 3.1.43 · 2026-11-21 · Fix-only
+
+AI switched off is off everywhere, and a run never fails because the AI connection is missing.
+
+### New features
+
+None in this version.
+
+### Fixes
+
+- **AI off wins over every AI switch** - With AI switched off for your installation, no engine, no AI summary and no tier catalog build uses AI, whatever their own switches say.
+- **No failed run without an AI connection** - When the AI summary is on but the Azure OpenAI connection is not set, the run says so once and builds the Top 50 lists without the summary.
+- **Support can switch AI off** - Support can switch the AI summary and each engine's AI switch off for your installation through the nightly update, never on.
+
 ## 3.1.42 · 2026-11-21 · Feature update
 
 The attack-path reports to Azure complete at the largest installations: every part is answered from the graph stored once per run.

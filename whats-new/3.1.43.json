@@ -1,0 +1,21 @@
+{
+  "version": "3.1.43",
+  "date": "2026-11-21",
+  "type": "fix-only",
+  "summary": "AI switched off is off everywhere, and a run never fails because the AI connection is missing.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "AI off wins over every AI switch",
+      "text": "With AI switched off for your installation, no engine, no AI summary and no tier catalog build uses AI, whatever their own switches say."
+    },
+    {
+      "title": "No failed run without an AI connection",
+      "text": "When the AI summary is on but the Azure OpenAI connection is not set, the run says so once and builds the Top 50 lists without the summary."
+    },
+    {
+      "title": "Support can switch AI off",
+      "text": "Support can switch the AI summary and each engine's AI switch off for your installation through the nightly update, never on."
+    }
+  ]
+}

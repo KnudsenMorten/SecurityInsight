@@ -295,3 +295,34 @@ function Test-RAAISummaryShouldAdopt {
     }
     return [pscustomobject]@{ Adopt = $true; Reason = ("adopting the leader's ({0}) snapshot, {1:N1}h old" -f $LeaderGrain, $ageHours) }
 }
+
+function Get-RAAISummaryGate {
+    <#
+        PURE. #1304 (SUP-2026-00667, Invardia 2026-11-21): may this run build the report-mail AI summary, and if not, why?
+        Returns @{ Build ($true = the AI configuration and the AI call follow); Level ('' | 'info' | 'warn'); Why (one line
+        for the log, '' when Build) }. Never throws: every "no" means the top lists are built without AI and the run goes on.
+
+          the summary is off (BuildSummaryByAI false)          -> no, silently (the top lists' own line says it)
+          AI switched off for the install (SI_EnableAI = false) -> no, INFO: AI off wins over the summary's own switch
+          an explicit AI_Uri                                    -> yes (the caller passed the whole address)
+          no endpoint / no deployment / no API version          -> no, WARNING naming what is missing
+                                                                  (a complete run used to END FAILED here, after its reports)
+
+        -MasterOff: Test-SIAIMasterSwitchOff of the run. -ApiVersion: OpenAI_apiVersion, else the engines' one default.
+    #>
+    param([bool]$BuildSummaryByAI, [bool]$MasterOff,
+          [AllowNull()][AllowEmptyString()][string]$AiUri,
+          [AllowNull()][AllowEmptyString()][string]$Endpoint,
+          [AllowNull()][AllowEmptyString()][string]$Deployment,
+          [AllowNull()][AllowEmptyString()][string]$ApiVersion)
+    $no = { param($lvl, $why) [pscustomobject]@{ Build = $false; Level = $lvl; Why = $why } }
+    if (-not $BuildSummaryByAI) { return (& $no '' '') }
+    if ($MasterOff) { return (& $no 'info' 'The AI summary is not built: AI is switched off for this installation (SI_EnableAI), which wins over the AI summary setting -- the Top 50 lists are built without it.') }
+    if (-not [string]::IsNullOrWhiteSpace($AiUri)) { return [pscustomobject]@{ Build = $true; Level = ''; Why = '' } }
+    $missing = @()
+    if ([string]::IsNullOrWhiteSpace($Endpoint))   { $missing += 'OpenAI_endpoint' }
+    if ([string]::IsNullOrWhiteSpace($Deployment)) { $missing += 'OpenAI_deployment' }
+    if ([string]::IsNullOrWhiteSpace($ApiVersion)) { $missing += 'OpenAI_apiVersion' }
+    if ($missing.Count) { return (& $no 'warn' ('[AI] the AI summary is not built: the Azure OpenAI connection is not set ({0} missing) -- the Top 50 lists are built without it and the run goes on.' -f ($missing -join ', '))) }
+    [pscustomobject]@{ Build = $true; Level = ''; Why = '' }
+}

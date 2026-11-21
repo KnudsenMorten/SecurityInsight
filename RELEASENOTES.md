@@ -13,6 +13,16 @@ SecurityInsight Pro and the Pro trial install from invardia.com, never from GitH
 [invardia.com/trial](https://invardia.com/trial/), and your installation page there gives your two lines.
 <!-- /install lines -->
 
+## v3.1.43 — AI switched off is off everywhere, and a run never fails because the AI connection is missing
+
+### Fixes
+- **AI off wins over every AI switch.** With AI switched off for your installation, no engine, no AI summary and no tier
+  catalog build uses AI, whatever their own switches say.
+- **No failed run without an AI connection.** When the AI summary is on but the Azure OpenAI connection is not set, the
+  run says so once and builds the Top 50 lists without the summary. Before, a complete Risk Analysis run ended failed.
+- **Support can switch AI off.** Support can switch the AI summary and each engine's AI switch off for your installation
+  through the nightly update, never on.
+
 ## v3.1.42 — the attack-path reports to Azure complete at the largest installations
 
 ### New

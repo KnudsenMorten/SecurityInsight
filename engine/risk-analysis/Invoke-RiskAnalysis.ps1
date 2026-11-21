@@ -7720,6 +7720,21 @@ $cachedSummaryUsed = $false
 $script:RAKpiFromAiPass = $null
 # The Azure OpenAI key goes ONLY to an Azure OpenAI host over https (Test-SIOpenAIEndpoint): another endpoint is not used --
 # said once, the summary is built without AI (the top lists), the run goes on.
+# #1304 (SUP-2026-00667): AI switched off for the install wins over the AI summary setting, and a missing endpoint /
+# deployment / API version is one line and the top lists alone -- never a throw at the end of a complete run.
+if (-not $script:_RATopListsOnly) {
+    if (-not (Get-Command -Name Test-SIAIMasterSwitchOff -ErrorAction SilentlyContinue)) { . (Join-Path (Split-Path -Parent $PSScriptRoot) 'asset-profiling/shared/Test-SIAIEnabled.ps1') }
+    $__aiApiVer = [string]$global:OpenAI_apiVersion
+    if ([string]::IsNullOrWhiteSpace($__aiApiVer) -and (Get-Command -Name Get-SIOpenAIApiVersion -ErrorAction SilentlyContinue)) { $__aiApiVer = [string](Get-SIOpenAIApiVersion) }
+    $__aiGate = Get-RAAISummaryGate -BuildSummaryByAI ([bool]$global:BuildSummaryByAI) -MasterOff (Test-SIAIMasterSwitchOff) `
+        -AiUri ([string]$global:AI_Uri) -Endpoint ([string]$global:OpenAI_endpoint) `
+        -Deployment $(if (-not [string]::IsNullOrWhiteSpace([string]$global:OpenAI_deployment)) { [string]$global:OpenAI_deployment } else { [string]$global:AI_deployment }) `
+        -ApiVersion $__aiApiVer
+    if (-not $__aiGate.Build) {
+        if ($__aiGate.Level -eq 'warn') { Write-Warning $__aiGate.Why } elseif ($__aiGate.Why) { Write-Info $__aiGate.Why }
+        $script:_RATopListsOnly = $true
+    }
+}
 if (-not $script:_RATopListsOnly) {
     if (-not (Get-Command -Name Test-SIOpenAIEndpoint -ErrorAction SilentlyContinue)) { . (Join-Path (Split-Path -Parent $PSScriptRoot) 'asset-profiling/shared/Test-SIAIEnabled.ps1') }
     $__aiTarget = if (-not [string]::IsNullOrWhiteSpace($global:AI_Uri)) { [string]$global:AI_Uri } else { [string]$global:OpenAI_endpoint }
@@ -9348,7 +9363,7 @@ try {
         $__ev = New-RAExecViewSnapshot -Grain $__evGrain -ReportTemplate ([string]$global:ReportTemplate) -Tenant $__evTenant `
             -GeneratedAtUtc ([datetime]::UtcNow) -CollectionTime $global:RA_CollectionTime -SolutionVersion ([string]$global:RA_SolutionVersion) `
             -Mode $__evMode -Leader $__evLeader -MaxAgeHours $__evMax -FiguresFromTemplate $__evFrom -FiguresGeneratedAt $__evFromAt `
-            -Kpi $global:RA_KPI -AISummaryEnabled ([bool]$global:BuildSummaryByAI) -AISummaryText ([string]$global:AI_SummaryText) `
+            -Kpi $global:RA_KPI -AISummaryEnabled ([bool]$global:BuildSummaryByAI -and -not $script:_RATopListsOnly) -AISummaryText ([string]$global:AI_SummaryText) `
             -TopAssets @($script:_RAExecTopAssets) -TopFindings @($script:_RAExecTopFindings)
         $__evJson = $__ev | ConvertTo-Json -Depth 8 -Compress
         $__evBlob = Get-RAExecViewBlobName -Grain $__evGrain -Top50BlobName ([string]$global:SI_RATop50_BlobName)
@@ -9532,7 +9547,7 @@ if ([bool]$global:Report_SendMail -eq $true) {
     # the mail says so, and that the results are in the web app (Invoke-RAWorkbookStep).
     if (-not [string]::IsNullOrWhiteSpace([string]$script:RAWorkbookMailNote)) { $_attachNotice = [string]$script:RAWorkbookMailNote + $_attachNotice }
 
-    $aiEnabled = [bool]$global:BuildSummaryByAI
+    $aiEnabled = [bool]$global:BuildSummaryByAI -and -not $script:_RATopListsOnly   # #1304: not built this run = not in the mail
 
     # ----- minimal markdown -> HTML for the AI section -----
     # Handles the subset the AI prompt produces:

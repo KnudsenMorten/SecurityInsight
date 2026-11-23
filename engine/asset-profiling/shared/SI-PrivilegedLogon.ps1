@@ -71,6 +71,8 @@
     PowerShell 7, REST only, no modules. PURE except the default -Query / -PrivilegedIdentities / store.
 #>
 
+# the storage wrappers (Get-SIAzStorageBlob ... for the cache blob) are plain REST -- loaded here, so this file works however it is loaded
+if (-not (Get-Command -Name Invoke-SIArm -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot '../../_shared/SI-AzRest.ps1') }
 if (-not (Get-Command -Name Invoke-SIHuntingQueryResult -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot 'HuntingQuery.ps1') }
 
 $script:SIPrivilegedLogonDefaultTypes = @('Interactive', 'RemoteInteractive', 'CachedInteractive', 'CachedRemoteInteractive', 'Unlock', 'CachedUnlock')

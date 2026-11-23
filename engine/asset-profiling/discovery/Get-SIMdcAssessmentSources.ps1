@@ -175,23 +175,59 @@ function Merge-SIMdcAssessmentRows {
 function Read-SIMdcArmPages {
     <# One ARM list read to its end (nextLink). -Get { param([string]$Uri) } -> the parsed page (value, nextLink); throws on an
        HTTP failure. Returns @{ Items; Pages }. Throws when a page fails -- the caller decides what that means. #>
-    param([Parameter(Mandatory)][string]$Uri, [Parameter(Mandatory)][scriptblock]$Get)
+    # AZHANG-1: -TimeoutMinutes stops the read (throws) once it has taken that long (0 = none); -OnPage { param($Pages, $Items) }
+    # is told after every page (the caller's progress line). A page that hands back only items already read (a next link
+    # that changes but returns the same page again) stops the read, as a repeated next link does.
+    param([Parameter(Mandatory)][string]$Uri, [Parameter(Mandatory)][scriptblock]$Get, [double]$TimeoutMinutes = 0, [scriptblock]$OnPage)
     $items = New-Object System.Collections.Generic.List[object]
     $next = $Uri; $pages = 0
+    $readStart = [datetime]::UtcNow
     $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
+    $seenIds = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
     while ($next) {
         if (-not $seen.Add([string]$next)) { throw ('the same next page was handed back twice ({0}) -- the read cannot be finished' -f (([string]$next) -replace '\?.*$', '')) }
+        if ($TimeoutMinutes -gt 0 -and ([datetime]::UtcNow - $readStart).TotalMinutes -ge $TimeoutMinutes) {
+            throw ('the read did not finish within {0} minute(s) ({1} page(s), {2} item(s) read) -- stopped' -f $TimeoutMinutes, $pages, $items.Count)
+        }
         $page = & $Get ([string]$next)
         $pages++
-        foreach ($v in @(Get-SIMdcItemValue $page 'value')) { if ($null -ne $v) { $items.Add($v) } }
+        $vals = @(Get-SIMdcItemValue $page 'value')
+        $withId = 0; $repeated = 0
+        foreach ($v in $vals) {
+            if ($null -eq $v) { continue }
+            $items.Add($v)
+            $vid = [string](Get-SIMdcItemValue $v 'id')
+            if ($vid) { $withId++; if (-not $seenIds.Add($vid)) { $repeated++ } }
+        }
+        if ($pages -gt 1 -and $withId -gt 0 -and $repeated -eq $withId) {
+            throw ('page {0} handed back only items already read ({1}) -- the read cannot be finished' -f $pages, (([string]$Uri) -replace '\?.*$', ''))
+        }
         $next = [string](Get-SIMdcItemValue $page 'nextLink')
+        if ($OnPage) { try { $null = & $OnPage $pages $items.Count } catch { } }
     }
     [pscustomobject]@{ Items = $items.ToArray(); Pages = $pages }
 }
 
+function Get-SIMdcReadTimeoutMinutes {
+    <# AZHANG-1: how long the assessments API read of ONE subscription may take: $global:SI_MdcArmSubscriptionTimeoutMinutes,
+       else 15 (it takes seconds). A subscription that runs out is treated as one whose read failed: Resource Graph's rows
+       answer for it when it has some, else it is UNKNOWN -- never "nothing there". #>
+    $v = 0
+    try { $v = [double](Get-Variable -Scope Global -Name SI_MdcArmSubscriptionTimeoutMinutes -ValueOnly -ErrorAction Ignore) } catch { $v = 0 }
+    if ($v -gt 0) { return $v }
+    15
+}
+
 function Get-SIMdcArmGetDefault {
     <# The real page read: the engine's REST client (retries 429 / 5xx; any other 4xx fails at once with its body). #>
-    { param([string]$Uri) $r = Invoke-SIAzRestRequest -Method GET -Uri $Uri -What 'Defender for Cloud assessments API'; if ($null -eq $r -or -not [string]$r.Content) { $null } else { $r.Content | ConvertFrom-Json } }
+    # AZHANG-1: each page waits at most Get-SIAzureReadTimeoutSec (120 s) and is tried 4 times, each retry SAID -- it was
+    # 6 x 300 s with the retries silent (Write-Verbose): at a large install the step printed nothing for over an hour
+    {
+        param([string]$Uri)
+        $r = Invoke-SIAzRestRequest -Method GET -Uri $Uri -What 'Defender for Cloud assessments API' -TimeoutSec (Get-SIAzureReadTimeoutSec) -MaxAttempts 4 `
+                 -OnRetry { param($Code, $Wait, $Attempt, $Max, $What) Write-SIReadProgress ('Defender for Cloud assessments API: no answer (HTTP {0}) on {1} -- retry {2}/{3} in {4}s' -f $Code, (([string]$Uri) -replace '\?.*$', ''), $Attempt, ($Max - 1), $Wait) }
+        if ($null -eq $r -or -not [string]$r.Content) { $null } else { $r.Content | ConvertFrom-Json }
+    }
 }
 
 function Get-SIMdcSubscriptionIds {
@@ -217,7 +253,7 @@ function Read-SIMdcArmAssessments {
                whose read fails (4xx / 5xx after the retries) is named in Failed and makes Complete $false.
     .PARAMETER Get  test seam: { param([string]$Uri) } -> the parsed page; throws on an HTTP failure.
     #>
-    param([string[]]$SubscriptionIds = @(), [scriptblock]$Get)
+    param([string[]]$SubscriptionIds = @(), [scriptblock]$Get, [double]$ProgressSeconds = 60)
     if (-not $Get) { $Get = Get-SIMdcArmGetDefault }
     $rows = New-Object System.Collections.Generic.List[object]
     $failed = [ordered]@{}; $per = @{}
@@ -227,10 +263,25 @@ function Read-SIMdcArmAssessments {
         $e = ('the subscriptions could not be listed: {0}' -f (([string]$_.Exception.Message) -split "`n")[0].Trim())
         return [pscustomobject]@{ Rows = @(); Complete = $false; Failed = [ordered]@{ '*' = $e }; PerSubscription = @{}; Subscriptions = @(); Error = $e }
     }
+    # AZHANG-1: a progress line at least every -ProgressSeconds (and at the start of a read of many subscriptions), and a
+    # time-out per subscription (Get-SIMdcReadTimeoutMinutes) -- a subscription that runs out is a failed read (below)
+    $started = [datetime]::UtcNow
+    $clock = @{ Last = [datetime]::UtcNow }
+    if ($ProgressSeconds -gt 0 -and $subs.Count -gt 1) { Write-SIReadProgress ('Defender for Cloud assessments API: reading {0} subscription(s) ...' -f $subs.Count) }
+    $tmo = Get-SIMdcReadTimeoutMinutes
+    $i = 0
     foreach ($s in $subs) {
+        $i++
         $uri = 'https://management.azure.com/subscriptions/{0}/providers/Microsoft.Security/assessments?api-version={1}' -f $s, $script:SIMdcAssessmentApiVersion
+        $say = {
+            param($Pg, $N)
+            if ($ProgressSeconds -gt 0 -and ([datetime]::UtcNow - $clock.Last).TotalSeconds -ge $ProgressSeconds) {
+                Write-SIReadProgress ('Defender for Cloud assessments: subscription {0} of {1}, page {2} ({3} assessment(s) of it so far, {4} in all; {5:n0}s)' -f $i, $subs.Count, $Pg, $N, ($rows.Count + $N), ([datetime]::UtcNow - $started).TotalSeconds)
+                $clock.Last = [datetime]::UtcNow
+            }
+        }
         try {
-            $r = Read-SIMdcArmPages -Uri $uri -Get $Get
+            $r = Read-SIMdcArmPages -Uri $uri -Get $Get -TimeoutMinutes $tmo -OnPage $say
             $n = 0
             foreach ($it in @($r.Items)) { $row = ConvertFrom-SIMdcArmAssessment -Item $it -SubscriptionId $s; if ($row) { $rows.Add($row); $n++ } }
             $per[$s] = $n
@@ -258,7 +309,7 @@ function Read-SIMdcGraphAssessments {
         }
         # #727 page by page: each page is made slim at once, the raw page is let go
         $take = { param($PageRows) foreach ($x in @($PageRows)) { $row = ConvertFrom-SIMdcGraphAssessment -Row $x; if ($row) { $rows.Add($row) } } }
-        $page = Invoke-SIArgPaged -Query $kql -SourceLabel 'Defender for Cloud assessments (Resource Graph)' -SubscriptionIds $SubscriptionIds -OnPage $take -WarningAction SilentlyContinue
+        $page = Invoke-SIArgPaged -Query $kql -SourceLabel 'Defender for Cloud assessments (Resource Graph)' -SubscriptionIds $SubscriptionIds -OnPage $take -TimeoutMinutes 30 -WarningAction SilentlyContinue
         return [pscustomobject]@{ Rows = $rows.ToArray(); Complete = [bool]$page.Complete; Error = $(if ($page.Complete) { '' } else { [string]$page.Error }) }
     } catch {
         return [pscustomobject]@{ Rows = $rows.ToArray(); Complete = $false; Error = ('Resource Graph: ' + [string]$_.Exception.Message) }
@@ -280,7 +331,7 @@ function Add-SIMdcMissingSeverity {
     foreach ($s in @($need | ForEach-Object { [string]$_.SubscriptionId } | Where-Object { $_ } | Select-Object -Unique)) { $uris.Add(('https://management.azure.com/subscriptions/{0}/providers/Microsoft.Security/assessmentMetadata?api-version={1}' -f $s, $script:SIMdcAssessmentApiVersion)) }
     foreach ($u in $uris) {
         try {
-            foreach ($m in @((Read-SIMdcArmPages -Uri $u -Get $Get).Items)) {
+            foreach ($m in @((Read-SIMdcArmPages -Uri $u -Get $Get -TimeoutMinutes (Get-SIMdcReadTimeoutMinutes)).Items)) {
                 $n = ([string](Get-SIMdcItemValue $m 'name')).Trim().ToLowerInvariant()
                 $v = [string](Get-SIMdcItemValue (Get-SIMdcItemValue $m 'properties') 'severity')
                 if ($n -and $v -and -not $sev.ContainsKey($n)) { $sev[$n] = $v }

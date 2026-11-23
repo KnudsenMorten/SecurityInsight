@@ -1,5 +1,29 @@
 # What's new in SecurityInsight
 
+## 3.1.43.5 · 2026-11-23 · Fix-only
+
+The Azure collection no longer waits silently on Defender for Cloud.
+
+### New features
+
+None in this version.
+
+### Fixes
+
+- **Azure collection no longer waits silently** - Each Defender for Cloud read now has a time limit, every retry is logged and a progress line appears each minute. A read that still gives up is marked unknown for that subscription, never shown as nothing found.
+
+## 3.1.43.4 · 2026-11-23 · Security
+
+Security update of the base images.
+
+### New features
+
+None in this version.
+
+### Fixes
+
+- **Security updates for the base images** - SecurityInsight's containers are rebuilt on Microsoft's newest base images. Microsoft published security fixes for the .NET and Ubuntu base images SecurityInsight builds on; this release moves to them.
+
 ## 3.1.43.3 · 2026-11-23 · Security
 
 Security update of the base images.

@@ -8,7 +8,7 @@
 #   az acr build --registry <acr> --image si-management-mcp:<tag> --file pro-management/Dockerfile.mcp <stage>
 
 # Base images pinned by digest and the .NET restore locked (packages.lock.json, --locked-mode): see ./Dockerfile.
-FROM mcr.microsoft.com/dotnet/sdk:10.0@sha256:2b1e13a22e46b55117f9cdb4b38e73172de08a30370166c8227d06cdaff82473 AS build
+FROM mcr.microsoft.com/dotnet/sdk:10.0@sha256:8c6edfb26c85153f236d26efebd9ad349aec403583f343f201ee67838b23658d AS build
 WORKDIR /src
 COPY pro-management/src/SI.Management.Core/SI.Management.Core.csproj pro-management/src/SI.Management.Core/packages.lock.json pro-management/src/SI.Management.Core/
 COPY pro-management/src/SI.Management.Mcp/SI.Management.Mcp.csproj pro-management/src/SI.Management.Mcp/packages.lock.json pro-management/src/SI.Management.Mcp/

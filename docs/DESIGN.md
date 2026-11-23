@@ -2456,6 +2456,19 @@ exception and the SUGGESTIONS to review -- a software tier detection whose every
 folder, or a copy bundled in another product, with no exception in force -- a page at a time, each opening its CI; nothing
 changes until an Admin acts.
 
+**No silent wait after the last Azure resource page (AZHANG-1, #1340).** The reads that follow the Resource Graph resource
+pages in the Azure discover -- Defender for Cloud assessments (Resource Graph AND the ARM assessments API, per
+subscription), other clouds, management groups, the Azure context -- each have a bound and say what they are doing:
+an assessments-API page waits at most 120 s (`$global:SI_AzureReadTimeoutSec`) and is tried 4 times; a Resource Graph page
+inside `Invoke-SIArgPaged` waits 120 s, 2 tries in the REST client, then the pager's own 4 (5 / 15 / 45 s); every retry is
+a log line (`Invoke-SIAzRestRequest -OnRetry`), not `Write-Verbose`. One subscription's assessments read times out after
+15 min (`$global:SI_MdcArmSubscriptionTimeoutMinutes`), the Resource Graph assessments read after 30 min (`-TimeoutMinutes`).
+A repeated next link, a page of only items already read, and a repeated Resource Graph next-page token stop the read with
+a clear error. A read that stops is a FAILED read with the rule it always had: Resource Graph's rows answer for a
+subscription when it has some, otherwise it is UNKNOWN and the pull is recorded incomplete -- never "nothing there". A
+progress line comes at least every minute ("Defender for Cloud assessments: subscription i of n, page p ..."). Time-outs
+only; no count caps. An answer whose body stops arriving times out where the stream allows it and counts as "no answer".
+
 **Resources in AWS and GCP** (`Get-SIMulticloudResources.ps1`, in the Azure discover after the Defender for Cloud
 assessment summary): first Defender for Cloud's multicloud connectors (Resource Graph `microsoft.security/securityconnectors`,
 environment AWS / GCP) -- none: the source is not present. Then ONE paged Resource Graph query over the assessments whose

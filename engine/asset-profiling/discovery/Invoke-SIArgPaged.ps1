@@ -26,6 +26,23 @@ function Test-SIArgTransientError {
     return ($m -match 'throttl|too many requests|\b429\b|rate limit|\b50[0234]\b|service unavailable|bad gateway|gateway timeout|timed out|timeout|temporar|connection.*(closed|reset)')
 }
 
+function Write-SIReadProgress {
+    <# AZHANG-1: one progress / retry line of a long read -- the run's INFO log when it is loaded, else the host. Never throws. #>
+    param([string]$Text)
+    try {
+        if (Get-Command -Name Write-SIInfo -ErrorAction SilentlyContinue) { Write-SIInfo ('   ' + $Text) } else { Write-Host ('   ' + $Text) }
+    } catch { }
+}
+
+function Get-SIAzureReadTimeoutSec {
+    <# AZHANG-1: how long ONE Azure read call (one page) may wait before it counts as no answer and is retried:
+       $global:SI_AzureReadTimeoutSec, else 120 s (the platform answers a page in seconds; ARM itself gives up at 60 s). #>
+    $v = 0
+    try { $v = [int](Get-Variable -Scope Global -Name SI_AzureReadTimeoutSec -ValueOnly -ErrorAction Ignore) } catch { $v = 0 }
+    if ($v -gt 0) { return $v }
+    120
+}
+
 function Invoke-SIArgPaged {
     [CmdletBinding()]
     param(
@@ -42,18 +59,35 @@ function Invoke-SIArgPaged {
         [scriptblock]$PageFetcher,
         # #727 PAGE BY PAGE: each page's rows go to { param($Rows) } and are let go -- Rows comes back empty, RowCount says
         # how many there were. An Azure estate of millions of resources is never held whole.
-        [scriptblock]$OnPage
+        [scriptblock]$OnPage,
+        # AZHANG-1: the whole read stops (INCOMPLETE, the rows read kept) once it has taken this long; 0 = no time-out
+        [double]$TimeoutMinutes = 0,
+        # AZHANG-1: a progress line at least this often while the read runs (0 = none)
+        [double]$ProgressSeconds = 60
     )
 
     if (-not $PageFetcher) {
         $PageFetcher = { param($p) Search-SIAzGraph @p -ErrorAction Stop }
     }
+    # AZHANG-1: each page call waits at most Get-SIAzureReadTimeoutSec and is tried twice by the REST client (this pager retries
+    # it again, 5 / 15 / 45 s) -- not 6 x 300 s silently. Read by Invoke-SIResourceGraphPage from this scope.
+    $SIArgPageOptions = @{
+        TimeoutSec = (Get-SIAzureReadTimeoutSec); MaxAttempts = 2
+        OnRetry = { param($Code, $Wait, $Attempt, $Max, $What) Write-SIReadProgress ('{0}: Resource Graph gave no answer (HTTP {1}) -- retry in {2}s' -f $SourceLabel, $Code, $Wait) }
+    }
 
     $rows = New-Object System.Collections.ArrayList
     $pages = 0; $retries = 0; $complete = $true; $errMsg = $null; $rowCount = 0L
     $skipToken = $null
+    $started = [datetime]::UtcNow; $lastSaid = $started
+    $seenTokens = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
 
     do {
+        if ($TimeoutMinutes -gt 0 -and ([datetime]::UtcNow - $started).TotalMinutes -ge $TimeoutMinutes) {
+            $complete = $false
+            $errMsg = ('{0}: the read did not finish within {1} minute(s) ({2} page(s) read) -- stopped' -f $SourceLabel, $TimeoutMinutes, $pages)
+            break
+        }
         $params = @{ Query = $Query; First = $PageSize }
         if (@($SubscriptionIds).Count -gt 0) { $params['Subscription'] = $SubscriptionIds }
         if ($skipToken)                      { $params['SkipToken']    = $skipToken }
@@ -73,7 +107,8 @@ function Invoke-SIArgPaged {
                 }
                 $delay = [int]($BackoffBaseSeconds * [Math]::Pow(3, $attempt - 1))
                 $retries++
-                Write-Verbose ('{0}: Resource Graph throttled/transient on page {1} -- retry {2}/{3} in {4}s' -f $SourceLabel, ($pages + 1), $attempt, $MaxAttempts, $delay)
+                Write-SIReadProgress ('{0}: Resource Graph throttled / no answer on page {1} -- retry {2}/{3} in {4}s' -f $SourceLabel, ($pages + 1), $attempt, $MaxAttempts, $delay)
+                $lastSaid = [datetime]::UtcNow
                 if ($delay -gt 0) { Start-Sleep -Seconds $delay }
             }
         }
@@ -93,6 +128,16 @@ function Invoke-SIArgPaged {
         $pages++
         $skipToken = $null
         if ($null -ne $page -and $page.PSObject.Properties['SkipToken']) { $skipToken = [string]$page.SkipToken }
+        # AZHANG-1: a next-page token handed back a second time would page forever -- stop, INCOMPLETE, said
+        if ($skipToken -and -not $seenTokens.Add($skipToken)) {
+            $complete = $false
+            $errMsg = ('{0}: Resource Graph handed back the same next-page token twice after page {1} -- the read cannot be finished' -f $SourceLabel, $pages)
+            break
+        }
+        if ($ProgressSeconds -gt 0 -and $skipToken -and ([datetime]::UtcNow - $lastSaid).TotalSeconds -ge $ProgressSeconds) {
+            Write-SIReadProgress ('{0}: page {1}, {2} row(s) so far ({3:n0}s)' -f $SourceLabel, $pages, $rowCount, ([datetime]::UtcNow - $started).TotalSeconds)
+            $lastSaid = [datetime]::UtcNow
+        }
     } while ($skipToken)
 
     if (-not $complete) {

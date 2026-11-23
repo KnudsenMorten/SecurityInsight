@@ -1,0 +1,13 @@
+{
+  "version": "3.1.43.4",
+  "date": "2026-11-23",
+  "type": "security",
+  "summary": "Security update of the base images.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "Security updates for the base images",
+      "text": "SecurityInsight's containers are rebuilt on Microsoft's newest base images. Microsoft published security fixes for the .NET and Ubuntu base images SecurityInsight builds on; this release moves to them."
+    }
+  ]
+}

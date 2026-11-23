@@ -13,6 +13,19 @@ SecurityInsight Pro and the Pro trial install from invardia.com, never from GitH
 [invardia.com/trial](https://invardia.com/trial/), and your installation page there gives your two lines.
 <!-- /install lines -->
 
+## v3.1.43.5 — the Azure collection no longer waits silently on Defender for Cloud
+
+### Fixes
+- **Each Defender for Cloud read now has a time limit.** On large installations the Azure collection could wait
+  an hour or more without a word in the log. Every retry is now logged and a progress line appears at least every
+  minute. A read that still gives up is marked as unknown for that subscription, never shown as nothing found.
+
+## v3.1.43.4 — security update of the base images
+
+### Fixes
+- **SecurityInsight's containers are rebuilt on Microsoft's newest base images.** Microsoft published security
+  fixes for the .NET and Ubuntu base images SecurityInsight builds on; this release moves to them.
+
 ## v3.1.43.3 — security update of the base images
 
 ### Fixes

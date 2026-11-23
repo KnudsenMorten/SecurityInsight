@@ -536,6 +536,8 @@ function Invoke-SIAzRestHttp {
         foreach ($k in $resp.Headers.AllKeys) { $h[$k] = [string]$resp.Headers[$k] }
         $text = ''; $raw = $null
         $rs = $resp.GetResponseStream()
+        # AZHANG-1: a body that stops arriving times out too (not only the wait for the headers) -- where the stream supports it
+        if ($rs -and $rs.CanTimeout) { try { $rs.ReadTimeout = $TimeoutSec * 1000 } catch { } }
         $sc = [int]$resp.StatusCode
         if ($rs -and $ReadStream -and $sc -ge 200 -and $sc -lt 300) {
             $parsed = $null
@@ -555,6 +557,12 @@ function Invoke-SIAzRestHttp {
                     $ms = New-Object System.IO.MemoryStream
                     $rs.CopyTo($ms); $raw = $ms.ToArray(); $ms.Dispose(); $ms = $null
                 }
+            } catch {
+                # AZHANG-1: the body stopped arriving (read time-out / connection lost mid-body) = no answer -> the caller's retry rule
+                $ioe = $_.Exception
+                while ($ioe -and -not ($ioe -is [System.IO.IOException] -or $ioe -is [System.Net.WebException] -or $ioe -is [System.TimeoutException] -or $ioe -is [System.OperationCanceledException])) { $ioe = $ioe.InnerException }
+                if (-not $ioe) { throw }
+                return [pscustomobject]@{ StatusCode = 0; Content = ('the answer stopped arriving: ' + [string]$_.Exception.Message); Bytes = $null; Headers = $h; RetryAfter = $null }
             } finally { $rs.Close() }
             if (-not $AsBytes) { $text = [System.Text.Encoding]::UTF8.GetString($raw); $raw = $null }
         }
@@ -694,7 +702,10 @@ function Invoke-SIAzRestRequest {
         [hashtable]$Auth,  # another identity than the run's (the platform sign-in reads its Key Vault as the bootstrap identity)
         # a 2xx body read as it arrives (Invoke-SIAzRestHttp -ReadStream); not through an Invardia support session, whose
         # recording wrapper hands the answer back whole
-        [scriptblock]$ReadStream
+        [scriptblock]$ReadStream,
+        # AZHANG-1: { param($Code, $WaitSeconds, $Attempt, $MaxAttempts, $What) } called BEFORE each platform retry waits, so a
+        # caller can SAY it (the retries were Write-Verbose only: a run that retried a hung read for half an hour printed nothing)
+        [scriptblock]$OnRetry
     )
     $refreshed = $false; $force = $false
     # #548: inside an Invardia support session every call SecurityInsight makes as the support app goes through Invardia's
@@ -725,6 +736,7 @@ function Invoke-SIAzRestRequest {
             Initialize-SIAzRestHelpers
             $wait = Get-SILogIngestRetryDelay -RetryAfter ([string]$r.RetryAfter) -Attempt $attempt
             Write-Verbose ("{0}: HTTP {1}, retrying in {2}s (attempt {3}/{4})" -f $What, $code, $wait, $attempt, $MaxAttempts)
+            if ($OnRetry) { try { $null = & $OnRetry $code $wait $attempt $MaxAttempts $What } catch { } }
             Start-Sleep -Seconds $wait
             continue
         }
@@ -853,7 +865,17 @@ function Search-SIResourceGraph {
 
 function Invoke-SIResourceGraphPage {
     <# ONE Resource Graph page: @{ Data; SkipToken; TotalRecords }. #>
-    param([string]$Query, [string[]]$Subscription, [string[]]$ManagementGroup, [int]$First = 1000, [int]$Skip = 0, [string]$SkipToken)
+    param([string]$Query, [string[]]$Subscription, [string[]]$ManagementGroup, [int]$First = 1000, [int]$Skip = 0, [string]$SkipToken,
+          # AZHANG-1: a shorter wait + fewer attempts + a retry line, for a pager that retries the page itself (Invoke-SIArgPaged)
+          [int]$TimeoutSec = 300, [int]$MaxAttempts = 6, [scriptblock]$OnRetry)
+    # AZHANG-1: inside Invoke-SIArgPaged (which retries the page itself) the page takes the pager's options -- read from its
+    # scope ($SIArgPageOptions), so a caller (or a test stub of Search-SIAzGraph) passes nothing new
+    $ambient = Get-Variable -Name SIArgPageOptions -ValueOnly -ErrorAction Ignore
+    if ($ambient -is [hashtable]) {
+        if (-not $PSBoundParameters.ContainsKey('TimeoutSec') -and $ambient['TimeoutSec']) { $TimeoutSec = [int]$ambient['TimeoutSec'] }
+        if (-not $PSBoundParameters.ContainsKey('MaxAttempts') -and $ambient['MaxAttempts']) { $MaxAttempts = [int]$ambient['MaxAttempts'] }
+        if (-not $OnRetry -and $ambient['OnRetry'] -is [scriptblock]) { $OnRetry = $ambient['OnRetry'] }
+    }
     $opt = [ordered]@{ resultFormat = 'objectArray'; '$top' = $First }
     if ($Skip -gt 0) { $opt['$skip'] = $Skip }
     if ($SkipToken) { $opt['$skipToken'] = $SkipToken }
@@ -863,7 +885,7 @@ function Invoke-SIResourceGraphPage {
     if ($subs.Count) { $body['subscriptions'] = [string[]]$subs }
     if ($mgs.Count) { $body['managementGroups'] = [string[]]$mgs }
     $r = Invoke-SIAzRestRequest -Method POST -Uri 'https://management.azure.com/providers/Microsoft.ResourceGraph/resources?api-version=2022-10-01' `
-             -Body ($body | ConvertTo-Json -Depth 10 -Compress) -What 'Resource Graph query'
+             -Body ($body | ConvertTo-Json -Depth 10 -Compress) -What 'Resource Graph query' -TimeoutSec $TimeoutSec -MaxAttempts $MaxAttempts -OnRetry $OnRetry
     $j = $r.Content | ConvertFrom-Json
     $tok = $null
     if ($j.PSObject.Properties['$skipToken']) { $tok = [string]$j.'$skipToken' }

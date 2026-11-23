@@ -277,10 +277,13 @@ function Invoke-SIManagementGroupCapture {
             $p = @{ Query = (Get-SIManagementGroupKql); First = 1000 }
             if (@($SubscriptionIds).Count -gt 0) { $p['Subscription'] = $SubscriptionIds }
             $all = New-Object System.Collections.Generic.List[object]
+            $seenTok = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
             do {
                 $page = Search-SIAzGraph @p -ErrorAction Stop
                 foreach ($x in $page) { $all.Add($x) }
                 $p['SkipToken'] = $page.SkipToken
+                # AZHANG-1: a next-page token handed back twice would page forever
+                if ($p['SkipToken'] -and -not $seenTok.Add([string]$p['SkipToken'])) { throw 'Resource Graph handed back the same next-page token twice -- the read cannot be finished' }
             } while ($p['SkipToken'])
             $rows = $all.ToArray()
         }

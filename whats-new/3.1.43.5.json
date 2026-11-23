@@ -1,0 +1,13 @@
+{
+  "version": "3.1.43.5",
+  "date": "2026-11-23",
+  "type": "fix-only",
+  "summary": "The Azure collection no longer waits silently on Defender for Cloud.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "Azure collection no longer waits silently",
+      "text": "Each Defender for Cloud read now has a time limit, every retry is logged and a progress line appears each minute. A read that still gives up is marked unknown for that subscription, never shown as nothing found."
+    }
+  ]
+}

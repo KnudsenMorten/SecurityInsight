@@ -23,7 +23,7 @@
 # (installed as a .NET tool under /usr/share/powershell, /usr/bin/pwsh links to it) on the .NET 10 runtime. The old
 # powershell:lts-ubuntu-22.04 image carried PowerShell 7.4 on .NET 8, both out of support on 2026-11-10. Runs as root,
 # as the old base did (no USER is set). Pinned by digest (release\Update-SIBaseImageDigests.ps1).
-FROM mcr.microsoft.com/dotnet/sdk:10.0-noble@sha256:bef136a371963aaa46ec97882845ef6f54dec15728bb4b128b1c2a400ffbc9b4
+FROM mcr.microsoft.com/dotnet/sdk:10.0-noble@sha256:2b1e13a22e46b55117f9cdb4b38e73172de08a30370166c8227d06cdaff82473
 
 # NO POWERSHELL MODULES. SecurityInsight reaches Azure, Log Analytics, storage, Key
 # Vault, Resource Graph, Microsoft Graph and the Log Ingestion API over plain REST

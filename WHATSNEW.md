@@ -1,5 +1,17 @@
 # What's new in SecurityInsight
 
+## 3.1.43.3 · 2026-11-23 · Security
+
+Security update of the base images.
+
+### New features
+
+None in this version.
+
+### Fixes
+
+- **Security updates for the base images** - SecurityInsight's containers are rebuilt on Microsoft's newest base images. Microsoft published security fixes for the .NET and Ubuntu base images SecurityInsight builds on; this release moves to them.
+
 ## 3.1.43 · 2026-11-21 · Fix-only
 
 AI switched off is off everywhere, and a run never fails because the AI connection is missing.

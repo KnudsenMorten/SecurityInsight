@@ -13,6 +13,12 @@ SecurityInsight Pro and the Pro trial install from invardia.com, never from GitH
 [invardia.com/trial](https://invardia.com/trial/), and your installation page there gives your two lines.
 <!-- /install lines -->
 
+## v3.1.43.3 — security update of the base images
+
+### Fixes
+- **SecurityInsight's containers are rebuilt on Microsoft's newest base images.** Microsoft published security
+  fixes for the .NET and Ubuntu base images SecurityInsight builds on; this release moves to them.
+
 ## v3.1.43 — AI switched off is off everywhere, and a run never fails because the AI connection is missing
 
 ### Fixes

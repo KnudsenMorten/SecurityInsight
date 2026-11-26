@@ -81,6 +81,20 @@ $r = Send-SIHeartbeatTick -RunStore $runStore -DataInvoke $dataInvoke -ClaimInvo
 & $say $(if ($r.Status -in @('failed', 'error')) { 'WARN' } else { 'INFO' }) ('Invardia support link: {0}' -f $(if ("$($r.Reason)".StartsWith("$($r.Status)")) { $r.Reason } else { '{0} -- {1}' -f $r.Status, $r.Reason }))
 if ($extra) { exit 0 }
 
+# #1396 DATA GETTING OLD (owner 2026-11-26: "why have nobody found out" / "fix it") -- on EVERY tick, both editions, with or
+# without an install key (one small read; the run record only when the data is old): no new data has been published for
+# longer than SI_Pro_StaleDataWarnHours (default 36, 0 = off; counted from when the shown collection became Complete) =
+# ONE guard warning 'data.published.stale' per UTC day -- only when an install switched that check on (OFF by default) --
+# on the Guards page, in run health and the report to Invardia (no mail, nothing held), naming the newest whole-pipeline
+# run's result and failed step (engine\_shared\SI-StaleData.ps1). Silent otherwise. Never fails the job.
+try {
+    if ($dataInvoke) {
+        if (-not (Get-Command -Name Invoke-SIStaleDataCheck -ErrorAction SilentlyContinue)) { . (Join-Path $siRoot 'engine/_shared/SI-StaleData.ps1') }
+        $sd = Invoke-SIStaleDataCheck -DataInvoke $dataInvoke -RunInvoke $proInvoke -Invoke $proInvoke
+        if ($sd -and "$($sd.Line)".Trim()) { & $say $(if ($sd.Status -in @('raised', 'error')) { 'WARN' } else { 'INFO' }) $sd.Line }
+    }
+} catch { & $say 'INFO' ('data getting old: not checked this time ({0})' -f $_.Exception.Message) }
+
 # #1021 THE SUPPORT GRANT SWEEP -- on EVERY tick: a just-in-time grant of the Invardia Support app that is past its maxUntil is
 # revoked (the signed procedure cfg.SupportGrantSweep removes only what an EXPIRED grant added; never the read-only access).
 # The grant job and the web app sweep too, so no one of them is the only revoker. Silent when there is nothing to do; a

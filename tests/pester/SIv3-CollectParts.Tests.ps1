@@ -204,8 +204,8 @@ Describe 'the producer discovers into parts, a worker reads its part (Write-SIDi
     It 'the engine runs Schedule + Discover as the producer, and the rest on its part as a worker, under the producer''s run id' {
         $src = [IO.File]::ReadAllText((Join-Path $script:SIRoot 'engine\asset-profiling\Invoke-SIEngineRun.ps1'))
         $src | Should -Match ([regex]::Escape("if (`$Phase -eq 'discover') { `$__st = @('Schedule', 'Discover') }"))
-        $src | Should -Match ([regex]::Escape("elseif (`$Phase -eq 'parts') { `$__st = @(`$__st | Where-Object { `$_ -notin 'Schedule', 'Discover' }) }"))
-        $src | Should -Match ([regex]::Escape("`$runId = if (`$Phase -eq 'parts' -and `"`$RunId`".Trim())"))
+        $src | Should -Match ([regex]::Escape("elseif (`$Phase -eq 'parts') { `$__st = @(`$__st | Where-Object { `$_ -notin 'Schedule', 'Discover', 'Recommendations' }) }"))
+        $src | Should -Match ([regex]::Escape("`$runId = if (`$Phase -in 'parts', 'recommendations' -and `"`$RunId`".Trim())"))
         [IO.File]::ReadAllText((Join-Path $script:SIRoot 'engine\asset-profiling\stages\Invoke-Discover.ps1')) | Should -Match 'Write-SIDiscoverParts -RunContext \$RunContext'
     }
     It 'the container: a producer with SI_PRODUCER_DISCOVERS discovers, then writes the manifest and one message per part; a parts message runs the worker from Collect' {

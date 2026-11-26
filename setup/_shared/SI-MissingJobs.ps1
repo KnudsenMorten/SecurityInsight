@@ -221,6 +221,9 @@ $script:SIJobBorrowCatalog = @(
                        What = 'the data sync (it sends the Risk Analysis Detailed mail with its stored Protection Score)' }
 )
 
+# #1413: only live identities are carried into a job made from a donor (setup\_shared\SI-LiveIdentities.ps1)
+if (-not (Get-Command -Name Select-SILiveIdentityKeys -ErrorAction SilentlyContinue)) { $__siLiF = Join-Path $PSScriptRoot 'SI-LiveIdentities.ps1'; if (Test-Path -LiteralPath $__siLiF) { . $__siLiF } }
+
 function Get-SIJobBorrowPatch {
     <#
         PURE. The PATCH that gives an EXISTING job a secret it lacks and the env var that reads it -- or Action present when it
@@ -450,7 +453,10 @@ function Get-SIMissingJobSpec {
           [switch]$OwnSize,
           # the ONLY secrets this job may carry (the catalog's Secrets): every other secret reference of the donor's env is left out,
           # its variable too; not given = the secrets the env still refers to, as before
-          [AllowNull()][AllowEmptyCollection()][string[]]$KeepSecrets = $null)
+          [AllowNull()][AllowEmptyCollection()][string[]]$KeepSecrets = $null,
+          # #1413: Read-SILiveIdentities -- a donor identity of the resource group that no longer exists is not carried (a deleted
+          # one makes Azure refuse the whole PUT); not given / not read = every identity, as before
+          $LiveIdentities = $null)
     if (-not $Map) { $Map = Get-SIJobFlowMap }
     $name = Get-SIBootstrapJobName -Engine $Engine
     $key = $name.Substring(7)
@@ -483,6 +489,9 @@ function Get-SIMissingJobSpec {
     # the identities the donor carries (the sign-in and the registry pull)
     $ua = Get-SIKedaConvertProp $Donor @('identity', 'userAssignedIdentities')
     $mi = @(); if ($ua) { if ($ua -is [System.Collections.IDictionary]) { $mi = @($ua.Keys | ForEach-Object { [string]$_ }) } else { $mi = @($ua.PSObject.Properties | ForEach-Object { $_.Name }) } }
+    $idLines = @()
+    if ($LiveIdentities -and (Get-Command -Name Select-SILiveIdentityKeys -ErrorAction SilentlyContinue)) { $sel = Select-SILiveIdentityKeys -Keys $mi -Live $LiveIdentities -Name $name; $mi = @($sel.Keep); $idLines = @($sel.Lines) }
+    $isDead = { param($i) [bool]($LiveIdentities -and $i -and (Get-Command -Name Test-SILiveIdentityDead -ErrorAction SilentlyContinue) -and (Test-SILiveIdentityDead -Id $i -Live $LiveIdentities)) }
     # the trigger, as Bootstrap gives a NEW job
     $trig = Get-SIBootstrapTriggerPlan -Engine $Engine -Mode $Mode -Cron $Cron -Map $Map
     $a = @('containerapp', 'job', 'create', '--name', $name, '--resource-group', $ResourceGroup, '--environment', [string](Get-SIKedaConvertProp $Donor @('properties', 'environmentId')),
@@ -503,21 +512,21 @@ function Get-SIMissingJobSpec {
     $trigger = $trig.Trigger
     if ($Engine -eq 'support-grant') {
         if (-not (Get-Command -Name Select-SISupportGrantJobIdentity -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot 'SI-SupportGrantUpdate.ps1') }
-        $sgId = Select-SISupportGrantJobIdentity -Job $Donor
+        $sgId = Select-SISupportGrantJobIdentity -Job $Donor; if (& $isDead $sgId) { $idLines += ('job {0}: the queue scaler''s identity {1} no longer exists -- the job is made manual until the update''s support step converts it' -f $name, (Get-SILiveIdentityName $sgId)); $sgId = '' }
         try { $a = @(ConvertTo-SISupportGrantEventCreateArgs -CreateArgs $a -StorageAccount (Get-SIKedaConvertEnvValue -EnvArgs $env -Name 'SI_STORAGE_ACCOUNT') -IdentityResourceId $sgId); $trigger = 'Event' } catch { $trigger = $trig.Trigger }
     }
     # #1252: the job request job -- started by ITS queue si-job-requests the same way (no storage account / identity = manual;
     # the updater's job request step converts it once it can)
     if ($Engine -eq 'job-requests') {
         if (-not (Get-Command -Name Select-SISupportGrantJobIdentity -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot 'SI-SupportGrantUpdate.ps1') }
-        $jrId = Select-SISupportGrantJobIdentity -Job $Donor
+        $jrId = Select-SISupportGrantJobIdentity -Job $Donor; if (& $isDead $jrId) { $idLines += ('job {0}: the queue scaler''s identity {1} no longer exists -- the job is made manual until the update''s job request step converts it' -f $name, (Get-SILiveIdentityName $jrId)); $jrId = '' }
         try { $a = @(ConvertTo-SISupportGrantEventCreateArgs -CreateArgs $a -StorageAccount (Get-SIKedaConvertEnvValue -EnvArgs $env -Name 'SI_STORAGE_ACCOUNT') -IdentityResourceId $jrId -Queue 'si-job-requests'); $trigger = 'Event' } catch { $trigger = $trig.Trigger }
     }
     $location = [string](Get-SIKedaConvertProp $Donor @('location'))
     [pscustomobject]@{ Name = $name; Args = $a; Body = (ConvertFrom-SIJobCreateArgs -CreateArgs $a -Location $location).Body; Image = $image
                        Trigger = $trigger; Cron = $Cron; EnvArgs = $env
                        # #1038 (1): Manual with no timer remembered = a job that is only ever started (the data-out job)
-                       RememberCron = [string]$trig.RememberCron }
+                       RememberCron = [string]$trig.RememberCron; IdentityLines = [string[]]@($idLines) }
 }
 
 function Test-SIMissingJobManualOnly {
@@ -645,6 +654,7 @@ function Invoke-SIMissingJobs {
         $why = { param($r) $t = ("$(if ($r) { $r.Body })" -replace '\s+', ' ').Trim(); if ($t.Length -gt 300) { $t = $t.Substring(0, 297) + '...' }; ('HTTP {0}{1}' -f $(if ($r) { [int]$r.Status } else { 0 }), $(if ($t) { ": $t" } else { '' })) }
         $jobUri = { param($n, [string]$Action) 'https://management.azure.com/subscriptions/{0}/resourceGroups/{1}/providers/Microsoft.App/jobs/{2}{3}?api-version={4}' -f $SubscriptionId, $ResourceGroup, $n, $Action, $script:SIMissingJobsArmApi }
         $map = Get-SIJobFlowMap
+        $live = $null; $liveRead = $false
         foreach ($row in $plan) {
             # #723: a job that exists but is still on a timer an earlier version shipped -> this version's timer (read-modify-
             # write PATCH of the trigger, then read back). A timer of the customer's own is never touched.
@@ -759,7 +769,10 @@ function Invoke-SIMissingJobs {
                     }
                     $keepSecrets['KeepSecrets'] = [string[]]$keep.ToArray()
                 }
-                $spec = Get-SIMissingJobSpec -Engine $row.Engine -Donor $row.Donor -ResourceGroup $ResourceGroup -Mode $mode -Cron $cron -SecretArgs $secretArgs -RegistryPassword $regPassword -Globals $Globals -Map $map -ExtraEnv $extraEnv -OwnSize:([bool]$row.OwnSize) @keepSecrets
+                # #1413: the resource group's identities, read ONCE -- a deleted donor identity is not carried (not read = as before)
+                if (-not $liveRead) { $liveRead = $true; if (Get-Command -Name Read-SILiveIdentities -ErrorAction SilentlyContinue) { $live = Read-SILiveIdentities -Rest $Rest -SubscriptionId $SubscriptionId -ResourceGroup $ResourceGroup } }   # not read = the donor's identities, as before (said by nothing: the PUT says it if Azure refuses)
+                $spec = Get-SIMissingJobSpec -Engine $row.Engine -Donor $row.Donor -ResourceGroup $ResourceGroup -Mode $mode -Cron $cron -SecretArgs $secretArgs -RegistryPassword $regPassword -Globals $Globals -Map $map -ExtraEnv $extraEnv -LiveIdentities $live -OwnSize:([bool]$row.OwnSize) @keepSecrets
+                foreach ($il in @($spec.IdentityLines)) { $lines.Add(('missing jobs: ' + $il)) }
                 # (2) idempotent: the job may have been made since the list was read (another run, the setup) -- never overwritten
                 $r = & $call 'GET' (& $jobUri $row.Job) $null
                 if (& $isOk $r) { & $add $row 'present' ('missing jobs: {0} exists now (made meanwhile) -- left as it is' -f $row.Job); continue }

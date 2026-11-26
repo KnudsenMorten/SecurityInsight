@@ -761,6 +761,9 @@ $updateRunning = if ($HostKind -eq 'Container') {
             catch { & $say 'WARN' ('whether the update still works could not be read ({0}) -- a running update is waited for as before' -f $_.Exception.Message) }
         }
         $upd = Get-SIPipelineUpdateLiveness -Executions @($r.value) -Locks $updLocks -LocksKnown $updKnown -Stopped $global:SI_ExecutionStopped
+        # #1406: an update that is quiet while Azure runs it is waited for -- never stopped, its lock never taken over; said once
+        if ($null -eq $global:SI_ExecutionQuietSaid) { $global:SI_ExecutionQuietSaid = @{} }
+        if (@($upd.Quiet).Count) { Write-SIExecutionQuietOnce -Live @($upd.Quiet) -Log $say -Said $global:SI_ExecutionQuietSaid }
         if (@($upd.Dead).Count) {
             # a dead update is STOPPED, said, and raised to Invardia; the waiting work goes on in this wake-up
             $updStop = Invoke-SIExecutionDeadStop -Dead @($upd.Dead) -OthersLive ([bool]$upd.Running) -Stopped $global:SI_ExecutionStopped -Log $say `

@@ -30,6 +30,8 @@
 
 $script:SIDupRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 if (-not (Get-Command -Name Find-SIDuplicateFindings -ErrorAction SilentlyContinue)) { . ([IO.Path]::Combine($script:SIDupRoot, 'data-model', 'SI-DuplicateCheck.ps1')) }
+# #1403 the affected lists read in full (a list that fills its column, from the finding's document)
+if (-not (Get-Command -Name Get-SIDataFullListSql -ErrorAction SilentlyContinue)) { . ([IO.Path]::Combine($script:SIDupRoot, '_shared', 'data-sql', 'SI-FullListSql.ps1')) }
 
 function Get-SIDupColumns {
     <# PURE. The si fields that are a column of sidata.CiFinding (c) -> the column. #>
@@ -39,10 +41,18 @@ function Get-SIDupColumns {
 function Get-SIDupFactColumns {
     <# PURE. The si fields a published finding's document may lack -> their stored column on sidata.Finding (f). #>
     [ordered]@{
-        si_affected_product = 'f.AffectedProduct'; si_affected_vendor = 'f.AffectedVendor'; si_affected_version = 'f.AffectedVersion'
+        si_affected_product = 'fl.AffectedProduct'; si_affected_vendor = 'fl.AffectedVendor'; si_affected_version = 'fl.AffectedVersion'
         si_cve = 'f.Cve'; si_component = 'f.Component'; si_category = 'f.Category'; si_subcategory = 'f.Subcategory'
         si_fix_recommended_update = 'f.FixRecommendedUpdate'; si_fix_recommended_update_id = 'f.FixRecommendedUpdateId'; si_report_name = 'f.ReportName'
     }
+}
+
+function Get-SIDupFullListApplySql {
+    <# PURE. #1403 the affected lists of a finding row f read in FULL (a list that fills its column, from the finding's document),
+       as fl.AffectedProduct / fl.AffectedVendor / fl.AffectedVersion -- the facts read them from here (never an aggregate over a subquery). #>
+    "CROSS APPLY (SELECT $(Get-SIDataFullListSql -Column 'f.AffectedProduct' -Bytes 800 -Keys 'si_affected_product', 'SI_AffectedProduct') AS AffectedProduct, " +
+    "$(Get-SIDataFullListSql -Column 'f.AffectedVendor' -Bytes 800 -Keys 'si_affected_vendor', 'SI_AffectedVendor') AS AffectedVendor, " +
+    "$(Get-SIDataFullListSql -Column 'f.AffectedVersion' -Bytes 800 -Keys 'si_affected_version', 'SI_AffectedVersion') AS AffectedVersion) AS fl"
 }
 
 function Get-SIDupNormSql {
@@ -270,7 +280,7 @@ WHERE NOT EXISTS (SELECT 1 FROM sidata.DuplicateCheckWork AS w WHERE w.CheckId =
         'bounds' { return "SET NOCOUNT ON; SELECT MIN(FindingId) AS Lo, MAX(FindingId) AS Hi FROM sidata.Finding WHERE CollectionId = CONVERT(int, @cid);" }
         'facts' {
             $fc = Get-SIDupFactColumns
-            $agg = @(for ($i = 0; $i -lt $FactFields.Count; $i++) { "MAX(CONVERT(nvarchar(4000), {0})) AS F{1}" -f $fc[$FactFields[$i]], $i })
+            $agg = @(for ($i = 0; $i -lt $FactFields.Count; $i++) { "MAX(CONVERT(nvarchar({2}), {0})) AS F{1}" -f $fc[$FactFields[$i]], $i, $(if ($FactFields[$i] -like 'si_affected_*') { 'max' } else { '4000' }) })
             $js = @(for ($i = 0; $i -lt $FactFields.Count; $i++) { "g.F{0} AS [{1}]" -f $i, $FactFields[$i] })
             return @"
 SET NOCOUNT ON;
@@ -281,6 +291,7 @@ FROM (SELECT HASHBYTES('SHA2_256', o.Owner + N'|' + o.KeyPart) AS H, MAX(o.Owner
       FROM sidata.Finding AS f
       CROSS APPLY (SELECT CHARINDEX(N'|', f.RaFindingKey) AS P) AS sp
       CROSS APPLY (SELECT CONVERT(nvarchar(450), LEFT(f.RaFindingKey, sp.P - 1)) AS Owner, LOWER(SUBSTRING(f.RaFindingKey, sp.P + 1, 900)) AS KeyPart) AS o
+      $(Get-SIDupFullListApplySql)
       JOIN sidata.DuplicateCheckWork AS w ON w.CheckId = @id AND w.Kind = 0 AND w.KeyHash = HASHBYTES('SHA2_256', o.Owner)
       WHERE f.CollectionId = @c AND f.FindingId BETWEEN @rlo AND @rhi AND f.RaFindingKey IS NOT NULL AND sp.P > 1
       GROUP BY HASHBYTES('SHA2_256', o.Owner + N'|' + o.KeyPart)) AS g
@@ -331,14 +342,15 @@ CROSS APPLY (SELECT COUNT(*) AS N, MIN(t2.TaskName) AS OntoName
                AND ({NORM_P} = sw.Software
                     OR EXISTS (SELECT 1 FROM sidata.RemediationTaskFinding AS l
                                JOIN sidata.Finding AS f ON f.CollectionId = l.CollectionId AND f.FindingId = l.FindingId
-                               CROSS APPLY STRING_SPLIT(ISNULL(f.AffectedProduct, N''), N';') AS s
+                               CROSS APPLY (SELECT {FULL_PRODUCT} AS P) AS fp
+                               CROSS APPLY STRING_SPLIT(ISNULL(fp.P, N''), N';') AS s
                                WHERE l.CollectionId = @c AND l.TaskId = t2.TaskId AND {NORM_S} = sw.Software))) AS d
 WHERE t.CollectionId = @c AND t.State = N'open' AND t.Kind NOT IN ({SW}) AND LOWER(LTRIM(t.TaskName)) LIKE N'update %'
   AND LEN(LTRIM(t.TaskName)) > 7 AND d.N > 0;
 SELECT @c AS CollectionId, (SELECT COUNT(*) FROM #d) AS Duplicates, (SELECT COUNT(DISTINCT OwnerKey) FROM #d) AS Owners,
        (SELECT TOP (CONVERT(int, @Take)) d.OwnerKey AS o, d.AssetName AS n, d.TaskName AS t, d.OntoName AS x, d.N AS c, d.Software AS v FROM #d AS d ORDER BY d.AssetName, d.TaskName FOR JSON PATH) AS Examples;
 DROP TABLE #d;
-'@).Replace('{SW}', $sw).Replace('{NORM_SW}', (& $norm 'SUBSTRING(LTRIM(t.TaskName), 8, 4000)')).Replace('{NORM_P}', (& $norm 't2.Product')).Replace('{NORM_S}', (& $norm 's.[value]'))
+'@).Replace('{SW}', $sw).Replace('{NORM_SW}', (& $norm 'SUBSTRING(LTRIM(t.TaskName), 8, 4000)')).Replace('{NORM_P}', (& $norm 't2.Product')).Replace('{NORM_S}', (& $norm 's.[value]')).Replace('{FULL_PRODUCT}', (Get-SIDataFullListSql -Column 'f.AffectedProduct' -Bytes 800 -Keys 'si_affected_product', 'SI_AffectedProduct'))
         }
         'store' {
             return @'
@@ -388,6 +400,38 @@ function Get-SIDuplicateExampleCount {
     $n
 }
 
+function New-SIDuplicateTally {
+    <# #1399 the duplicates of a run COUNTED per rule (owner 2026-11-26: "memory issues must not be a problem in any step"): per rule
+       its kind, the count, the owners (each once) and the examples -- only the first -Examples in the summary's order are kept. #>
+    param([int]$Examples = 10)
+    [pscustomobject]@{ Examples = [Math]::Max(1, $Examples); Rules = [ordered]@{} }
+}
+
+function Get-SIDuplicateTallyExamples {
+    <# PURE. A rule's first -Examples items in the summary's order (CI name, owner, title, key). #>
+    param($Rule, [int]$Examples = 10)
+    if ($null -eq $Rule) { return @() }
+    @($Rule.Examples | Sort-Object CiName, Owner, Title, Key | Select-Object -First $Examples)
+}
+
+function Add-SIDuplicateTally {
+    <# Adds one page's items (Find-SIDuplicateFindings) to the tally; the example list never grows past a few times -Examples. #>
+    param([Parameter(Mandatory)]$Tally, [AllowEmptyCollection()][object[]]$Items = @())
+    foreach ($i in @($Items)) {
+        if ($null -eq $i) { continue }
+        $r = [string]$i.Rule
+        if (-not $Tally.Rules.Contains($r)) { $Tally.Rules[$r] = [pscustomobject]@{ Kind = [string]$i.Kind; Count = 0L; Owners = (New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)); Examples = (New-Object System.Collections.Generic.List[object]) } }
+        $x = $Tally.Rules[$r]
+        $x.Count++
+        [void]$x.Owners.Add([string]$i.Owner)
+        $x.Examples.Add($i)
+        if ($x.Examples.Count -ge 4 * $Tally.Examples) {
+            $keep = @(Get-SIDuplicateTallyExamples -Rule $x -Examples $Tally.Examples)
+            $x.Examples.Clear(); foreach ($k in $keep) { $x.Examples.Add($k) }
+        }
+    }
+}
+
 function Get-SIDuplicateCheckSummary {
     <#
         PURE. The run's result from the duplicates found (-Items: Find-SIDuplicateFindings' items) and the task rule's row
@@ -395,18 +439,23 @@ function Get-SIDuplicateCheckSummary {
         Owners, Examples); Total; Lines; Issue; Metrics (dup.* kind dup) }. -Checked: the rules checked (a rule checked with
         nothing found is 0, never missing).
     #>
-    param([AllowEmptyCollection()][object[]]$Items = @(), $Tasks, [string[]]$Checked = @(), [int]$Examples = 10)
+    param([AllowEmptyCollection()][object[]]$Items = @(), $Tasks, [string[]]$Checked = @(), [int]$Examples = 10,
+          # #1399 the duplicates COUNTED per rule as the pages are read (New-SIDuplicateTally / Add-SIDuplicateTally) -- the
+          # same summary as from every item (-Items), without holding them
+          $Tally = $null)
+    if ($null -eq $Tally) { $Tally = New-SIDuplicateTally -Examples $Examples; Add-SIDuplicateTally -Tally $Tally -Items @($Items) }
     $rules = [ordered]@{}
     foreach ($r in @($Checked)) { $rules[$r] = $null }
-    foreach ($i in @($Items)) { if (-not $rules.Contains([string]$i.Rule)) { $rules[[string]$i.Rule] = $null } }
+    foreach ($r in @($Tally.Rules.Keys)) { if (-not $rules.Contains([string]$r)) { $rules[[string]$r] = $null } }
     $out = New-Object System.Collections.Generic.List[object]
     foreach ($r in @($rules.Keys)) {
-        $its = @($Items | Where-Object { [string]$_.Rule -eq $r })
-        $kind = $(if ($its.Count) { [string]$its[0].Kind } elseif ($r -like 'fold:*') { 'fold' } elseif ($r -eq 'same-cve') { 'cve' } else { $r })
-        $ex = @($its | Sort-Object CiName, Owner, Title | Select-Object -First $Examples | ForEach-Object {
+        $tr = $(if ($Tally.Rules.Contains($r)) { $Tally.Rules[$r] } else { $null })
+        $n = $(if ($tr) { [int]$tr.Count } else { 0 })
+        $kind = $(if ($n) { [string]$tr.Kind } elseif ($r -like 'fold:*') { 'fold' } elseif ($r -eq 'same-cve') { 'cve' } else { $r })
+        $ex = @(@(Get-SIDuplicateTallyExamples -Rule $tr -Examples $Examples) | ForEach-Object {
                 [ordered]@{ ci = $(if ($_.CiName) { $_.CiName } else { $_.Owner }); owner = $_.Owner; key = $_.Key; title = $_.Title; report = $_.Report; ontoKey = $_.OntoKey; ontoTitle = $_.OntoTitle; onto = $_.Onto; value = $_.Value; text = (Format-SIDuplicateExample $_) } })
-        $out.Add([pscustomobject][ordered]@{ Id = $r; Kind = $kind; Label = (Get-SIDuplicateRuleLabel $r); Duplicates = $its.Count
-            Owners = @($its | ForEach-Object { $_.Owner } | Select-Object -Unique).Count; Examples = $ex })
+        $out.Add([pscustomobject][ordered]@{ Id = $r; Kind = $kind; Label = (Get-SIDuplicateRuleLabel $r); Duplicates = $n
+            Owners = $(if ($tr) { $tr.Owners.Count } else { 0 }); Examples = $ex })
     }
     if ($null -ne $Tasks) {
         $tx = @(@($Tasks.Examples) | Where-Object { $null -ne $_ } | Select-Object -First $Examples | ForEach-Object {
@@ -503,13 +552,14 @@ function Invoke-SIDataDuplicateCheck {
         }
         $factSec = $clock.Elapsed.TotalSeconds
         # 3. every finding of a page of candidate CIs, through the pure detector
-        $items = New-Object System.Collections.Generic.List[object]
+        # #1399 counted per rule as the pages are read -- never every duplicate item held (a rule gone wrong could make millions)
+        $tally = New-SIDuplicateTally -Examples (Get-SIDuplicateExampleCount)
         $pageSql = $(if ($ReadOnly -and $factFields.Count -and $null -ne $cid) { Get-SIDuplicateCheckReadOnlyPageSql -Fields $fields -FactFields $factFields } else { Get-SIDuplicateCheckSql -Part 'page' -Fields $fields -Facts:$useFacts })
         for ($i = 0; $i -lt $owners.Count; $i += $OwnersPerPage) {
             $chunk = $owners.GetRange($i, [Math]::Min($OwnersPerPage, $owners.Count - $i)).ToArray()
             $rows = & $one $pageSql @{ Check = $check; cid = [string]$cid; Owners = (ConvertTo-Json -InputObject @($chunk) -Compress) } 'reader'
             $page = @($rows | ForEach-Object { ConvertTo-SIDupFinding -Row $_ -Fields $fields })
-            foreach ($d in @(Find-SIDuplicateFindings -Findings $page -Index $idx)) { $items.Add($d) }
+            Add-SIDuplicateTally -Tally $tally -Items @(Find-SIDuplicateFindings -Findings $page -Index $idx)
         }
         # the tasks
         $tasks = $null
@@ -518,9 +568,9 @@ function Invoke-SIDataDuplicateCheck {
             $tex = @(); $tj = [string](Get-SIDupRowValue $tr 'Examples'); if ($tj) { try { $tex = @($tj | ConvertFrom-Json) } catch { $tex = @() } }
             $tasks = [pscustomobject]@{ Duplicates = [int](Get-SIDupRowValue $tr 'Duplicates'); Owners = [int](Get-SIDupRowValue $tr 'Owners'); Examples = $tex }
         }
-        $sum = Get-SIDuplicateCheckSummary -Items $items.ToArray() -Tasks $tasks -Checked $checked.ToArray() -Examples (Get-SIDuplicateExampleCount)
+        $sum = Get-SIDuplicateCheckSummary -Tally $tally -Tasks $tasks -Checked $checked.ToArray() -Examples (Get-SIDuplicateExampleCount)
         $res = [pscustomobject][ordered]@{ Status = 'ok'; CheckId = $check; CollectionTime = $ctText; Candidates = $owners.Count; Ranges = $ranges; Rules = $sum.Rules
-            Total = $sum.Total; Lines = $sum.Lines; Issue = $sum.Issue; Metrics = $sum.Metrics; Items = $items.ToArray()
+            Total = $sum.Total; Lines = $sum.Lines; Issue = $sum.Issue; Metrics = $sum.Metrics; Items = @(foreach ($tr in @($tally.Rules.Values)) { Get-SIDuplicateTallyExamples -Rule $tr -Examples $tally.Examples })
             Seconds = [Math]::Round($clock.Elapsed.TotalSeconds, 1); Phases = ('candidates={0:N1} s; facts={1:N1} s; pages={2:N1} s' -f $candSec, ($factSec - $candSec), ($clock.Elapsed.TotalSeconds - $factSec)) }
         if (-not $ReadOnly -and -not $DryRun -and -not $NoStore) {
             $rj = ConvertTo-Json -Compress -Depth 6 -InputObject @(@($sum.Rules) | ForEach-Object { [ordered]@{ r = $_.Id; k = $_.Kind; l = $_.Label; d = [int]$_.Duplicates; o = [int]$_.Owners; s = 'ok'; x = @($_.Examples) } })
@@ -543,7 +593,7 @@ function Get-SIDuplicateCheckReadOnlyPageSql {
        statement (one pass over the collection's rows per page -- fine for a diagnostic run, never the nightly path). #>
     param([string[]]$Fields = @(), [string[]]$FactFields = @())
     $fc = Get-SIDupFactColumns
-    $agg = @(for ($i = 0; $i -lt $FactFields.Count; $i++) { "MAX(CONVERT(nvarchar(4000), {0})) AS [{1}]" -f $fc[$FactFields[$i]], $FactFields[$i] })
+    $agg = @(for ($i = 0; $i -lt $FactFields.Count; $i++) { "MAX(CONVERT(nvarchar({2}), {0})) AS [{1}]" -f $fc[$FactFields[$i]], $FactFields[$i], $(if ($FactFields[$i] -like 'si_affected_*') { 'max' } else { '4000' }) })
     $page = Get-SIDuplicateCheckSql -Part 'page' -Fields $Fields -InlineFacts $FactFields
     $fx = @"
 IF OBJECT_ID('tempdb..#fx') IS NOT NULL DROP TABLE #fx;
@@ -552,6 +602,7 @@ INTO #fx
 FROM sidata.Finding AS f
 CROSS APPLY (SELECT CHARINDEX(N'|', f.RaFindingKey) AS P) AS sp
 CROSS APPLY (SELECT CONVERT(nvarchar(450), LEFT(f.RaFindingKey, sp.P - 1)) AS Owner, CONVERT(nvarchar(900), LOWER(SUBSTRING(f.RaFindingKey, sp.P + 1, 900))) AS KeyPart) AS o
+$(Get-SIDupFullListApplySql)
 WHERE f.CollectionId = CONVERT(int, @cid) AND f.RaFindingKey IS NOT NULL AND sp.P > 1 AND o.Owner IN (SELECT Owner FROM @o)
 GROUP BY o.Owner, o.KeyPart;
 "@

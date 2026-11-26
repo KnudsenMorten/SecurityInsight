@@ -37,7 +37,10 @@ public sealed class NotSeenModel : SI.Management.Web.Columns.DataViewPageModel
         catch (Exception ex) when (ex is not OperationCanceledException) { _log.LogWarning(ex, "the lifecycle settings could not be read; the defaults are shown"); }
         try
         {
-            View = await _store.ReadAsync(RetiredDays, ct);
+            // #1400 (owner 2026-11-26: "memory issues must not be a problem in any step"): each list a page at a time (?p= / ?rp=),
+            // never every not-seen CI in one read; an export reads every page of its list (Chunks)
+            var size = SqlAssetLifecycleStore.PageSize;
+            View = await _store.ReadPageAsync(RetiredDays, new NotSeenPaging((PageOf("p") - 1) * size, (PageOf("rp") - 1) * size, size), ct);
             if (!Exporting) await LoadTablesAsync(ct);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -53,11 +56,37 @@ public sealed class NotSeenModel : SI.Management.Web.Columns.DataViewPageModel
 
     protected override IReadOnlyList<SI.Management.Web.Columns.DataTable> BuildTables() =>
     [
-        Assets(View.NotSeen, "notseen", "cmdb-notseen", "Not seen anymore", "data-not-seen-table", User.IsAdmin()),
-        Assets(View.Retired, "retired", "cmdb-retired", "Retired recently", "data-retired-table", false),
+        Assets(View.NotSeen, "notseen", "cmdb-notseen", "Not seen anymore", "data-not-seen-table", User.IsAdmin(), Exporting ? ExportChunks(NotSeenPaging.NotSeen) : null, View.NotSeenTotal),
+        Assets(View.Retired, "retired", "cmdb-retired", "Retired recently", "data-retired-table", false, Exporting ? ExportChunks(NotSeenPaging.RetiredList) : null, View.RetiredTotal),
     ];
 
-    private static SI.Management.Web.Columns.DataTable Assets(IReadOnlyList<NotSeenAsset> rows, string id, string view, string title, string marker, bool retire)
+    /// The page of a list the address asks for (?p= not seen, ?rp= retired; 1 = the first).
+    private int PageOf(string key) =>
+        int.TryParse(Request?.Query[key], System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var n) && n >= 1
+            ? Math.Min(n, int.MaxValue / SqlAssetLifecycleStore.PageSize) : 1;
+
+    /// The number of pages of a list.
+    public static long Pages(long total) => Math.Max(1, (total + SqlAssetLifecycleStore.PageSize - 1) / SqlAssetLifecycleStore.PageSize);
+
+    /// This page's address with one list's page changed.
+    public string PageLink(string key, long page)
+    {
+        var parts = Request.Query.Where(q => q.Key != key && q.Key != "handler").SelectMany(q => q.Value.Select(v => Uri.EscapeDataString(q.Key) + "=" + Uri.EscapeDataString(v ?? ""))).ToList();
+        if (page > 1) parts.Add(key + "=" + page.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        return Request.Path + (parts.Count == 0 ? "" : "?" + string.Join("&", parts));
+    }
+
+    /// #1400 an export's rows: EVERY row of one list, a chunk at a time (never the page shown alone, never all in one read).
+    private Func<int, CancellationToken, Task<IReadOnlyList<object>>> ExportChunks(string list) => async (n, ct) =>
+    {
+        var size = SI.Management.Core.ProData.ProDataFilters.ExportChunk;
+        var skip = (int)Math.Min(int.MaxValue, (n - 1L) * size);
+        var v = await _store.ReadPageAsync(RetiredDays, new NotSeenPaging(skip, skip, size, list), ct);
+        return (list == NotSeenPaging.NotSeen ? v.NotSeen : v.Retired).Cast<object>().ToList();
+    };
+
+    private static SI.Management.Web.Columns.DataTable Assets(IReadOnlyList<NotSeenAsset> rows, string id, string view, string title, string marker, bool retire,
+        Func<int, CancellationToken, Task<IReadOnlyList<object>>>? chunks = null, long? total = null)
     {
         static NotSeenAsset A(object o) => (NotSeenAsset)o;
         var cols = new List<SI.Management.Web.Columns.DataColumn>
@@ -80,7 +109,7 @@ public sealed class NotSeenModel : SI.Management.Web.Columns.DataViewPageModel
         if (retire) cols.Add(new("Retire", "Retire now", _ => null));
         return new SI.Management.Web.Columns.DataTable
         {
-            Id = id, View = view, Title = title, Rows = rows.Cast<object>().ToList(), Columns = cols, Marker = marker,
+            Id = id, View = view, Title = title, Rows = chunks is null ? rows.Cast<object>().ToList() : Array.Empty<object>(), Chunks = chunks, ExpectedRows = chunks is null ? null : total, KeyOf = o => A(o).CiKey, Columns = cols, Marker = marker,
             Ci = SI.Management.Core.ProData.RowCiKey.AssetKey, RefOf = o => new SI.Management.Web.Columns.RowRef(A(o).CiKey),
             RowAttributes = o => new Dictionary<string, string?> { ["data-asset"] = A(o).CiKey },
         };

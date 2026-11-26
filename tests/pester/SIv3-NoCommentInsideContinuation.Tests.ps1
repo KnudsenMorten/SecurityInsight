@@ -35,8 +35,10 @@ BeforeAll {
     function script:Find-SICommentInContinuation {
         param([Parameter(Mandatory)][string]$Root)
         $found = New-Object System.Collections.ArrayList
+        # the test tree is left out on EITHER separator: the runner is Linux, where '\\tests\\' matched nothing and this
+        # file's own repro (a comment inside a continuation, on purpose) was reported as a shipped offender (#1415)
         $files = Get-ChildItem -Path $Root -Filter *.ps1 -Recurse -File -ErrorAction SilentlyContinue |
-                    Where-Object { $_.FullName -notmatch '\\tests\\' }
+                    Where-Object { $_.FullName -notmatch '[\\/]tests[\\/]' }
         foreach ($f in $files) {
             $lines = [System.IO.File]::ReadAllLines($f.FullName)
             for ($i = 0; $i -lt $lines.Count - 1; $i++) {
@@ -102,7 +104,7 @@ Describe '🔒 NO SHIPPED FILE PUTS A COMMENT INSIDE A CONTINUATION' {
     It 'the scanner actually reads files -- or the assertion below is vacuous' {
         # A source scan that matches no files passes for the wrong reason.
         @(Get-ChildItem -Path $script:SIRootDir -Filter *.ps1 -Recurse -File |
-            Where-Object { $_.FullName -notmatch '\\tests\\' }).Count | Should -BeGreaterThan 100
+            Where-Object { $_.FullName -notmatch '[\\/]tests[\\/]' }).Count | Should -BeGreaterThan 100
     }
 
     It 'and finds none' {

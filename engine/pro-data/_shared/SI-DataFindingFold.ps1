@@ -30,6 +30,7 @@
 
 $script:SIFoldRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 if (-not (Get-Command -Name Test-SIFindingFoldSide -ErrorAction SilentlyContinue)) { . ([IO.Path]::Combine($script:SIFoldRoot, 'data-model', 'SI-RecommendationEquivalence.ps1')) }
+if (-not (Get-Command -Name Get-SIDataFullListSql -ErrorAction SilentlyContinue)) { . ([IO.Path]::Combine($script:SIFoldRoot, '_shared', 'data-sql', 'SI-FullListSql.ps1')) }
 
 function Get-SIDataFoldColumns {
     <# PURE. The SI fields a fold rule may read in the database -> their expression over a finding row f (bk = its own key parts). #>
@@ -59,13 +60,23 @@ CROSS APPLY (SELECT LEFT(CASE WHEN LOWER(f.ConfigurationId) = o.KeyPart THEN f.C
 '@
 }
 
+function Get-SIDataFoldWidth {
+    <# PURE. #1403 the width a fold value is compared at: an affected list in full (max), any other value 4000 as before. #>
+    param([string]$Field)
+    if ($Field -like 'si_affected_*' -or $Field -like 'Affected*') { return 'max' }
+    '4000'
+}
+
 function Get-SIDataFoldSourceSql {
     <# PURE. The rows a rule is worked out over, alias f: the collection's (@c) findings and its evidence rows (their stored row);
        EvidenceId is NULL for a finding. #>
     $flds = 'ConfigurationId', 'Cve', 'Title', 'ReportName', 'SecurityDomain', 'Category', 'Subcategory', 'Component', 'AffectedProduct', 'AffectedVendor', 'AffectedVersion'
-    $a = (@($flds | ForEach-Object { "f0.$_" })) -join ', '
+    # #1403 the affected lists read in FULL (a list that fills its NVARCHAR(400) column, from the finding's document)
+    $a = (@($flds | ForEach-Object {
+                if ($_ -like 'Affected*') { '{0} AS {1}' -f (Get-SIDataFullListSql -Column ('f0.' + $_) -Bytes 800 -Keys ('si_affected_' + $_.Substring(8).ToLowerInvariant()), ('SI_' + $_) -Json 'f0.DetailJson'), $_ }
+                else { "f0.$_" } })) -join ', '
     $b = (@($flds | ForEach-Object { if ($_ -in 'ConfigurationId', 'Title', 'ReportName') { "COALESCE(j0.$_, e0.$_)" } else { "j0.$_" } })) -join ', '
-    $w = (@($flds | ForEach-Object { "$_ nvarchar(4000) '$.$_'" })) -join ', '
+    $w = (@($flds | ForEach-Object { "$_ nvarchar($(Get-SIDataFoldWidth $_)) '$.$_'" })) -join ', '
 @"
 (SELECT f0.FindingId, CAST(NULL AS bigint) AS EvidenceId, f0.RaFindingKey, $a
  FROM sidata.Finding AS f0 WHERE f0.CollectionId = @c AND f0.RaFindingKey IS NOT NULL
@@ -90,7 +101,7 @@ function Get-SIDataFoldValuesSql {
     <# One rule side: the DISTINCT values of its fields over the collection's rows (@CollectionId). c0..cn = the fields in order. #>
     param([Parameter(Mandatory)][string[]]$Fields)
     $cols = Get-SIDataFoldColumns
-    $sel = @(for ($i = 0; $i -lt $Fields.Count; $i++) { "CONVERT(nvarchar(4000), {0}) AS c{1}" -f $cols[$Fields[$i]], $i })
+    $sel = @(for ($i = 0; $i -lt $Fields.Count; $i++) { "CONVERT(nvarchar({2}), {0}) AS c{1}" -f $cols[$Fields[$i]], $i, (Get-SIDataFoldWidth $Fields[$i]) })
     @"
 SET NOCOUNT ON;
 DECLARE @c INT = CONVERT(int, @CollectionId);
@@ -165,8 +176,8 @@ function Get-SIDataFoldApplySqlText {
         $names.Add(("WHEN {0} THEN N'{1}'" -f $ri, ([string]$r.Group).Replace("'", "''")))
         foreach ($side in 'ev', 'cv') {
             $flds = if ($side -eq 'ev') { $r.EvFields } else { $r.CvFields }
-            $with = @("r int '$.r'", "m nvarchar(4000) '$.m'") + @(for ($i = 0; $i -lt $flds.Count; $i++) { "v$i nvarchar(4000) '$.v$i'" })
-            $on = @(for ($i = 0; $i -lt $flds.Count; $i++) { "ISNULL(CONVERT(nvarchar(4000), $($cols[$flds[$i]])), N'') = ISNULL(j.v$i, N'') COLLATE DATABASE_DEFAULT" })
+            $with = @("r int '$.r'", "m nvarchar(4000) '$.m'") + @(for ($i = 0; $i -lt $flds.Count; $i++) { "v$i nvarchar($(Get-SIDataFoldWidth $flds[$i])) '$.v$i'" })
+            $on = @(for ($i = 0; $i -lt $flds.Count; $i++) { "ISNULL(CONVERT(nvarchar($(Get-SIDataFoldWidth $flds[$i])), $($cols[$flds[$i]])), N'') = ISNULL(j.v$i, N'') COLLATE DATABASE_DEFAULT" })
             $tbl = if ($side -eq 'ev') { '#e' } else { '#c' }
             # a canonical is a FINDING (never an evidence row)
             $only = if ($side -eq 'cv') { ' AND f.EvidenceId IS NULL' } else { '' }

@@ -20,6 +20,7 @@
 
 # #1332 the readers' finding source (the reader jobs' seam: their reads of the findings go to the served views)
 if (-not (Get-Command -Name 'New-SIFindingSourceInvoke' -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot 'SI-FindingSource.ps1') }
+if (-not (Get-Command -Name 'Get-SIDataFullTextSql' -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot 'SI-FullListSql.ps1') }
 
 # The certificate lookup and the SPN token are the identity ledger's (same SPN, same host). Loaded, not copied.
 if (-not (Get-Command -Name 'Get-SILedgerAccessToken' -ErrorAction SilentlyContinue)) {
@@ -856,7 +857,9 @@ $script:SIDataRowColumns = [ordered]@{
     RaScopePatchCycle           = @{ Kind = 'value'; Fields = @('si_patch_cycle') }
     RaScopeOsFamily             = @{ Kind = 'value'; Fields = @('si_os_family') }
     RaScopeSubCi                = @{ Kind = 'value'; Fields = @('si_servicenow_subci') }
-    RaScopeAffectedProduct      = @{ Kind = 'value'; Fields = @('si_affected_product') }
+    # #1403 the product list kept up to its column (a longer list was NULL: the scope rule then never matched); the reader reads a
+    # list that fills the column in full from the document (SI-VulnDesired.ps1)
+    RaScopeAffectedProduct      = @{ Kind = 'value'; Fields = @('si_affected_product'); Full = 4000 }
     RaFillRiskFactorProbability = @{ Kind = 'fill'; Fields = @('RiskFactor_Probability_Detailed') }
     RaFillRiskFactorConsequence = @{ Kind = 'fill'; Fields = @('RiskFactor_Consequence_Detailed') }
 }
@@ -875,6 +878,11 @@ function Get-SIDataRowColumnExpr {
     $one = if ($Parsed) { { param([string]$fld) $n = (Get-SIDataRowFieldList).IndexOf($fld); "COALESCE(CASE WHEN LEN(rj.[v$n]) <= 4000 THEN rj.[v$n] END, rj.[j$n])" } }
            else { { param([string]$fld) "COALESCE(JSON_VALUE($Json, N'$.$fld'), JSON_QUERY($Json, N'$.$fld'))" } }
     if ($c.Kind -eq 'fill') { return ("CASE WHEN LEN(TRIM(CHAR(9) + CHAR(10) + CHAR(13) + CHAR(32) FROM COALESCE({0}, N''))) > 0 THEN 1 ELSE 0 END" -f (& $one $c.Fields[0])) }
+    if ($c.Contains('Full') -and $c.Fields.Count -eq 1) {
+        $n0 = (Get-SIDataRowFieldList).IndexOf($c.Fields[0])
+        if ($Parsed) { return ("COALESCE(LEFT(rj.[v{0}], {1}), rj.[j{0}])" -f $n0, [int]$c.Full) }
+        return ("COALESCE(LEFT({0}, {1}), JSON_QUERY({2}, N'$.{3}'))" -f (Get-SIDataFullTextSql -Key $c.Fields[0] -Json $Json), [int]$c.Full, $Json, $c.Fields[0])
+    }
     if ($c.Fields.Count -eq 1) { return (& $one $c.Fields[0]) }
     'COALESCE(' + ((@($c.Fields | ForEach-Object { "NULLIF($(& $one $_), N'')" })) -join ', ') + ')'
 }
@@ -944,7 +952,7 @@ function Get-SIDataDeriveFindingSql {
         $svc += ",`r`n    FixRemediation         = LEFT(NULLIF(LTRIM(RTRIM(JSON_VALUE(f.DetailJson, '$.si_fix_remediation'))), N''), 4000)," +
                 "`r`n    FixRecommendedUpdate   = LEFT(NULLIF(LTRIM(RTRIM(JSON_VALUE(f.DetailJson, '$.si_fix_recommended_update'))), N''), 1000)," +
                 "`r`n    FixRecommendedUpdateId = LEFT(NULLIF(LTRIM(RTRIM(JSON_VALUE(f.DetailJson, '$.si_fix_recommended_update_id'))), N''), 1000)," +
-                "`r`n    AffectedSoftware       = LEFT(NULLIF(LTRIM(RTRIM(JSON_VALUE(f.DetailJson, '$.si_affected_software'))), N''), 2000)"
+                "`r`n    AffectedSoftware       = LEFT(NULLIF(LTRIM(RTRIM(" + (Get-SIDataFullTextSql -Key 'si_affected_software') + ")), N''), 2000)"
     }
     if ($Category) { $svc += ",`r`n    RaCategory        = LEFT(JSON_VALUE(f.DetailJson, '$.Category'), 128)" }
     if ($RowColumns) { foreach ($rc in $script:SIDataRowColumns.Keys) { $svc += (",`r`n    {0} = {1}" -f $rc, (Get-SIDataRowColumnExpr -Column $rc -Parsed)) } }
@@ -1067,7 +1075,8 @@ function Get-SIDataDeriveTypedSql {
         & $add 'FixRemediation' (& $trim 'si_fix_remediation' 4000)
         & $add 'FixRecommendedUpdate' (& $trim 'si_fix_recommended_update' 1000)
         & $add 'FixRecommendedUpdateId' (& $trim 'si_fix_recommended_update_id' 1000)
-        & $add 'AffectedSoftware' (& $trim 'si_affected_software' 2000)
+        # #1403 the WHOLE text cut to the column (a longer one was left NULL: the readers then read it in full from the document)
+        & $add 'AffectedSoftware' ("LEFT(NULLIF(LTRIM(RTRIM(rj.[v$(& $at 'si_affected_software')])), N''), 2000)")
     }
     if ($Category) { & $add 'RaCategory' "LEFT($(& $jv 'Category'), 128)" }
     if ($RowColumns) {
@@ -2670,6 +2679,29 @@ function Write-SIDataJsonRows {
     $total
 }
 
+function Write-SIDataJsonRowsFrom {
+    <#
+        #1399 (owner 2026-11-26: "memory issues must not be a problem in any step"): Write-SIDataJsonRows over -Source, converted
+        (-Convert { param($x) <json text> }) and written -ChunkRows at a time -- the JSON text of every row is never held at once.
+        The same statements, the same rows, the same checks (each chunk of Write-SIDataJsonRows is its own statement already).
+        Returns the rows written.
+    #>
+    param([Parameter(Mandatory)][scriptblock]$Invoke, [Parameter(Mandatory)][string]$Sql, [AllowNull()][AllowEmptyCollection()][object[]]$Source = @(),
+          [Parameter(Mandatory)][scriptblock]$Convert, [hashtable]$Params = @{}, [ref]$ChunkChars, [string]$What = 'rows', [int]$ChunkRows = 5000)
+    $total = 0L
+    $w = @{ Invoke = $Invoke; Sql = $Sql; Params = $Params; What = $What }; if ($PSBoundParameters.ContainsKey('ChunkChars') -and $null -ne $ChunkChars) { $w['ChunkChars'] = $ChunkChars }
+    $buf = New-Object System.Collections.Generic.List[string]
+    foreach ($x in @($Source)) {
+        if ($null -eq $x) { continue }
+        $buf.Add([string](& $Convert $x))
+        if ($buf.Count -ge $ChunkRows) {
+            $total += Write-SIDataJsonRows @w -Items $buf.ToArray()
+            $buf.Clear()
+        }
+    }
+    if ($buf.Count -gt 0) { $total += Write-SIDataJsonRows @w -Items $buf.ToArray() }
+    $total
+}
 function Get-SIDataPurgeDerivedTables {
     <#
         PURE. #881 The tables the purge of a collection empties for it, read from Get-SIDataPurgeCollectionSql itself (ONE

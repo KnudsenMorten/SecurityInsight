@@ -32,6 +32,13 @@
         @if (AppInfo.Version.Length > 0) { <span class="version-pill" data-version title="@AppInfo.Version@(AppInfo.Build.BuiltText.Length > 0 ? " (" + AppInfo.Build.BuiltText + ")" : "")">v@(SI.Management.Web.Changes.InstalledRelease.Short(AppInfo.Version))</span> }
     </header>
     <main id="main">
+        @* #1396: the most visible screen says when no new data has been published for longer than the limit -- the reader's
+           words for everyone on it (no link, no run detail: it is a wall screen) *@
+        @if (signedIn && Context.RequestServices.GetService(typeof(SI.Management.Web.Collection.IStaleDataNotices)) is SI.Management.Web.Collection.IStaleDataNotices staleSource
+             && await staleSource.CurrentAsync(Context.RequestAborted) is { } stale)
+        {
+            <partial name="_StaleDataNotice" model="(stale, false)" />
+        }
         @RenderBody()
     </main>
     @* BRAND-2.10 (#313): the times in the browser's own zone (the page reloads itself, so no live update is needed) *@

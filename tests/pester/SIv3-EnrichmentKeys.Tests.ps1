@@ -42,7 +42,7 @@ Describe 'Get-AzureExposureGraphAccessEdges indexes an edge by node id AND by na
                                    TargetNodeId = 'N-ABC'; TargetNodeName = 'KV-Prod'; TargetNodeLabel = 'microsoft.keyvault/vaults'; EdgeLabel = 'has permissions to' }
             ) }
         }
-        $map = Get-AzureExposureGraphAccessEdges
+        $map = Get-AzureExposureGraphAccessEdges -Keys @('n-abc', 'kv-prod')
         $map.ContainsKey('nodeid:n-abc') | Should -BeTrue
         $map.ContainsKey('kv-prod')      | Should -BeTrue
         @($map['nodeid:n-abc'])[0].SourceName | Should -Be 'AdminUser'

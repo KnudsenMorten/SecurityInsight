@@ -69,7 +69,9 @@ Describe 'a blocking statement keeps the update alive' {
         $log.ToString() | Should -Match '(?m)^    9j\. PUBLISHED COPIES: SQL statement running \d+ min\r?$'
     }
     It 'the default interval is 5 minutes; the step falls back to the step the update is in' {
-        $script:SIUpdateSqlBeatLoop | Should -Match 'WaitOne\(\$IntervalMs\)'
+        # #1406: the row is beaten every -BeatSeconds (60 s, at most the interval); the line every -IntervalSeconds
+        $script:SIUpdateSqlBeatLoop | Should -Match 'WaitOne\(\$BeatMs\)'
+        ((Get-Command Start-SIUpdateSqlBeat).ScriptBlock.Ast.Body.ParamBlock.Parameters | Where-Object { $_.Name.VariablePath.UserPath -eq 'BeatSeconds' }).DefaultValue.Value | Should -Be 60
         ((Get-Command Start-SIUpdateSqlBeat).ScriptBlock.Ast.Body.ParamBlock.Parameters | Where-Object { $_.Name.VariablePath.UserPath -eq 'IntervalSeconds' }).DefaultValue.Value | Should -Be 300
         $global:SI_UpdateStage = '9q. COLLECT PRODUCERS (started only by the pipeline)'
         try {
@@ -144,7 +146,12 @@ Describe 'past the cap the update is judged by the unchanged rule' {
         $exec = [pscustomobject]@{ name = 'exec-1'; properties = [pscustomobject]@{ status = 'Running'; startTime = $last.AddMinutes(-60).ToString('o') } }
         $locks = @([pscustomobject]@{ LockName = 'updater'; Holder = 'caj-si-updater:exec-1'; HeartbeatUtc = $last })
         (Get-SIExecutionLiveness -Execution $exec -Kind updater -Locks $locks -NowUtc $last.AddMinutes(14)).Alive | Should -BeTrue
+        # #1406: 15 minutes after its last beat an update that only signed in is dead as before; one CHANGING the install (its
+        # install lock / run beat row) is quiet (waited for) and dead only past the 6 h fallback
         (Get-SIExecutionLiveness -Execution $exec -Kind updater -Locks $locks -NowUtc $last.AddMinutes(16)).Alive | Should -BeFalse
+        $chg = @($locks) + [pscustomobject]@{ LockName = 'install'; Holder = 'caj-si-updater:exec-1'; HeartbeatUtc = $last }
+        (Get-SIExecutionLiveness -Execution $exec -Kind updater -Locks $chg -NowUtc $last.AddMinutes(16)).Quiet | Should -BeTrue
+        (Get-SIExecutionLiveness -Execution $exec -Kind updater -Locks $chg -NowUtc $last.AddMinutes(301)).Alive | Should -BeFalse
     }
     It 'a hang OUTSIDE a statement is never beaten: the beat lives only inside Invoke-SIUpdateSqlBeat' {
         $script:SIUpdateSqlBeatActive | Should -BeFalse

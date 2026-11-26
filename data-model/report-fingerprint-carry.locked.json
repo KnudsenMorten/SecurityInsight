@@ -255,6 +255,95 @@
           ]
         }
       }
+    },
+    {
+      "id": "report-affected-lists-complete-2026-11-26",
+      "decided": "owner 2026-11-26 (\"data quality is key. trust\" / \"no data drop\"; coordinator: \"no churn, no drops\")",
+      "description": "The Detailed CVE report keeps up to 256 affected products, versions, vendors, software items and fixes per device and CVE (it kept 8 of each list, cut on its own, so a product's own software item could drop out in one run and come back in the next), sorts every list (the same software always gives the same lists), and says when a list reached the limit (si_affected_software_complete false). The report lists the same findings -- no finding leaves it because of the change -- so the fingerprint is carried and nothing closes as report changed.",
+      "reports": {
+        "Device_Missing_CVEs_Detailed": {
+          "restoreText": [
+            {
+              "now": "SI_AffectedVendorSet = make_set(tolower(tostring(SoftwareVendor)), 256), SI_AffectedProductSet = make_set(tolower(tostring(SoftwareName)), 256), SI_AffectedVersionSet = make_set(tostring(SoftwareVersion), 256), SI_FixReferenceSet = make_set(tostring(RecommendedSecurityUpdate), 256), _swDisplaySet = make_set_if(_swDisplay, isnotempty(trim(\" \", _swDisplay)), 256), _fixUpdateSet = make_set_if(_fixUpdate, isnotempty(_fixUpdate), 256), _fixUpdateIdSet = make_set_if(_fixUpdateId, isnotempty(_fixUpdateId), 256),",
+              "was": "SI_AffectedVendorSet = make_set(tolower(tostring(SoftwareVendor)), 8), SI_AffectedProductSet = make_set(tolower(tostring(SoftwareName)), 8), SI_AffectedVersionSet = make_set(tostring(SoftwareVersion), 8), SI_FixReferenceSet = make_set(tostring(RecommendedSecurityUpdate), 8), _swDisplaySet = make_set_if(_swDisplay, isnotempty(trim(\" \", _swDisplay)), 8), _fixUpdateSet = make_set_if(_fixUpdate, isnotempty(_fixUpdate), 8), _fixUpdateIdSet = make_set_if(_fixUpdateId, isnotempty(_fixUpdateId), 8),"
+            },
+            {
+              "now": "// #1403 the affected software COMPLETE and STABLE: up to 256 per device and CVE (never cut on real data), each list // sorted -- the same software always gives the same lists, whatever order the source returns it in; a list that // reached the limit says so (si_affected_software_complete false), never cut silently | extend si_affected_software_complete = not(coalesce(array_length(SI_AffectedProductSet), 0) >= 256 or coalesce(array_length(SI_AffectedVersionSet), 0) >= 256 or coalesce(array_length(SI_AffectedVendorSet), 0) >= 256 or coalesce(array_length(_swDisplaySet), 0) >= 256) | extend SI_AffectedVendorSet = iff(array_length(SI_AffectedVendorSet) > 0, array_sort_asc(SI_AffectedVendorSet), SI_AffectedVendorSet), SI_AffectedProductSet = iff(array_length(SI_AffectedProductSet) > 0, array_sort_asc(SI_AffectedProductSet), SI_AffectedProductSet), SI_AffectedVersionSet = iff(array_length(SI_AffectedVersionSet) > 0, array_sort_asc(SI_AffectedVersionSet), SI_AffectedVersionSet), SI_FixReferenceSet = iff(array_length(SI_FixReferenceSet) > 0, array_sort_asc(SI_FixReferenceSet), SI_FixReferenceSet), _swDisplaySet = iff(array_length(_swDisplaySet) > 0, array_sort_asc(_swDisplaySet), _swDisplaySet), _fixUpdateSet = iff(array_length(_fixUpdateSet) > 0, array_sort_asc(_fixUpdateSet), _fixUpdateSet), _fixUpdateIdSet = iff(array_length(_fixUpdateIdSet) > 0, array_sort_asc(_fixUpdateIdSet), _fixUpdateIdSet)",
+              "was": ""
+            },
+            {
+              "now": "si_exploit_verified, si_in_exploit_kit, si_affected_software_complete",
+              "was": "si_exploit_verified, si_in_exploit_kit"
+            },
+            {
+              "now": "// si si_in_exploit_kit <- si_in_exploit_kit, si_exposed_devices <- si_exposed_devices, si_affected_software_complete <- si_affected_software_complete, si_fix_reference <- SI_FixReference // si si_reference_url <- si_reference_url, si_published <- si_published, si_affected_product <- SI_AffectedProduct, si_affected_vendor <- SI_AffectedVendor // si si_affected_version <- SI_AffectedVersion, si_asset_criticality <- cmdbCriticality",
+              "was": "// si si_in_exploit_kit <- si_in_exploit_kit, si_exposed_devices <- si_exposed_devices, si_fix_reference <- SI_FixReference, si_reference_url <- si_reference_url // si si_published <- si_published, si_affected_product <- SI_AffectedProduct, si_affected_vendor <- SI_AffectedVendor, si_affected_version <- SI_AffectedVersion // si si_asset_criticality <- cmdbCriticality"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "report-summary-lists-sorted-2026-11-26",
+      "decided": "review of 3.1.51 agreement round (coordinator 2026-11-26: \"Summary CVE report list: sort it too (display stability), cap may stay\")",
+      "description": "The Summary CVE report sorts its affected software, its recommended updates and their ids (they came in the order the source returned them, which moved run to run). The same values, in a stable order: the report lists the same findings, so the fingerprint is carried and nothing closes as report changed.",
+      "reports": {
+        "Device_Missing_CVEs_Summary": {
+          "restoreText": [
+            {
+              "now": "strcat_array(array_sort_asc(set_difference(set_union(split(strcat_array(_swAll, \";\"), \";\"), dynamic([])), dynamic([\"\"]))), \";\")",
+              "was": "strcat_array(set_difference(set_union(split(strcat_array(_swAll, \";\"), \";\"), dynamic([])), dynamic([\"\"])), \";\")"
+            },
+            {
+              "now": "strcat_array(array_sort_asc(set_difference(set_union(split(strcat_array(_fixAll, \";\"), \";\"), dynamic([])), dynamic([\"\"]))), \";\")",
+              "was": "strcat_array(set_difference(set_union(split(strcat_array(_fixAll, \";\"), \";\"), dynamic([])), dynamic([\"\"])), \";\")"
+            },
+            {
+              "now": "strcat_array(array_sort_asc(set_difference(set_union(split(strcat_array(_fixIdAll, \";\"), \";\"), dynamic([])), dynamic([\"\"]))), \";\")",
+              "was": "strcat_array(set_difference(set_union(split(strcat_array(_fixIdAll, \";\"), \";\"), dynamic([])), dynamic([\"\"])), \";\")"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "report-defender-accepted-snapshot-2026-11-26",
+      "decided": "owner 2026-11-26 (\"memory issues must not be a problem in any step\" / \"all must be in 52 as bundle\"; #1399, the two-agent reviews of 716e218a9 and 9c8b49a87)",
+      "description": "Every reader of SI_AzureRecommendation_CL -- the two Defender recommendation reports and the Defender hand-off of the two Azure recommendation reports (_dfcPairs) -- takes the ONE accepted snapshot (engine\\_shared\\SI-AzureRecSnapshot.ps1: the newest snapshot with its SnapshotComplete marker and at least that many distinct keys, else the newest from before the marker, else the newest there is -- never none) and one row per key. The keys are the same; only a copy of a row (a run published by every part, or a retry) is no longer read twice, and a half-posted snapshot is not read -- so the fingerprint is carried and nothing closes as report changed.",
+      "reports": {
+        "Azure_Recommendations_Summary": {
+          "restoreText": [
+            {
+              "now": "#1399 the ONE accepted snapshot (engine\\_shared\\SI-AzureRecSnapshot.ps1 -- generated, never edited here): the keys come // from the snapshot the Defender recommendation report reads //__SI_REC_SNAPSHOT_BEGIN__ | where CollectionTime == toscalar(((SI_AzureRecommendation_CL | where TimeGenerated > ago(8d)) | where tostring(column_ifexists(\"RowKind\", \"\")) == \"SnapshotComplete\" | where isnotempty(CollectionTime) | summarize _siExp = max(toint(column_ifexists(\"AffectedEntityCount\", int(null)))) by CollectionTime | join kind=inner ((SI_AzureRecommendation_CL | where TimeGenerated > ago(8d)) | where tostring(column_ifexists(\"RowKind\", \"\")) != \"SnapshotComplete\" | where isnotempty(CollectionTime) | summarize by CollectionTime, _siK = strcat(tostring(column_ifexists(\"PrimaryEntityId\", \"\")), \"|\", tostring(column_ifexists(\"RowKind\", \"\")), \"|\", tolower(tostring(column_ifexists(\"ResourceIdLower\", \"\"))), \"|\", tolower(tostring(column_ifexists(\"AssessmentKey\", \"\")))) | summarize _siN = count() by CollectionTime) on CollectionTime | where _siN >= _siExp | project CollectionTime, _siP = 1) | union ((SI_AzureRecommendation_CL | where TimeGenerated > ago(8d)) | where tostring(column_ifexists(\"RowKind\", \"\")) != \"SnapshotComplete\" | where isnotempty(CollectionTime) | summarize by CollectionTime | extend _siFm = toscalar((SI_AzureRecommendation_CL | where TimeGenerated > ago(8d)) | where tostring(column_ifexists(\"RowKind\", \"\")) == \"SnapshotComplete\" | where isnotempty(CollectionTime) | summarize min(CollectionTime)) | where isnull(_siFm) or CollectionTime < _siFm | project CollectionTime, _siP = 2) | union ((SI_AzureRecommendation_CL | where TimeGenerated > ago(8d)) | where tostring(column_ifexists(\"RowKind\", \"\")) != \"SnapshotComplete\" | where isnotempty(CollectionTime) | summarize by CollectionTime | project CollectionTime, _siP = 3) | summarize arg_max(CollectionTime, *) by _siP | summarize arg_min(_siP, CollectionTime) | project CollectionTime) //__SI_REC_SNAPSHOT_END__ // #200",
+              "was": "#200"
+            }
+          ]
+        },
+        "Azure_Recommendations_Detailed": {
+          "restoreText": [
+            {
+              "now": "#1399 the ONE accepted snapshot (engine\\_shared\\SI-AzureRecSnapshot.ps1 -- generated, never edited here): the keys come // from the snapshot the Defender recommendation report reads //__SI_REC_SNAPSHOT_BEGIN__ | where CollectionTime == toscalar(((SI_AzureRecommendation_CL | where TimeGenerated > ago(8d)) | where tostring(column_ifexists(\"RowKind\", \"\")) == \"SnapshotComplete\" | where isnotempty(CollectionTime) | summarize _siExp = max(toint(column_ifexists(\"AffectedEntityCount\", int(null)))) by CollectionTime | join kind=inner ((SI_AzureRecommendation_CL | where TimeGenerated > ago(8d)) | where tostring(column_ifexists(\"RowKind\", \"\")) != \"SnapshotComplete\" | where isnotempty(CollectionTime) | summarize by CollectionTime, _siK = strcat(tostring(column_ifexists(\"PrimaryEntityId\", \"\")), \"|\", tostring(column_ifexists(\"RowKind\", \"\")), \"|\", tolower(tostring(column_ifexists(\"ResourceIdLower\", \"\"))), \"|\", tolower(tostring(column_ifexists(\"AssessmentKey\", \"\")))) | summarize _siN = count() by CollectionTime) on CollectionTime | where _siN >= _siExp | project CollectionTime, _siP = 1) | union ((SI_AzureRecommendation_CL | where TimeGenerated > ago(8d)) | where tostring(column_ifexists(\"RowKind\", \"\")) != \"SnapshotComplete\" | where isnotempty(CollectionTime) | summarize by CollectionTime | extend _siFm = toscalar((SI_AzureRecommendation_CL | where TimeGenerated > ago(8d)) | where tostring(column_ifexists(\"RowKind\", \"\")) == \"SnapshotComplete\" | where isnotempty(CollectionTime) | summarize min(CollectionTime)) | where isnull(_siFm) or CollectionTime < _siFm | project CollectionTime, _siP = 2) | union ((SI_AzureRecommendation_CL | where TimeGenerated > ago(8d)) | where tostring(column_ifexists(\"RowKind\", \"\")) != \"SnapshotComplete\" | where isnotempty(CollectionTime) | summarize by CollectionTime | project CollectionTime, _siP = 3) | summarize arg_max(CollectionTime, *) by _siP | summarize arg_min(_siP, CollectionTime) | project CollectionTime) //__SI_REC_SNAPSHOT_END__ // #200",
+              "was": "#200"
+            }
+          ]
+        },
+        "Azure_DefenderRecommendations_Summary": {
+          "restoreText": [
+            {
+              "now": "// #1399 the ONE accepted-snapshot rule (engine\\_shared\\SI-AzureRecSnapshot.ps1 -- generated, never edited here): the newest // complete snapshot, one row per key -- never no snapshot while one is there //__SI_REC_SNAPSHOT_BEGIN__ let _recLatest = toscalar((_recAll | where tostring(column_ifexists(\"RowKind\", \"\")) == \"SnapshotComplete\" | where isnotempty(CollectionTime) | summarize _siExp = max(toint(column_ifexists(\"AffectedEntityCount\", int(null)))) by CollectionTime | join kind=inner (_recAll | where tostring(column_ifexists(\"RowKind\", \"\")) != \"SnapshotComplete\" | where isnotempty(CollectionTime) | summarize by CollectionTime, _siK = strcat(tostring(column_ifexists(\"PrimaryEntityId\", \"\")), \"|\", tostring(column_ifexists(\"RowKind\", \"\")), \"|\", tolower(tostring(column_ifexists(\"ResourceIdLower\", \"\"))), \"|\", tolower(tostring(column_ifexists(\"AssessmentKey\", \"\")))) | summarize _siN = count() by CollectionTime) on CollectionTime | where _siN >= _siExp | project CollectionTime, _siP = 1) | union (_recAll | where tostring(column_ifexists(\"RowKind\", \"\")) != \"SnapshotComplete\" | where isnotempty(CollectionTime) | summarize by CollectionTime | extend _siFm = toscalar(_recAll | where tostring(column_ifexists(\"RowKind\", \"\")) == \"SnapshotComplete\" | where isnotempty(CollectionTime) | summarize min(CollectionTime)) | where isnull(_siFm) or CollectionTime < _siFm | project CollectionTime, _siP = 2) | union (_recAll | where tostring(column_ifexists(\"RowKind\", \"\")) != \"SnapshotComplete\" | where isnotempty(CollectionTime) | summarize by CollectionTime | project CollectionTime, _siP = 3) | summarize arg_max(CollectionTime, *) by _siP | summarize arg_min(_siP, CollectionTime) | project CollectionTime); let _rec = _recAll | where CollectionTime == _recLatest and tostring(column_ifexists(\"RowKind\", \"\")) != \"SnapshotComplete\" | extend _siTg = column_ifexists(\"TimeGenerated\", datetime(null)), _siKey = strcat(tostring(column_ifexists(\"PrimaryEntityId\", \"\")), \"|\", tostring(column_ifexists(\"RowKind\", \"\")), \"|\", tolower(tostring(column_ifexists(\"ResourceIdLower\", \"\"))), \"|\", tolower(tostring(column_ifexists(\"AssessmentKey\", \"\")))) | summarize arg_max(_siTg, *) by _siKey | project-away _siKey*, _siTg* //__SI_REC_SNAPSHOT_END__",
+              "was": "let _recLatest = toscalar(_recAll | summarize max(CollectionTime)); let _rec = _recAll | where CollectionTime == _recLatest"
+            }
+          ]
+        },
+        "Azure_DefenderRecommendations_Detailed": {
+          "restoreText": [
+            {
+              "now": "// #1399 the ONE accepted-snapshot rule (engine\\_shared\\SI-AzureRecSnapshot.ps1 -- generated, never edited here): the newest // complete snapshot, one row per key -- never no snapshot while one is there //__SI_REC_SNAPSHOT_BEGIN__ let _recLatest = toscalar((_recAll | where tostring(column_ifexists(\"RowKind\", \"\")) == \"SnapshotComplete\" | where isnotempty(CollectionTime) | summarize _siExp = max(toint(column_ifexists(\"AffectedEntityCount\", int(null)))) by CollectionTime | join kind=inner (_recAll | where tostring(column_ifexists(\"RowKind\", \"\")) != \"SnapshotComplete\" | where isnotempty(CollectionTime) | summarize by CollectionTime, _siK = strcat(tostring(column_ifexists(\"PrimaryEntityId\", \"\")), \"|\", tostring(column_ifexists(\"RowKind\", \"\")), \"|\", tolower(tostring(column_ifexists(\"ResourceIdLower\", \"\"))), \"|\", tolower(tostring(column_ifexists(\"AssessmentKey\", \"\")))) | summarize _siN = count() by CollectionTime) on CollectionTime | where _siN >= _siExp | project CollectionTime, _siP = 1) | union (_recAll | where tostring(column_ifexists(\"RowKind\", \"\")) != \"SnapshotComplete\" | where isnotempty(CollectionTime) | summarize by CollectionTime | extend _siFm = toscalar(_recAll | where tostring(column_ifexists(\"RowKind\", \"\")) == \"SnapshotComplete\" | where isnotempty(CollectionTime) | summarize min(CollectionTime)) | where isnull(_siFm) or CollectionTime < _siFm | project CollectionTime, _siP = 2) | union (_recAll | where tostring(column_ifexists(\"RowKind\", \"\")) != \"SnapshotComplete\" | where isnotempty(CollectionTime) | summarize by CollectionTime | project CollectionTime, _siP = 3) | summarize arg_max(CollectionTime, *) by _siP | summarize arg_min(_siP, CollectionTime) | project CollectionTime); let _rec = _recAll | where CollectionTime == _recLatest and tostring(column_ifexists(\"RowKind\", \"\")) != \"SnapshotComplete\" | extend _siTg = column_ifexists(\"TimeGenerated\", datetime(null)), _siKey = strcat(tostring(column_ifexists(\"PrimaryEntityId\", \"\")), \"|\", tostring(column_ifexists(\"RowKind\", \"\")), \"|\", tolower(tostring(column_ifexists(\"ResourceIdLower\", \"\"))), \"|\", tolower(tostring(column_ifexists(\"AssessmentKey\", \"\")))) | summarize arg_max(_siTg, *) by _siKey | project-away _siKey*, _siTg* //__SI_REC_SNAPSHOT_END__",
+              "was": "let _recLatest = toscalar(_recAll | summarize max(CollectionTime)); let _rec = _recAll | where CollectionTime == _recLatest"
+            }
+          ]
+        }
+      }
     }
   ]
 }

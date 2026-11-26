@@ -62,9 +62,25 @@ public sealed class DataTable
     /// The attributes of a row (e.g. data-request="7") -- the page's own scripts and tests read them.
     public Func<object, IReadOnlyDictionary<string, string?>>? RowAttributes { get; init; }
 
+    /// <summary>
+    /// #1400 (owner 2026-11-26: "memory issues must not be a problem in any step"; "SI never fewer rows than the source"): an
+    /// export's rows after <see cref="Rows"/>, read a CHUNK at a time (the chunk number, 1, 2, ...; no rows = the end) --
+    /// every matching row, each chunk's extra columns read for that chunk only and written on before the next is read. Null =
+    /// the export writes <see cref="Rows"/> (a page's own small list).
+    /// </summary>
+    public Func<int, CancellationToken, Task<IReadOnlyList<object>>>? Chunks { get; init; }
+    /// #1400 the rows the source counted when the export began (null = not counted): an export whose rows differ says so
+    /// (<see cref="SI.Management.Web.Data.ExportSession.Note"/>: the Export sheet, the audit row, the log).
+    public long? ExpectedRows { get; init; }
+    /// #1400 a row's unique key (with <see cref="Chunks"/>: a key that comes twice aborts the export); null = not compared.
+    public Func<object, string?>? KeyOf { get; init; }
+
     public DataViewLayout Layout { get; private set; } = null!;
     public DataColumnCells Cells { get; private set; } = DataColumnCells.None;
     public bool Loaded { get; private set; }
+    private HttpContext? _http;
+    private ILogger? _log;
+    private IReadOnlyList<string> _wanted = Array.Empty<string>();
 
     /// The own columns as the layout knows them.
     public IReadOnlyList<ViewColumn> Own => Columns.Select(c => new ViewColumn(c.Key, c.Label, c.Shown, c.Description)).ToList();
@@ -85,7 +101,8 @@ public sealed class DataTable
         Layout = await new DataViewLayout { View = View, Own = Own, Ci = Ci, Findings = Findings, Shipped = DataViewDefaults.Complete(shipped, probe.Known) }
             .LoadAsync(http, log, ct);
         var wanted = allColumns ? Layout.AllExtras : Layout.ChosenExtras;
-        if (RefOf is not null && wanted.Count > 0)
+        (_http, _log, _wanted) = (http, log, wanted.ToList());
+        if (RefOf is not null && wanted.Count > 0 && Rows.Count > 0)
             Cells = await Layout.CellsAsync(http, log, wanted, Rows.Select(RefOf), CollectionId, ct);
         Loaded = true;
         return this;
@@ -187,12 +204,54 @@ public sealed class DataTable
     /// any extra column the view shows that the offer does not list: what is shown is never left out).
     public IReadOnlyList<string> ExportKeys(bool all) => all ? Columns.Select(c => c.Key).Concat(Layout.AllExtras).ToList() : Shown;
 
-    /// The CSV of the rows with these columns (UTF-8 text; the caller adds the BOM).
-    public string Csv(IReadOnlyList<string> keys)
+    /// <summary>
+    /// #1400 every row an export writes: <see cref="Rows"/>, or (<see cref="Chunks"/>) every chunk in turn -- the extra
+    /// columns of a chunk are read for its rows just before they are written (<see cref="Cells"/> then holds that chunk's).
+    /// </summary>
+    public async IAsyncEnumerable<object> ExportRowsAsync([System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
     {
-        var sb = new StringBuilder();
-        sb.AppendLine(string.Join(",", keys.Select(k => Pages.Findings.IndexModel.Csv(Label(k)))));
-        foreach (var row in Rows) sb.AppendLine(string.Join(",", keys.Select(k => Pages.Findings.IndexModel.Csv(Text(row, k, csv: true)))));
-        return sb.ToString();
+        // the rows already read (their extra columns read with the layout), then -- with Chunks -- every chunk after them
+        long written = 0;
+        // #1400 review: with Chunks, a row whose key came already (it moved across the chunks) aborts the export
+        var seen = Chunks is not null && KeyOf is not null ? new SI.Management.Web.Export.KeySet() : null;
+        void Check(object row)
+        {
+            if (seen is not null && KeyOf!(row) is { Length: > 0 } k && !seen.Add(k))
+                throw new SI.Management.Web.Data.ExportIncompleteException(SI.Management.Web.Export.GridChunks.Twice(k));
+        }
+        foreach (var row in Rows) { Check(row); written++; yield return row; }
+        if (Chunks is null) yield break;
+        await foreach (var chunk in SI.Management.Web.Export.CsvExport.ChunksAsync(Chunks, ct))
+        {
+            foreach (var row in chunk) Check(row);
+            if (RefOf is not null && _wanted.Count > 0 && Layout is not null)
+                Cells = await Layout.CellsAsync(_http, _log ?? Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance, _wanted, chunk.Select(RefOf), CollectionId, ct);
+            foreach (var row in chunk) { written++; yield return row; }
+        }
+        // #1400 completeness: the rows written against the count the export began with -- a difference ABORTS the export
+        // (nothing is downloaded; the audit row and the log say why), never a clean-looking short file
+        if (ExpectedRows is { } expected && SI.Management.Web.Export.GridChunks.Note(expected, written) is { } note)
+            throw new SI.Management.Web.Data.ExportIncompleteException(note);
     }
+
+    /// The CSV of every export row with these columns, written straight to the file (<see cref="SI.Management.Web.Export.CsvExport"/>).
+    public async Task CsvAsync(SI.Management.Web.Export.CsvSink sink, IReadOnlyList<string> keys, CancellationToken ct)
+    {
+        await foreach (var row in ExportRowsAsync(ct)) await sink.RowAsync(keys.Select(k => Text(row, k, csv: true)));
+    }
+
+    /// The headers of an export in words (#1382) -- the same for the CSV and the workbook.
+    public IReadOnlyList<string> Headers(IReadOnlyList<string> keys) => SI.Management.Core.ProData.DataColumnKeys.UniqueTitles(keys.Select(k => (k, Label(k)))).ToList();
+
+    /// The sheet of every export row with these columns (continued on a next sheet at Excel's row limit).
+    public Task SheetAsync(SI.Management.Web.Export.XlsxWriter x, SI.Management.Web.Export.ExportInfo info, string name, IReadOnlyList<string> keys, CancellationToken ct) =>
+        SI.Management.Web.Export.ExcelExport.SheetAsync(x, info, name, Headers(keys), Excels(keys, ct), ct);
+
+    private async IAsyncEnumerable<IReadOnlyList<object?>> Excels(IReadOnlyList<string> keys, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
+    {
+        await foreach (var row in ExportRowsAsync(ct)) yield return keys.Select(k => Excel(row, k)).ToList();
+    }
+
+    /// The export file's name stem (letters, digits, '-').
+    public string Stem => new string(Title.ToLowerInvariant().Select(ch => char.IsAsciiLetterOrDigit(ch) ? ch : '-').ToArray()).Trim('-');
 }

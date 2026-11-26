@@ -141,6 +141,8 @@ public sealed class AuditScope
     public long? Rows { get; set; }
     /// The filter of an export, as the handler describes it (else the query string).
     public string? Filter { get; set; }
+    /// #1400 what an export said about itself (its rows differ from the count it began with); null = nothing.
+    public string? Note { get; set; }
 
     public void Set(string outcome, string? text = null) { Outcome = outcome; OutcomeText = text; }
     public void Refused(string? why) => Set(AuditOutcomes.Refused, why);

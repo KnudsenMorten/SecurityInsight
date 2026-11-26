@@ -88,6 +88,9 @@
     "si_exposed_devices": [
       "si_exposed_devices"
     ],
+    "si_affected_software_complete": [
+      "si_affected_software_complete"
+    ],
     "si_exposure_impact": [
       "si_exposure_impact"
     ],

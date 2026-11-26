@@ -220,13 +220,17 @@ Describe 'WIRING -- the azure engine publishes, never a partial list' {
         $src = Get-Content -LiteralPath (Join-Path $script:SIRoot 'engine\asset-profiling\Invoke-SIEngineRun.ps1') -Raw
         $src | Should -Match "if \(\`$Engine -eq 'azure'\) \{ \`$__st \+= 'Recommendations' \}"
     }
-    It 'an incomplete read returns before publishing' {
+    It 'an incomplete read publishes nothing: the stage posts only what the reader hands on, and an incomplete read hands on nothing (#1399)' {
         $src = Get-Content -LiteralPath (Join-Path $script:SIRoot 'engine\asset-profiling\stages\Invoke-Recommendations.ps1') -Raw
-        $inc  = $src.IndexOf('if (-not $res.Complete)')
-        $pub  = $src.IndexOf('Send-SIObjectMapRows')
-        $inc | Should -BeGreaterThan 0
-        $pub | Should -BeGreaterThan $inc
-        $src.Substring($inc, $pub - $inc) | Should -Match 'return'
+        # #1399 the whole roll-up goes to disk first; the rows are posted only after a complete read, then the completion marker
+        $src | Should -Match '(?s)if \(-not \$res\.Complete\) \{.*?return.*?Send-SIObjectMapRows -Rows \$chunk.*?New-SIDefenderSnapshotMarker'
+        $src | Should -Match '(?s)if \(-not \$res\.Complete\) \{.*?return'
+        Mock Start-Sleep { }
+        $handed = New-Object System.Collections.ArrayList
+        $bad = Get-SIDefenderRecommendations -CollectionTime ([datetime]::UtcNow) -RunId x -OnRows { param($Rows) [void]$handed.Add(@($Rows).Count) }.GetNewClosure() -PageFetcher { param($p)
+            if ([string]$p['Query'] -match 'subassessments') { throw 'Forbidden' } else { [pscustomobject]@{ Data = $script:Raw; SkipToken = $null } } } -WarningAction SilentlyContinue
+        $bad.Complete | Should -BeFalse
+        $handed.Count | Should -Be 0
     }
     It 'the reports read the collected table and the graph report drops only pairs Defender carries' {
         $y = [IO.File]::ReadAllText((Join-Path $script:SIRoot 'risk-analysis-detection\RiskAnalysis_Queries_Locked.yaml'))

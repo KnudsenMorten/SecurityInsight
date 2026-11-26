@@ -702,11 +702,33 @@ public abstract class CollectionPageModel : PageModel
         if (Plan is null) return null;
         await ApplyLayoutAsync(ct);
         var plan = Plan;
-        var query = new GridQuery(plan.Spec, plan.Parameters, plan.Scope, ReadGrid(plan));
+        // #1400: the request's relative dates fixed ONCE -- every chunk of the export reads the same window
+        var query = new GridQuery(plan.Spec, plan.Parameters, plan.Scope, ReadGrid(plan).Pinned());
         // "Export this page": the page shown (its filters, sort, page and size); else every row matching the filters (and
-        // the selection), never only the page shown
-        var g = ExportChoices.PageOnly(Request) ? await Views.GridAsync(query, ct) : await Views.ExportAsync(query, ct);
+        // the selection), never only the page shown -- #1400: read a chunk at a time (ExportChunks), its first chunk here
+        _exportQuery = query;
+        _exportAll = !ExportChoices.PageOnly(Request);
+        var g = _exportAll ? await Views.ExportChunkAsync(query, 1, ProDataFilters.ExportChunk, ct) : await Views.GridAsync(query, ct);
         return (plan, g.Data);
+    }
+
+    private GridQuery? _exportQuery;
+    private bool _exportAll;
+
+    /// <summary>
+    /// #1400 (owner 2026-11-26: "memory issues must not be a problem in any step"; "SI never fewer rows than the source"):
+    /// EVERY row of the export -- the first chunk <see cref="ExportRowsAsync"/> read, then chunk 2, 3, ... until a chunk
+    /// answers none; each chunk's extra columns filled for its rows only, and written on before the next is read. No row
+    /// cap ("Export this page": the page read).
+    /// </summary>
+    protected IAsyncEnumerable<IReadOnlyDictionary<string, object?>> ExportChunks(GridPage first, IReadOnlyList<GridColumn> cols, CancellationToken ct) =>
+        GridChunks.RowsAsync(first, _exportAll && _exportQuery is not null,
+            async (n, t) => (await Views.ExportChunkAsync(_exportQuery!, n, ProDataFilters.ExportChunk, t)).Data, (rows, t) => FillAsync(cols, rows, t), ct, keyColumn: _exportQuery?.Spec.KeyColumn);
+
+    /// The export's rows as Excel cells (<see cref="ExportChunks"/>).
+    private async IAsyncEnumerable<IReadOnlyList<object?>> ExcelRows(GridPage first, IReadOnlyList<GridColumn> cols, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
+    {
+        await foreach (var row in ExportChunks(first, cols, ct)) yield return cols.Select(c => CellExcel(c, row)).ToList();
     }
 
     /// <summary>
@@ -737,102 +759,106 @@ public abstract class CollectionPageModel : PageModel
     /// The visible columns, in order (what the grid shows and what an export writes).
     public static IReadOnlyList<GridColumn> Visible(GridSpec s) => s.Columns.Where(c => !c.Hidden).ToList();
 
-    /// Excel: every row of the current view (or only the selected rows), the visible columns, typed cells.
+    /// Excel: every row of the current view (or only the selected rows), the visible columns, typed cells -- #1400: every
+    /// row (no row cap), read and written a chunk at a time, continued on a next sheet at Excel's row limit.
     [SI.Management.Web.Audit.Audited("data.export.download")]
     public async Task<IActionResult> OnGetXlsxAsync(CancellationToken ct)
     {
-        (GridPlan Plan, GridPage Page)? r;
-        try { r = await ExportRowsAsync(ct); }
+        try
+        {
+            var r = await ExportRowsAsync(ct);
+            if (r is null) return NotFound(Error ?? Notice ?? "nothing to export");
+            var (plan, page) = r.Value;
+            // #589: exactly the chosen columns (own + extra), for every row matching the filters
+            var cols = DisplayColumns.Count > 0 ? DisplayColumns : Visible(plan.Spec);
+            return await ExcelExport.FileAsync(ExportName, Current?.CollectionId, async (x, info) =>
+            {
+                info.Collection = Current?.CollectionId;
+                info.Add("Collection time (UTC)", Current?.CollectionTime);
+                info.Add("Sort", page.State.Sort + (page.State.Desc ? " (descending)" : ""));
+                info.Filter("Search", page.State.Search);
+                foreach (var f in page.State.Filters) info.Add("Filter: " + (plan.Spec.Column(f.Key)?.Label ?? f.Key), plan.Spec.Column(f.Key) is { } fc ? ExportFilterText(fc, f) : FilterText(f));
+                if (page.State.Selected.Count > 0) info.Add("Selected rows", page.State.Selected.Count);
+                if (ExportChoices.PageOnly(Request)) info.Add("Rows", "the page shown (page " + Fmt.Int(page.State.Page) + ", " + Fmt.Int(page.State.Size) + " per page)");
+                foreach (var e in ExtraState()) info.Add(e.Key, e.Value);
+                await x.SheetAsync(info, Heading, SI.Management.Core.ProData.DataColumnKeys.UniqueTitles(cols).ToList(), ExcelRows(page, cols, ct), ct);
+            }, ct);
+        }
         catch (ArgumentException ex) { return BadRequest(ViewerError.Text(ex)); }
         catch (ViewTimeoutException ex) { return ExportTimedOut(ex); }
-        if (r is null) return NotFound(Error ?? Notice ?? "nothing to export");
-        var (plan, page) = r.Value;
-        // #589: exactly the chosen columns (own + extra), for every row matching the filters
-        var cols = DisplayColumns.Count > 0 ? DisplayColumns : Visible(plan.Spec);
-        var rows = await FillAsync(cols, page.Rows, ct);
-        return await ExcelExport.FileAsync(ExportName, Current?.CollectionId, (x, info) =>
-        {
-            info.Collection = Current?.CollectionId;
-            info.Add("Collection time (UTC)", Current?.CollectionTime);
-            info.Add("Sort", page.State.Sort + (page.State.Desc ? " (descending)" : ""));
-            info.Filter("Search", page.State.Search);
-            foreach (var f in page.State.Filters) info.Add("Filter: " + (plan.Spec.Column(f.Key)?.Label ?? f.Key), plan.Spec.Column(f.Key) is { } fc ? ExportFilterText(fc, f) : FilterText(f));
-            if (page.State.Selected.Count > 0) info.Add("Selected rows", page.State.Selected.Count);
-            if (ExportChoices.PageOnly(Request)) info.Add("Rows", "the page shown (page " + Fmt.Int(page.State.Page) + ", " + Fmt.Int(page.State.Size) + " per page)");
-            foreach (var e in ExtraState()) info.Add(e.Key, e.Value);
-            x.Sheet(info, Heading, cols.Select(c => c.Label).ToList(), rows.Select(row => (IReadOnlyList<object?>)cols.Select(c => CellExcel(c, row)).ToList()));
-            if (page.Rows.Count >= ProDataFilters.MaxExport) info.Notes.Add($"The export stops at {ProDataFilters.MaxExport:N0} rows; narrow the filter to get the rest.");
-            return Task.CompletedTask;
-        }, ct);
     }
 
-    /// CSV: the same rows and columns; UTF-8 with a BOM, formula-looking cells defused.
+    /// CSV: the same rows and columns; UTF-8 with a BOM, formula-looking cells defused -- #1400: every row, streamed a chunk
+    /// at a time to the file (never the whole file in memory), the headers in words.
     [SI.Management.Web.Audit.Audited("data.export.download")]
     public async Task<IActionResult> OnGetCsvAsync(CancellationToken ct)
     {
-        (GridPlan Plan, GridPage Page)? r;
-        try { r = await ExportRowsAsync(ct); }
+        try
+        {
+            var r = await ExportRowsAsync(ct);
+            if (r is null) return NotFound(Error ?? Notice ?? "nothing to export");
+            var (plan, page) = r.Value;
+            var cols = DisplayColumns.Count > 0 ? DisplayColumns : Visible(plan.Spec);
+            var name = ExportName + (Current is null ? "" : "-" + Current.CollectionId) + "-" + DateTime.UtcNow.ToString("yyyyMMdd-HHmm", CultureInfo.InvariantCulture) + "Z.csv";
+            return await CsvExport.FileAsync(name, SI.Management.Core.ProData.DataColumnKeys.UniqueTitles(cols).ToList(), async sink =>
+            {
+                // machine-readable: numbers invariant, no grouping, "." decimal -- whatever the viewer's regional format
+                await foreach (var row in ExportChunks(page, cols, ct)) await sink.RowAsync(cols.Select(c => CellText(c, row, csv: true)));
+            }, ct);
+        }
         catch (ArgumentException ex) { return BadRequest(ViewerError.Text(ex)); }
         catch (ViewTimeoutException ex) { return ExportTimedOut(ex); }
-        if (r is null) return NotFound(Error ?? Notice ?? "nothing to export");
-        var (plan, page) = r.Value;
-        var cols = DisplayColumns.Count > 0 ? DisplayColumns : Visible(plan.Spec);
-        var rows = await FillAsync(cols, page.Rows, ct);
-        var sb = new StringBuilder();
-        sb.AppendLine(string.Join(",", cols.Select(c => Findings.IndexModel.Csv(c.Label))));
-        // machine-readable: numbers invariant, no grouping, "." decimal -- whatever the viewer's regional format
-        foreach (var row in rows) sb.AppendLine(string.Join(",", cols.Select(c => Findings.IndexModel.Csv(CellText(c, row, csv: true)))));
-        var name = ExportName + (Current is null ? "" : "-" + Current.CollectionId) + "-" + DateTime.UtcNow.ToString("yyyyMMdd-HHmm", CultureInfo.InvariantCulture) + "Z.csv";
-        return File(Encoding.UTF8.GetPreamble().Concat(Encoding.UTF8.GetBytes(sb.ToString())).ToArray(), "text/csv; charset=utf-8", name);
     }
 
     /// <summary>
     /// #589 "Export all columns": every row matching the filters (as the all-rows export) with EVERY column of the view --
     /// every own column, shown or not, the CI id, every identifier value, the linked objects, the finding context and
     /// fields -- and, for a view whose rows are tied to a CI, every field of the CI document and the Full details sheet
-    /// (every property each source reported, <see cref="SI.Management.Web.Cis.CiFullExport"/>).
+    /// (every property each source reported, <see cref="SI.Management.Web.Cis.CiFullExport"/>). #1400: every row, read a
+    /// chunk at a time (the CI sheet reads the rows twice: once for the CIs and the fields they carry, once to write them).
     /// </summary>
     [SI.Management.Web.Audit.Audited("data.export.download")]
     public async Task<IActionResult> OnGetXlsxAllAsync(CancellationToken ct)
     {
-        (GridPlan Plan, GridPage Page)? r;
-        try { r = await ExportRowsAsync(ct); }
+        try
+        {
+            var r = await ExportRowsAsync(ct);
+            if (r is null || ViewLayout is null) return NotFound(Error ?? Notice ?? "nothing to export");
+            var (plan, page) = r.Value;
+            var layout = ViewLayout;
+            var full = layout.Ci != RowCiKey.None ? HttpContext.RequestServices.GetService<ICiFullExportViews>() : null;
+            // the CI document fields and the source properties come in the CI sheet / the Full details sheet when the full export
+            // is there; every other extra column is a column of the page's own part
+            var extras = layout.AllExtras.Where(k => full is null || (DataColumnKeys.FieldOf(k) is null && DataColumnKeys.SourceOf(k) is null))
+                .Select(k => GridLayout.Extra(k, layout.Label(k)));
+            var cols = plan.Spec.Columns.Concat(extras).ToList();
+            var metadata = HttpContext.RequestServices.GetService<IAssetMetadataViews>();
+            return await ExcelExport.FileAsync(ExportName + "-all-columns", Current?.CollectionId, async (x, info) =>
+            {
+                info.Collection = Current?.CollectionId;
+                info.Add("Collection time (UTC)", Current?.CollectionTime);
+                info.Add("Columns", full is null ? "every column of the view" : "every column of the view, then every CI field (all fields of the CI document), whatever columns the page shows");
+                info.Add("Sort", page.State.Sort + (page.State.Desc ? " (descending)" : ""));
+                info.Filter("Search", page.State.Search);
+                foreach (var f in page.State.Filters) info.Add("Filter: " + (plan.Spec.Column(f.Key)?.Label ?? f.Key), plan.Spec.Column(f.Key) is { } fc ? ExportFilterText(fc, f) : FilterText(f));
+                if (page.State.Selected.Count > 0) info.Add("Selected rows", page.State.Selected.Count);
+                foreach (var e in ExtraState()) info.Add(e.Key, e.Value);
+                var headers = SI.Management.Core.ProData.DataColumnKeys.UniqueTitles(cols).ToList();
+                if (full is not null)
+                {
+                    IAsyncEnumerable<IReadOnlyList<SI.Management.Web.Cis.CiExportRow>> Keyed(CancellationToken t) =>
+                        SI.Management.Web.Cis.CiFullExport.Chunked(ExportChunks(page, cols, t),
+                            row => new SI.Management.Web.Cis.CiExportRow(RefOf(row).Ci ?? "", Cell(row, "AssetName") ?? Cell(row, "Name"), cols.Select(c => CellExcel(c, row)).ToList()), t);
+                    await SI.Management.Web.Cis.CiFullExport.WriteAsync(x, info, full, metadata, layout.Ci == RowCiKey.CiId ? CiExportKeys.CiId : CiExportKeys.AssetKey,
+                        layout.Ci == RowCiKey.CiId ? "CI id" : "Asset (CI) key", headers, Keyed, ct,
+                        // every CI field under the heading the grid shows that column under
+                        fieldHeading: f => layout.Label(DataColumnKeys.Field(f)));
+                }
+                else await x.SheetAsync(info, Heading, headers, ExcelRows(page, cols, ct), ct);
+            }, ct);
+        }
         catch (ArgumentException ex) { return BadRequest(ViewerError.Text(ex)); }
         catch (ViewTimeoutException ex) { return ExportTimedOut(ex); }
-        if (r is null || ViewLayout is null) return NotFound(Error ?? Notice ?? "nothing to export");
-        var (plan, page) = r.Value;
-        var layout = ViewLayout;
-        var full = layout.Ci != RowCiKey.None ? HttpContext.RequestServices.GetService<ICiFullExportViews>() : null;
-        // the CI document fields and the source properties come in the CI sheet / the Full details sheet when the full export
-        // is there; every other extra column is a column of the page's own part
-        var extras = layout.AllExtras.Where(k => full is null || (DataColumnKeys.FieldOf(k) is null && DataColumnKeys.SourceOf(k) is null))
-            .Select(k => GridLayout.Extra(k, layout.Label(k)));
-        var cols = plan.Spec.Columns.Concat(extras).ToList();
-        var rows = await FillAsync(cols, page.Rows, ct);
-        var metadata = HttpContext.RequestServices.GetService<IAssetMetadataViews>();
-        return await ExcelExport.FileAsync(ExportName + "-all-columns", Current?.CollectionId, async (x, info) =>
-        {
-            info.Collection = Current?.CollectionId;
-            info.Add("Collection time (UTC)", Current?.CollectionTime);
-            info.Add("Columns", full is null ? "every column of the view" : "every column of the view, then every CI field (all fields of the CI document), whatever columns the page shows");
-            info.Add("Sort", page.State.Sort + (page.State.Desc ? " (descending)" : ""));
-            info.Filter("Search", page.State.Search);
-            foreach (var f in page.State.Filters) info.Add("Filter: " + (plan.Spec.Column(f.Key)?.Label ?? f.Key), plan.Spec.Column(f.Key) is { } fc ? ExportFilterText(fc, f) : FilterText(f));
-            if (page.State.Selected.Count > 0) info.Add("Selected rows", page.State.Selected.Count);
-            foreach (var e in ExtraState()) info.Add(e.Key, e.Value);
-            var headers = cols.Select(c => c.Label).ToList();
-            if (full is not null)
-            {
-                var keyed = rows.Select(row => new SI.Management.Web.Cis.CiExportRow(RefOf(row).Ci ?? "", Cell(row, "AssetName") ?? Cell(row, "Name"),
-                    cols.Select(c => CellExcel(c, row)).ToList())).ToList();
-                await SI.Management.Web.Cis.CiFullExport.WriteAsync(x, info, full, metadata, layout.Ci == RowCiKey.CiId ? CiExportKeys.CiId : CiExportKeys.AssetKey,
-                    layout.Ci == RowCiKey.CiId ? "CI id" : "Asset (CI) key", headers, keyed, ct,
-                    // every CI field under the heading the grid shows that column under
-                    fieldHeading: f => layout.Label(DataColumnKeys.Field(f)));
-            }
-            else x.Sheet(info, Heading, headers, rows.Select(row => (IReadOnlyList<object?>)cols.Select(c => CellExcel(c, row)).ToList()));
-            if (page.Rows.Count >= ProDataFilters.MaxExport) info.Notes.Add($"The export stops at {ProDataFilters.MaxExport:N0} rows; narrow the filter to get the rest.");
-        }, ct);
     }
 
     /// #284: an export that ran out of time answers 504 with the same text the page shows (never the generic error page).

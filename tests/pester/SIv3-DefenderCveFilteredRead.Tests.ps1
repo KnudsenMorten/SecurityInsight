@@ -146,7 +146,7 @@ Describe 'by default the CVE report''s own query carries the context and no Defe
         $q.Substring($letAt, $unionAt - $letAt) | Should -Not -Match '__BUCKET_FILTER'
         $q | Should -Match ([regex]::Escape('| join kind=leftouter (_cveExposedDevices) on $left._cveUpper == $right._expCve'))
         $q | Should -Match ([regex]::Escape('si_exposed_devices = toint(_expDevices)'))
-        $q | Should -Match '(?s)\| project.*si_exposed_devices, si_exploit_verified, si_in_exploit_kit\s*\r?\n\s*\| order by'
+        $q | Should -Match '(?s)\| project.*si_exposed_devices, si_exploit_verified, si_in_exploit_kit(, si_affected_software_complete)?\s*\r?\n\s*\| order by'
     }
     It 'verified exploit and exploit kit come from the graph node; a row the graph does not carry leaves them unknown, never false' {
         $q = $script:Detailed

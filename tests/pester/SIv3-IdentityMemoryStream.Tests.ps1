@@ -29,7 +29,7 @@
 BeforeAll {
     $script:SIRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSCommandPath))
     foreach ($n in 'Write-SIInfo', 'Write-SIProgress', 'Reset-SIProgress', 'Write-SIWarn', 'Write-SIDiag') {
-        if (-not (Get-Command -Name $n -ErrorAction SilentlyContinue)) { Set-Item -Path ("function:global:{0}" -f $n) -Value { param($Message) } }
+        if (-not (Get-Command -Name $n -ErrorAction SilentlyContinue)) { Set-Item -Path ("function:script:{0}" -f $n) -Value { param($Message) } }
     }
     . (Join-Path $script:SIRoot 'engine\_shared\SI-ErrorClass.ps1')
     . (Join-Path $script:SIRoot 'engine\_shared\SI-AzRest.ps1')

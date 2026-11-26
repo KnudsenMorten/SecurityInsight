@@ -76,14 +76,46 @@ public static class CiFullExport
 
     /// <paramref name="fieldHeading"/>: the heading of a CI document field on the CI sheet, when the view has one of its
     /// own for it (null = <see cref="FieldHeading"/>, the heading the grid shows the field under as an extra column).
-    public static async Task WriteAsync(XlsxWriter x, ExportInfo info, ICiFullExportViews views, IAssetMetadataViews? metadata, CiExportKeys by,
+    public static Task WriteAsync(XlsxWriter x, ExportInfo info, ICiFullExportViews views, IAssetMetadataViews? metadata, CiExportKeys by,
         string keyHeader, IReadOnlyList<string> pageHeaders, IReadOnlyList<CiExportRow> rows, CancellationToken ct, IReadOnlyList<string>? tailHeaders = null,
-        Func<string, string?>? fieldHeading = null)
+        Func<string, string?>? fieldHeading = null) =>
+        WriteAsync(x, info, views, metadata, by, keyHeader, pageHeaders, _ => One(rows), ct, tailHeaders, fieldHeading);
+
+    private static async IAsyncEnumerable<IReadOnlyList<CiExportRow>> One(IReadOnlyList<CiExportRow> rows)
+    {
+        await Task.CompletedTask;
+        if (rows.Count > 0) yield return rows;
+    }
+
+    /// #1400 the rows of a chunked read as chunks of <see cref="CiExportRow"/> (at most <see cref="ProDataFilters.ExportChunk"/> each).
+    public static async IAsyncEnumerable<IReadOnlyList<CiExportRow>> Chunked<T>(IAsyncEnumerable<T> rows, Func<T, CiExportRow> row,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
+    {
+        var chunk = new List<CiExportRow>();
+        await foreach (var r in rows.WithCancellation(ct))
+        {
+            chunk.Add(row(r));
+            if (chunk.Count >= ProDataFilters.ExportChunk) { yield return chunk; chunk = new List<CiExportRow>(); }
+        }
+        if (chunk.Count > 0) yield return chunk;
+    }
+
+    /// <summary>
+    /// #1400 (owner 2026-11-26: "memory issues must not be a problem in any step"; "SI never fewer rows than the source"): the
+    /// export of EVERY row, read in chunks (<paramref name="chunks"/> is read twice: first for the CIs and the fields they
+    /// carry -- the sheet's columns --, then to write the rows, each chunk with its own CIs' documents). Only the CI keys and
+    /// names are held for the whole export; the CI sheet goes on on "CIs (all fields) 2", ... at Excel's row limit.
+    /// </summary>
+    public static async Task WriteAsync(XlsxWriter x, ExportInfo info, ICiFullExportViews views, IAssetMetadataViews? metadata, CiExportKeys by,
+        string keyHeader, IReadOnlyList<string> pageHeaders, Func<CancellationToken, IAsyncEnumerable<IReadOnlyList<CiExportRow>>> chunks, CancellationToken ct,
+        IReadOnlyList<string>? tailHeaders = null, Func<string, string?>? fieldHeading = null)
     {
         var schema = await views.SchemaAsync(ct);
-        var keys = rows.Select(r => r.Key).Where(k => k.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        var keys = new List<string>();
         var names = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
-        foreach (var r in rows) if (r.Key.Length > 0 && !names.ContainsKey(r.Key)) names[r.Key] = r.Name;
+        await foreach (var chunk in chunks(ct).WithCancellation(ct))
+            foreach (var r in chunk)
+                if (r.Key.Length > 0 && !names.ContainsKey(r.Key)) { names[r.Key] = r.Name; keys.Add(r.Key); }
 
         // ---- sheet 1: every CI field -------------------------------------------------------------------------------
         var fieldSet = new HashSet<string>(StringComparer.Ordinal);
@@ -100,22 +132,41 @@ public static class CiFullExport
         // the fields under the headings the grid shows them under -- never under their internal names
         var headers = pageHeaders.Concat(FieldHeadings(fields, fieldHeading)).Concat(tail).ToList();
         if (headers.Count == 0) headers.Add(keyHeader);
-        using (var s = x.AddSheet(FieldsSheet, headers))
+        var ci = x.AddSheet(FieldsSheet, headers);
+        var sheetNo = 1;
+        try
         {
-            var byKey = rows.GroupBy(r => r.Key, StringComparer.OrdinalIgnoreCase).ToDictionary(g => g.Key, g => g.ToList(), StringComparer.OrdinalIgnoreCase);
-            foreach (var b in Batches(keys))
+            void Write(List<object?> values)
             {
-                var docs = (await views.DocsAsync(schema, by, b, ct)).GroupBy(d => d.Owner, StringComparer.OrdinalIgnoreCase).ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
-                foreach (var key in b)
+                // #1400: at Excel's row limit the rows go on on the next sheet -- never cut
+                if (ci.RowCount + 2 > XlsxWriter.MaxRows)
                 {
-                    docs.TryGetValue(key, out var doc);
-                    if (doc?.Name is { Length: > 0 } n && string.IsNullOrEmpty(names.GetValueOrDefault(key))) names[key] = n;
-                    var cells = CiExportFlatten.Doc(doc?.DocJson);
-                    foreach (var row in byKey[key])
+                    info.Rows.Add((ci.Name, ci.RowCount));
+                    ci.Dispose();
+                    ci = x.AddSheet(FieldsSheet + " " + (++sheetNo).ToString(System.Globalization.CultureInfo.InvariantCulture), headers);
+                }
+                ci.WriteRow(values);
+            }
+            // the rows in the page's order, a chunk at a time, each chunk with its own CIs' documents
+            await foreach (var chunk in chunks(ct).WithCancellation(ct))
+            {
+                var docs = new Dictionary<string, CiExportDoc>(StringComparer.OrdinalIgnoreCase);
+                var chunkKeys = chunk.Select(r => r.Key).Where(k => k.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+                foreach (var b in Batches(chunkKeys))
+                    foreach (var d in await views.DocsAsync(schema, by, b, ct))
+                        docs.TryAdd(d.Owner, d);
+                foreach (var row in chunk)
+                {
+                    var values = new List<object?>(headers.Count);
+                    values.AddRange(row.Cells);
+                    // #589: a row tied to no CI (a finding without an asset key) keeps its own columns -- never dropped
+                    if (row.Key.Length == 0) values.AddRange(fields.Select(_ => (object?)null));
+                    else
                     {
-                        if (s.RowCount + 2 > XlsxWriter.MaxRows) break;
-                        var values = new List<object?>(headers.Count);
-                        values.AddRange(row.Cells);
+                        var key = row.Key;
+                        docs.TryGetValue(key, out var doc);
+                        if (doc?.Name is { Length: > 0 } n && string.IsNullOrEmpty(names.GetValueOrDefault(key))) names[key] = n;
+                        var cells = CiExportFlatten.Doc(doc?.DocJson);
                         foreach (var f in fields)
                         {
                             cells.TryGetValue(f, out var v);
@@ -123,23 +174,14 @@ public static class CiFullExport
                             if (v is null && f == "si_asset_name") v = doc?.Name;
                             values.Add(v);
                         }
-                        values.AddRange(TailOf(row, tail.Count));
-                        s.WriteRow(values);
                     }
+                    values.AddRange(TailOf(row, tail.Count));
+                    Write(values);
                 }
             }
-            // #589: a row tied to no CI (a finding without an asset key) keeps its own columns -- never dropped
-            foreach (var row in rows.Where(r => r.Key.Length == 0))
-            {
-                if (s.RowCount + 2 > XlsxWriter.MaxRows) break;
-                var values = new List<object?>(headers.Count);
-                values.AddRange(row.Cells);
-                values.AddRange(fields.Select(_ => (object?)null));
-                values.AddRange(TailOf(row, tail.Count));
-                s.WriteRow(values);
-            }
-            info.Rows.Add((s.Name, s.RowCount));
+            info.Rows.Add((ci.Name, ci.RowCount));
         }
+        finally { ci.Dispose(); }
 
         // ---- the linked objects: one row per CI and linked object (a view of CIs; written when the CIs have any) ---------
         if (by == CiExportKeys.CiId && schema.Ci && schema.Links)

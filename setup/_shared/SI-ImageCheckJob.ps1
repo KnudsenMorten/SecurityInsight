@@ -23,6 +23,9 @@
     PURE except Invoke-SIImageCheckJobEnsure (its ARM calls go through -Arm). PS 5.1 and 7. No module.
 #>
 
+# #1413: only live identities are carried into the job (Read-SILiveIdentities / Select-SILiveIdentityKeys)
+if (-not (Get-Command -Name Select-SILiveIdentityKeys -ErrorAction SilentlyContinue)) { $__siLiF = Join-Path $PSScriptRoot 'SI-LiveIdentities.ps1'; if (Test-Path -LiteralPath $__siLiF) { . $__siLiF } }
+
 function Get-SIImageCheckJobNames {
     <# PURE. The job's fixed names and values (a function: a caller that dot-sources this file inside a function sees it). #>
     [ordered]@{
@@ -71,7 +74,9 @@ function Get-SIImageCheckJobBody {
         updater that is NOT a Key Vault reference cannot be copied (its value is never read here): the job is then not made,
         said why. Returns @{ Ok; Body; Image; Problem }.
     #>
-    param($UpdaterJob, [string]$UpdaterName = 'caj-si-updater')
+    # -LiveIdentities (#1413): Read-SILiveIdentities (setup\_shared\SI-LiveIdentities.ps1) -- an identity of the resource group
+    # that no longer exists is not carried; not given / not read = every identity, as before
+    param($UpdaterJob, [string]$UpdaterName = 'caj-si-updater', $LiveIdentities = $null)
     $n = Get-SIImageCheckJobNames
     $no = { param($p) [pscustomobject]@{ Ok = $false; Body = $null; Image = ''; Problem = $p } }
     if (-not $UpdaterJob) { return (& $no ('the updater job {0} is not there' -f $UpdaterName)) }
@@ -108,6 +113,13 @@ function Get-SIImageCheckJobBody {
     $env.Add([ordered]@{ name = 'SI_UPDATER_MODE'; value = $n.Mode })
     $env.Add([ordered]@{ name = 'SI_UPDATER_JOB_NAME'; value = $UpdaterName })
     $ident = Get-SIImageCheckProp $UpdaterJob @('identity')
+    # #1413: only the updater's identities that still exist (a deleted one makes Azure refuse the whole PUT)
+    $uaKeys = @(Get-SIImageCheckKeys (Get-SIImageCheckProp $ident @('userAssignedIdentities')))
+    $idLines = @()
+    if ($LiveIdentities -and (Get-Command -Name Select-SILiveIdentityKeys -ErrorAction SilentlyContinue)) {
+        $sel = Select-SILiveIdentityKeys -Keys $uaKeys -Live $LiveIdentities -Name $n.Job
+        $uaKeys = @($sel.Keep); $idLines = @($sel.Lines)
+    }
     $tags = [ordered]@{ product = 'securityinsight' }; $tags[$n.TagName] = $n.TagValue
     $c = [ordered]@{
         triggerType = 'Schedule'; replicaTimeout = $n.RunLimit; replicaRetryLimit = 0
@@ -117,7 +129,7 @@ function Get-SIImageCheckJobBody {
     if ($secrets.Count) { $c.secrets = $secrets.ToArray() }
     $body = [ordered]@{ location = [string](Get-SIImageCheckProp $UpdaterJob @('location')); tags = $tags }
     if ($ident -and [string](Get-SIImageCheckProp $ident @('type'))) {
-        $ua = [ordered]@{}; foreach ($k in @(Get-SIImageCheckKeys (Get-SIImageCheckProp $ident @('userAssignedIdentities')))) { $ua[$k] = [ordered]@{} }
+        $ua = [ordered]@{}; foreach ($k in $uaKeys) { $ua[$k] = [ordered]@{} }
         $id = [ordered]@{ type = [string](Get-SIImageCheckProp $ident @('type')) }; if ($ua.Count) { $id.userAssignedIdentities = $ua }
         $body.identity = $id
     }
@@ -127,7 +139,7 @@ function Get-SIImageCheckJobBody {
         template = [ordered]@{ containers = @([ordered]@{ name = $n.Container; image = $image; resources = [ordered]@{ cpu = $n.Cpu; memory = $n.Memory }; env = $env.ToArray() }) }
     }
     $tags[$n.SpecTag] = Get-SIImageCheckJobFingerprint -Body $body
-    [pscustomobject]@{ Ok = $true; Body = $body; Image = $image; Problem = '' }
+    [pscustomobject]@{ Ok = $true; Body = $body; Image = $image; Problem = ''; IdentityLines = [string[]]$idLines }
 }
 
 function Get-SIImageCheckJobFingerprint {
@@ -176,13 +188,17 @@ function Invoke-SIImageCheckJobEnsure {
         Returns @{ Ok; Action = kept | made | updated | plan | not-ready | failed; Reason; Cron }.
     #>
     param([Parameter(Mandatory)][scriptblock]$Arm, [Parameter(Mandatory)][string]$SubscriptionId, [Parameter(Mandatory)][string]$ResourceGroup,
-          [string]$UpdaterJob = 'caj-si-updater', [switch]$WhatIf, [scriptblock]$Sleep = { param($s) Start-Sleep -Seconds $s }, [int]$Polls = 30)
+          [string]$UpdaterJob = 'caj-si-updater', [switch]$WhatIf, [scriptblock]$Sleep = { param($s) Start-Sleep -Seconds $s }, [int]$Polls = 30,
+          # #1413: the SI REST seam -- the resource group's identities are read once and a deleted one is not carried into the job
+          [scriptblock]$Rest)
     $n = Get-SIImageCheckJobNames
     $res = { param($ok, $a, $why) [pscustomobject]@{ Ok = $ok; Action = $a; Reason = $why; Cron = $n.Cron } }
     try {
         $base = '/subscriptions/{0}/resourceGroups/{1}/providers/Microsoft.App/jobs' -f $SubscriptionId, $ResourceGroup
         $upd = & $Arm 'GET' ('{0}/{1}' -f $base, $UpdaterJob) $null
-        $plan = Get-SIImageCheckJobBody -UpdaterJob $upd -UpdaterName $UpdaterJob
+        $live = $null
+        if ($Rest -and (Get-Command -Name Read-SILiveIdentities -ErrorAction SilentlyContinue)) { $live = Read-SILiveIdentities -Rest $Rest -SubscriptionId $SubscriptionId -ResourceGroup $ResourceGroup }
+        $plan = Get-SIImageCheckJobBody -UpdaterJob $upd -UpdaterName $UpdaterJob -LiveIdentities $live
         if (-not $plan.Ok) { return (& $res $true 'not-ready' ('the image check job {0}: {1} -- checked again at the next update' -f $n.Job, $plan.Problem)) }
         $path = '{0}/{1}' -f $base, $n.Job
         $cur = & $Arm 'GET' $path $null
@@ -197,8 +213,8 @@ function Invoke-SIImageCheckJobEnsure {
             if ($rb.Ok -or $ps -in 'Failed', 'Canceled') { break }
             & $Sleep 10
         }
-        if (-not $rb.Ok) { return (& $res $false 'failed' ('WARNING: the image check job {0} did not read back right ({1}) -- the next update tries again; the nightly update still installs every release' -f $n.Job, $rb.Problem)) }
-        & $res $true $(if ($cur) { 'updated' } else { 'made' }) ('the image check job {0} was {1} and read back: every 15 minutes (''{2}'' UTC) it asks Invardia for a newer image-only (security) release of its ring and installs only that, at once; it runs as the updater''s identity on the updater''s image' -f $n.Job, $(if ($cur) { 'brought up to date' } else { 'made' }), $n.Cron)
+        if (-not $rb.Ok) { return (& $res $false 'failed' ('WARNING: the image check job {0} did not read back right ({1}) -- the next update tries again; the nightly update still installs every release{2}' -f $n.Job, $rb.Problem, $(if (@($plan.IdentityLines).Count) { '; ' + (@($plan.IdentityLines) -join '; ') } else { '' }))) }
+        & $res $true $(if ($cur) { 'updated' } else { 'made' }) ('the image check job {0} was {1} and read back: every 15 minutes (''{2}'' UTC) it asks Invardia for a newer image-only (security) release of its ring and installs only that, at once; it runs as the updater''s identity on the updater''s image{3}' -f $n.Job, $(if ($cur) { 'brought up to date' } else { 'made' }), $n.Cron, $(if (@($plan.IdentityLines).Count) { '; ' + (@($plan.IdentityLines) -join '; ') } else { '' }))
     } catch {
         & $res $false 'failed' ('WARNING: the image check job could not be kept present ({0}) -- the next update tries again' -f $_.Exception.Message)
     }

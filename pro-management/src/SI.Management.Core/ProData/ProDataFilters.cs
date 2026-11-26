@@ -10,7 +10,12 @@ namespace SI.Management.Core.ProData;
 public static partial class ProDataFilters
 {
     public const int MaxTake = 500;
+    /// The most rows a READ of all rows at once holds (value choices, the counts a dropdown reads from rows). An EXPORT never
+    /// stops here: it reads every matching row in chunks of <see cref="ExportChunk"/> (#1400).
     public const int MaxExport = 50_000;
+    /// #1400 (owner 2026-11-26: "memory issues must not be a problem in any step"): the rows an export reads and writes at a
+    /// time -- every matching row is exported, a chunk at a time, never all of them in memory at once.
+    public const int ExportChunk = 5_000;
     public const int MaxTextLength = 200;
     public const int MaxDays = 730;
     public const string Unclassified = "Unclassified";

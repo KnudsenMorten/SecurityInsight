@@ -156,7 +156,7 @@ Describe 'a 9j refresh longer than the liveness window keeps a fresh beat and is
         ($o.Judged | Measure-Object -Property MinutesSinceBeat -Maximum).Maximum | Should -BeLessOrEqual 3
         $o.Judged[-1].LastBeatUtc | Should -Not -BeNullOrEmpty
     }
-    It 'without it (the negative): the unchanged rule judges the same refresh dead within the window' {
+    It 'without it (the negative): the unchanged rule judges the same refresh dead within the window (its sign-in row only: #1406 quiet needs the install lock or the run beat)' {
         $o = & $script:RunRefresh $false
         @($o.Judged | Where-Object { -not $_.Alive }).Count | Should -BeGreaterThan 0
     }

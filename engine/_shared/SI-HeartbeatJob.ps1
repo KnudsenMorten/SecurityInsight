@@ -711,8 +711,10 @@ function Send-SIHeartbeatTick {
           # Invardia 2026-11-20: the extra heartbeat after a support grant changed -- no half-hour claim (see above)
           [switch]$Extra,
           # OPEN-04: forces the signedRequests field's switch (tests)
-          [AllowNull()]$SignedRequestsField)
-    $out = { param($s, $why, $rec, $sent) [pscustomobject]@{ Status = $s; Reason = $why; Record = $rec; Sent = [bool]$sent } }
+          [AllowNull()]$SignedRequestsField,
+          # #1395 LAST-RUN-1: the rows LastRun is built from (tests; default: read through -ClaimInvoke / -DataInvoke)
+          [object[]]$LastRunRows, [object[]]$LastRunPublishedRows)
+    $out ={ param($s, $why, $rec, $sent) [pscustomobject]@{ Status = $s; Reason = $why; Record = $rec; Sent = [bool]$sent } }
     # LIVE 2026-10-16 (#718): the hour is recorded SENT only after Invardia answered 2xx; every other end of a claimed tick
     # records it FAILED (with why), so the next execution takes the hour again -- never a claimed hour that sent nothing
     $claimed = $false; $completed = $false; $failWhy = 'the tick ended before the heartbeat was sent'; $nowUtc = [datetime]::UtcNow
@@ -855,7 +857,7 @@ function Send-SIHeartbeatTick {
         try {
             $fa = @{ Ring = $ring; NowUtc = $nowUtc; Switch = $FieldSwitch; CfgInvoke = $ClaimInvoke; DataInvoke = $DataInvoke
                      Counts = $(if ($hbCounts -is [System.Collections.IDictionary]) { $hbCounts } else { @{} }) }
-            foreach ($k in 'CfgRows', 'SecurityRows', 'SourceRows', 'Arm', 'RunQuery', 'Installed') { if ($PSBoundParameters.ContainsKey($k)) { $fa[$k] = $PSBoundParameters[$k] } }
+            foreach ($k in 'CfgRows', 'SecurityRows', 'SourceRows', 'Arm', 'RunQuery', 'Installed', 'LastRunRows', 'LastRunPublishedRows') { if ($PSBoundParameters.ContainsKey($k)) { $fa[$k] = $PSBoundParameters[$k] } }
             $fields = New-SIHeartbeatFields @fa
             foreach ($k in @($fields.Keys)) { $w | Add-Member -NotePropertyName $k -NotePropertyValue $fields[$k] -Force }
             # Invardia takes an identified heartbeat of at most 48 KB: over it, the optional fields go in a fixed order

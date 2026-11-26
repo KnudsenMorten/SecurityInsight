@@ -1437,7 +1437,8 @@ function Get-SIPipelineUpdateLiveness {
             if ([string]$c -match '(?i)Update-SecurityInsight\.ps1') { $why = 'Update-SecurityInsight.ps1 is running on this machine'; break }
         }
     }
-    [pscustomobject]@{ Running = $why; Dead = @($sel.Dead) }
+    # #1406: Quiet = the live updates whose beat is stale while Azure runs them (waited for, never stopped; said once)
+    [pscustomobject]@{ Running = $why; Dead = @($sel.Dead); Quiet = @($sel.Live | Where-Object { $_.PSObject.Properties['Quiet'] -and $_.Quiet }) }
 }
 
 function Get-SIPipelineUpdateRunning {

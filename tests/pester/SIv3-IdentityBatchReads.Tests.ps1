@@ -253,7 +253,10 @@ Describe '2+3. the identity reads on the fixture of internal''s shape: the calls
         $script:Persona = @(foreach ($i in 1..14) { 'p{0:000}' -f $i }); $script:Sps = @(foreach ($i in 1..1617) { 's{0:0000}' -f $i })
         $script:FixtureHandler = {
             param($u)
-            if ($u -match '^/groups/(d\d+)/') { return (Err 404 'Request_ResourceNotFound') }
+            # #1403 the Entra ID deleted items: the deleted groups are there, any other id is not
+            if ($u -match '^/directory/deletedItems/(d\d+)') { return @{ status = 200; body = [pscustomobject]@{ id = $Matches[1]; '@odata.type' = '#microsoft.graph.group' } } }
+            if ($u -match '^/directory/deletedItems/') { return (Err 404 'Request_ResourceNotFound') }
+            if ($u -match '^/groups/([dx]\d+)/') { return (Err 404 'Request_ResourceNotFound') }
             if ($u -match '^/groups/(\w+)/transitiveMembers') { return (Ok @([pscustomobject]@{ id = "user-of-$($Matches[1])"; '@odata.type' = '#microsoft.graph.user' })) }
             if ($u -match "eligibilitySchedules\?.*groupId eq '(e(\d+))'") { $k = [int]$Matches[2]; if ($k -le 14) { return (Ok @([pscustomobject]@{ principalId = ('p{0:000}' -f $k); groupId = $Matches[1] })) }; return (Ok @()) }
             if ($u -match 'eligibilitySchedules|assignmentSchedules\?') { return (Ok @()) }
@@ -273,6 +276,8 @@ Describe '2+3. the identity reads on the fixture of internal''s shape: the calls
         $roleGroups = @{}; foreach ($g in $script:Entra) { $roleGroups[$g] = @{ Permanent = @('Global Reader'); Eligible = @() } }
         $script:_SICache['GroupRoles'] = $roleGroups
         $azure = @{}; foreach ($g in $script:Deleted) { $azure[$g] = @([pscustomobject]@{ PrincipalType = 'Group'; Role = 'Reader'; Scope = '/subscriptions/s1' }) }
+        # #1403 the Azure role assignments naming them were made long ago (a fresh one may still be replicating)
+        foreach ($g in $script:Deleted) { Add-SIGroupAssignedOn -GroupId $g -At ([datetime]::UtcNow.AddDays(-30)) }
         Set-SIEntraRoleReadPart -Part 'GroupTypes' -Complete $true
         $priv = Get-SIPrivilegeHoldingGroupMap -RoleAssignedGroupMap $roleGroups -AzureLookup $azure
         $priv.Count | Should -Be 194
@@ -305,12 +310,84 @@ Describe '2+3. the identity reads on the fixture of internal''s shape: the calls
         $spRequests | Should -Be ([Math]::Ceiling(1617 / 20))
         $after | Should -BeLessThan ($before / 15)
     }
-    It 'a group deleted after getByIds answered (404 on its members): gone, the read complete' {
+    It 'a group deleted after getByIds answered (404 on its members, and in the Entra ID deleted items): gone, the read complete' {
         $roleGroups = @{ e001 = @{ Permanent = @('Global Reader'); Eligible = @() }; d001 = @{ Permanent = @('User Administrator'); Eligible = @() } }
         $null = Get-SIGroupTransitiveMembers -Token 't' -RoleAssignedGroupMap $roleGroups -PostMany $script:FakePost -Sleep $script:NoSleep 3>$null
         (Test-SIEntraRoleReadComplete -Parts @('GroupMembers')) | Should -BeTrue
         (Get-SIGoneGroupSet).Contains('d001') | Should -BeTrue
         @($script:Info | Where-Object { $_ -match 'no longer exist.*answered 404.*d001' }).Count | Should -Be 1
+    }
+    It '#1403 a group getByIds CONFIRMED this run that answers 404 (not in the deleted items) is NOT gone: the read is incomplete' {
+        $script:_SICache['PrincipalTypes'] = @{ e001 = '#microsoft.graph.group'; x001 = '#microsoft.graph.group' }
+        $null = Get-SIGroupTransitiveMembers -Token 't' -RoleAssignedGroupMap @{ e001 = @{ Permanent = @('x'); Eligible = @() }; x001 = @{ Permanent = @('Global Administrator'); Eligible = @() } } -PostMany $script:FakePost -Sleep $script:NoSleep 3>$null
+        (Test-SIEntraRoleReadComplete -Parts @('GroupMembers')) | Should -BeFalse -Because 'replication lag: never "complete and wrong"'
+        (Get-SIGoneGroupSet).Contains('x001') | Should -BeFalse
+    }
+    It '#1403 an Azure-only group getByIds did not return, named by an assignment made 2 hours ago (not in the deleted items): kept, and its 404 leaves the read incomplete' {
+        Add-SIGroupAssignedOn -GroupId 'd901' -At ([datetime]::UtcNow.AddHours(-2))
+        Mock Invoke-RestMethod { [pscustomobject]@{ value = @() } } -ParameterFilter { $Uri -like '*directoryObjects/getByIds*' }
+        $script:G.Handler = { param($u) if ($u -match '^/directory/deletedItems/') { return (Err 404 'Request_ResourceNotFound') }; if ($u -match '^/groups/d901/') { return (Err 404 'Request_ResourceNotFound') }; Ok @() }
+        $priv = Remove-SIGonePrivilegeGroups -Token 't' -GroupMap @{ d901 = @{ Permanent = @(); Eligible = @() } } -RoleAssignedGroupMap @{} -PostMany $script:FakePost -Sleep $script:NoSleep
+        $priv.ContainsKey('d901') | Should -BeTrue -Because 'a fresh assignment may name a group still replicating'
+        $null = Get-SIGroupTransitiveMembers -Token 't' -RoleAssignedGroupMap $priv -PostMany $script:FakePost -Sleep $script:NoSleep 3>$null
+        (Test-SIEntraRoleReadComplete -Parts @('GroupMembers')) | Should -BeFalse
+        (Get-SIGoneGroupSet).Contains('d901') | Should -BeFalse
+        # the same group named by an assignment older than 24 hours: gone
+        $script:_SICache = @{}; $global:SI_EntraRoleReadState = $null
+        Add-SIGroupAssignedOn -GroupId 'd901' -At ([datetime]::UtcNow.AddDays(-3))
+        $priv2 = Remove-SIGonePrivilegeGroups -Token 't' -GroupMap @{ d901 = @{ Permanent = @(); Eligible = @() } } -RoleAssignedGroupMap @{} -PostMany $script:FakePost -Sleep $script:NoSleep
+        $priv2.ContainsKey('d901') | Should -BeFalse
+        (Get-SIGoneGroupSet).Contains('d901') | Should -BeTrue
+    }
+    It '#1403 a group in the Entra ID deleted items is gone even when getByIds confirmed it earlier in the run' {
+        $script:_SICache['PrincipalTypes'] = @{ d002 = '#microsoft.graph.group' }
+        $null = Get-SIGroupTransitiveMembers -Token 't' -RoleAssignedGroupMap @{ d002 = @{ Permanent = @('x'); Eligible = @() } } -PostMany $script:FakePost -Sleep $script:NoSleep 3>$null
+        (Test-SIEntraRoleReadComplete -Parts @('GroupMembers')) | Should -BeTrue
+        (Get-SIGoneGroupSet).Contains('d002') | Should -BeTrue
+    }
+    It '#1403 a FOLLOWED PIM group confirmed this run that answers 404 leaves PIM for Groups incomplete' {
+        $script:G.Handler = {
+            param($u)
+            if ($u -match '^/directory/deletedItems/') { return (Err 404 'Request_ResourceNotFound') }
+            if ($u -match "eligibilitySchedules\?.*groupId eq 'e001'") { return (Ok @([pscustomobject]@{ principalId = 'x002'; groupId = 'e001' })) }
+            if ($u -match '^/groups/x002/') { return (Err 404 'Request_ResourceNotFound') }
+            Ok @()
+        }
+        $null = Get-SIPimForGroupsByPrincipal -Token 't' -RoleAssignedGroupMap @{ e001 = @{ Permanent = @('x'); Eligible = @() } } -PostMany $script:FakePost -Sleep $script:NoSleep 3>$null
+        (Test-SIEntraRoleReadComplete -Parts @('PimForGroups')) | Should -BeFalse
+        (Get-SIGoneGroupSet).Contains('x002') | Should -BeFalse
+    }
+    It '#1403 EVERY assignment must be known: one without a time among older ones = not settled (not gone)' {
+        Add-SIGroupAssignedOn -GroupId 'd911' -At ([datetime]::UtcNow.AddDays(-30))
+        (Test-SIGroupAssignmentSettled -GroupId 'd911') | Should -BeTrue
+        Add-SIGroupAssignedOn -GroupId 'd911' -At $null
+        (Test-SIGroupAssignmentSettled -GroupId 'd911') | Should -BeFalse -Because 'an assignment whose time is not known may be the fresh one'
+        (Test-SIGroupAssignmentSettled -GroupId 'never-assigned') | Should -BeFalse
+    }
+    It '#1403 THE BOUNDED FALLBACK: a group never confirmed and never settled is gone after 3 runs in a row (stored), not before; one the directory returns again is cleared' {
+        $script:Watch = @{}
+        $script:_SICache['GroupWatchInvoke'] = {
+            param($Sql, $Params, $Mode)
+            foreach ($g in @($Params.seen | ConvertFrom-Json)) { $script:Watch.Remove([string]$g) }
+            $out = foreach ($g in @($Params.miss | ConvertFrom-Json)) { $k = ([string]$g).ToLowerInvariant(); $script:Watch[$k] = 1 + [int]$script:Watch[$k]; @{ GroupId = $k; Misses = $script:Watch[$k] } }
+            $out
+        }
+        $script:G.Handler = { param($u) Err 404 'Request_ResourceNotFound' }
+        foreach ($run in 1..2) {
+            $d = Resolve-SIGoneGroups -Token 't' -Ids @('d921') -PostMany $script:FakePost -Sleep $script:NoSleep
+            @($d.Gone) | Should -Not -Contain 'd921' -Because "run $run of 3: not yet"
+        }
+        $d3 = Resolve-SIGoneGroups -Token 't' -Ids @('d921') -PostMany $script:FakePost -Sleep $script:NoSleep
+        @($d3.Gone) | Should -Contain 'd921' -Because 'not confirmed by the directory in 3 runs in a row'
+        @($script:Info | Where-Object { $_ -match 'not returned in 3 runs in a row.*d921' }).Count | Should -Be 1
+        # a group the directory confirms is never gone by the fallback
+        $script:_SICache['PrincipalTypes'] = @{ d922 = '#microsoft.graph.group' }
+        $script:Watch['d922'] = 9
+        @((Resolve-SIGoneGroups -Token 't' -Ids @('d922') -PostMany $script:FakePost -Sleep $script:NoSleep).Gone) | Should -Not -Contain 'd922'
+        # the statement: stored per group, a miss counted once per 12 hours, consecutive within 48 hours; the table is in the schema
+        $q = Get-SIGroupGoneWatchSql
+        $q | Should -Match ([regex]::Escape('DATEADD(hour, -12, @now)')); $q | Should -Match ([regex]::Escape('DATEADD(hour, -48, @now)'))
+        (Get-Content -Raw -LiteralPath (Join-Path $script:SIRoot 'sql\si-data-schema.sql')) | Should -Match 'CREATE TABLE sidata\.GroupGoneWatch'
     }
     It 'a REAL failure still marks the read incomplete: 500, 403, and a 503 that never cleared' {
         foreach ($st in 500, 403, 503) {

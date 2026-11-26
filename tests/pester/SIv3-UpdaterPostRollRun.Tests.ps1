@@ -149,6 +149,108 @@ AfterAll {
     if ($script:Rsa) { $script:Rsa.Dispose() }
 }
 
+Describe '#1406 a RESUMED update (the jobs on 3.0.1, the record on 3.0.0) -- the real update path, offline' {
+    BeforeAll {
+        # the resume: the jobs already run 3.0.1, the install records 3.0.0 (an update to 3.0.1 stopped part-way)
+        function script:Invoke-Resume($World, [string]$Recorded = '3.0.0') {
+            Remove-Item -LiteralPath $script:Marker -ErrorAction SilentlyContinue
+            $global:SI_UpdaterFailures = New-Object System.Collections.Generic.List[object]
+            $global:SI_UpdaterRecordedVersion = $Recorded
+            try {
+                $e = @{ SI_UPDATER_KEY_VAULT = 'kv-test'; SI_UPDATER_RING = '1'; CONTAINER_APP_JOB_EXECUTION_NAME = 'upd-x1' }
+                $log = @(Invoke-SIUpdaterFromInvardia -Env $e -SubscriptionId 'sub' -ResourceGroup 'rg' -AcrName 'acr' -Store $null -Deployed '3.0.1' `
+                            -SIRoot $script:SIRoot -Seams $World.Seams -Work (Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))) 6>&1 | ForEach-Object { $_ })
+            } finally { $global:SI_UpdaterRecordedVersion = $null }
+            $st = ConvertFrom-SIInvardiaUpdateState -Json ([string]$World.Vault['SI-Update-State'])
+            [pscustomobject]@{ Code = (@($log | Where-Object { $_ -is [int] }) | Select-Object -Last 1); Log = (@($log | Where-Object { $_ -isnot [int] } | ForEach-Object { "$_" }) -join "`n")
+                               Tries = [string]$st.code.resumeTries; ResumeVersion = [string]$st.code.resumeVersion; Failures = @($global:SI_UpdaterFailures | ForEach-Object { [string]$_.Step }) }
+        }
+        function script:Set-Tries($World, [int]$Tries) {
+            $s = ConvertFrom-SIInvardiaUpdateState -Json ([string]$World.Vault['SI-Update-State'])
+            $s.code.resumeVersion = '3.0.1'; $s.code.resumeTries = [string]$Tries
+            $World.Vault['SI-Update-State'] = ($s | ConvertTo-Json -Depth 6 -Compress)
+        }
+    }
+    It 'a resume that succeeds and moved the updater (rolled): the release runs, the post-roll run STARTS, and the count is cleared' {
+        $w = New-World -SelfAction 'rolled'
+        $r = Invoke-Resume $w
+        $r.Log | Should -Match 'the jobs run 3\.0\.1 but the update to it did not finish \(the install records 3\.0\.0 as installed\)'
+        (Test-Path -LiteralPath $script:Marker) | Should -BeTrue -Because 'the release script ran again'
+        @($w.Started).Count | Should -Be 1 -Because 'the second pass starts after a successful resume that moved the updater'
+        $r.Tries | Should -Be ''; $r.ResumeVersion | Should -Be ''
+        $r.Failures | Should -Not -Contain 'resume'
+    }
+    It 'a resume whose post-roll FAILED with the updater moved: NO second pass (as before), post-roll failed; the 2nd+ try raises resume' {
+        $w = New-World -SelfAction 'rolled'
+        $w.Seams.PostRoll = { param($si, $v, $c) [pscustomobject]@{ Code = 1; Text = "post-roll $v failed (test)"; SelfAction = 'rolled' } }
+        Set-Tries $w 1
+        $r = Invoke-Resume $w
+        @($w.Started).Count | Should -Be 0 -Because 'a failed post-roll never starts the second pass'
+        $r.Failures | Should -Contain 'post-roll'
+        $r.Failures | Should -Contain 'resume'
+        $r.Tries | Should -Be '2'
+        $r.Log | Should -Match 'WARNING: the update to 3\.0\.1 did not finish 1 time\(s\) before'
+    }
+    It 'the first resume try that fails: counted (1), no resume failure yet' {
+        $w = New-World -SelfAction 'current'
+        $w.Seams.PostRoll = { param($si, $v, $c) [pscustomobject]@{ Code = 1; Text = "post-roll $v failed (test)"; SelfAction = 'current' } }
+        $r = Invoke-Resume $w
+        $r.Tries | Should -Be '1'
+        $r.Failures | Should -Not -Contain 'resume'
+    }
+    It 'a resume that WAITS (deferred before the roll) is not counted' {
+        $w = New-World -SelfAction 'rolled'
+        $w.Seams.PreRoll = { [pscustomobject]@{ Go = $false; Reason = 'a pipeline run is going (test)'; Environment = $null } }
+        Set-Tries $w 1
+        $r = Invoke-Resume $w
+        (Test-Path -LiteralPath $script:Marker) | Should -BeFalse
+        $r.Tries | Should -Be '1' -Because 'only an attempt that really starts counts'
+        $r.Failures | Should -Not -Contain 'resume'
+    }
+    It 'a roll that answers HELD did not try: its count is taken back' {
+        $w = New-World -SelfAction 'rolled'
+        Set-Tries $w 1
+        Mock Invoke-SIUpdaterRoll { [pscustomobject]@{ Code = 0; Held = $true; Reason = 'held (test)' } }
+        $r = Invoke-Resume $w
+        $r.Tries | Should -Be '1'
+        @($w.Started).Count | Should -Be 0
+    }
+    It 'NOT a resume (the record reaches the version): unchanged -- the jobs run it already, nothing is rolled or started' {
+        $w = New-World -SelfAction 'rolled'
+        $r = Invoke-Resume $w -Recorded '3.0.1'
+        (Test-Path -LiteralPath $script:Marker) | Should -BeFalse
+        @($w.Started).Count | Should -Be 0
+        $r.Tries | Should -Be ''
+        $r.Log | Should -Match 'the jobs run 3\.0\.1 already'
+    }
+    It '(final review) a web app roll that failed: the next run does NOT write the record -- it says the failure record, rolls nothing' {
+        $w = New-World -SelfAction 'current'
+        # run 1: the update to 3.0.1 -- the engine rolls (the sequence is applied), the post-roll (the web app) FAILS
+        $w.Seams.PostRoll = { param($si, $v, $c) [pscustomobject]@{ Code = 1; Text = "web app ca-si-management: the roll to $v failed (test)"; SelfAction = 'current' } }
+        $r1 = Invoke-Update $w
+        $r1.Code | Should -Be 1
+        (ConvertFrom-SIInvardiaUpdateState -Json ([string]$w.Vault['SI-Update-State'])).code.appliedSequence | Should -Be 7
+        # run 2: the jobs run 3.0.1, the record is still 3.0.0, the sequence applied -> the record lags
+        $script:RecordWrites = New-Object System.Collections.Generic.List[string]
+        $w.Seams.SaveRecord = { param($v) $script:RecordWrites.Add($v); $true }
+        Mock Save-SIUpdaterInstalledRecord { $script:RecordWrites.Add([string]$Version); $true }
+        $w.Seams.PostRoll = { param($si, $v, $c) [pscustomobject]@{ Code = 0; Text = "post-roll $v"; SelfAction = 'current' } }
+        $r2 = Invoke-Resume $w
+        $script:RecordWrites.Count | Should -Be 0 -Because 'the web app may still be old: the release is never marked installed here'
+        $r2.Failures | Should -Contain 'record'
+        $r2.Log | Should -Match 'WARNING: code: the jobs run 3\.0\.1 \(sequence 7 applied\) but the install still records 3\.0\.0'
+        (Test-Path -LiteralPath $script:Marker) | Should -BeFalse -Because 'nothing is rolled again'
+    }
+    It 'the outcome rule itself (one function, used by the update): the second pass only after a successful post-roll' {
+        (Get-SIUpdaterPostRollOutcome -PostCode 0 -SelfAction 'rolled' -ResumeTries 0).SecondPass | Should -BeTrue
+        (Get-SIUpdaterPostRollOutcome -PostCode 1 -SelfAction 'rolled' -ResumeTries 0).SecondPass | Should -BeFalse
+        (Get-SIUpdaterPostRollOutcome -PostCode 0 -SelfAction 'rolled' -ResumeTries 2).SecondPass | Should -BeTrue
+        (Get-SIUpdaterPostRollOutcome -PostCode 0 -SelfAction 'current' -ResumeTries 1).ClearResume | Should -BeTrue
+        (Get-SIUpdaterPostRollOutcome -PostCode 1 -SelfAction '' -ResumeTries 1).FailResume | Should -BeFalse
+        (Get-SIUpdaterPostRollOutcome -PostCode 1 -SelfAction '' -ResumeTries 2).FailResume | Should -BeTrue
+    }
+}
+
 Describe 'the update that moved the updater starts the post-roll run (#1262)' {
     It 'the full update: the updater moved itself (rolled) -> the post-roll run is started ONCE' {
         $w = New-World -SelfAction 'rolled'

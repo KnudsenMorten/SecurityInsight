@@ -162,6 +162,13 @@
                      SecurityInsight's earlier default, found by id, read back, put back on failure, never twice. Azure resources
                      keep their names. SI_Update_RenameDisplayNames (ON by default; the Pro setting first): off = the plan only.
                      Without the rights: one line, and setup\Set-SIDisplayNames.ps1 for an administrator. Never fails the update.
+     13. ONE ACTIVE REVISION -- (SI #1414, setup/_shared/SI-SingleRevision.ps1; framework SEC-PATCH-PIPELINE-1 point 6) the
+                     LAST step: every container app of the install with an ingress in Single revision mode with exactly one
+                     active revision, its newest one proven healthy, 100 % of the traffic, no traffic label -- read back. An
+                     app whose newest revision is not proven healthy is not changed. So the release that brings it reaches
+                     it in the same update (the web app roll that follows then replaces the one revision in Single mode);
+                     the updater does it again as its own last step. Not proven = a WARNING only (the failure record is the
+                     updater's own last step); it never changes this script's exit code.
 
     -SizingOnly (#756): ONLY the size steps that read the customer's settings -- 7 (SQL database size), 8 (job size) and 8d
                      (web app size) -- for a run where the code is current already (caj-si-updater: the ring's release is
@@ -234,6 +241,10 @@ $solRoot = Split-Path -Parent $PSScriptRoot
 # updater's own lock row is beaten every 5 minutes on a connection of its own, with one log line each -- a long statement is
 # never taken for a dead update (the pipeline runner's rule: no beat for 15 minutes = dead)
 . (Join-Path $PSScriptRoot '_shared/SI-UpdateSqlBeat.ps1')
+# #1406 (live 2026-11-26): THE RUN'S BEAT -- from here to the end the update's sign of life is written from a thread and a
+# connection of its own every minute while the update works, so no pipeline flow tick (of this release or the one before it)
+# ever reads a working update as dead. Outside the updater (no row registered) nothing starts.
+if (Get-Command -Name Start-SIUpdateRunBeat -ErrorAction SilentlyContinue) { $null = Start-SIUpdateRunBeat }
 # the summary views' statements (9f) are the one place with a time limit: 2 hours -- a beaten statement is never alive for ever
 $script:SIUpdateSummaryTimeoutSeconds = 7200
 # #911 (e): a step with no log line for 20 minutes says "still working: <step>" -- started here unless the updater runs one
@@ -250,10 +261,11 @@ if (Test-Path -LiteralPath $updWatchLib) {
 # run gate), and every line tells the watch, so a long step says "still working" and is never mistaken for a hang
 function Step([string]$m) { $global:SI_UpdateStage = $m; Write-Host "==> $m" -ForegroundColor Cyan
     if (Get-Command -Name Set-SIUpdateWatchLine -ErrorAction SilentlyContinue) { Set-SIUpdateWatchLine -Step $m }
+    if ($global:SI_UpdateRunBeat) { Set-SIUpdateRunBeatProgress }
     if (Get-Command -Name Invoke-SIUpdaterLockBeat -ErrorAction SilentlyContinue) { $null = Invoke-SIUpdaterLockBeat -What $m -Force }
 }
-function Info([string]$m) { Write-Host "    $m"; if (Get-Command -Name Set-SIUpdateWatchLine -ErrorAction SilentlyContinue) { Set-SIUpdateWatchLine } }
-function Warn([string]$m) { if (-not "$global:SI_UpdateFirstWarn".Trim()) { $global:SI_UpdateFirstWarn = $m }; Write-Host "    $m" -ForegroundColor Yellow; if (Get-Command -Name Set-SIUpdateWatchLine -ErrorAction SilentlyContinue) { Set-SIUpdateWatchLine } }
+function Info([string]$m) { Write-Host "    $m"; if ($global:SI_UpdateRunBeat) { Set-SIUpdateRunBeatProgress }; if (Get-Command -Name Set-SIUpdateWatchLine -ErrorAction SilentlyContinue) { Set-SIUpdateWatchLine } }
+function Warn([string]$m) { if (-not "$global:SI_UpdateFirstWarn".Trim()) { $global:SI_UpdateFirstWarn = $m }; Write-Host "    $m" -ForegroundColor Yellow; if ($global:SI_UpdateRunBeat) { Set-SIUpdateRunBeatProgress }; if (Get-Command -Name Set-SIUpdateWatchLine -ErrorAction SilentlyContinue) { Set-SIUpdateWatchLine } }
 # framework rule 11g: a build pool that could not be brought back to 0 agents (or was removed and not made again) is a failure
 # line of its OWN (step 'build-pool') -- the updater reports it also when the update itself succeeded; it never changes the exit code
 function Add-SIUpdateBuildPoolFailure([string]$Text) {
@@ -961,6 +973,25 @@ function Invoke-SIUpdateMissingJobs {
         }
     } catch { Warn ("missing jobs: not checked ({0}) -- the update goes on; the next update tries again." -f $_.Exception.Message) }
 }
+# #1413: A DELETED USER-ASSIGNED IDENTITY IS TAKEN OFF SI'S JOBS AND APPS (setup/_shared/SI-LiveIdentities.ps1, Invoke-SIDeadIdentityCleanup).
+# ARM keeps a deleted identity listed on an existing job / app, but the next full write of it is refused ("FailedIdentityOperation
+# ... was not found") -- a later outage. Right after the job steps (missing jobs, the image check): fail closed -- only with the
+# resource group's identity list read completely AND the identity's own GET answering 404; a resource that still uses it (registry,
+# secret, scale rule, a setting, its sign-in) is not touched (WARNING); one identity-only PATCH; one line per removed reference;
+# read back. Never fails the update. -DetectOnly / no -Apply: the plan only.
+function Invoke-SIUpdateDeadIdentities {
+    if (-not $rest) { return }
+    if (-not (Get-Command -Name Invoke-SIDeadIdentityCleanup -ErrorAction SilentlyContinue)) { $lib = Join-Path $PSScriptRoot '_shared/SI-LiveIdentities.ps1'; if (-not (Test-Path -LiteralPath $lib)) { return }; . $lib }
+    # the off-switch (SI_UPDATER_IDENTITY_CLEANUP = off on the updater job): a live problem is stopped without a release
+    if (-not (Test-SIDeadIdentityCleanupOn ([Environment]::GetEnvironmentVariable('SI_UPDATER_IDENTITY_CLEANUP')))) { Info 'identities: the clean-up of deleted identities is switched off (SI_UPDATER_IDENTITY_CLEANUP = off) -- nothing checked'; return }
+    try {
+        $r = Invoke-SIDeadIdentityCleanup -Rest $rest -SubscriptionId $sub -ResourceGroup $target.ResourceGroupName -WhatIf:(-not $Apply -or $DetectOnly)
+        if (-not @($r.Removed).Count -and -not @($r.Problems).Count -and -not @($r.Held).Count -and -not @($r.Soft).Count -and -not @($r.Lines | Where-Object { $_ -match 'would lose|nothing removed|exists \(its own read' }).Count) { return }
+        Step '9s. IDENTITIES (deleted identities taken off SI''s jobs and apps)'
+        foreach ($l in @($r.Lines)) { if ($l -match '^WARNING') { Warn $l } else { Info $l } }
+        if (Get-Command -Name Add-SIUpdaterFailure -ErrorAction SilentlyContinue) { foreach ($p in @($r.Problems) + @($r.Soft)) { Add-SIUpdaterFailure -Step 'settings' -Text $p } }
+    } catch { Warn ("identities: not checked ({0}) -- the update goes on; the next update checks again." -f $_.Exception.Message) }
+}
 # THE NIGHTLY SCHEDULE (setup/_shared/SI-NightlySchedule.ps1; owner 2026-10-15: "complete by 8am" / "11pm local time for region"),
 # ONCE per install, in the time zone of the install's Azure region: (a) the updater job's timer -- on a shipped timer (the old
 # '0 3 * * *', or the Danish-time '0 21,22 * * *' with its tag '23:00 Europe/Copenhagen' or none) -> the UTC hours that are 23:00
@@ -997,7 +1028,7 @@ function Invoke-SIUpdateNightlySchedule {
                 # (its image, identity and settings: no new right), read back. Existing installs get it here. Never fails the update.
                 if (Get-Command -Name Invoke-SIImageCheckJobEnsure -ErrorAction SilentlyContinue) {
                     $icArm = { param([string]$Method, [string]$Path, $Body) Invoke-SIRestJson -Rest $rest -Method $Method -Uri (Get-SIArmUri -Path $Path -ApiVersion (Get-SIImageCheckJobNames).AppApi) -Body $(if ($null -ne $Body) { ConvertTo-Json -InputObject $Body -Depth 30 -Compress } else { $null }) -Headers @{ 'Content-Type' = 'application/json' } -AllowNotFound:($Method -eq 'GET') }
-                    $ic = Invoke-SIImageCheckJobEnsure -Arm $icArm -SubscriptionId $sub -ResourceGroup $target.ResourceGroupName -UpdaterJob $name.Trim() -WhatIf:$wi
+                    $ic = Invoke-SIImageCheckJobEnsure -Arm $icArm -SubscriptionId $sub -ResourceGroup $target.ResourceGroupName -UpdaterJob $name.Trim() -WhatIf:$wi -Rest $rest
                     if ($ic.Action -ne 'kept') { Step '9n. IMAGE CHECK (every 15 minutes)'; if ($ic.Ok) { Info $ic.Reason } else { Warn $ic.Reason } }
                 }
             }
@@ -1324,11 +1355,15 @@ function Invoke-SIUpdateKeyFigures {
             if ($n) { Step '9i. KEY FIGURES'; Info ("key figures: {0} collection(s) would be figured again with this release's figures" -f $n) }
             return
         }
-        $lines = New-Object System.Collections.Generic.List[string]
-        $r = Invoke-SIDataKeyFigures -Invoke $dataSql -Settings $settings -BudgetSeconds 900 -Log { param($l, $m) $lines.Add(('{0}|{1}' -f $l, $m)) }
+        # #1406 (live 2026-11-26): the progress lines are said AS THEY COME (a range read, each step's time) -- never held until
+        # the end: a long collection shows where its time goes, and every line is a sign of life of the update
+        $kfSaid = @{ Header = $false }
+        $kfLog = { param($l, $m)
+            if (-not $kfSaid.Header) { $kfSaid.Header = $true; Step '9i. KEY FIGURES' }
+            if ($l -eq 'WARN') { Warn $m } else { Info $m } }
+        $r = Invoke-SIDataKeyFigures -Invoke $dataSql -Settings $settings -BudgetSeconds 900 -Log $kfLog
         if ([string]$r.Status -eq 'ok' -and [int]$r.Collections -eq 0) { return }
-        Step '9i. KEY FIGURES'
-        foreach ($x in $lines) { $lv, $m = $x -split '\|', 2; if ($lv -eq 'WARN') { Warn $m } else { Info $m } }
+        if (-not $kfSaid.Header) { Step '9i. KEY FIGURES' }
         $global:SI_UpdateKeyFigures = $r
     } catch { Warn ("key figures: they were not worked out again ({0}) -- the update goes on; the next data sync works them out." -f $_.Exception.Message) }
 }
@@ -1737,7 +1772,33 @@ function Invoke-SIUpdateSigninStore {
         $r
     } catch { Warn ("sign-in front store: not checked ({0}) -- the update goes on; the front keeps what it runs; the next update tries again." -f $_.Exception.Message); $null }
 }
-function Complete-SIUpdate { $null = Invoke-SIUpdateSqlTier; $null = Invoke-SIUpdateJobFloor; $null = Invoke-SIUpdateJobSizing; $null = Invoke-SIUpdateUpdaterSize; $null = Invoke-SIUpdateKedaConvert; $null = Invoke-SIUpdateRaWorkers; $null = Invoke-SIUpdateOldCollectJobs; $null = Invoke-SIUpdateEngineRetryLimit; $null = Invoke-SIUpdateRaGcSetting; $null = Invoke-SIUpdateMissingJobs; $null = Invoke-SIUpdateNightlySchedule; $null = Invoke-SIUpdateReportCopy; $null = Invoke-SIUpdateOrchestration; $null = Invoke-SIUpdatePipelineLayout; $null = Invoke-SIUpdateSummaryRebuild; $null = Invoke-SIUpdatePublishedCopy; $null = Invoke-SIUpdateKeyFigures; $null = Invoke-SIUpdateOwnSqlConnector; $null = Invoke-SIUpdateSnowDataOut; $null = Invoke-SIUpdateSnowStagingStatus; $null = Invoke-SIUpdateSnowOneRoute; $null = Invoke-SIUpdateSupportGrant; $null = Invoke-SIUpdateWebAppSize; $null = Invoke-SIUpdateSigninStore; $null = Invoke-SIUpdatePermissionGrant; $null = Invoke-SIUpdatePermissionNote; $null = Invoke-SIUpdateDisplayNames; Install-SIUpdateDefaultTemplates }
+# SI #1414 ONE ACTIVE REVISION (step 13 in the help above): the update's last step. Never fails the update; a result that is
+# not proven is a WARNING here -- the failure record is the updater's own last step, after the web app roll.
+function Invoke-SIUpdateSingleRevision {
+    $lib = Join-Path $PSScriptRoot '_shared/SI-SingleRevision.ps1'
+    if (-not (Test-Path -LiteralPath $lib)) { return $null }
+    try {
+        . $lib
+        Step '13. ONE ACTIVE REVISION'
+        if (-not $rest) { Warn ('one active revision: not checked -- no Azure sign-in ({0}); the updater checks it at its end.' -f $signInError); return $null }
+        $namesLib = [IO.Path]::Combine($solRoot, 'engine', '_shared', 'SI-InstallNames.ps1')
+        $names = @()
+        if (Test-Path -LiteralPath $namesLib) { try { . $namesLib; $names = @(@(Get-SIInstallNameCandidates -Role web) + @(Get-SIInstallNameCandidates -Role mcp)) } catch { $names = @() } }
+        $wi = (-not $Apply -or $DetectOnly)
+        $r = Invoke-SISingleRevision -Rest $rest -SubscriptionId $sub -ResourceGroup $target.ResourceGroupName -Apps @($names) -WhatIf:$wi -Log { param($m) Info $m }
+        $global:SI_UpdateSingleRevision = $r
+        if ($r.Ok) { Info $r.Text; return $r }
+        # a WARNING only: the failure record belongs to the updater's own last step (after the web app roll -- a revision
+        # still Activating here, before it, is not a failure)
+        Warn $r.Text
+        $r
+    } catch {
+        $t = 'one active revision NOT proven: the step stopped ({0}) -- an older revision may still answer; the updater checks it again at its end.' -f $_.Exception.Message
+        Warn $t
+        $null
+    }
+}
+function Complete-SIUpdate { $null = Invoke-SIUpdateSqlTier; $null = Invoke-SIUpdateJobFloor; $null = Invoke-SIUpdateJobSizing; $null = Invoke-SIUpdateUpdaterSize; $null = Invoke-SIUpdateKedaConvert; $null = Invoke-SIUpdateRaWorkers; $null = Invoke-SIUpdateOldCollectJobs; $null = Invoke-SIUpdateEngineRetryLimit; $null = Invoke-SIUpdateRaGcSetting; $null = Invoke-SIUpdateMissingJobs; $null = Invoke-SIUpdateNightlySchedule; $null = Invoke-SIUpdateDeadIdentities; $null = Invoke-SIUpdateReportCopy; $null = Invoke-SIUpdateOrchestration; $null = Invoke-SIUpdatePipelineLayout; $null = Invoke-SIUpdateSummaryRebuild; $null = Invoke-SIUpdatePublishedCopy; $null = Invoke-SIUpdateKeyFigures; $null = Invoke-SIUpdateOwnSqlConnector; $null = Invoke-SIUpdateSnowDataOut; $null = Invoke-SIUpdateSnowStagingStatus; $null = Invoke-SIUpdateSnowOneRoute; $null = Invoke-SIUpdateSupportGrant; $null = Invoke-SIUpdateWebAppSize; $null = Invoke-SIUpdateSigninStore; $null = Invoke-SIUpdatePermissionGrant; $null = Invoke-SIUpdatePermissionNote; $null = Invoke-SIUpdateSingleRevision; $null = Invoke-SIUpdateDisplayNames; if ($global:SI_UpdateRunBeat) { Stop-SIUpdateRunBeatAtEnd }; Install-SIUpdateDefaultTemplates }
 $script:SISqlTierJobs = @()
 
 # #756 THE CODE IS CURRENT, THE SIZES STILL FOLLOW THE SETTINGS (live 2026-10-19: SI_Bootstrap_SqlServiceObjective = S2 set,

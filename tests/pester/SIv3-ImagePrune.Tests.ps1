@@ -783,7 +783,10 @@ Describe 'IMAGE-PRUNE WIRING: after the read-back, never before' {
         $roll = $script:Inv.IndexOf('$roll = Invoke-SIUpdaterRoll ')
         $okRoll = $script:Inv.IndexOf('elseif ($roll.Code -eq 0) {')
         $post = $script:Inv.IndexOf('Invoke-SIUpdaterInvardiaPostRoll -SIRoot $si')
-        $postFail = $script:Inv.IndexOf('if ($post.Code -ne 0) {')
+        # (the post-roll decision moved into Get-SIUpdaterPostRollOutcome: PostRollFailed = PostCode -ne 0, read from $post right after it)
+        $postFail = $script:Inv.IndexOf('$pro = Get-SIUpdaterPostRollOutcome -PostCode ([int]$post.Code)')
+        $script:Inv.IndexOf('if ($pro.PostRollFailed) {') | Should -BeGreaterThan $postFail
+        $script:Inv | Should -Match '(?s)function Get-SIUpdaterPostRollOutcome \{.{0,1200}\$failed = \(\$PostCode -ne 0\).{0,80}PostRollFailed = \$failed'
         $guard = $script:Inv.IndexOf('if ($post.Code -eq 0) {')
         $step = $script:Inv.IndexOf('Invoke-SIUpdaterImagePruneStep -ResourceGroup')
         $seam = $script:Inv.IndexOf('& $s.ImagePrune $imgBefore')

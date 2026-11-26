@@ -36,6 +36,8 @@ public sealed class ServiceModel : SI.Management.Web.Columns.DataViewPageModel
     public string Source { get; private set; } = CmdbSources.SI;
     public IReadOnlyList<MapAsset> Assets { get; private set; } = Array.Empty<MapAsset>();
     public long AssetTotal { get; private set; }
+    /// #1400 an export's linked assets, a page at a time (DataTable.Chunks).
+    private Func<int, CancellationToken, Task<IReadOnlyList<object>>>? AssetChunks { get; set; }
     public IReadOnlyList<ChangeLogRow> History { get; private set; } = Array.Empty<ChangeLogRow>();
     public string? Error { get; private set; }
     public bool Editable => Service is { Retired: false } s && s.Source == CmdbSources.SI && Source == CmdbSources.SI;
@@ -58,17 +60,22 @@ public sealed class ServiceModel : SI.Management.Web.Columns.DataViewPageModel
             try
             {
                 (Assets, AssetTotal) = await _store.ServiceAssetsAsync(Id, new MapFilter { Lifecycle = Lifecycle.Key }, 0, AssetPage, ct);
-                // #589: an export takes EVERY linked asset, page by page
+                // #589: an export takes EVERY linked asset, page by page -- #1400 (owner 2026-11-26: "SI never fewer rows than the
+                // source"; "memory issues must not be a problem in any step"): no 50,000 cut, each page written on before the next
                 if (Exporting)
                 {
-                    var all = Assets.ToList();
-                    while (all.Count < AssetTotal && all.Count < SI.Management.Core.ProData.ProDataFilters.MaxExport)
+                    var first = Assets;
+                    var id = Id;
+                    var life = Lifecycle.Key;
+                    long at = 0;
+                    AssetChunks = async (n, t) =>
                     {
-                        var (more, _) = await _store.ServiceAssetsAsync(Id, new MapFilter { Lifecycle = Lifecycle.Key }, all.Count, SI.Management.Core.ProData.ProDataFilters.MaxTake, ct);
-                        if (more.Count == 0) break;
-                        all.AddRange(more);
-                    }
-                    Assets = all;
+                        var rows = n == 1 ? first
+                            : (await _store.ServiceAssetsAsync(id, new MapFilter { Lifecycle = life }, (int)Math.Min(int.MaxValue, at), SI.Management.Core.ProData.ProDataFilters.MaxTake, t)).Assets;
+                        at += rows.Count;
+                        return rows.Cast<object>().ToList();
+                    };
+                    Assets = Array.Empty<MapAsset>();
                 }
 
             }
@@ -103,7 +110,7 @@ public sealed class ServiceModel : SI.Management.Web.Columns.DataViewPageModel
         var svc = Service?.Number ?? "";
         var assets = new SI.Management.Web.Columns.DataTable
         {
-            Id = "assets", View = "cmdb-service-assets", Title = "Linked assets " + svc, Rows = Assets.Cast<object>().ToList(), Marker = "data-service-assets",
+            Id = "assets", View = "cmdb-service-assets", Title = "Linked assets " + svc, Rows = Assets.Cast<object>().ToList(), Chunks = AssetChunks, ExpectedRows = AssetChunks is null ? null : AssetTotal, KeyOf = o => A(o).AssetKey, Marker = "data-service-assets",
             Ci = SI.Management.Core.ProData.RowCiKey.AssetKey, RefOf = o => new SI.Management.Web.Columns.RowRef(A(o).AssetKey),
             Columns =
             [

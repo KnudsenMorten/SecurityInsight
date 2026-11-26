@@ -55,6 +55,7 @@ if (-not (Get-Command -Name Get-SIFindingFieldPlan -ErrorAction SilentlyContinue
 if (-not (Get-Command -Name Get-SIDataModelTemplate -ErrorAction SilentlyContinue)) { . ([IO.Path]::Combine($script:SIRemTaskRoot, 'data-model', 'SI-DataModelTemplates.ps1')) }
 if (-not (Get-Command -Name Get-SISoftwareEvidence -ErrorAction SilentlyContinue)) { . ([IO.Path]::Combine($script:SIRemTaskRoot, '_shared', 'SI-SoftwareEvidence.ps1')) }
 if (-not (Get-Command -Name Invoke-SIDataFindingFold -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot 'SI-DataFindingFold.ps1') }
+if (-not (Get-Command -Name Get-SIDataFullListSql -ErrorAction SilentlyContinue)) { . ([IO.Path]::Combine($script:SIRemTaskRoot, '_shared', 'data-sql', 'SI-FullListSql.ps1')) }
 
 # (lists are returned by functions, never read from a script variable: a file dot-sourced inside a function keeps its variables
 # in THAT scope -- the trap of #961)
@@ -68,12 +69,14 @@ function Get-SIRemediationTaskColumns {
         si_component                 = 'f.Component'
         si_fix_recommended_update    = 'f.FixRecommendedUpdate'
         si_fix_recommended_update_id = 'f.FixRecommendedUpdateId'
-        si_affected_product          = 'f.AffectedProduct'
-        si_affected_vendor           = 'f.AffectedVendor'
-        si_affected_version          = 'f.AffectedVersion'
+        # #1403 the lists are stored cut to their column (400 / 2000 characters): a list that FILLS its column is read in full
+        # from the finding's own document (SI-FullListSql.ps1; the report keeps up to 256 per list) -- never a list cut short
+        si_affected_product          = (Get-SIDataFullListSql -Column 'f.AffectedProduct' -Bytes 800 -Keys 'si_affected_product', 'SI_AffectedProduct')
+        si_affected_vendor           = (Get-SIDataFullListSql -Column 'f.AffectedVendor' -Bytes 800 -Keys 'si_affected_vendor', 'SI_AffectedVendor')
+        si_affected_version          = (Get-SIDataFullListSql -Column 'f.AffectedVersion' -Bytes 800 -Keys 'si_affected_version', 'SI_AffectedVersion')
         # #1384 "<name> <version> (<vendor>)" per copy: pairs a multi-product finding's products with their versions (read for
         # such a finding alone -- a finding of one product needs no pairs, and its signatures stay as many as they were)
-        si_affected_software         = "CASE WHEN f.AffectedProduct LIKE N'%;%' THEN f.AffectedSoftware END"
+        si_affected_software         = "CASE WHEN f.AffectedProduct LIKE N'%;%' THEN $(Get-SIDataFullListSql -Column 'f.AffectedSoftware' -Bytes 4000 -Keys 'si_affected_software' -NullReadsFull) END"
         si_title                   = 'f.Title'
         si_category                  = 'f.Category'
         si_subcategory               = 'f.Subcategory'
@@ -149,7 +152,7 @@ function Get-SIRemediationTaskSigSql {
     $cols = Get-SIRemediationTaskColumns
     $sel = New-Object 'System.Collections.Generic.List[string]'
     $agg = New-Object 'System.Collections.Generic.List[string]'
-    for ($i = 0; $i -lt $Fields.Count; $i++) { $sel.Add(("CONVERT(nvarchar(4000), {0}) AS c{1}" -f $cols[$Fields[$i]], $i)); $agg.Add(("MAX(x.c{0}) AS c{0}" -f $i)) }
+    for ($i = 0; $i -lt $Fields.Count; $i++) { $sel.Add(("CONVERT(nvarchar({2}), {0}) AS c{1}" -f $cols[$Fields[$i]], $i, $(if ($Fields[$i] -like 'si_affected_*') { 'max' } else { '4000' }))); $agg.Add(("MAX(x.c{0}) AS c{0}" -f $i)) }
     @"
 SET NOCOUNT ON;
 SELECT CONVERT(varchar(64), x.SigHash, 2) AS SigHex, $($agg -join ', '), COUNT_BIG(*) AS N
@@ -157,7 +160,8 @@ FROM (SELECT $(Get-SIRemediationTaskSigExpr -Fields $Fields) AS SigHash, $($sel 
       FROM sidata.Finding AS f
 $(Get-SIRemediationTaskKeyApplySql)
       WHERE f.CollectionId = CONVERT(int, @CollectionId) AND f.RaFindingKey IS NOT NULL AND sp.P > 1) AS x
-GROUP BY x.SigHash;
+GROUP BY x.SigHash
+ORDER BY x.SigHash;
 "@
 }
 
@@ -411,7 +415,7 @@ SELECT u.OwnerKey, u.Product, u.Vendor, u.Version,
        CASE WHEN u.OwnerKey LIKE N'asset:%' THEN LOWER(SUBSTRING(u.OwnerKey, 7, 450))
             ELSE (SELECT STRING_AGG(CONVERT(nvarchar(max), LOWER(l.NativeId)), N';') FROM sidata.CiLink AS l WHERE l.CiId = u.OwnerKey AND l.Provider = N'mde') END AS DeviceIds
 FROM u
-ORDER BY u.OwnerKey;
+ORDER BY u.OwnerKey COLLATE Latin1_General_BIN2;
 "@
 }
 
@@ -605,7 +609,9 @@ CREATE TABLE #f (FindingId BIGINT NOT NULL PRIMARY KEY, OwnerKey NVARCHAR(450) C
                  Title NVARCHAR(1000) NULL, SevRank TINYINT NOT NULL, RiskScore FLOAT NULL, Weighted FLOAT NULL, Tier TINYINT NULL, SecurityDomain NVARCHAR(128) NULL,
                  DepartmentId INT NULL, Own BIT NOT NULL, Exempt BIT NOT NULL,
                  -- #1283 the finding-level values the task reports filter and group by (copied to the links)
-                 RatingRank TINYINT NOT NULL, RiskRating NVARCHAR(16) NULL, Category NVARCHAR(256) NULL, Subcategory NVARCHAR(256) NULL);
+                 RatingRank TINYINT NOT NULL, RiskRating NVARCHAR(16) NULL, Category NVARCHAR(256) NULL, Subcategory NVARCHAR(256) NULL,
+                 -- #1403 the finding's affected software lists are NOT complete (the source listed more than SI keeps, or a list was cut)
+                 ListsCut BIT NOT NULL);
 CREATE INDEX IX_f ON #f (OwnerKey, FindingKey) INCLUDE (Own, Exempt);
 -- the owners of the range: the CI's lifecycle -- active | retired | hold (not seen, frozen, gone, or its evidence not read this run)
 CREATE TABLE #o (OwnerKey NVARCHAR(450) COLLATE DATABASE_DEFAULT NOT NULL PRIMARY KEY, Lc NVARCHAR(16) NOT NULL, CiId NVARCHAR(64) NULL,
@@ -629,7 +635,7 @@ CREATE TABLE #t (TaskId BINARY(32) NOT NULL PRIMARY KEY, OwnerKey NVARCHAR(450) 
                  TaskName NVARCHAR(MAX) NOT NULL, Kind NVARCHAR(32) NOT NULL, Product NVARCHAR(400) NULL, Vendor NVARCHAR(400) NULL, Version NVARCHAR(400) NULL,
                  Application NVARCHAR(MAX) NULL, Paths NVARCHAR(MAX) NULL, EvidenceAt DATETIME2(3) NULL, Findings INT NOT NULL, Cves INT NOT NULL, SevRank TINYINT NULL,
                  MaxRisk FLOAT NULL, MaxWeighted FLOAT NULL, Tier TINYINT NULL, Doms INT NOT NULL, Dom NVARCHAR(128) NULL, Depts INT NOT NULL, Dept INT NULL,
-                 AssetKey NVARCHAR(400) NULL, AssetName NVARCHAR(400) NULL, RatingRank TINYINT NULL, AppVersion NVARCHAR(MAX) NULL);
+                 AssetKey NVARCHAR(400) NULL, AssetName NVARCHAR(400) NULL, RatingRank TINYINT NULL, AppVersion NVARCHAR(MAX) NULL, ListsCut BIT NULL);
 -- the links of those tasks (one per task and finding key)
 CREATE TABLE #k (TaskId BINARY(32) NOT NULL, FindingKey NVARCHAR(256) COLLATE DATABASE_DEFAULT NOT NULL, OwnerKey NVARCHAR(450) COLLATE DATABASE_DEFAULT NOT NULL,
                  FindingId BIGINT NOT NULL, Cve NVARCHAR(256) NULL, Title NVARCHAR(1000) NULL, SevRank TINYINT NULL, RiskScore FLOAT NULL, Version NVARCHAR(400) NULL,
@@ -649,7 +655,9 @@ CREATE TABLE #tr (Channel NVARCHAR(32) NOT NULL, Opened INT NOT NULL, ClosedFixe
 --   unknown  anything else -- kept as it was: absent but not closed, seen only in an incomplete report or carried; a bundled
 --            copy whose evidence was not read, or was read without a path on disk (a registry row only); a task written with a
 CREATE TABLE #ls (TaskId BINARY(32) NOT NULL, St NVARCHAR(16) NOT NULL);
-CREATE TABLE #d (TaskId BINARY(32) NOT NULL PRIMARY KEY, Unknown INT NOT NULL, Fixed INT NOT NULL, Retired INT NOT NULL, Report INT NOT NULL, Exempted INT NOT NULL, N INT NOT NULL);
+CREATE TABLE #d (TaskId BINARY(32) NOT NULL PRIMARY KEY, Unknown INT NOT NULL, Fixed INT NOT NULL, Retired INT NOT NULL, Report INT NOT NULL, Exempted INT NOT NULL, N INT NOT NULL,
+                 -- #1403 links held because the finding's affected software lists are not complete this run
+                 HeldLists INT NOT NULL);
 -- THE COLLECTION'S TASKS: the ones worked out now (open; reopened when the base had them closed) + the base's tasks not worked
 -- out now (closed by the rules above, or carried as they were) + the base's closed tasks within the retention
 SELECT TOP (0) CAST(NULL AS NVARCHAR(16)) AS Src, p.* INTO #out FROM #p AS p;
@@ -666,6 +674,7 @@ CREATE TABLE #cx (TaskId BINARY(32) NOT NULL, Cid INT NOT NULL, FindingId BIGINT
 DECLARE @life BIT = 0;
 IF EXISTS (SELECT 1 FROM sidata.KeyFigure AS kf WHERE kf.CollectionId = @c AND kf.Block = N'meta' AND kf.Figure = N'lifecycle_rows') SET @life = 1;
 -- the run's totals, added up range by range (the CIs of two ranges never overlap)
+DECLARE @nHeldLists INT = 0;
 DECLARE @nTasks INT = 0, @nOpen INT = 0, @nClosed INT = 0, @nNewlyClosed INT = 0, @nKept INT = 0, @nReopened INT = 0, @nFindings INT = 0, @noTask INT = 0,
         @nOwn INT = 0, @states NVARCHAR(MAX) = NULL;
 DECLARE @msF BIGINT = 0, @msU BIGINT = 0, @msT BIGINT = 0, @msB BIGINT = 0, @msO BIGINT = 0, @msW BIGINT = 0, @tp DATETIME2(3);
@@ -692,7 +701,8 @@ SELECT f.FindingId, LEFT(o.OwnerKey, 450), k.FKey, {SIG}, f.AssetKey, f.AssetNam
        f.RiskScore, ISNULL(f.RiskScoreWeighted, f.RiskScore), f.Tier, f.SecurityDomain, f.DepartmentId,
        CASE WHEN f.CarriedFrom IS NULL AND EXISTS (SELECT 1 FROM #rep AS r WHERE r.ReportName = f.ReportName) THEN 1 ELSE 0 END,
        CASE WHEN f.ExemptionId IS NULL THEN 0 ELSE 1 END,
-       {RATINGRANK_F}, {RATINGTEXT_F}, f.Category, f.Subcategory
+       {RATINGRANK_F}, {RATINGTEXT_F}, f.Category, f.Subcategory,
+       {LISTSCUT_F}
 FROM #fo AS x
     JOIN #wk AS wf ON wf.OwnerKey = x.OwnerKey
     JOIN sidata.Finding AS f ON f.CollectionId = @c AND f.FindingId = x.FindingId
@@ -739,14 +749,14 @@ WHERE f.Exempt = 0 AND LOWER(LTRIM(RTRIM(x.TaskName))) <> LOWER(LTRIM(RTRIM(ISNU
 INSERT #t
 SELECT HASHBYTES('SHA2_256', CONCAT(g.OwnerKey, N'|', g.TaskKey)), g.OwnerKey, g.TaskKey, g.TaskName, g.Kind, NULLIF(g.Product, N''), NULLIF(g.Vendor, N''),
        NULLIF(g.Version, N''), g.Application, g.Paths, g.EvidenceAt, g.Findings, g.Cves, g.SevRank, g.MaxRisk, g.MaxWeighted, g.Tier,
-       g.Doms, CASE WHEN g.Doms = 1 THEN g.Dom END, g.Depts, CASE WHEN g.Depts = 1 THEN g.Dept END, g.AssetKey, g.AssetName, g.RatingRank, g.AppVersion
+       g.Doms, CASE WHEN g.Doms = 1 THEN g.Dom END, g.Depts, CASE WHEN g.Depts = 1 THEN g.Dept END, g.AssetKey, g.AssetName, g.RatingRank, g.AppVersion, g.ListsCut
 FROM (SELECT l.OwnerKey, l.TaskKey, MAX(l.TaskName) AS TaskName, MAX(l.Kind) AS Kind, MAX(l.Product) AS Product, MAX(l.Vendor) AS Vendor,
              CASE WHEN MIN(l.Version) = MAX(l.Version) THEN MAX(l.Version) ELSE N'' END AS Version, MAX(l.Application) AS Application,
              MAX(l.Paths) AS Paths, MAX(l.EvidenceAt) AS EvidenceAt, COUNT(DISTINCT l.FindingKey) AS Findings, COUNT(DISTINCT f.Cve) AS Cves,
              MAX(f.SevRank) AS SevRank, MAX(f.RiskScore) AS MaxRisk, MAX(f.Weighted) AS MaxWeighted, MIN(f.Tier) AS Tier,
              COUNT(DISTINCT ISNULL(f.SecurityDomain, N'')) AS Doms, MAX(f.SecurityDomain) AS Dom,
              COUNT(DISTINCT ISNULL(f.DepartmentId, -1)) AS Depts, MAX(f.DepartmentId) AS Dept, MAX(f.AssetKey) AS AssetKey, MAX(f.AssetName) AS AssetName,
-             MAX(f.RatingRank) AS RatingRank, MAX(l.AppVersion) AS AppVersion
+             MAX(f.RatingRank) AS RatingRank, MAX(l.AppVersion) AS AppVersion, CONVERT(bit, MAX(CONVERT(int, f.ListsCut))) AS ListsCut
       FROM #l AS l JOIN #f AS f ON f.FindingId = l.FindingId
       GROUP BY l.OwnerKey, l.TaskKey) AS g;
 INSERT #k
@@ -759,7 +769,10 @@ INSERT #ls
 SELECT p.TaskId,
        CASE WHEN fx.AnyRow = 1 AND fx.Live = 0 THEN N'exempted'
             WHEN fx.OwnLive = 1 THEN
-                 CASE WHEN p.Kind <> N'bundled-upgrade' THEN N'changed'
+                 -- #1403 a software task whose finding's lists are not complete this run is HELD (its product may only be missing
+                 -- from the cut list): never closed as task changed
+                 CASE WHEN p.Kind = N'software-upgrade' AND fx.Cut = 1 THEN N'held'
+                      WHEN p.Kind <> N'bundled-upgrade' THEN N'changed'
                       WHEN ISNULL(p.Version, N'') = N'' OR ISNULL(p.ApplicationPaths, N'') = N'' THEN N'unknown'
                       WHEN ev.HasDisk = 1 AND pa.Held = 0 THEN N'fixed'
                       WHEN ev.HasDisk = 1 THEN N'changed'
@@ -781,7 +794,8 @@ FROM #p AS p
 JOIN #o AS o ON o.OwnerKey = p.OwnerKey AND o.Lc = N'active'
 JOIN sidata.RemediationTaskFinding AS pl ON pl.CollectionId = @b AND pl.TaskId = p.TaskId
 LEFT JOIN sidata.CiFindingState AS st ON st.OwnerKey = p.OwnerKey AND st.FindingKey = pl.FindingKey
-OUTER APPLY (SELECT MAX(1) AS AnyRow, MAX(CASE WHEN f.Exempt = 0 THEN 1 ELSE 0 END) AS Live, MAX(CASE WHEN f.Own = 1 AND f.Exempt = 0 THEN 1 ELSE 0 END) AS OwnLive
+OUTER APPLY (SELECT MAX(1) AS AnyRow, MAX(CASE WHEN f.Exempt = 0 THEN 1 ELSE 0 END) AS Live, MAX(CASE WHEN f.Own = 1 AND f.Exempt = 0 THEN 1 ELSE 0 END) AS OwnLive,
+                    MAX(CONVERT(int, f.ListsCut)) AS Cut
              FROM #f AS f WHERE f.OwnerKey = p.OwnerKey AND f.FindingKey = pl.FindingKey) AS fx
 -- the copy's evidence this run (bundled): read at all (Found), read with its paths on disk (HasDisk)
 OUTER APPLY (SELECT MAX(1) AS Found, MAX(CASE WHEN ISNULL(x.Paths, N'') <> N'' THEN 1 ELSE 0 END) AS HasDisk FROM sidata.RemediationTaskSplit AS x
@@ -793,19 +807,23 @@ OUTER APPLY (SELECT MAX(z.Held) AS Held
                    FROM STRING_SPLIT(CASE WHEN p.Kind = N'bundled-upgrade' THEN ISNULL(p.ApplicationPaths, N'') ELSE N'' END, N';') AS s
                    WHERE LTRIM(RTRIM(s.[value])) <> N'') AS z) AS pa
 WHERE p.State = N'open' AND NOT EXISTS (SELECT 1 FROM #t AS t WHERE t.TaskId = p.TaskId);
-INSERT #d SELECT TaskId, SUM(CASE WHEN St = N'unknown' THEN 1 ELSE 0 END), SUM(CASE WHEN St = N'fixed' THEN 1 ELSE 0 END),
-                 SUM(CASE WHEN St = N'retired' THEN 1 ELSE 0 END), SUM(CASE WHEN St = N'report' THEN 1 ELSE 0 END), SUM(CASE WHEN St = N'exempted' THEN 1 ELSE 0 END), COUNT(*)
+INSERT #d SELECT TaskId, SUM(CASE WHEN St IN (N'unknown', N'held') THEN 1 ELSE 0 END), SUM(CASE WHEN St = N'fixed' THEN 1 ELSE 0 END),
+                 SUM(CASE WHEN St = N'retired' THEN 1 ELSE 0 END), SUM(CASE WHEN St = N'report' THEN 1 ELSE 0 END), SUM(CASE WHEN St = N'exempted' THEN 1 ELSE 0 END), COUNT(*),
+                 SUM(CASE WHEN St = N'held' THEN 1 ELSE 0 END)
 FROM #ls GROUP BY TaskId;
+    SET @nHeldLists = @nHeldLists + (SELECT COUNT(*) FROM #d AS dh JOIN #p AS ph ON ph.TaskId = dh.TaskId WHERE dh.HeldLists > 0 AND ph.State = N'open');
     SET @msB = @msB + DATEDIFF(millisecond, @tp, SYSUTCDATETIME()); SET @tp = SYSUTCDATETIME();
 INSERT #out (Src, CollectionId, TaskId, OwnerKey, CiId, AssetKey, AssetName, TaskKey, TaskName, Kind, Product, Vendor, Version, Application, ApplicationPaths, EvidenceAt,
              Findings, Cves, HighestSeverity, MaxRiskScore, MaxWeightedRisk, Tier, SecurityDomain, DepartmentId, Departments, CiOwner, CiDepartment, CmdbId,
-             FirstSeen, LastSeen, State, ClosedAt, ClosedWhy, ReopenCount, InThisCollection, RowHash, ChangedAt, SentInScope, HighestRiskRating, ApplicationVersion)
+             FirstSeen, LastSeen, State, ClosedAt, ClosedWhy, ReopenCount, InThisCollection, RowHash, ChangedAt, SentInScope, HighestRiskRating, ApplicationVersion,
+             SoftwareListsComplete)
 SELECT CASE WHEN p.TaskId IS NULL THEN N'new' WHEN p.State = N'closed' THEN N'reopened' ELSE N'seen' END,
        @c, t.TaskId, t.OwnerKey, o.CiId, t.AssetKey, t.AssetName, t.TaskKey, t.TaskName, t.Kind, t.Product, t.Vendor, t.Version, t.Application, t.Paths, t.EvidenceAt,
        t.Findings, t.Cves, CASE t.SevRank WHEN 4 THEN N'critical' WHEN 3 THEN N'high' WHEN 2 THEN N'medium' WHEN 1 THEN N'low' ELSE N'info' END,
        t.MaxRisk, t.MaxWeighted, t.Tier, t.Dom, ad.DepartmentId, CASE WHEN ad.DepartmentId IS NULL THEN 0 ELSE 1 END, o.CiOwner, o.CiDept, o.CmdbId,
        ISNULL(p.FirstSeen, @ct), @ct, N'open', NULL, NULL, ISNULL(p.ReopenCount, 0) + CASE WHEN p.State = N'closed' THEN 1 ELSE 0 END, 1, 0x00, @now, p.SentInScope,
-       {RATINGTEXT_T}, t.AppVersion
+       {RATINGTEXT_T}, t.AppVersion,
+       CASE WHEN t.Kind IN (N'software-upgrade', N'bundled-upgrade') THEN CASE WHEN t.ListsCut = 1 THEN N'no' ELSE N'yes' END END
 FROM #t AS t
 JOIN #o AS o ON o.OwnerKey = t.OwnerKey
 LEFT JOIN #p AS p ON p.TaskId = t.TaskId
@@ -813,11 +831,14 @@ LEFT JOIN #p AS p ON p.TaskId = t.TaskId
 LEFT JOIN sidata.Asset AS ad ON ad.AssetKey = t.AssetKey;
 INSERT #out (Src, CollectionId, TaskId, OwnerKey, CiId, AssetKey, AssetName, TaskKey, TaskName, Kind, Product, Vendor, Version, Application, ApplicationPaths, EvidenceAt,
              Findings, Cves, HighestSeverity, MaxRiskScore, MaxWeightedRisk, Tier, SecurityDomain, DepartmentId, Departments, CiOwner, CiDepartment, CmdbId,
-             FirstSeen, LastSeen, State, ClosedAt, ClosedWhy, ReopenCount, InThisCollection, RowHash, ChangedAt, SentInScope, HighestRiskRating, ApplicationVersion)
+             FirstSeen, LastSeen, State, ClosedAt, ClosedWhy, ReopenCount, InThisCollection, RowHash, ChangedAt, SentInScope, HighestRiskRating, ApplicationVersion,
+             SoftwareListsComplete)
 SELECT z.Src, @c, p.TaskId, p.OwnerKey, p.CiId, p.AssetKey, p.AssetName, p.TaskKey, p.TaskName, p.Kind, p.Product, p.Vendor, p.Version, p.Application, p.ApplicationPaths, p.EvidenceAt,
        p.Findings, p.Cves, p.HighestSeverity, p.MaxRiskScore, p.MaxWeightedRisk, p.Tier, p.SecurityDomain, p.DepartmentId, p.Departments, p.CiOwner, p.CiDepartment, p.CmdbId,
        p.FirstSeen, p.LastSeen, CASE WHEN z.Why IS NULL THEN p.State ELSE N'closed' END, CASE WHEN z.Why IS NULL THEN p.ClosedAt ELSE @ct END,
-       ISNULL(z.Why, p.ClosedWhy), p.ReopenCount, 0, p.RowHash, p.ChangedAt, p.SentInScope, p.HighestRiskRating, p.ApplicationVersion
+       ISNULL(z.Why, p.ClosedWhy), p.ReopenCount, 0, p.RowHash, p.ChangedAt, p.SentInScope, p.HighestRiskRating, p.ApplicationVersion,
+       -- #1403 a task HELD because its finding's lists are not complete says so this run (never the base's old 'yes')
+       CASE WHEN d.HeldLists > 0 THEN N'no' ELSE p.SoftwareListsComplete END
 FROM #p AS p
 LEFT JOIN #o AS o ON o.OwnerKey = p.OwnerKey
 LEFT JOIN #d AS d ON d.TaskId = p.TaskId
@@ -862,13 +883,15 @@ FROM #out AS o LEFT JOIN #p AS p ON p.TaskId = o.TaskId;
                                    CiDepartment, CmdbId, FirstSeen, LastSeen, State, ClosedAt, ClosedWhy, ReopenCount, InThisCollection, RowHash, ChangedAt, SentInScope,
                                    TaskKeyHash, Channel, HighestRiskRating, ApplicationVersion,
                                    WhatToDo, RecommendedUpdate, RemediationSteps, CveList, ExploitAvailable, EndOfSupport, EndOfSupportDate, DueDate, FirstDetected,
-                                   WithinAcceptedLifecycle, DetectedPaths, AssetType, AssetOs, AssetIp, AssetEnvironment, InternetExposed, AlsoReportedBy, ContextHash)
+                                   WithinAcceptedLifecycle, DetectedPaths, AssetType, AssetOs, AssetIp, AssetEnvironment, InternetExposed, AlsoReportedBy, ContextHash,
+                                   SoftwareListsComplete)
     SELECT o.CollectionId, o.TaskId, o.OwnerKey, o.CiId, o.AssetKey, o.AssetName, o.TaskKey, o.TaskName, o.Kind, o.Product, o.Vendor, o.Version, o.Application, o.ApplicationPaths,
            o.EvidenceAt, o.Findings, o.Cves, o.HighestSeverity, o.MaxRiskScore, o.MaxWeightedRisk, o.Tier, o.SecurityDomain, o.DepartmentId, o.Departments, o.CiOwner,
            o.CiDepartment, o.CmdbId, o.FirstSeen, o.LastSeen, o.State, o.ClosedAt, o.ClosedWhy, o.ReopenCount, o.InThisCollection, o.RowHash, o.ChangedAt, o.SentInScope,
            HASHBYTES('SHA2_256', o.TaskKey), {CHANNEL_O}, o.HighestRiskRating, o.ApplicationVersion,
            o.WhatToDo, o.RecommendedUpdate, o.RemediationSteps, o.CveList, o.ExploitAvailable, o.EndOfSupport, o.EndOfSupportDate, o.DueDate, o.FirstDetected,
-           o.WithinAcceptedLifecycle, o.DetectedPaths, o.AssetType, o.AssetOs, o.AssetIp, o.AssetEnvironment, o.InternetExposed, o.AlsoReportedBy, o.ContextHash
+           o.WithinAcceptedLifecycle, o.DetectedPaths, o.AssetType, o.AssetOs, o.AssetIp, o.AssetEnvironment, o.InternetExposed, o.AlsoReportedBy, o.ContextHash,
+           o.SoftwareListsComplete
     FROM #out AS o JOIN #wk AS w ON w.OwnerKey = o.OwnerKey;
     INSERT sidata.RemediationTaskFinding (CollectionId, TaskId, FindingKey, OwnerKey, FindingId, Cve, Title, Severity, RiskScore, Version, InThisCollection, SentInScope,
                                           RiskRating, Category, Subcategory, SecurityDomain, WeightedRisk, Tier)
@@ -915,7 +938,7 @@ UPDATE sidata.Collection SET RemediationTasksAt = SYSUTCDATETIME(), RemediationT
 SET @ph = @ph + CONCAT(N'findings=', @msF, N';owners+units=', @msU, N';tasks+links=', @msT, N';base-states=', @msB, N';out+hash=', @msO, N';write=', @msW, N';ranges=', @ranges, N';largest-range=', @maxTake, N';');
 SELECT @nTasks AS Tasks, @nOpen AS [Open], @nClosed AS Closed, @nNewlyClosed AS NewlyClosed, @nKept AS Kept, @nReopened AS Reopened,
        (SELECT COUNT(*) FROM sidata.RemediationTaskFinding WHERE CollectionId = @c) AS Links, @nFindings AS Findings, @noTask AS NoTask,
-       @nOwn AS OwnRows, (SELECT COUNT(*) FROM #rep) AS CompleteReports, @states AS LinkStates, @ranges AS WriteRanges, (SELECT COUNT(*) FROM #hold) AS Held, @ph AS BuildPhases;
+       @nOwn AS OwnRows, (SELECT COUNT(*) FROM #rep) AS CompleteReports, @states AS LinkStates, @ranges AS WriteRanges, (SELECT COUNT(*) FROM #hold) AS Held, @ph AS BuildPhases, @nHeldLists AS HeldLists;
 '@
     $rkF = Get-SIRemediationTaskRatingRankSql -Column 'f.RiskRating'
     $text = $text.Replace('{ROLLUP}', (Get-SIRemediationTaskReportsSql)).Replace('{CONTEXT}', (Get-SIRemediationTaskContextSql))
@@ -923,6 +946,10 @@ SELECT @nTasks AS Tasks, @nOpen AS [Open], @nClosed AS Closed, @nNewlyClosed AS 
     $text = $text.Replace('{RATINGTEXT_T}', (Get-SIRemediationTaskRatingTextSql -Rank 't.RatingRank')).Replace('{RATINGTEXT_X}', (Get-SIRemediationTaskRatingTextSql -Rank 'q.Rk'))
     $text = $text.Replace('{RATINGRANK_L}', (Get-SIRemediationTaskRatingRankSql -Column 'l.RiskRating')).Replace('{CHANNEL_O}', (Get-SIRemediationTaskChannelSql -Kind 'o.Kind'))
     $text = $text.Replace('{SIG}', $sig).Replace('{APPLY}', (Get-SIRemediationTaskKeyApplySql)).Replace('{HASHCOLS}', $hashCols)
+    # #1403 a finding's lists are NOT complete: the report says so (si_affected_software_complete false), or its product list fills its
+    # column and NO document could be read to read it in full -- never merely because the list is long
+    $cutF = "CASE WHEN LOWER(LTRIM(RTRIM(ISNULL(f.AffectedSoftwareComplete, N'')))) = N'false' THEN 1 WHEN DATALENGTH(f.AffectedProduct) >= 800 AND (SELECT TOP (1) COALESCE(NULLIF(jx.[a], N''), NULLIF(jx.[b], N'')) FROM OPENJSON(CASE WHEN $(Get-SIDataJsonObjectTestSql 'f.DetailJson') THEN f.DetailJson END) WITH ([a] nvarchar(max) N'$.si_affected_product', [b] nvarchar(max) N'$.SI_AffectedProduct') AS jx) IS NULL THEN 1 ELSE 0 END"
+    $text = $text.Replace('{LISTSCUT_F}', $cutF)
     $text = $text.Replace('{COMBO_F}', (& $combo 'f.OwnerKey' 's.Vendor' 's.Product' 's.Version'))
     $text.Replace('{COMBO_P}', (& $combo 'p.OwnerKey' 'p.Vendor' "ISNULL(p.Product, N'')" 'p.Version'))
 }
@@ -955,7 +982,9 @@ function Get-SIRemediationTaskSchemaCheckSql {
         "COL_LENGTH('sidata.Ci', 'CmdbEnvironment')", "COL_LENGTH('sidata.Ci', 'ServiceEnvironment')", "COL_LENGTH('sidata.Ci', 'OsName')",
         "OBJECT_ID('sidata.SoftwareEvidence')", "OBJECT_ID('sidata.KeyFigure')", "OBJECT_ID('sidata.FindingLifecycleRisk')",
         # #1388 the finding model's due date (the task's due date where the provider sets none)
-        "COL_LENGTH('sidata.CiFindingState', 'DueAt')")
+        "COL_LENGTH('sidata.CiFindingState', 'DueAt')",
+        # #1403 whether a finding's / a task's affected software lists are complete
+        "COL_LENGTH('sidata.Finding', 'AffectedSoftwareComplete')", "COL_LENGTH('sidata.RemediationTask', 'SoftwareListsComplete')")
     'SELECT CASE WHEN ' + (($need | ForEach-Object { "$_ IS NOT NULL" }) -join ' AND ') + ' THEN 1 ELSE 0 END'
 }
 
@@ -1039,26 +1068,87 @@ function Invoke-SIRemediationTaskSignatures {
         (ConvertTo-SIRemediationTaskUnits), written to the build's working rows. Returns @{ Signatures; Units; NoUnit }.
     #>
     param([Parameter(Mandatory)][scriptblock]$Invoke, [Parameter(Mandatory)][long]$CollectionId, [Parameter(Mandatory)][string]$BuildId,
-          [Parameter(Mandatory)][string[]]$Fields, [Parameter(Mandatory)]$Map, $Plan, $ValueMaps)
+          [Parameter(Mandatory)][string[]]$Fields, [Parameter(Mandatory)]$Map, $Plan, $ValueMaps, [int]$FlushUnits = 5000)
     if ($null -eq $Plan) { $Plan = Get-SIFindingFieldPlan -Map $Map }
-    $rows = @(@(& $Invoke (Get-SIRemediationTaskSigSql -Fields $Fields) @{ CollectionId = [string]$CollectionId } 'reader') | ForEach-Object { $_ } | Where-Object { $null -ne $_ })
-    $out = New-Object System.Collections.Generic.List[object]
-    $res = [pscustomobject]@{ Signatures = $rows.Count; Units = 0; NoUnit = 0 }
-    foreach ($r in $rows) {
-        $hex = [string]$r['SigHex']
+    # #1399 (owner 2026-11-26: "memory issues must not be a problem in any step"): the signatures are READ ROW BY ROW and their
+    # units written every -FlushUnits -- never every signature of the collection held at once
+    # RESUMABLE (#1399 review): the statement sorts by the hash (binary); what was written is never read again -- a read that
+    # breaks on a temporary SQL error is read again from the signature after the last one written, the unwritten units dropped
+    $st = @{ Out = (New-Object System.Collections.Generic.List[object]); Res = [pscustomobject]@{ Signatures = 0; Units = 0; NoUnit = 0 }
+             P = @{ Sig = 0; NoUnit = 0; Last = $null }; Done = $null }
+    $flushSig = {
+        $st.Res.Units += Write-SIRemediationTaskStage -Invoke $Invoke -BuildId $BuildId -Part 'sig' -Rows $st.Out; $st.Out.Clear()
+        $st.Res.Signatures += $st.P.Sig; $st.Res.NoUnit += $st.P.NoUnit; if ($null -ne $st.P.Last) { $st.Done = $st.P.Last }
+        $st.P = @{ Sig = 0; NoUnit = 0; Last = $null }
+    }
+    $onRow = {
+        param($r)
+        if ($null -eq $r) { return }
+        $hex = ([string]$r['SigHex']).ToUpperInvariant()
+        if ($null -ne $st.Done -and [string]::CompareOrdinal($hex, $st.Done) -le 0) { return }
+        $st.P.Sig++; $st.P.Last = $hex
         if ($hex -notmatch '^[0-9A-Fa-f]{64}$') { throw ('a finding signature came back without its hash ({0})' -f $hex) }
         $vals = [ordered]@{}
         for ($i = 0; $i -lt $Fields.Count; $i++) { $v = $r[('c{0}' -f $i)]; if ($v -is [System.DBNull]) { $v = $null }; $vals[$Fields[$i]] = $v }
         $units = ConvertTo-SIRemediationTaskUnits -Values $vals -Map $Map -Plan $Plan -ValueMaps $ValueMaps
-        if (@($units).Count -eq 0) { $res.NoUnit++; continue }
+        if (@($units).Count -eq 0) { $st.P.NoUnit++; return }
         $n = 0
         foreach ($u in @($units)) {
             $n++
-            $out.Add([ordered]@{ h = $hex; u = $n; k = $u.TaskKey; n = $u.TaskName; d = $u.Kind; p = $u.Product; v = $u.Vendor; r = $u.Version })
+            $st.Out.Add([ordered]@{ h = $hex; u = $n; k = $u.TaskKey; n = $u.TaskName; d = $u.Kind; p = $u.Product; v = $u.Vendor; r = $u.Version })
+        }
+        if ($st.Out.Count -ge $FlushUnits) { & $flushSig }
+    }
+    $null = Invoke-SIRemediationTaskRows -Invoke $Invoke -Sql (Get-SIRemediationTaskSigSql -Fields $Fields) -Params @{ CollectionId = [string]$CollectionId } -OnRow $onRow `
+        -OnRetry { $st.Out.Clear(); $st.P = @{ Sig = 0; NoUnit = 0; Last = $null } }
+    & $flushSig
+    $st.Res
+}
+
+function Invoke-SIRemediationTaskRows {
+    <#
+        #1399 one read of ANY size, a row at a time: the data sync's streaming reader (Invoke-SIDataSqlStream -- mode 'stream' on a
+        seam that reads row by row) when it is loaded, else the seam's 'reader' answer walked row by row. Returns the rows read.
+    #>
+    # -OnRetry { }: a TEMPORARY SQL error after rows were handed on (the seam cannot send the statement again by itself then) --
+    # the caller drops what it has not written and the read starts again (its -OnRow skips what was written). As often as the
+    # SQL statement retry allows (Get-SISqlStatementRetryWaits), with its waits; anything else is thrown as before.
+    param([Parameter(Mandatory)][scriptblock]$Invoke, [Parameter(Mandatory)][string]$Sql, $Params, [Parameter(Mandatory)][scriptblock]$OnRow,
+          [scriptblock]$OnRetry, [scriptblock]$Sleep)
+    $waits = @(5, 15, 45); if (Get-Command -Name Get-SISqlStatementRetryWaits -ErrorAction SilentlyContinue) { try { $waits = @(Get-SISqlStatementRetryWaits) } catch { } }
+    if (-not $Sleep) { $Sleep = { param($s) if ($s -gt 0) { Start-Sleep -Seconds $s } } }
+    # an error of the CALLER's own work (a write of its rows) is never read again here: only the read's own error is retried
+    $__rtOnRow = $OnRow   # (a name of its own: inside the stream reader $OnRow is the reader's parameter)
+    $each = { param($r) try { & $__rtOnRow $r } catch { try { $_.Exception.Data['SIRtCallback'] = $true } catch { }; throw } }
+    $try = 0
+    while ($true) {
+        try {
+            if (Get-Command -Name Invoke-SIDataSqlStream -ErrorAction SilentlyContinue) { return (Invoke-SIDataSqlStream -Invoke $Invoke -Sql $Sql -Params $Params -OnRow $each) }
+            $n = 0L
+            $ans = & $Invoke $Sql $Params 'reader'
+            foreach ($a in @($ans)) { foreach ($r in @($a)) { if ($null -eq $r) { continue }; $n++; $null = & $each $r } }
+            return $n
+        } catch {
+            $err = $_
+            if (-not $OnRetry -or $try -ge @($waits).Count -or -not (Test-SIRemediationTaskTransient $err)) { throw }
+            $w = [int]@($waits)[$try]; $try++
+            Write-Host ('       remediation tasks: the read broke on a temporary SQL error ({0}) -- read again from the last part written in {1} s ({2}/{3})' -f ((([string]$err.Exception.Message) -split "`n")[0]), $w, $try, @($waits).Count) -ForegroundColor DarkYellow
+            & $OnRetry
+            & $Sleep $w
         }
     }
-    $res.Units = Write-SIRemediationTaskStage -Invoke $Invoke -BuildId $BuildId -Part 'sig' -Rows $out
-    $res
+}
+
+function Test-SIRemediationTaskTransient {
+    <# A temporary SQL error (Test-SISqlStatementTransient, or an exception the seam marked transient-sql), anywhere in the chain. #>
+    param($ErrorRecord)
+    $ex0 = $(if ($ErrorRecord -is [System.Management.Automation.ErrorRecord]) { $ErrorRecord.Exception } else { $ErrorRecord })
+    for ($x = $ex0; $null -ne $x; $x = $x.InnerException) { if ($x.Data -and $x.Data.Contains('SIRtCallback')) { return $false } }
+    try { if ((Get-Command -Name Test-SISqlStatementTransient -ErrorAction SilentlyContinue) -and (Test-SISqlStatementTransient $ErrorRecord)) { return $true } } catch { }
+    $ex = $(if ($ErrorRecord -is [System.Management.Automation.ErrorRecord]) { $ErrorRecord.Exception } else { $ErrorRecord })
+    for ($x = $ex; $null -ne $x; $x = $x.InnerException) { if ($x.Data -and $x.Data.Contains('SIRtCallback')) { return $false } }
+    while ($null -ne $ex) { if ($ex.Data -and $ex.Data.Contains('SIErrorClass') -and [string]$ex.Data['SIErrorClass'] -eq 'transient-sql') { return $true }; $ex = $ex.InnerException }
+    $false
 }
 
 function Invoke-SIRemediationTaskEvidence {
@@ -1075,20 +1165,16 @@ function Invoke-SIRemediationTaskEvidence {
           [Parameter(Mandatory)][string[]]$Fields, [int]$DevicesPerPage = 500, [scriptblock]$ReadEvidence)
     if (-not $ReadEvidence) { $ReadEvidence = { param($Inv, $Ids) Get-SISoftwareEvidence -Invoke $Inv -DeviceIds $Ids } }
     $sql = (Get-SIRemediationTaskSoftwareSql).Replace('{SIG}', (Get-SIRemediationTaskSigExpr -Fields $Fields))
-    $rows = @(@(& $Invoke $sql @{ CollectionId = [string]$CollectionId; BuildId = $BuildId } 'reader') | ForEach-Object { $_ } | Where-Object { $null -ne $_ })
-    $res = [pscustomobject]@{ Units = $rows.Count; Read = 0; Bundled = 0; Held = (New-Object System.Collections.Generic.List[string]); Failed = 0; Error = '' }
-    if ($rows.Count -eq 0) { return $res }
+    $res = [pscustomobject]@{ Units = 0; Read = 0; Bundled = 0; Held = (New-Object System.Collections.Generic.List[string]); Failed = 0; Error = '' }
+    $cur = @{ Key = $null; Done = $null; Seen = $false }
     $g = { param($r, $n) $x = $r[$n]; if ($x -is [System.DBNull]) { $null } else { $x } }
-    # the owners in order, each with its devices and its units
-    $owners = [ordered]@{}
-    foreach ($r in $rows) {
-        $o = [string](& $g $r 'OwnerKey')
-        if (-not $owners.Contains($o)) {
-            $devs = @(([string](& $g $r 'DeviceIds')).Split(';') | ForEach-Object { $_.Trim().ToLowerInvariant() } | Where-Object { $_ } | Select-Object -Unique)
-            $owners[$o] = @{ Devices = $devs; Units = (New-Object System.Collections.Generic.List[object]) }
-        }
-        $owners[$o].Units.Add($r)
-    }
+    # #1399 (owner 2026-11-26: "memory issues must not be a problem in any step"): the (CI x software unit) rows are READ ROW BY
+    # ROW in their owner order (the statement sorts by OwnerKey) -- an owner is complete when the next one starts, and only the
+    # owners of the page being filled are held (about -DevicesPerPage devices), never every row of the collection
+    # RESUMABLE + EXACT (#1399 review): the statement sorts the owners BINARY (COLLATE Latin1_General_BIN2) and an owner change is
+    # an ordinal compare -- the same order SQL gives; a read broken by a temporary SQL error starts again after the last owner
+    # WRITTEN, the owners not yet written dropped and read again
+    $owners = New-Object System.Collections.Specialized.OrderedDictionary ([StringComparer]::Ordinal)
     $page = New-Object System.Collections.Generic.List[string]
     $pageDevs = New-Object System.Collections.Generic.List[string]
     $flush = {
@@ -1099,7 +1185,8 @@ function Invoke-SIRemediationTaskEvidence {
             catch {
                 # this page's CIs are UNKNOWN this run: held as they are (the other pages go on)
                 $res.Failed++; if (-not $res.Error) { $res.Error = $_.Exception.Message }
-                foreach ($o in $page) { $res.Held.Add([string]$o) }
+                foreach ($o in $page) { $res.Held.Add([string]$o); $res.Units += $owners[$o].Units.Count; $owners.Remove($o) }
+                $cur.Done = $page[$page.Count - 1]
                 $page.Clear(); $pageDevs.Clear()
                 return
             }
@@ -1139,14 +1226,39 @@ function Invoke-SIRemediationTaskEvidence {
             }
         }
         $null = Write-SIRemediationTaskStage -Invoke $Invoke -BuildId $BuildId -Part 'split' -Rows $out
+        foreach ($o in $page) { $res.Units += $owners[$o].Units.Count; $owners.Remove($o) }
+        $cur.Done = $page[$page.Count - 1]
         $page.Clear(); $pageDevs.Clear()
     }
-    foreach ($o in $owners.Keys) {
+    # an owner whose rows are all read joins the page (the page is written first when the owner's devices would overflow it)
+    $addOwner = {
+        param([string]$o)
         $devs = @($owners[$o].Devices)
         if ($pageDevs.Count -gt 0 -and ($pageDevs.Count + $devs.Count) -gt $DevicesPerPage) { & $flush }
         $page.Add([string]$o)
         foreach ($d in $devs) { if (-not $pageDevs.Contains($d)) { $pageDevs.Add($d) } }
     }
+    $onRow = {
+        param($r)
+        if ($null -eq $r) { return }
+        $o = [string](& $g $r 'OwnerKey')
+        if ($null -ne $cur.Done -and [string]::CompareOrdinal($o, $cur.Done) -le 0) { return }
+        $cur.Seen = $true
+        if ($null -eq $cur.Key -or -not [string]::Equals($cur.Key, $o, [StringComparison]::Ordinal)) {
+            if ($null -ne $cur.Key) { & $addOwner $cur.Key }
+            if ($owners.Contains($o)) { $cur.Key = $o }
+            else {
+                $devs = @(([string](& $g $r 'DeviceIds')).Split(';') | ForEach-Object { $_.Trim().ToLowerInvariant() } | Where-Object { $_ } | Select-Object -Unique)
+                $owners[$o] = @{ Devices = $devs; Units = (New-Object System.Collections.Generic.List[object]) }
+                $cur.Key = $o
+            }
+        }
+        $owners[$cur.Key].Units.Add($r)
+    }
+    $null = Invoke-SIRemediationTaskRows -Invoke $Invoke -Sql $sql -Params @{ CollectionId = [string]$CollectionId; BuildId = $BuildId } -OnRow $onRow `
+        -OnRetry { $owners.Clear(); $page.Clear(); $pageDevs.Clear(); $cur.Key = $null }
+    if (-not $cur.Seen) { return $res }
+    if ($null -ne $cur.Key) { & $addOwner $cur.Key }
     & $flush
     $res
 }
@@ -1253,10 +1365,13 @@ function Invoke-SIDataRemediationTasks {
                                   NewlyClosed = (& $v 'NewlyClosed'); Kept = (& $v 'Kept'); Reopened = (& $v 'Reopened'); Links = (& $v 'Links'); Findings = (& $v 'Findings')
                                   NoTask = (& $v 'NoTask'); OwnRows = (& $v 'OwnRows'); CompleteReports = (& $v 'CompleteReports'); LinkStates = $(if ($r -and -not ($r['LinkStates'] -is [System.DBNull])) { [string]$r['LinkStates'] } else { '' }); Signatures = $sig.Signatures; Bundled = $ev.Bundled; EvidenceRead = $ev.Read; Removed = $removed
                                   WriteRanges = (& $v 'WriteRanges'); Held = (& $v 'Held'); EvidenceFailed = $ev.Failed; Locked = [bool]$st.Locked
+                                  HeldLists = $(if ($r -is [System.Collections.IDictionary] -and $r.Contains('HeldLists') -and -not ($r['HeldLists'] -is [System.DBNull])) { [int]$r['HeldLists'] } else { 0 })
                                   Seconds = [Math]::Round($clock.Elapsed.TotalSeconds, 1)
                                   Phases = ('{0}; retention={1:N0} s; in the build (ms): {2}' -f ($laps -join ' s; '), $lap.Elapsed.TotalSeconds, $(if ($r -and -not ($r['BuildPhases'] -is [System.DBNull])) { [string]$r['BuildPhases'] } else { '' })) }
         & $Log 'OK' ('remediation tasks: the collection of {0:yyyy-MM-dd HH:mm} UTC -- {1} task(s) ({2} open, {3} closed, {4} closed this run, {5} kept as they were while their findings are not known), {6} finding(s) without a known fix get no task ({7} s: {8})' -f `
             $ct, $res.Tasks, $res.Open, $res.Closed, $res.NewlyClosed, $res.Kept, $res.NoTask, $res.Seconds, $res.Phases)
+        # #1403 one line per run: the software tasks held because their findings' affected software lists are not complete
+        if ($res.HeldLists -gt 0) { & $Log 'INFO' ('remediation tasks: {0} software task(s) kept open as they were -- their findings name more affected software than SecurityInsight keeps (or a list could not be read in full): never closed on a product the list may only have left out' -f $res.HeldLists) }
         return $res
     }
     try {

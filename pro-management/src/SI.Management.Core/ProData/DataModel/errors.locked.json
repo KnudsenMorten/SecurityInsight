@@ -1380,6 +1380,31 @@
     "since": null
   },
   {
+    "code": "si-flow-1206",
+    "title": "The newest complete data is older than the warning limit",
+    "causeClass": "held-too-long",
+    "appliesTo": {
+      "capabilities": [],
+      "licences": []
+    },
+    "customerText": "No new data has been published for longer than the warning limit, so the web app still shows the newest complete data, which is getting old. Nothing is lost and nothing is stopped: the pages keep showing that data until a run completes. Support looks at why the runs do not complete.",
+    "internalNote": "#1396 (owner 2026-11-26: \"why have nobody found out\" / \"fix it\" -- one install had no complete pipeline run since 2026-11-18, others were 1.5-2.5 days behind, and nobody was alerted). The heartbeat job (engine/heartbeat/Invoke-SIHeartbeat.ps1 -> engine/_shared/SI-StaleData.ps1 Invoke-SIStaleDataCheck) compares when the collection the web app shows became Complete (sidata.vPublishedCollection LoadedAt -- never reset by a republish; not its collection time, set near the run's start) with SI_Pro_StaleDataWarnHours (default 36, 0 = off). Older = guard event data.published.stale (OFF by default, the owner's guard rule -- an install switches it on), outcome warning, ONCE per UTC day (cause key stale|<day>): the Guards page, run health and the GUARD-1 record to Invardia; no mail. Its detail names the newest WHOLE-PIPELINE run's result and its first failed step. The web app shows the same as a warning on Home and the wall board (every reader) and at the top of every page (Admins) -- on by itself. Invardia's fleet alert reads Published{} of the heartbeat (no new wire key). Warning only: nothing is held or stopped.",
+    "whoActs": "support",
+    "priority": "P2",
+    "opensTicket": false,
+    "action": "support",
+    "fixedIn": null,
+    "waitForFix": false,
+    "steps": [
+      {
+        "who": "support",
+        "text": "Open the newest runs on Operations > Jobs: which step failed or still runs, and why. Fix that step's cause; the next run that completes moves the pages to new data and the warning goes by itself."
+      }
+    ],
+    "lesson": "Data that is getting old must be said where people look, every day, not only found when someone asks why the numbers have not moved.",
+    "since": null
+  },
+  {
     "code": "si-snow-1301",
     "title": "A ServiceNow output's check failed",
     "causeClass": "settings-unreachable",

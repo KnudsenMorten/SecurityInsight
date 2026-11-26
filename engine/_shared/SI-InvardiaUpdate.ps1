@@ -679,7 +679,9 @@ function New-SIInvardiaKindState {
                 lastSequence = -1; lastVersion = ''; lastRing = $null; lastAction = ''; lastReason = ''; lastCheckUtc = $null; lastWave = ''
                 hold = ''; nextTryUtc = $null
                 # (templates) the fingerprint of a release's template change that waits for an Admin while its code rolled ('' = none)
-                pendingFingerprint = '' }
+                pendingFingerprint = ''
+                # (code) #1406: the version an update stopped part-way is finished for, and how many runs tried it ('' = none)
+                resumeVersion = ''; resumeTries = '' }
 }
 
 function ConvertTo-SIInvardiaUtc {
@@ -1084,6 +1086,26 @@ function New-SIInvardiaReleaseRequest {
 #  SI decides the version AND the ring; Invardia relays (framework UPDATE-1.7, operator 2026-10-06) -- pure builders for
 #  the release calls of SI's publisher identity (setup/Publish-SIRelease.ps1, setup/Publish-SICommunityRelease.ps1)
 # =====================================================================================================================
+function ConvertFrom-SIJsonText {
+    <# PURE. JSON text -> objects, with ISO date strings KEPT as text where the shell can (pwsh 7.5+: -DateKind String), so a
+       time is judged by what was written ("+02:00" stays "+02:00"), never by what ConvertFrom-Json made of it. THROWS on
+       text that is not JSON. #>
+    # -NoDateKind: the path a shell before pwsh 7.5 takes (tests)
+    param([Parameter(Mandatory)][AllowEmptyString()][string]$Text, [switch]$NoDateKind)
+    if (-not $NoDateKind -and (Get-Command -Name ConvertFrom-Json).Parameters.ContainsKey('DateKind')) { return ($Text | ConvertFrom-Json -DateKind String -ErrorAction Stop) }
+    # before pwsh 7.5 (review round 2): every ISO date string is marked first so ConvertFrom-Json leaves it as text, then the
+    # mark is taken off again -- "+00:00" stays "+00:00" (UTC), "+02:00" stays "+02:00" (refused by the caller)
+    $mark = '~si-iso~'
+    $o = ([regex]::Replace($Text, '"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}[^"]*)"', ('"' + $mark + '$1"'))) | ConvertFrom-Json -ErrorAction Stop
+    $un = $null
+    $un = { param($v)
+        if ($v -is [string]) { if ($v.StartsWith($mark)) { return $v.Substring($mark.Length) }; return $v }
+        if ($v -is [System.Array]) { return ,@($v | ForEach-Object { & $un $_ }) }
+        if ($v -is [System.Management.Automation.PSCustomObject]) { foreach ($pp in @($v.PSObject.Properties)) { $v.($pp.Name) = (& $un $pp.Value) }; return $v }
+        $v }
+    & $un $o
+}
+
 function ConvertTo-SIRingTestGate {
     <#
         PURE (framework RING-GATE-PROOF, Invardia 2026-11-11; SI #1186). A ring call's "testGate" -- from an object, a
@@ -1094,7 +1116,7 @@ function ConvertTo-SIRingTestGate {
     #>
     param([Parameter(Mandatory)][AllowNull()]$TestGate)
     $tg = $TestGate
-    if ($tg -is [string]) { try { $tg = $tg | ConvertFrom-Json -ErrorAction Stop } catch { throw 'testGate is not JSON' } }
+    if ($tg -is [string]) { try { $tg = ConvertFrom-SIJsonText -Text $tg } catch { throw 'testGate is not JSON' } }
     if ($null -eq $tg) { throw 'no testGate' }
     $g = { param($k) if ($tg -is [System.Collections.IDictionary]) { $tg[$k] } elseif ($tg.PSObject.Properties[$k]) { $tg.$k } else { $null } }
     $commit = "$(& $g 'commit')".Trim().ToLowerInvariant()
@@ -1110,7 +1132,160 @@ function ConvertTo-SIRingTestGate {
     if ($result -notin @('green', 'red')) { $bad.Add('result (green | red)') }
     if ($at -notmatch '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$') { $bad.Add('at (ISO UTC)') }
     if ($bad.Count) { throw ('testGate malformed: {0}' -f ($bad -join ', ')) }
-    [ordered]@{ commit = $commit; run = $run; result = $result; at = $at }
+    $out = [ordered]@{ commit = $commit; run = $run; result = $result; at = $at }
+    # TWO-AGENT-CHECK-1 (#1404): reviewer verdicts + findings the testGate already carries (a stored proof, a given one) stay
+    # in it -- checked again against its commit (ConvertTo-SIRingReviews; a malformed set THROWS, nothing is sent)
+    $rs = Get-SIRingReviewsShape
+    $rvIn = & $g $rs.Reviews
+    if ($null -ne $rvIn) {
+        $rv = ConvertTo-SIRingReviews -Reviews @($rvIn) -Findings (& $g $rs.Findings) -Commit $commit
+        $out[$rs.Reviews] = $rv[$rs.Reviews]; $out[$rs.Findings] = $rv[$rs.Findings]
+    }
+    $out
+}
+
+function Get-SIRingReviewsShape {
+    <#
+        PURE. THE ONE PLACE the ring call's reviewer verdicts are named (framework TWO-AGENT-CHECK-1, Invardia bfbccf0f; SI #1404).
+        Invardia's shape (2026-11-26): INSIDE the testGate object --
+          "testGate": { commit, run, result, at,
+                        "reviews":  [ { "agent": <text, at most 60>, "verdict": "PASS" | "FAIL", "at": <ISO-8601 UTC>,
+                                        "commit": <40 hex, = testGate.commit> }, ... ],
+                        "findings": { "raised": <int>, "agreedRight": <int>, "agreedWrong": <int> } }
+        Reviews / Findings: the keys inside testGate. Agent / Verdict / At / Commit: an entry's keys. Raised / AgreedRight /
+        AgreedWrong: the findings' keys. Pass: the verdict a ring call takes (Verdicts: every verdict Invardia knows). Min: the
+        fewest DISTINCT agents with Pass. AgentMax: an agent id's longest length. Change the shape HERE only.
+    #>
+    [ordered]@{ Reviews = 'reviews'; Findings = 'findings'; Agent = 'agent'; Verdict = 'verdict'; At = 'at'; Commit = 'commit'
+                Raised = 'raised'; AgreedRight = 'agreedRight'; AgreedWrong = 'agreedWrong'
+                Pass = 'PASS'; Verdicts = @('PASS', 'FAIL'); Min = 2; AgentMax = 60 }
+}
+
+function ConvertTo-SIRingReviews {
+    <#
+        PURE (framework TWO-AGENT-CHECK-1, Invardia bfbccf0f; SI #1404). The reviewer verdicts + the findings a ring call's
+        testGate carries (Get-SIRingReviewsShape) -- from JSON text or an object { reviews: [...], findings: {...} }, or an array
+        of entries with -Findings given beside it. Returns [ordered]@{ reviews = @([ordered]@{ agent; verdict; at; commit });
+        findings = [ordered]@{ raised; agreedRight; agreedWrong } }.
+        THROWS -- the LOCAL refusal, before any call -- unless:
+          * at least Min (2) entries, every agent id given (1-60 characters) and DISTINCT (case-insensitive);
+          * every verdict PASS (a FAIL on the release commit means the two-agent check did not pass: nothing is sent);
+          * every "at" ISO-8601 UTC as WRITTEN (Z or +00:00; JSON text is read with its dates kept as text, ConvertFrom-SIJsonText;
+            a [datetime] is taken only when its kind is Utc), not in the future (more than 5 minutes after -Now), and not
+            before -NotBefore (the reviewed commit's commit time, when the caller knows it: a review older than the commit
+            it names did not review it);
+          * every commit 40 hex and the commit the testGate names (-Commit, 7-40 hex: the same commit, one may be the short
+            form) -- a review of another tree never proves this one; all entries name the same commit;
+          * findings given, each an exact JSON whole number >= 0 (never text: "3" is refused), and raised = agreedRight + agreedWrong (owner: every finding was agreed
+            right -- fixed before the merge -- or wrong -- reason recorded -- by both agents and the author; no agreement = FAIL).
+    #>
+    param([AllowNull()]$Reviews, [AllowNull()]$Findings = $null, [AllowEmptyString()][string]$Commit = '',
+          [AllowNull()][Nullable[datetime]]$NotBefore = $null, [datetime]$Now = [datetime]::UtcNow, [int]$SkewMinutes = 5)
+    $s = Get-SIRingReviewsShape
+    $r = $Reviews
+    if ($r -is [string]) {
+        if (-not "$r".Trim()) { throw 'reviews: none given' }
+        try { $r = ConvertFrom-SIJsonText -Text $r } catch { throw 'reviews is not JSON' }
+    }
+    $g = { param($o, $k) if ($null -eq $o) { $null } elseif ($o -is [System.Collections.IDictionary]) { $o[$k] } elseif ($o.PSObject.Properties[$k]) { $o.$k } else { $null } }
+    $fd = $Findings
+    if ($fd -is [string]) { if ("$fd".Trim()) { try { $fd = ConvertFrom-SIJsonText -Text $fd } catch { throw 'findings is not JSON' } } else { $fd = $null } }
+    # an object that carries the list (and the findings) under their names: { "reviews": [ ... ], "findings": { ... } }
+    $wrapped = ($null -ne $r -and $r -isnot [System.Array] -and $r -isnot [System.Collections.IList] -and
+                $(if ($r -is [System.Collections.IDictionary]) { $r.Contains($s.Reviews) } else { [bool]$r.PSObject.Properties[$s.Reviews] }))
+    if ($wrapped) {
+        if ($null -eq $fd) { $fd = & $g $r $s.Findings }
+        $r = & $g $r $s.Reviews
+    }
+    $list = @(@($r) | Where-Object { $null -ne $_ })
+    $bad = New-Object System.Collections.Generic.List[string]
+    if ($list.Count -lt [int]$s.Min) { throw ('reviews refused: {0} given -- a ring call needs at least {1} independent reviewer verdicts on the release commit (TWO-AGENT-CHECK-1)' -f $list.Count, $s.Min) }
+    $tc = "$Commit".Trim().ToLowerInvariant()
+    if ($tc -notmatch '^[0-9a-f]{7,40}$') { $bad.Add('the testGate names no commit to match the reviews to') }
+    $seen = @{}; $commits = @{}
+    $out = New-Object System.Collections.Generic.List[object]
+    for ($i = 0; $i -lt $list.Count; $i++) {
+        $e = $list[$i]; $n = $i + 1
+        $agent = "$(& $g $e $s.Agent)".Trim()
+        $verdict = "$(& $g $e $s.Verdict)".Trim().ToUpperInvariant()
+        $atRaw = & $g $e $s.At
+        $at = ''; $atUtc = $null
+        # a [datetime] only when it IS UTC (ConvertFrom-Json before pwsh 7.5 turns "+02:00" into a Local one: refused)
+        if ($atRaw -is [datetime]) { if ($atRaw.Kind -eq [DateTimeKind]::Utc) { $atUtc = $atRaw } }
+        elseif ($atRaw -is [datetimeoffset]) { if ($atRaw.Offset -eq [TimeSpan]::Zero) { $atUtc = $atRaw.UtcDateTime } }
+        else {
+            $t = "$atRaw".Trim()
+            $o = [datetimeoffset]::MinValue
+            if ($t -match '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|\+00:00)$' -and
+                [datetimeoffset]::TryParse($t, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::AssumeUniversal, [ref]$o)) {
+                $atUtc = $o.UtcDateTime
+            }
+        }
+        if ($null -ne $atUtc) { $at = $atUtc.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", [Globalization.CultureInfo]::InvariantCulture) }
+        $ec = "$(& $g $e $s.Commit)".Trim().ToLowerInvariant()
+        if (-not $agent -or $agent.Length -gt [int]$s.AgentMax) { $bad.Add(('review {0}: agent (1-{1} characters)' -f $n, $s.AgentMax)) }
+        elseif ($seen.ContainsKey($agent.ToLowerInvariant())) { $bad.Add(('review {0}: agent {1} reviewed twice -- the reviewers must be distinct' -f $n, $agent)) }
+        else { $seen[$agent.ToLowerInvariant()] = $true }
+        if ($verdict -notin @($s.Verdicts)) { $bad.Add(('review {0}: verdict {1} ({2})' -f $n, $(if ($verdict) { $verdict } else { 'none' }), (@($s.Verdicts) -join ' | '))) }
+        elseif ($verdict -ne $s.Pass) { $bad.Add(('review {0}: verdict {1} -- only {2} from every reviewer reaches a ring' -f $n, $verdict, $s.Pass)) }
+        if (-not $at) { $bad.Add(('review {0}: at (ISO-8601 UTC, yyyy-MM-ddTHH:mm:ssZ)' -f $n)) }
+        elseif ($atUtc -gt $Now.ToUniversalTime().AddMinutes([Math]::Abs($SkewMinutes))) { $bad.Add(('review {0}: at {1} is in the future' -f $n, $at)) }
+        elseif ($null -ne $NotBefore -and $atUtc -lt ([datetime]$NotBefore).ToUniversalTime()) { $bad.Add(('review {0}: at {1} is before the reviewed commit was made ({2:yyyy-MM-ddTHH:mm:ssZ}) -- it did not review that commit' -f $n, $at, ([datetime]$NotBefore).ToUniversalTime())) }
+        if ($ec -notmatch '^[0-9a-f]{40}$') { $bad.Add(('review {0}: commit (40 hex, the release commit)' -f $n)) }
+        elseif ($tc -match '^[0-9a-f]{7,40}$' -and -not ($ec.StartsWith($tc) -or $tc.StartsWith($ec))) { $bad.Add(('review {0}: reviewed {1}, the testGate (the release commit) is {2} -- the reviewed tree is not the released tree' -f $n, $ec, $tc)) }
+        else { $commits[$ec] = $true }
+        $x = [ordered]@{}
+        $x[$s.Agent] = $agent; $x[$s.Verdict] = $verdict; $x[$s.At] = $at; $x[$s.Commit] = $ec
+        $out.Add($x)
+    }
+    if ($commits.Count -gt 1) { $bad.Add(('the reviews name {0} different commits' -f $commits.Count)) }
+    $fo = [ordered]@{}
+    if ($null -eq $fd) { $bad.Add(('findings ({0}, {1}, {2}) not given' -f $s.Raised, $s.AgreedRight, $s.AgreedWrong)) }
+    else {
+        $num = @{}
+        foreach ($k in @($s.Raised, $s.AgreedRight, $s.AgreedWrong)) {
+            $v = & $g $fd $k
+            # an exact JSON whole number only: text ("3"), a fraction or a negative is refused
+            if (($v -is [int] -or $v -is [long] -or $v -is [int16] -or $v -is [byte]) -and $v -ge 0 -and $v -le 999999999) { $num[$k] = [int]$v; $fo[$k] = $num[$k] }
+            else { $bad.Add(('findings: {0} (a whole number >= 0)' -f $k)) }
+        }
+        if ($num.Count -eq 3 -and $num[$s.Raised] -ne ($num[$s.AgreedRight] + $num[$s.AgreedWrong])) {
+            $bad.Add(('findings: {0} raised, but {1} agreed right + {2} agreed wrong -- every finding must be agreed right or wrong by both reviewers and the author (no agreement = FAIL)' -f $num[$s.Raised], $num[$s.AgreedRight], $num[$s.AgreedWrong]))
+        }
+    }
+    if ($bad.Count) { throw ('reviews refused: {0}' -f ($bad -join '; ')) }
+    $res = [ordered]@{}
+    $res[$s.Reviews] = @($out.ToArray()); $res[$s.Findings] = $fo
+    $res
+}
+
+function Add-SIRingTestGateReviews {
+    <#
+        PURE (TWO-AGENT-CHECK-1, SI #1404). The testGate (ConvertTo-SIRingTestGate shape) with the reviewer verdicts and the
+        findings put INSIDE it (Get-SIRingReviewsShape) -- -Reviews: JSON text / object { reviews, findings } / an array (with
+        -Findings). Checked against the testGate's commit (ConvertTo-SIRingReviews); THROWS on a refusal. When the testGate
+        names its commit in short form, it takes the full 40-hex commit the reviews name (Invardia compares them as equal).
+        -Reviews $null: the testGate as it is.
+    #>
+    param([Parameter(Mandatory)][AllowNull()]$TestGate, [AllowNull()]$Reviews, [AllowNull()]$Findings = $null, [AllowNull()][Nullable[datetime]]$NotBefore = $null)
+    $tg = ConvertTo-SIRingTestGate -TestGate $TestGate
+    if ($null -eq $Reviews -or ($Reviews -is [string] -and -not "$Reviews".Trim())) { return $tg }
+    $s = Get-SIRingReviewsShape
+    $rv = ConvertTo-SIRingReviews -Reviews $Reviews -Findings $Findings -Commit $tg.commit -NotBefore $NotBefore
+    $full = "$(@($rv[$s.Reviews])[0][$s.Commit])"
+    if ($full -match '^[0-9a-f]{40}$') { $tg.commit = $full }
+    $tg[$s.Reviews] = $rv[$s.Reviews]; $tg[$s.Findings] = $rv[$s.Findings]
+    $tg
+}
+
+function Test-SIRingTestGateHasReviews {
+    <# PURE. Does -TestGate (any form ConvertTo-SIRingTestGate takes) carry reviewer verdicts? Never throws. #>
+    param([AllowNull()]$TestGate)
+    try {
+        $s = Get-SIRingReviewsShape
+        $tg = ConvertTo-SIRingTestGate -TestGate $TestGate
+        [bool]($tg.Contains($s.Reviews) -and @($tg[$s.Reviews]).Count)
+    } catch { $false }
 }
 
 function New-SIInvardiaRingReleaseRequest {
@@ -1121,6 +1296,9 @@ function New-SIInvardiaRingReleaseRequest {
         (ConvertTo-SIRingTestGate shape; setup\_shared\SI-ReleaseGateProof.ps1 decides it). A request that will be SENT (it
         carries -AccessToken) without one is refused here -- no ring call ever leaves without its proof; a plan (no token)
         shows the body without it.
+        -Reviews (+ -Findings) (framework TWO-AGENT-CHECK-1, #1404): testGate.reviews [{ agent, verdict, at, commit }] and
+        testGate.findings { raised, agreedRight, agreedWrong } (Get-SIRingReviewsShape) -- the /check dry run carries the same
+        body (New-SIInvardiaRingCheckRequest builds it from the same arguments).
         Community: rings 0-3, as Pro (framework PRO-COMMUNITY-SAME, SI #1207). Only SI's publisher identity may call it.
         -EngineChanged 'true' | 'false' (CR4 #654): sets engineChanged on that version's record (a version published before
         SI said it); '' = not sent.
@@ -1140,9 +1318,18 @@ function New-SIInvardiaRingReleaseRequest {
           [AllowNull()]$TestGate = $null, [switch]$ImageOnly, [AllowNull()]$ImageDiff = $null,
           # #1324 (framework DIGEST-PROOF-1): the rings 2/3 image patch of an older build is proven by the NEWER patch rings 0/1
           # proved -- { version; imageDiff } of that patch (ConvertTo-SIRingProvenBy); with -ImageOnly only
-          [AllowNull()]$ProvenBy = $null)
+          [AllowNull()]$ProvenBy = $null,
+          # #1404 (framework TWO-AGENT-CHECK-1): the two independent reviewers' verdicts + the findings, put INSIDE testGate
+          # (Add-SIRingTestGateReviews; JSON / object { reviews, findings } / an array with -Findings). Refused here, before
+          # any call, unless every check of ConvertTo-SIRingReviews passes. $null = the testGate as it is (it may carry them).
+          [AllowNull()]$Reviews = $null, [AllowNull()]$Findings = $null,
+          # #1404 review round 3 (H4): a roll-back to the version a ring ran before (its own stored proof as it was) -- the ONE
+          # ring call that is sent (it carries -AccessToken) without reviewer verdicts, beside an image-only call
+          [switch]$RollBack)
     if ("$Version".Trim() -notmatch '^\d{1,12}(\.\d{1,12}){1,5}$') { throw "not a release version: '$Version'" }
     if ($null -ne $ProvenBy -and -not $ImageOnly) { throw 'provenBy goes with an image-only ring call only' }
+    $hasReviews = -not ($null -eq $Reviews -or ($Reviews -is [string] -and -not "$Reviews".Trim()))
+    if ($hasReviews -and $null -eq $TestGate) { throw 'refused: reviews go INSIDE testGate (TWO-AGENT-CHECK-1) -- a ring call with reviews needs its testGate' }
     # SI #1207 (framework PRO-COMMUNITY-SAME): a Community version goes to rings 0-3, the same rings as Pro
     if ($AccessToken -and $null -eq $TestGate) { throw ("refused: the ring {0} call carries no testGate -- a ring call is sent only with the green quick-gate run on exactly the release commit (RING-GATE-PROOF)" -f $Ring) }
     $base = Get-SIInvardiaUpdateBaseUrl -BaseUrl $BaseUrl
@@ -1150,7 +1337,14 @@ function New-SIInvardiaRingReleaseRequest {
     if ($Tag) { $b['tag'] = $Tag }
     if ($EngineChanged) { $b['engineChanged'] = ($EngineChanged -eq 'true') }
     if ("$ChangedScopes".Trim()) { $b['changedScopes'] = [string[]]@("$ChangedScopes".Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ }) }
-    if ($null -ne $TestGate) { $b['testGate'] = ConvertTo-SIRingTestGate -TestGate $TestGate }
+    if ($null -ne $TestGate) { $b['testGate'] = $(if ($hasReviews) { Add-SIRingTestGateReviews -TestGate $TestGate -Reviews $Reviews -Findings $Findings } else { ConvertTo-SIRingTestGate -TestGate $TestGate }) }
+    # #1404 review round 3 (H4, fail closed): a ring call that will be SENT carries two PASS reviews inside testGate -- unless it
+    # is image-only (Invardia's exemption decides) or an explicit roll-back. Checked on the testGate as it will go (malformed
+    # ones were refused just above).
+    $rsh = Get-SIRingReviewsShape
+    if ($AccessToken -and -not $ImageOnly -and -not $RollBack -and -not ($b['testGate'].Contains($rsh.Reviews) -and @($b['testGate'][$rsh.Reviews]).Count)) {
+        throw ("refused: the ring {0} call carries no reviewer verdicts -- two fresh independent reviewers must PASS on exactly the release commit (TWO-AGENT-CHECK-1)" -f $Ring)
+    }
     if ($ImageOnly) {
         $b['imageOnly'] = $true
         $b['imageDiff'] = ConvertTo-SIRingImageDiff -ImageDiff $ImageDiff

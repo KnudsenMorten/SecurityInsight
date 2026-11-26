@@ -29,6 +29,10 @@ BeforeAll {
     . (Join-Path $script:SIRoot 'engine\data-model\SI-RecordHandover.ps1')
     . (Join-Path $script:SIRoot 'engine\data-model\SI-DataModelTemplates.ps1')
 
+    # the product's INFO line goes to the information stream test 1 reads (#1415): without this, a no-op Write-SIInfo another
+    # suite left GLOBAL in a shared Pester process swallowed the line and test 1 read nothing
+    function script:Write-SIInfo { param([string]$Message) Write-Information ('[INFO] ' + $Message) }
+
     $script:Sub  = '11111111-0000-0000-0000-000000001089'
     $script:RgId = "/subscriptions/$($script:Sub)/resourceGroups/rg-app"
     $script:VmId = "$($script:RgId)/providers/Microsoft.Compute/virtualMachines/vm1"

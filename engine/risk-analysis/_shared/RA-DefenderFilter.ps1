@@ -252,6 +252,9 @@ function Test-RACountQuery {
     return ($t -match '\|\s*count\s*$' -or $t -match '\|\s*distinct\s+SIGroupHash\s*$')
 }
 
+# #1399 the one accepted-snapshot rule of SI_AzureRecommendation_CL
+if (-not (Get-Command -Name Get-SIAzureRecAcceptedTimeKql -ErrorAction SilentlyContinue)) { . ([IO.Path]::Combine((Split-Path -Parent (Split-Path -Parent $PSScriptRoot)), '_shared', 'SI-AzureRecSnapshot.ps1')) }
+
 function Get-RADefenderSetKql {
     <#
         PURE. The Defender list as Log Analytics holds it, one key per pair -- the same three pair TEXTS and the same
@@ -261,8 +264,10 @@ function Get-RADefenderSetKql {
         -Count: the number of keys.
     #>
     param([int]$Pages = 1, [int]$Page = 0, [switch]$Count, [string]$Table = 'SI_AzureRecommendation_CL')
+    # #1399 the ONE accepted snapshot (engine\_shared\SI-AzureRecSnapshot.ps1): the snapshot the Defender recommendation reports read
+    $siTime = Get-SIAzureRecAcceptedTimeKql -Source ("($Table | where TimeGenerated > ago(8d))")
     $head = @"
-let _siT = toscalar($Table | where TimeGenerated > ago(8d) | summarize max(CollectionTime));
+let _siT = $siTime;
 $Table
 | where TimeGenerated > ago(8d) and CollectionTime == _siT
 | extend _akL = tolower(tostring(column_ifexists("AssessmentKey", "")))

@@ -18,6 +18,16 @@
     Failure modes are non-fatal -- empty maps are returned on Graph error,
     license missing, schema drift. Azure engine still classifies via ARG
     + AI metaprofile alone.
+
+    #1398 THE PART'S NODES AND EDGES ONLY (owner 2026-10-21: "memory issues must not be a problem in any step. env must work
+    in millions of assets env"). Both reads took the WHOLE graph in every part: the nodes in one unpaged hunting query (cut at
+    Microsoft's 100,000 rows without a word) with each node's raw NodeProperties text, the edges as one list. Now each asks
+    only for what the PART's resources look up -- the nodes by the part's resource names (-Names: the key Invoke-Collect joins
+    on), the edges by the part's node ids and resource names (-Keys: the keys Invoke-Enrich joins on) -- in key lists sized by
+    their text, through the product's hunting request (retried; a cut answer read whole in hash parts), each part of an answer
+    taken as it arrives. Kusto projects only the four rawData fields Collect reads (with which of them the node HAS).
+    IDENTICAL FOR THE PART: every node / edge that gives a key the part looks up carries that key, so it is in the answer; a
+    name two nodes share is counted on the same nodes; a row in two lists' answers is taken once.
 #>
 
 # Node labels that identify Azure resources in the EG schema. Customer can
@@ -60,88 +70,24 @@ $script:SI_AzureEG_AccessEdgeLabels_Default = @(
     'has data action on'
 )
 
-function Get-AzureExposureGraphResourceNodes {
-    [CmdletBinding()]
-    param()
-
-    . (Join-Path (Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))) "auth/Get-SIGraphToken.ps1")
-
-    try {
-        $token = Get-SIGraphToken -Resource Graph
-    } catch {
-        Write-Warning ('AzureExposureGraph nodes: token failed -- {0}' -f $_.Exception.Message)
-        return @{}
-    }
-
+function Get-SIAzureEgLabelList {
     $labels = if ($global:SI_AzureExposureGraph_ResourceLabels) { @($global:SI_AzureExposureGraph_ResourceLabels) } else { $script:SI_AzureEG_ResourceLabels_Default }
-    $labelList = ($labels | ForEach-Object { "'$_'" }) -join ','
-
-    # NodeProperties is dynamic so projecting tostring() avoids the
-    # `distinct` 400-on-dynamic gotcha (same fix used in the endpoint EG
-    # connector). Also project NodeLabel so the caller can pivot on type.
-    $kql = @"
-ExposureGraphNodes
-| where NodeLabel in~ ($labelList)
-| project NodeId, NodeName, NodeLabel, NodePropertiesJson = tostring(NodeProperties)
-"@
-
-    try {
-        $resp = Invoke-RestMethod -Method Post `
-            -Uri 'https://graph.microsoft.com/v1.0/security/runHuntingQuery' `
-            -Headers @{ Authorization = ('Bearer ' + $token); 'Content-Type' = 'application/json' } `
-            -Body (@{ Query = $kql } | ConvertTo-Json -Compress) -ErrorAction Stop
-    } catch {
-        $msg = $_.Exception.Message
-        if ($_.ErrorDetails -and $_.ErrorDetails.Message) { $msg = $_.ErrorDetails.Message }
-        Write-Warning ('AzureExposureGraph nodes: query failed -- {0}' -f $msg)
-        return @{}
-    }
-
-    $rows = if ($resp.results) { $resp.results } elseif ($resp.Results) { $resp.Results } else { @() }
-    # Map keyed by lowercased NodeName for join with AZ_Name (resource short
-    # name). #642: a name two nodes share is no key at all -- the first node of a name answered for every same-named
-    # resource (one per subscription is common), so they all took its values.
-    $nameCount = @{}
-    foreach ($r in $rows) { if ($r.NodeName) { $nk = ([string]$r.NodeName).ToLowerInvariant(); $nameCount[$nk] = 1 + [int]$nameCount[$nk] } }
-    $byName = @{}
-    foreach ($r in $rows) {
-        if (-not $r.NodeName) { continue }
-        $key = ([string]$r.NodeName).ToLowerInvariant()
-        if ([int]$nameCount[$key] -eq 1 -and -not $byName.ContainsKey($key)) {
-            $byName[$key] = @{
-                NodeId             = $r.NodeId
-                NodeName           = $r.NodeName
-                NodeLabel          = $r.NodeLabel
-                NodePropertiesJson = $r.NodePropertiesJson
-            }
-        }
-    }
-    return $byName
+    ($labels | ForEach-Object { "'$_'" }) -join ','
 }
 
-function Get-AzureExposureGraphAccessEdges {
-    [CmdletBinding()]
-    # -Ask { param($Query) } -> @{ Ok; Rows; Error }: the test seam of one hunting request (default: Graph, retried)
-    param([scriptblock]$Ask)
+function Get-SIAzureEgNodeQuery {
+    <# PURE. The Azure resource node table's whole-table query (shared\SI-EgNodeExport.ps1: the fields cast in Kusto). #>
+    Get-SIEgExportQuery -Kind 'azure-nodes' -LabelList (Get-SIAzureEgLabelList)
+}
 
-    if (-not $Ask) {
-        . (Join-Path (Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))) "auth/Get-SIGraphToken.ps1")
-        try {
-            $token = Get-SIGraphToken -Resource Graph
-        } catch {
-            Write-Warning ('AzureExposureGraph edges: token failed -- {0}' -f $_.Exception.Message)
-            return @{}
-        }
-    }
-
+function Get-SIAzureEgEdgeQuery {
+    <# PURE. The access-edge table's whole-table query: identity -> Azure resource edges of the access labels. #>
     $resourceLabels = if ($global:SI_AzureExposureGraph_ResourceLabels) { @($global:SI_AzureExposureGraph_ResourceLabels) } else { $script:SI_AzureEG_ResourceLabels_Default }
     $identityLabels = if ($global:SI_AzureExposureGraph_IdentityLabels) { @($global:SI_AzureExposureGraph_IdentityLabels) } else { $script:SI_AzureEG_IdentityLabels_Default }
     $edgeLabels     = if ($global:SI_AzureExposureGraph_AccessEdgeLabels) { @($global:SI_AzureExposureGraph_AccessEdgeLabels) } else { $script:SI_AzureEG_AccessEdgeLabels_Default }
-
     $rList = ($resourceLabels | ForEach-Object { "'$_'" }) -join ','
     $iList = ($identityLabels | ForEach-Object { "'$_'" }) -join ','
     $eList = ($edgeLabels     | ForEach-Object { "'$_'" }) -join ','
-
     # The live graph labels Azure resources by ARM TYPE ('microsoft.storage/storageaccounts',
     # 'microsoft.keyvault/vaults', ...), not by the short names in the default list -- so this query
     # matched nothing, on every run, and XENG_AccessedBy* stayed empty (measured: hundreds of
@@ -153,32 +99,74 @@ function Get-AzureExposureGraphAccessEdges {
     } else {
         "(TargetNodeLabel in~ ($rList) or (TargetNodeLabel startswith 'microsoft.' and TargetNodeLabel !startswith 'microsoft.authorization/'))"
     }
+    Get-SIEgExportQuery -Kind 'azure-edges' -EdgeFilter ("| where EdgeLabel in~ ($eList)`n| where SourceNodeLabel in~ ($iList) and $targetFilter")
+}
 
-    $kql = @"
-ExposureGraphEdges
-| where EdgeLabel in~ ($eList)
-| where SourceNodeLabel in~ ($iList) and $targetFilter
-| project SourceNodeId, SourceNodeName, SourceNodeLabel,
-          TargetNodeId, TargetNodeName, TargetNodeLabel, EdgeLabel
-"@
+function Get-AzureExposureGraphResourceNodes {
+    [CmdletBinding()]
+    # -Names: the part's resource short names (Get-SIAzureEgLookupKeys); none = no read. -Ask / -Store / -RunId: test seams.
+    param([AllowNull()][AllowEmptyCollection()][string[]]$Names = @(), [scriptblock]$Ask, $Store, [string]$RunId = '')
 
-    # the product's hunting request (Invoke-SIHuntingQueryResult): throttled / busy / 5xx / no answer asked again with a
-    # growing wait, a cut answer (Microsoft's 100,000 rows) read whole in parts, a refused query (400) not asked again. A read
-    # that still fails is said: the access edges are UNKNOWN this run (not "no identity has access").
-    if (-not (Get-Command -Name Invoke-SIHuntingQueryResult -ErrorAction SilentlyContinue)) { . (Join-Path (Split-Path -Parent $PSScriptRoot) 'shared/HuntingQuery.ps1') }
-    $hqArgs = @{ Query = $kql }; if ($Ask) { $hqArgs['Ask'] = $Ask }
-    $hr = Invoke-SIHuntingQueryResult @hqArgs
-    if (-not $hr.Ok) {
-        $kind = if ($hr.Defect) { 'the query was refused and must be fixed (running it again gives the same answer)' } else { 'the read failed after it was asked again' }
-        Write-Warning ('AzureExposureGraph edges: query failed -- {0} -- {1}. Which identities can reach which Azure resources is not known this run (not "none").' -f $kind, $hr.Error)
+    # (not $rows: the block runs inside the hunting split, whose -Rows is a number)
+    $egAzNodeRows = New-Object System.Collections.Generic.List[object]
+    $rd = Read-SIEgRowsForKeys -Kind 'azure-nodes' -Keys @($Names) -Query (Get-SIAzureEgNodeQuery) -Ask $Ask -Store $Store -RunId $RunId -Engine 'azure' -OnRow { param($r) $egAzNodeRows.Add($r) }
+    if (-not $rd.Ok) {
+        $kind = if ($rd.Defect) { 'the query was refused and must be fixed (running it again gives the same answer)' } else { 'the read failed after it was asked again' }
+        Write-Warning ('AzureExposureGraph nodes: query failed -- {0} -- {1}. The Exposure Graph enrichment of this part''s resources is unknown this run (not "none").' -f $kind, $rd.Error)
         return @{}
     }
 
-    $rows = @($hr.Rows)
+    # Map keyed by lowercased NodeName for join with AZ_Name (resource short
+    # name). #642: a name two nodes share is no key at all -- the first node of a name answered for every same-named
+    # resource (one per subscription is common), so they all took its values.
+    $nameCount = @{}
+    foreach ($r in $egAzNodeRows) { if ($r.NodeName) { $nk = ([string]$r.NodeName).ToLowerInvariant(); $nameCount[$nk] = 1 + [int]$nameCount[$nk] } }
+    $byName = @{}
+    foreach ($r in $egAzNodeRows) {
+        if (-not $r.NodeName) { continue }
+        $key = ([string]$r.NodeName).ToLowerInvariant()
+        if ([int]$nameCount[$key] -eq 1 -and -not $byName.ContainsKey($key)) {
+            $raw = ConvertFrom-SIEgNodeRow -Row $r -Kind 'azure-nodes'
+            $byName[$key] = @{
+                NodeId     = $r.NodeId
+                NodeName   = $r.NodeName
+                NodeLabel  = $r.NodeLabel
+                # the node's rawData as Collect reads it: only the fields it has; HasRawData = the node has properties at all
+                HasRawData = [bool]$raw.HasRawData
+                RawData    = $raw.RawData
+            }
+        }
+    }
+    return $byName
+}
+
+function Get-SIAzureEgAccessEdgeKeys {
+    <#
+        PURE. #1398 The keys THIS part's Azure records look their access edges up by (Invoke-Enrich): the Exposure Graph node
+        id and the resource name from the ARM id, lower case, for every record with an ARM id.
+    #>
+    param([AllowNull()][AllowEmptyCollection()][object[]]$Records = @())
+    $keys = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
+    foreach ($r in @($Records)) {
+        if ($null -eq $r -or $null -eq $r.Metadata -or -not $r.Metadata.AZ_ResourceId) { continue }
+        if ($r.Metadata.AZ_NodeId) { [void]$keys.Add(([string]$r.Metadata.AZ_NodeId).ToLowerInvariant()) }
+        $nameFromId = (([string]$r.Metadata.AZ_ResourceId).TrimEnd('/') -split '/')[-1]
+        if ($nameFromId) { [void]$keys.Add($nameFromId.ToLowerInvariant()) }
+    }
+    [string[]]@($keys)
+}
+
+function Get-AzureExposureGraphAccessEdges {
+    [CmdletBinding()]
+    # -Keys: the part's target keys (Get-SIAzureEgAccessEdgeKeys -- node ids and resource names); none = no read.
+    # -Ask { param($Query) } -> @{ Ok; Rows; Error }: the test seam of one hunting request (default: Graph, retried); -Store / -RunId: the run's export
+    param([AllowNull()][AllowEmptyCollection()][string[]]$Keys = @(), [scriptblock]$Ask, $Store, [string]$RunId = '')
+
     # Map: lowercased TargetNodeName -> ArrayList of @{ SourceName; SourceLabel; EdgeLabel }
     $byTargetName = @{}
-    foreach ($r in $rows) {
-        if (-not $r.TargetNodeName -and -not $r.TargetNodeId) { continue }
+    $onEdge = {
+        param($r)
+        if (-not $r.TargetNodeName -and -not $r.TargetNodeId) { return }
         $edge = @{
             SourceName  = $r.SourceNodeName
             SourceId    = $r.SourceNodeId
@@ -187,15 +175,27 @@ ExposureGraphEdges
         }
         # Indexed by BOTH the node id ("nodeid:<id>", exact) and the name. The enrich stage matches the id
         # first -- a name can repeat across resource groups; an Exposure Graph node id cannot.
-        $keys = @()
-        if ($r.TargetNodeId)   { $keys += ('nodeid:' + ([string]$r.TargetNodeId).ToLowerInvariant()) }
-        if ($r.TargetNodeName) { $keys += ([string]$r.TargetNodeName).ToLowerInvariant() }
-        foreach ($key in $keys) {
+        $edgeKeys = @()
+        if ($r.TargetNodeId)   { $edgeKeys += ('nodeid:' + ([string]$r.TargetNodeId).ToLowerInvariant()) }
+        if ($r.TargetNodeName) { $edgeKeys += ([string]$r.TargetNodeName).ToLowerInvariant() }
+        foreach ($key in $edgeKeys) {
             if (-not $byTargetName.ContainsKey($key)) {
                 $byTargetName[$key] = New-Object System.Collections.ArrayList
             }
             [void]$byTargetName[$key].Add($edge)
         }
     }
+
+    # the product's hunting request (Invoke-SIHuntingQueryResult): throttled / busy / 5xx / no answer asked again with a
+    # growing wait, a cut answer (Microsoft's 100,000 rows) read whole in parts, a refused query (400) not asked again. A read
+    # that still fails is said: the access edges are UNKNOWN this run (not "no identity has access").
+    $rd = Read-SIEgRowsForKeys -Kind 'azure-edges' -Keys @($Keys) -Query (Get-SIAzureEgEdgeQuery) -Ask $Ask -Store $Store -RunId $RunId -Engine 'azure' -OnRow $onEdge
+    if (-not $rd.Ok) {
+        $kind = if ($rd.Defect) { 'the query was refused and must be fixed (running it again gives the same answer)' } else { 'the read failed after it was asked again' }
+        Write-Warning ('AzureExposureGraph edges: query failed -- {0} -- {1}. Which identities can reach which Azure resources is not known this run (not "none").' -f $kind, $rd.Error)
+        return @{}
+    }
     return $byTargetName
 }
+
+if (-not (Get-Command -Name Read-SIEgRowsForKeys -ErrorAction SilentlyContinue)) { . (Join-Path (Split-Path -Parent $PSScriptRoot) 'shared/SI-EgNodeExport.ps1') }

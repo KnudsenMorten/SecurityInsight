@@ -685,6 +685,70 @@ Describe 'WIRING -- the sources reach the device tier through the existing paths
     }
 }
 
+Describe 'THE TIER 0-2 IDENTITIES READ (#1415): in parts, and a failed read is never "complete, none"' {
+    <# Get-SIPrivilegedIdentities over a stand-in Log Analytics (Invoke-SIAzOperationalInsightsQuery, the call the parted
+       reader makes): (a) the read AND the table check fail for a transient reason -> NOT complete, both errors said (it was
+       Missing + Complete = "complete, no Tier 0-2 identity" on an error); (b) the table really is not there (the service's
+       own words) -> Missing; (c) an answer the service cuts -> read in parts, every identity once. #>
+    BeforeAll {
+        # Mock, not a script-scope function: the engine's own functions sit in a nearer scope than script: and would win
+        if (-not (Get-Command -Name Resolve-SIEnrichWorkspaceGuid -ErrorAction SilentlyContinue)) { function script:Resolve-SIEnrichWorkspaceGuid { param($WorkspaceResourceId, $What) '' } }
+        Mock Resolve-SIEnrichWorkspaceGuid { '11111111-2222-3333-4444-555555555555' }
+        $script:IdData = @(1..9 | ForEach-Object { [pscustomobject]@{ ObjectId = ('0000000{0}-aaaa-4bbb-8ccc-dddddddddddd' -f $_); Sid = ''; Upn = ('t{0}@contoso.test' -f $_); Tier = [string]($_ % 3); SIRules = '[]'; TierReason = ''; Groups = '' } })
+        function script:Get-IdFakeHash([string]$s, [long]$mod) {
+            $md5 = [System.Security.Cryptography.MD5]::Create()
+            [long]([BitConverter]::ToUInt64($md5.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($s)), 0) % [uint64]$mod)
+        }
+        # the rows a query asks for: the part filter (Get-SILaPartFilter's shape on ObjectId) applied to the stand-in rows
+        function script:Select-IdFakeRows([string]$Query) {
+            $m = [regex]::Match($Query, '\| extend _siPart = tostring\((?<k>.+?)\) \| where (?<w>.+?) \| project-away _siPart')
+            @($script:IdData | Where-Object {
+                $r = $_; $ok = $true
+                if ($m.Success) {
+                    foreach ($t in [regex]::Matches($m.Groups['w'].Value, 'hash\((?:strcat\("(?<d>\d+)\|", _siPart\)|_siPart), (?<n>\d+)\) == (?<p>\d+)')) {
+                        $s = [string]$r.ObjectId; if ($t.Groups['d'].Success) { $s = $t.Groups['d'].Value + '|' + $s }
+                        if ((Get-IdFakeHash $s ([long]$t.Groups['n'].Value)) -ne [long]$t.Groups['p'].Value) { $ok = $false; break }
+                    }
+                }
+                $ok
+            })
+        }
+    }
+    AfterEach { $global:SI_LaServiceRowLimit = $null }
+    It '(a) the read and the table check both fail for a transient reason: NOT complete, both errors said -- never "complete, none"' {
+        Mock Invoke-SIAzOperationalInsightsQuery { throw "Operation returned an invalid status code 'ServiceUnavailable'" }
+        $r = Get-SIPrivilegedIdentities
+        $r.Complete | Should -BeFalse
+        $r.Missing | Should -BeFalse
+        @($r.Rows).Count | Should -Be 0
+        $r.Error | Should -Match 'ServiceUnavailable.*the table check failed too: .*ServiceUnavailable'
+    }
+    It '(b) the table really is not there (the service''s own words): Missing' {
+        Mock Invoke-SIAzOperationalInsightsQuery { throw "Operation returned an invalid status code 'BadRequest' -- 'where' operator: Failed to resolve table or column expression named 'SI_Identity_Profile_CL'" }
+        $r = Get-SIPrivilegedIdentities
+        $r.Missing | Should -BeTrue
+        $r.Complete | Should -BeTrue -Because 'the identity engine has not written its profile yet -- said by the caller as "not there yet"'
+        @($r.Rows).Count | Should -Be 0
+    }
+    It '(c) an answer the service cuts is read in parts: every Tier 0-2 identity once' {
+        $global:SI_LaServiceRowLimit = 4
+        Mock Invoke-SIAzOperationalInsightsQuery {
+            if ($Query -match 'summarize SIRows = count\(\), SIBytes = sum\(estimate_data_size\(\*\)\)') {
+                $n = @(Select-IdFakeRows ($Query -replace '(?s)\n\| summarize SIRows.*$', '')).Count
+                return [pscustomobject]@{ Results = @([pscustomobject]@{ SIRows = [string]$n; SIBytes = [string]($n * 200) }) }
+            }
+            $rows = @(Select-IdFakeRows $Query)
+            if ($rows.Count -ge 4) { throw (New-SILaCutAnswerError -Verdict @{ Kind = 'Limit'; Code = 'PartialError/EngineError'; Detail = 'Query result set has exceeded the internal data size limit 64000000 (E_QUERY_RESULT_SET_TOO_LARGE)'; Tables = @(); Rows = 4 } -ErrorObject $null) }
+            [pscustomobject]@{ Results = $rows }
+        }
+        $r = Get-SIPrivilegedIdentities
+        $r.Complete | Should -BeTrue
+        @($r.Rows | ForEach-Object { $_.ObjectId }).Count | Should -Be 9 -Because 'every identity ONCE'
+        @($r.Rows | ForEach-Object { $_.ObjectId } | Sort-Object -Unique).Count | Should -Be 9
+        @($r.Rows | ForEach-Object { $_.ObjectId } | Sort-Object) | Should -Be @($script:IdData | ForEach-Object { $_.ObjectId } | Sort-Object)
+    }
+}
+
 Describe 'SCALE (on demand only): 200,000 devices, tens of thousands of Tier 0-2 accounts, tens of millions of logons' -Tag 'Scale' {
     It 'the query count follows the account lists and the rows the privileged accounts x the devices they touched -- never the devices' {
         $devices = 200000; $priv = 30000; $logons = 40000000

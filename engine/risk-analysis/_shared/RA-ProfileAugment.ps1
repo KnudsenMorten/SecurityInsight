@@ -1506,10 +1506,11 @@ function Resolve-ProfileCLLetBlocks {
                 # 598 rows -> 716. Replicating the lookup cannot duplicate anything, because it does
                 # not change which left rows a bucket sees.
                 if ($_unkeyed -eq @($allRows).Count -and @($allRows).Count -gt 0 -and $BucketCount -gt 1) {
-                    for ($_b = 0; $_b -lt $BucketCount; $_b++) {
-                        $_groups[$_b] = New-Object 'System.Collections.Generic.List[object]'
-                        $_groups[$_b].AddRange([object[]]@($allRows))
-                    }
+                    # #1397: ONE list of the rows that every bucket refers to (only ever read: line below copies the one
+                    # bucket a slice needs) -- a copy per bucket held slices x rows references (1,024 x 150,000 = ~1.2 GB)
+                    $_all = New-Object 'System.Collections.Generic.List[object]'
+                    $_all.AddRange([object[]]@($allRows))
+                    for ($_b = 0; $_b -lt $BucketCount; $_b++) { $_groups[$_b] = $_all }
                     Write-Info ("[hybrid] '{0}' has no bucketable key -- replicating all {1} row(s) into each of {2} bucket(s) so no bucket sees an empty lookup (EG-side bucket filter stays active, so rows cannot duplicate)" -f $varName, @($allRows).Count, $BucketCount)
                     if (-not $script:_HybridBucketGroupsWhole) { $script:_HybridBucketGroupsWhole = @{} }
                     $script:_HybridBucketGroupsWhole[$groupCacheKey] = $true

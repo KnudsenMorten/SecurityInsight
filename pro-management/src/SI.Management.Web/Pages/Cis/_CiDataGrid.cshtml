@@ -93,10 +93,7 @@
             <partial name="~/Pages/Shared/_ViewExports.cshtml" model="exports" />
         </div>
 
-        @if (g.Total > SI.Management.Web.Pages.Cis.CiDataGridModel.ExportLimit)
-        {
-            <div class="notice" role="status" data-export-limit>An export holds at most @Fmt.Int(SI.Management.Web.Pages.Cis.CiDataGridModel.ExportLimit) rows and this list has @Fmt.Int(g.Total): an export of it stops at the first @Fmt.Int(SI.Management.Web.Pages.Cis.CiDataGridModel.ExportLimit) rows in the sort order (the file's Export sheet says so). Narrow the filter -- one class, one component or one severity at a time -- and export each part to get every row.</div>
-        }
+        @* #1400: an export holds every row of the list (read a chunk at a time) -- there is no export limit to say *@
 
         <partial name="~/Pages/Shared/_GridToolbar.cshtml" model="toolbar" />
 

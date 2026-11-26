@@ -110,14 +110,86 @@ function Get-SIFullAssetPropertiesSetting {
 function Reset-SIFullAssetProperties {
     <# The run state, at the security level. Every engine run starts here (a container session runs several engines). #>
     param([string]$Engine = '')
+    if ($null -ne $global:SIFullAssetPropertiesState -and $global:SIFullAssetPropertiesState.PSObject.Properties['Spool']) { Close-SIFullSourceSpool -State $global:SIFullAssetPropertiesState }
     $global:SIFullAssetPropertiesState = [pscustomobject]@{
         Level   = 'security'
         Engine  = ([string]$Engine).Trim().ToLowerInvariant()
         Reason  = ''
+        # kept for callers that read it; the kept objects themselves are in the spool on disk (#1398, below)
         Entries = New-Object System.Collections.Generic.List[object]
         Pulls   = @{}
+        Spool   = $null
     }
     $global:SIFullAssetPropertiesState
+}
+
+# #1398 THE KEPT OBJECTS GO TO DISK (owner 2026-10-21: "memory issues must not be a problem in any step. env must work in
+# millions of assets env"). At the full level every source object was kept in memory for the whole discovery -- and that is
+# why discovery could not stream at the full level (SI-DiscoverStream.ps1 refused it). Each kept object is now written, as
+# it is kept, to a spool file of the run as ONE compact JSON entry, length-prefixed and written in one piece (a write that
+# fails is cut off again -- the next entry never lands after half of one), and read back one by one by the hand-over
+# (Save-SIFullAssetPropertiesDiscoverHandover, in batches) or whole by Get-SIFullSourceObjects. The JSON is the hand-over's
+# own: the same depth (its 30 levels from the hand-over document = 28 from the entry), text kept as text when read back
+# (-DateKind String). Memory: one object at a time, whatever the tenant's size.
+$script:SIFullSpoolDepth = 28
+
+function ConvertFrom-SIFullSpoolJson {
+    <# PURE. One spool entry's JSON back to its object -- an ISO date text stays the text it was written as (pwsh 7.5+). #>
+    param([Parameter(Mandatory)][string]$Json)
+    if ($null -eq $script:SIJsonDateKind) { $script:SIJsonDateKind = [bool](Get-Command -Name ConvertFrom-Json).Parameters.ContainsKey('DateKind') }; if ($script:SIJsonDateKind) { return (ConvertFrom-Json -InputObject $Json -DateKind String) }
+    ConvertFrom-Json -InputObject $Json
+}
+
+function Open-SIFullSourceSpool {
+    <# The run's spool (created on the first kept object): a temp file of length-prefixed entries. #>
+    param([Parameter(Mandatory)]$State)
+    if ($null -ne $State.Spool) { return $State.Spool }
+    $path = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), ('si-fullprops-{0}.bin' -f [guid]::NewGuid().ToString('N')))
+    $fs = New-Object System.IO.FileStream($path, [System.IO.FileMode]::Create, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::ReadWrite)
+    $State.Spool = [pscustomobject]@{ Path = $path; Stream = $fs; Count = 0L; Drops = @{} }
+    $State.Spool
+}
+
+function Close-SIFullSourceSpool {
+    <# Lets the run's spool go (its file is removed). Never throws. #>
+    param($State)
+    if ($null -eq $State -or $null -eq $State.Spool) { return }
+    try { $State.Spool.Stream.Dispose() } catch { }
+    try { if ([System.IO.File]::Exists($State.Spool.Path)) { [System.IO.File]::Delete($State.Spool.Path) } } catch { }
+    $State.Spool = $null
+}
+
+function Read-SIFullSourceSpool {
+    <# Every kept object, in the order kept, handed to -OnEntry { param($Entry) } one at a time (none held). Dropped ones (Remove-SIFullSourceObjects) are skipped. #>
+    param([Parameter(Mandatory)]$State, [Parameter(Mandatory)][scriptblock]$OnEntry)
+    $sp = $State.Spool
+    if ($null -eq $sp -or $sp.Count -eq 0) { return }
+    $sp.Stream.Flush()
+    $rs = New-Object System.IO.FileStream($sp.Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+    try {
+        $enc = New-Object System.Text.UTF8Encoding($false)
+        $lb = New-Object byte[] 4
+        for ($i = 0L; $i -lt $sp.Count; $i++) {
+            $o = 0; while ($o -lt 4) { $n = $rs.Read($lb, $o, 4 - $o); if ($n -le 0) { throw ('the kept full metadata ended early ({0} of {1} objects)' -f $i, $sp.Count) }; $o += $n }
+            $len = [BitConverter]::ToInt32($lb, 0)
+            $b = New-Object byte[] $len
+            $o = 0; while ($o -lt $len) { $n = $rs.Read($b, $o, $len - $o); if ($n -le 0) { throw ('the kept full metadata ended early ({0} of {1} objects)' -f $i, $sp.Count) }; $o += $n }
+            $e = ConvertFrom-SIFullSpoolJson -Json $enc.GetString($b)
+            $drop = $sp.Drops[[string]$e.SourceSystem]
+            if ($null -ne $drop -and $i -lt [long]$drop) { continue }
+            $null = & $OnEntry $e
+        }
+    } finally { $rs.Dispose() }
+}
+
+function Remove-SIFullSourceObjects {
+    <# Lets every object kept so far for -SourceSystem go (a source that starts its read over -- Intune's beta -> stable). #>
+    param([Parameter(Mandatory)][string]$SourceSystem)
+    $s = $global:SIFullAssetPropertiesState
+    if ($null -eq $s) { return }
+    $k = $SourceSystem.Trim().ToLowerInvariant()
+    if ($null -ne $s.Entries) { try { [void]$s.Entries.RemoveAll([Predicate[object]] { param($e) [string]$e.SourceSystem -eq $k }) } catch { } }
+    if ($null -ne $s.Spool) { $s.Spool.Drops[$k] = $s.Spool.Count }
 }
 
 function Set-SIFullAssetPropertiesLevel {
@@ -195,12 +267,21 @@ function Add-SIFullSourceObject {
     if ($null -ne $Object -and (Test-Path -Path 'function:Add-SIRecordPartFromSource')) { Add-SIRecordPartFromSource -SourceSystem $SourceSystem -Object $Object -AnchorValue $AnchorValue }
     if (-not (Test-SIFullAssetPropertiesOn)) { return }
     if ($null -eq $Object) { return }
-    $global:SIFullAssetPropertiesState.Entries.Add([pscustomobject]@{
+    $entry = [pscustomobject]@{
         SourceSystem = $SourceSystem.Trim().ToLowerInvariant()
         Object       = (Copy-SIFullSourceObject $Object)
         AnchorColumn = [string]$AnchorColumn
         AnchorValue  = [string]$AnchorValue
-    })
+    }
+    # #1398: to the run's spool on disk, as it is kept (written now, so a field stamped on the source object later is not in it)
+    $sp = Open-SIFullSourceSpool -State $global:SIFullAssetPropertiesState
+    $body = (New-Object System.Text.UTF8Encoding($false)).GetBytes((ConvertTo-Json -InputObject $entry -Depth $script:SIFullSpoolDepth -Compress))
+    $one = New-Object byte[] (4 + $body.Length)
+    [Array]::Copy([BitConverter]::GetBytes([int]$body.Length), 0, $one, 0, 4); [Array]::Copy($body, 0, $one, 4, $body.Length)
+    $at = $sp.Stream.Seek(0, [System.IO.SeekOrigin]::End)
+    try { $sp.Stream.Write($one, 0, $one.Length); $sp.Stream.Flush() }
+    catch { try { $sp.Stream.SetLength($at) } catch { }; throw }
+    $sp.Count++
 }
 
 function Set-SIFullSourcePull {
@@ -230,10 +311,13 @@ function Get-SIFullAssetPropertiesState {
 }
 
 function Get-SIFullSourceObjects {
-    <# The objects this run kept (empty at the security level). #>
+    <# The objects this run kept (empty at the security level) -- read back from the spool, ALL of them (a caller that can take them one at a time uses Read-SIFullSourceSpool). #>
     $s = $global:SIFullAssetPropertiesState
     if ($null -eq $s) { return @() }
-    @($s.Entries.ToArray())
+    $all = New-Object System.Collections.Generic.List[object]
+    foreach ($e in $s.Entries) { $all.Add($e) }
+    if ($s.PSObject.Properties['Spool'] -and $null -ne $s.Spool) { Read-SIFullSourceSpool -State $s -OnEntry { param($e) $all.Add($e) } }
+    $all.ToArray()
 }
 
 function Get-SIFullGraphUrl {
@@ -420,9 +504,20 @@ function Save-SIFullAssetPropertiesDiscoverHandover {
         . ([System.IO.Path]::Combine((Split-Path -Parent $pro), 'SI-AssetPropertiesHandover.ps1'))
     }
     if (-not $Store) { $Store = Get-SIFullAssetPropertiesHandoverStore }
-    $res = Save-SIAssetPropsHandover -Store $Store -Engine $Engine -RunId $RunId -Who 'discover' -Entries @(Get-SIFullSourceObjects) -Pulls $s.Pulls
+    # #1398: read back from the spool and handed over a batch at a time (each batch its own piece, discover-bNNNNN, in the
+    # order kept) -- never every kept object in memory. The pulls travel in every piece, as they travel in every chunk.
+    $batch = New-Object System.Collections.Generic.List[object]
+    $st = @{ Saved = 0L; Batches = 0 }
+    $flush = {
+        $r = Save-SIAssetPropsHandover -Store $Store -Engine $Engine -RunId $RunId -Who ('discover-b{0:D5}' -f $st.Batches) -Entries $batch.ToArray() -Pulls $s.Pulls
+        $st.Saved += [long]$r.Entries; $st.Batches++; $batch.Clear()
+    }
+    foreach ($e in $s.Entries) { $batch.Add($e); if ($batch.Count -ge 1000) { & $flush } }
+    Read-SIFullSourceSpool -State $s -OnEntry { param($e) $batch.Add($e); if ($batch.Count -ge 1000) { & $flush } }
+    if ($batch.Count -gt 0 -or $st.Batches -eq 0) { & $flush }
     $s.Entries.Clear()
-    $res.Entries
+    Close-SIFullSourceSpool -State $s
+    $st.Saved
 }
 
 function Publish-SIFullAssetProperties {

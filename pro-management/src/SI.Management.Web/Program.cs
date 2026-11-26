@@ -266,6 +266,9 @@ builder.Services.AddRazorPages(o =>
 // error -- written by a global page filter; requests the role framework refuses before a handler are written by the
 // authorization result handler below.
 .AddMvcOptions(m => m.Filters.Add<SI.Management.Web.Audit.AuditPageFilter>())
+// #1400 every export handler reads ONE snapshot of the Pro database over one connection, and says what it found about itself
+// (DataAccess/ExportSession.cs) -- inside the audit scope, so its notes are on the export's audit row
+.AddMvcOptions(m => m.Filters.Add<SI.Management.Web.Data.ExportSessionPageFilter>())
 // ONE WEB APP, BOTH VERSIONS (owner 2026-10-18): a paid page or handler without a Pro licence is refused HERE, server side, on
 // every request (Licensing/ProFeatures.cs) -- after the audit filter, so a refused change is on the audit trail as refused.
 .AddMvcOptions(m => m.Filters.Add<SI.Management.Web.Licensing.ProFeaturePageFilter>())
@@ -295,6 +298,9 @@ builder.Services.AddSingleton<SI.Management.Web.Collection.ISourceNotes, SI.Mana
 builder.Services.AddSingleton<SI.Management.Web.Collection.ISyncNotices, SI.Management.Web.Collection.SqlSyncNotices>();
 // ONE TRUSTED RUN (owner 2026-10-19): which run every page shows -- "Data from the run of ... · a newer run is in progress"
 builder.Services.AddSingleton<SI.Management.Web.Collection.IPublishedRunNotices, SI.Management.Web.Collection.SqlPublishedRunNotices>();
+// #1396 (owner 2026-11-26 "fix it"): the data the pages show is older than SI_Pro_StaleDataWarnHours -- a WARNING on Home for
+// everyone, at the top of every page for an Admin (with the newest run's result and failed step)
+builder.Services.AddSingleton<SI.Management.Web.Collection.IStaleDataNotices, SI.Management.Web.Collection.SqlStaleDataNotices>();
 builder.Services.AddSingleton<IAuthorizationMiddlewareResultHandler, SI.Management.Web.Audit.AuditAuthorizationResultHandler>();
 // #264: a page that shows exempted findings reads under its surface's setting, overridden by the view's tick
 builder.Services.AddSingleton<SI.Management.Web.Exemptions.IExemptedSchema, SI.Management.Web.Exemptions.SqlExemptedSchema>();

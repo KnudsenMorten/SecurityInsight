@@ -33,6 +33,8 @@ public sealed class GuardSwitches
         "audit.retention.refused", "exemption.bulk.refused",
         "flow.run.catch-up", "flow.step.skipped", "flow.step.start-failed", "flow.step.interrupted",
         "job.execution.previous-running", "job.run.throttled-stuck",
+        // #1396: the Guards-page event of data getting old (the page warning, SI_Pro_StaleDataWarnHours, is on by itself)
+        "data.published.stale",
     };
 
     /// PURE. 'vuln.connector.close-ceiling' -&gt; 'VulnConnectorCloseCeiling' (as ConvertTo-SIGuardSettingToken).
@@ -48,6 +50,8 @@ public sealed class GuardSwitches
     public static readonly IReadOnlySet<string> NeverMails = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
     {
         "collection.source.asset-drop",
+        // #1396: data getting old -- a warning only (Home, the top of the pages for Admins, the Guards page)
+        "data.published.stale",
     };
 
     /// The settings the Settings page does not show: the mail switch of a check that never mails (it would change nothing).

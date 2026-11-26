@@ -12,6 +12,9 @@
     PS 5.1 safe. No Set-StrictMode (it leaks into the caller's scope).
 #>
 
+# #1399 the one accepted-snapshot rule of SI_AzureRecommendation_CL (Get-SIDataRecommendationsKql)
+if (-not (Get-Command -Name Get-SIAzureRecAcceptedTimeKql -ErrorAction SilentlyContinue)) { . ([IO.Path]::Combine((Split-Path -Parent (Split-Path -Parent $PSScriptRoot)), '_shared', 'SI-AzureRecSnapshot.ps1')) }
+
 function ConvertTo-SIDataKqlTime {
     <# PURE. A UTC KQL datetime literal for a [datetime] (seconds and fractions kept, so == matches the stored value). #>
     param([Parameter(Mandatory)][datetime]$Time)
@@ -311,15 +314,18 @@ function Get-SIDataRecommendationsKql {
     if ($Partitions -lt 1) { throw 'Get-SIDataRecommendationsKql: -Partitions must be 1 or more' }
     if ($Partition -lt 0 -or $Partition -ge $Partitions) { throw ('Get-SIDataRecommendationsKql: -Partition {0} is outside 0..{1}' -f $Partition, ($Partitions - 1)) }
     $part = if ($PageFilter) { $PageFilter } elseif ($Partitions -gt 1) { "| where hash(_pk, $Partitions) == $Partition" } else { '' }
+    # #1399 the ONE accepted-snapshot rule (engine\_shared\SI-AzureRecSnapshot.ps1): the same snapshot and rows as the reports
+    $siRecTime = Get-SIAzureRecAcceptedTimeKql -Source 'src'
+    $siRecRows = Get-SIAzureRecRowsKql -Source 'src' -Time 'snap'
     $head = @"
 let src = SI_AzureRecommendation_CL
     | where TimeGenerated > ago($($LookbackDays)d)
     | where CollectionTime <= $(ConvertTo-SIDataKqlTime -Time $AsOf);
-let snap = toscalar(src | summarize max(CollectionTime));
-src
-| where CollectionTime == snap
+let snap = $siRecTime;
+$siRecRows
 "@
-    $key = '| extend _pk = strcat(tostring(column_ifexists("_ItemId", "")), "|", tolower(tostring(column_ifexists("ResourceId", ""))), "|", tostring(column_ifexists("AssessmentKey", "")))'
+    # #1399 the page key is the row's own key (unique after the one-row-per-key read: _ItemId need not survive it), then _ItemId
+    $key = '| extend _pk = strcat(' + (Get-SIAzureRecKeyKql) + ', "|", tostring(column_ifexists("_ItemId", "")))'
     if ($Measure) {
         return @"
 $head

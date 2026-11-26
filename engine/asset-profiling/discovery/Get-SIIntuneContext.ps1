@@ -154,8 +154,10 @@ function Invoke-SIIntuneCapture {
             # by its stable object; the counters and the name look-up start empty; at the full level the objects kept
             # from the beta pages are let go, so no device is kept twice)
             $ids.Clear(); $byNameUser.Clear(); $siSeen.n = 0; $page = $null; $err = ''
-            if ($full -and $null -ne $global:SIFullAssetPropertiesState -and $null -ne $global:SIFullAssetPropertiesState.Entries) {
-                try { [void]$global:SIFullAssetPropertiesState.Entries.RemoveAll([Predicate[object]] { param($e) [string]$e.SourceSystem -eq 'intune-device' }) } catch { }
+            # (#1398: the kept objects are in the run's spool on disk -- Remove-SIFullSourceObjects lets them go there)
+            if ($full -and $null -ne $global:SIFullAssetPropertiesState) {
+                if (Get-Command -Name Remove-SIFullSourceObjects -ErrorAction SilentlyContinue) { try { Remove-SIFullSourceObjects -SourceSystem 'intune-device' } catch { } }
+                elseif ($null -ne $global:SIFullAssetPropertiesState.Entries) { try { [void]$global:SIFullAssetPropertiesState.Entries.RemoveAll([Predicate[object]] { param($e) [string]$e.SourceSystem -eq 'intune-device' }) } catch { } }
             }
             try { $page = & $Fetch $stableUrl 'Intune managed devices' $onDevice }
             catch { $err = [string]$_.Exception.Message }

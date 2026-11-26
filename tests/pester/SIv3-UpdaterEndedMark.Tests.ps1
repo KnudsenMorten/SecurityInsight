@@ -156,11 +156,15 @@ Describe 'a real dead update is still stopped and raised' {
         $rows = @([pscustomobject]@{ LockName = 'updater-ended'; Holder = 'caj-si-updater:caj-si-updater-other'; HeartbeatUtc = $now.AddMinutes(-1) })
         (Get-SIExecutionLiveness -Execution (Exec 'caj-si-updater-dead' $now.AddMinutes(-45)) -Kind updater -Locks $rows -NowUtc $now).Alive | Should -BeFalse
     }
-    It 'a hung update that BEAT (stale 16 minutes, no mark) is still dead as before' {
+    It '#1406: a hung update that only signed in (stale 16 minutes, no mark) is dead as before; one changing the install is QUIET while Azure runs it -- past 6 h it is dead' {
         $now = [datetime]::UtcNow
-        $rows = @([pscustomobject]@{ LockName = 'updater'; Holder = 'caj-si-updater:caj-si-updater-hung'; HeartbeatUtc = $now.AddMinutes(-16) })
+        $idle = @([pscustomobject]@{ LockName = 'updater'; Holder = 'caj-si-updater:caj-si-updater-hung'; HeartbeatUtc = $now.AddMinutes(-16) })
+        (Get-SIExecutionLiveness -Execution (Exec 'caj-si-updater-hung' $now.AddMinutes(-90)) -Kind updater -Locks $idle -NowUtc $now).Alive | Should -BeFalse
+        $rows = @($idle) + [pscustomobject]@{ LockName = 'updater-run'; Holder = 'caj-si-updater:caj-si-updater-hung'; HeartbeatUtc = $now.AddMinutes(-16) }
         $lv = Get-SIExecutionLiveness -Execution (Exec 'caj-si-updater-hung' $now.AddMinutes(-90)) -Kind updater -Locks $rows -NowUtc $now
-        $lv.Alive | Should -BeFalse; $lv.Ended | Should -BeFalse
+        $lv.Alive | Should -BeTrue; $lv.Quiet | Should -BeTrue; $lv.Ended | Should -BeFalse
+        $old = Get-SIExecutionLiveness -Execution (Exec 'caj-si-updater-hung' $now.AddMinutes(-400)) -Kind updater -Locks $rows -NowUtc $now
+        $old.Alive | Should -BeFalse; $old.Quiet | Should -BeFalse
     }
 }
 

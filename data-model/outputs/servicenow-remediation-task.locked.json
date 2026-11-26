@@ -241,6 +241,11 @@
       "target": "u_si_context_hash",
       "from": "record.context_hash",
       "soft": true
+    },
+    {
+      "target": "u_si_software_lists_complete",
+      "from": "record.software_lists_complete",
+      "soft": true
     }
   ],
   "contract": "snowstage.vImportRemediationTask"

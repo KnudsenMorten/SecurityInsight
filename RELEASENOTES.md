@@ -13,6 +13,42 @@ SecurityInsight Pro and the Pro trial install from invardia.com, never from GitH
 [invardia.com/trial](https://invardia.com/trial/), and your installation page there gives your two lines.
 <!-- /install lines -->
 
+## v3.1.52 — large installations finish their runs, a warning when data is old, and the 3.1.51 data corrections
+
+### New
+- **A warning appears when an installation's newest data is older than 36 hours** (setting), on every page for Admins
+  and on Home and the wall board for readers, with the last run's result.
+
+### Fixes
+- **Large installations: the Detailed CVE report no longer runs out of memory at its final check** (it reads the stored
+  rows in pages), and a failed report's stored rows are reported removed only after a check finds none left.
+- **The statistics refresh is no longer re-created on every update** (each update took a short schema lock on it).
+- **Asset profiling streams its rows instead of holding them all in memory**, so large installations no longer run out
+  of memory while profiling. One correction comes with it: a yes/no property stored as the text "False" was read as yes
+  in 3.1.51 and is now read as no, so some identity properties change once after the update.
+- **Software update tasks are brought up to date once after the update**: each task's full product list is read again,
+  so some tasks show as changed one time. No task is lost.
+- **An update busy in a long database step is no longer stopped as having no sign of life**: it keeps reporting while it
+  works, and an update that is still working is not stopped (up to the 6-hour limit).
+- **Defender recommendations are read in pieces instead of all at once**, so large installations no longer run out of
+  memory while reading them, and a recommendations refresh that fails is now reported as failed instead of passing
+  silently.
+- **Azure resources moved between resource groups are no longer retired as deleted**; resources wrongly retired this way
+  by 3.1.51 come back by themselves.
+- **The update now removes references to deleted managed identities from jobs and apps**, so new jobs can be created again
+  at installations that carried them.
+- **After every update only the current web app version answers**: older versions of the web app are switched off, so
+  nobody reaches an older version.
+- **Exports include every row, with no 50,000-row limit**: they stream from the database instead of being held in memory.
+  An export whose data changed or was republished while it ran is refused, never downloaded short.
+- **The privileged-identity tier read no longer reports "complete" when Log Analytics could not be read.**
+- Repeated column titles in exports carry their field name, e.g. "More details (MoreDetails)".
+- **Scope rules on the affected product now also match products in long product lists** (over 4,000 characters), so
+  some rules match more findings once after the update.
+- **Software update tasks are held open when the source listed more affected software than SI keeps**; ServiceNow
+  remediation tasks carry a new optional field u_si_software_lists_complete (yes/no); u_si_cleared also names that field
+  when it is empty, so tasks are sent once after the update.
+
 ## v3.1.51 — job buttons work again, deleted assets retire at once, exploited findings due in 14 days, clearer tiles and columns
 
 ### New

@@ -40,7 +40,15 @@ function Invoke-SIHuntingQuery {
         # AADServicePrincipalSignInLogs / AADManagedIdentitySignInLogs /
         # IdentityInfo live, while SI_*_Profile_CL queries continue to use
         # the SI home workspace.
-        [string]$WorkspaceResourceId
+        [string]$WorkspaceResourceId,
+        # #1398 (owner 2026-10-21: "memory issues must not be a problem in any step"): each part of the answer (a hash
+        # bucket of a cut Defender answer, a part of a Log Analytics read) is handed to -OnRows { param($Rows) } as soon as
+        # it is read whole, and let go -- the answer is never collected into one list. With -OnRows the call returns
+        # $true (every part was read and handed on) or $false (it failed: the parts handed on so far are NOT the whole
+        # answer -- the caller drops what it staged). -OnRestart { } is called before a Log Analytics read is asked again
+        # (its parts so far are then asked again too, so the caller drops what it staged).
+        [scriptblock]$OnRows,
+        [scriptblock]$OnRestart
     )
 
     if ($QueryEngine -in 'LogAnalytics','MultiWorkspace') {
@@ -71,6 +79,7 @@ function Invoke-SIHuntingQuery {
         $lastMsg = $null
         while ($attempt -lt $maxRetries) {
             $attempt++
+            if ($attempt -gt 1 -and $OnRows -and $OnRestart) { & $OnRestart }
             try {
                 $prevCtx = Get-SIAzContext
                 $ctxChanged = $false
@@ -82,10 +91,11 @@ function Invoke-SIHuntingQuery {
                     $ws = Get-SIAzOperationalInsightsWorkspace -ResourceGroupName $rg -Name $name -ErrorAction Stop
                     # #639 lane 4: a rule's query can return more rows than one answer carries -- read in parts (Read-SILaParts);
                     # a cut answer is refused, never handed out as the rule's whole result
-                    $resp = Read-SILaParts -WorkspaceId $ws.CustomerId.Guid -Query $Query -What 'the hunting query (Log Analytics)' -Log { param($l, $m) Write-Verbose ('Invoke-SIHuntingQuery (LA): ' + $m) }
+                    $resp = Read-SILaParts -WorkspaceId $ws.CustomerId.Guid -Query $Query -What 'the hunting query (Log Analytics)' -Log { param($l, $m) Write-Verbose ('Invoke-SIHuntingQuery (LA): ' + $m) } -OnRows $OnRows
                     if ($attempt -gt 1) {
                         Write-Verbose ("Invoke-SIHuntingQuery (LA): succeeded on attempt {0}/{1}" -f $attempt, $maxRetries)
                     }
+                    if ($OnRows) { return $true }
                     return @($resp.Rows)
                 } finally {
                     if ($ctxChanged -and $prevCtx) {
@@ -128,6 +138,7 @@ function Invoke-SIHuntingQuery {
         Write-Warning ("Invoke-SIHuntingQuery (LA): {0} consecutive attempts failed. Last error: {1}" -f $maxRetries, $lastMsg)
         $qPreview = if ($Query.Length -gt 500) { $Query.Substring(0, 500) + '... [truncated]' } else { $Query }
         Write-Warning ('Invoke-SIHuntingQuery (LA): failing query (first 500 chars): {0}' -f $qPreview)
+        if ($OnRows) { return $false }
         return @()
     }
 
@@ -155,16 +166,49 @@ function Invoke-SIHuntingQuery {
         Write-Warning ('Invoke-SIHuntingQuery: query failed -- {0}' -f $one.Error)
         $qPreview = if ($Query.Length -gt 500) { $Query.Substring(0, 500) + '... [truncated]' } else { $Query }
         Write-Warning ('Invoke-SIHuntingQuery: failing query (first 500 chars): {0}' -f $qPreview)
+        if ($OnRows) { return $false }
         return @()
     }
-    if (@($one.Rows).Count -lt $script:SIHuntingRowCut) { return $one.Rows }
-    $whole = Invoke-SIHuntingCutSplit -Query $Query -Rows ([long]@($one.Rows).Count)
+    $oneCount = [long]@($one.Rows).Count
+    if ($oneCount -lt $script:SIHuntingRowCut) {
+        if ($OnRows) { $null = & $OnRows @($one.Rows); return $true }
+        return $one.Rows
+    }
+    # #1398: the cut answer is let go BEFORE it is asked again in parts -- it is not part of the answer
+    $one = $null
+    $whole = Invoke-SIHuntingCutSplit -Query $Query -Rows $oneCount -OnRows $OnRows
     if (-not $whole.Ok) {
         Write-Warning ('Invoke-SIHuntingQuery: the answer was cut at {0:N0} rows (Microsoft''s limit) and could not be read whole in parts -- {1}' -f $script:SIHuntingRowCut, $whole.Error)
+        if ($OnRows) { return $false }
         return @()
     }
+    if ($OnRows) { return $true }
     return $whole.Rows
 }
+
+function ConvertTo-SIKqlKeyLists {
+    <#
+        PURE. Distinct, lower-cased, non-empty keys -> KQL dynamic-array literals (dynamic(["a","b"])), each at most
+        -MaxChars long: the key list of a query is cut by its MEASURED text, never by a count. Empty input -> no list.
+        (#1398: moved here from Invoke-Enrich.ps1, unchanged.)
+    #>
+    param([AllowNull()][AllowEmptyCollection()][object[]]$Keys = @(), [int]$MaxChars = 0)
+    if ($MaxChars -le 0) { $MaxChars = 200000; if ($global:SI_EnrichKeyListChars -gt 0) { $MaxChars = [int]$global:SI_EnrichKeyListChars } }
+    $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
+    $out = New-Object System.Collections.Generic.List[string]
+    $sb = New-Object System.Text.StringBuilder
+    foreach ($k in @($Keys)) {
+        $s = ([string]$k).Trim().ToLowerInvariant()
+        if (-not $s -or -not $seen.Add($s)) { continue }
+        $lit = '"' + $s.Replace('\', '\\').Replace('"', '\"').Replace("`r", '\r').Replace("`n", '\n').Replace("`t", '\t') + '"'
+        if ($sb.Length -gt 0 -and ($sb.Length + $lit.Length + 11) -gt $MaxChars) { $out.Add('dynamic([' + $sb.ToString() + '])'); [void]$sb.Clear() }
+        if ($sb.Length -gt 0) { [void]$sb.Append(',') }
+        [void]$sb.Append($lit)
+    }
+    if ($sb.Length -gt 0) { $out.Add('dynamic([' + $sb.ToString() + '])') }
+    foreach ($x in $out) { $x }
+}
+
 
 function Test-SIHuntingQueryDefect {
     <# PURE. Is this error the service refusing the QUERY itself -- a semantic or syntax error, a table or column that does
@@ -187,8 +231,10 @@ function Invoke-SIHuntingQueryResult {
         expired token renewed; a cut answer read whole in parts), but a failure is NEVER handed out as an empty answer --
         the caller says it and keeps that part's data unknown. Defect: the query was refused (400). Never throws.
         -Ask { param($Query) } -> @{ Ok; Rows; Error } (test seam; default Invoke-SIHuntingGraphRequest).
+        -OnRows { param($Rows) } (#1398): each whole part of the answer is handed on and let go (Rows of the result is then
+        empty); Ok = $false means the parts handed on so far are not the whole answer -- the caller drops what it staged.
     #>
-    param([Parameter(Mandatory)][string]$Query, [scriptblock]$Ask)
+    param([Parameter(Mandatory)][string]$Query, [scriptblock]$Ask, [scriptblock]$OnRows)
     if (-not $Ask) {
         $siRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
         if (-not (Get-Command -Name Get-SIGraphToken -ErrorAction SilentlyContinue)) { . (Join-Path $siRoot 'auth/Get-SIGraphToken.ps1') }
@@ -199,8 +245,14 @@ function Invoke-SIHuntingQueryResult {
     $one = $null
     try { $one = & $Ask $Query } catch { $one = [pscustomobject]@{ Ok = $false; Rows = @(); Error = $_.Exception.Message } }
     if (-not $one.Ok) { return [pscustomobject]@{ Ok = $false; Rows = @(); Error = [string]$one.Error; Defect = (Test-SIHuntingQueryDefect -Message ([string]$one.Error)) } }
-    if (@($one.Rows).Count -lt $cut) { return [pscustomobject]@{ Ok = $true; Rows = @($one.Rows); Error = ''; Defect = $false } }
-    $whole = Invoke-SIHuntingCutSplit -Query $Query -Rows ([long]@($one.Rows).Count) -Ask $Ask -Cut $cut
+    $oneCount = [long]@($one.Rows).Count
+    if ($oneCount -lt $cut) {
+        if ($OnRows) { $null = & $OnRows @($one.Rows); return [pscustomobject]@{ Ok = $true; Rows = @(); Error = ''; Defect = $false } }
+        return [pscustomobject]@{ Ok = $true; Rows = @($one.Rows); Error = ''; Defect = $false }
+    }
+    # #1398: the cut answer is let go BEFORE it is asked again in parts -- it is not part of the answer
+    $one = $null
+    $whole = Invoke-SIHuntingCutSplit -Query $Query -Rows $oneCount -Ask $Ask -Cut $cut -OnRows $OnRows
     if (-not $whole.Ok) { return [pscustomobject]@{ Ok = $false; Rows = @(); Error = ('the answer was cut at {0:N0} rows (Microsoft''s limit) and could not be read whole in parts -- {1}' -f $cut, $whole.Error); Defect = $false } }
     [pscustomobject]@{ Ok = $true; Rows = @($whole.Rows); Error = ''; Defect = $false }
 }
@@ -265,8 +317,10 @@ function Invoke-SIHuntingCutSplit {
         Review M1: the two halves of a split part are asked together. A split that does NOT reduce the part -- one half cut
         again, the other half EMPTY (every row has the same hash: 100,000+ identical rows) -- can never end, so the split stops
         there and the answer is a NAMED FAILURE (Ok = $false, which part, why), never a partial answer.
+        -OnRows { param($Rows) } (#1398): each part that came back whole is handed on as it arrives and let go -- never
+        collected (Rows is then empty). A later failure makes Ok $false: the caller drops what it staged.
     #>
-    param([Parameter(Mandatory)][string]$Query, [long]$Rows = 0, [scriptblock]$Ask, [int]$Cut = $script:SIHuntingRowCut)
+    param([Parameter(Mandatory)][string]$Query, [long]$Rows = 0, [scriptblock]$Ask, [int]$Cut = $script:SIHuntingRowCut, [scriptblock]$OnRows)
     if (-not $Ask) { $Ask = { param($q) Invoke-SIHuntingGraphRequest -Query $q } }
     $n = [int][Math]::Max(2, 2 * [Math]::Ceiling([Math]::Max(1, $Rows) / [double]$Cut))
     # each item: @(parts, @(bucket[, its sibling])) -- a split part's two halves travel together
@@ -293,8 +347,10 @@ function Invoke-SIHuntingCutSplit {
         foreach ($g in $got) {
             $pb = [int]$g[0]; $gr = @($g[1])
             if ($gr.Count -ge $Cut) { $todo.Enqueue(@((2 * $pn), @($pb, ($pb + $pn)))); continue }
+            if ($OnRows) { $null = & $OnRows $gr; continue }
             foreach ($row in $gr) { $out.Add($row) }
         }
+        $got = $null
     }
     [pscustomobject]@{ Ok = $true; Rows = $out.ToArray(); Parts = $parts; Error = '' }
 }

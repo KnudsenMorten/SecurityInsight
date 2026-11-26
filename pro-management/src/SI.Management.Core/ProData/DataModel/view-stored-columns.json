@@ -158,6 +158,7 @@
     { "key": "fc.cvssvector", "column": "CvssVector", "issue": "CvssVector", "type": "NVARCHAR(200)", "fields": [ "si_cvss_vector" ] },
     { "key": "fc.exploittypes", "column": "ExploitTypes", "issue": "ExploitTypes", "type": "NVARCHAR(1000)", "fields": [ "si_exploit_types" ] },
     { "key": "fc.exposeddevices", "column": "ExposedDevices", "issue": "ExposedDevices", "type": "INT", "fields": [ "si_exposed_devices" ] },
+    { "key": "fc.softwarecomplete", "column": "AffectedSoftwareComplete", "issue": "AffectedSoftwareComplete", "type": "NVARCHAR(8)", "fields": [ "si_affected_software_complete" ] },
     { "key": "fc.affectedpath", "column": "AffectedPath", "issue": "AffectedPath", "type": "NVARCHAR(4000)", "fields": [ "si_affected_path" ] },
     { "key": "fc.statuscause", "column": "StatusCause", "issue": "StatusCause", "type": "NVARCHAR(400)", "fields": [ "si_status_cause" ] },
     { "key": "fc.userimpact", "column": "UserImpact", "issue": "UserImpact", "type": "NVARCHAR(400)", "fields": [ "si_user_impact", "UserImpact" ] },

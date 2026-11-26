@@ -22,6 +22,10 @@ BeforeAll {
     $root = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
     . (Join-Path $root '..\engine\asset-profiling\shared\Get-SIPayloadProfile.ps1')
     $script:SIRootDir = (Resolve-Path (Join-Path $root '..')).Path
+    # the summary's lines reach the streams the summary tests read (#1415): without these, a no-op Write-SIInfo / Write-SIWarn
+    # another suite left GLOBAL in a shared Pester process swallowed them and the tests read nothing
+    function script:Write-SIInfo { param([string]$Message) Write-Information $Message }
+    function script:Write-SIWarn { param([string]$Message) Write-Warning $Message }
 
     # A schema shaped like the real one, small enough to reason about.
     $script:Schema = [pscustomobject]@{

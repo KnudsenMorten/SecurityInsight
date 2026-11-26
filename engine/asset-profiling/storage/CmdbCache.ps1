@@ -286,6 +286,27 @@ function Get-SICmdbCIs {
     }
 }
 
+function Read-SICmdbCIPages {
+    <#
+        #1398 (owner 2026-10-21: "memory issues must not be a problem in any step"): the CIs a page at a time to -OnPage
+        { param($Entities) } -- never the whole table in memory (Reconcile keeps only the CIs its part's rows can match).
+        The same read and the same INCOMPLETE marking as Get-SICmdbCIs: $true when read to the end, $false (a named warning,
+        the cache marked incomplete) when not -- the pages handed on so far are then not the whole table.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][object]$Context, [Parameter(Mandatory)][scriptblock]$OnPage)
+    if ($Context.Mode -eq 'Mock') { $null = & $OnPage @(Get-SICmdbCIs -Context $Context); return $true }
+    try {
+        $null = Read-SICmdbTablePages -Context $Context -Table 'sicmdbcis' -OnPage $OnPage
+        $script:SICmdbCacheReadIssues.Remove('sicmdbcis')
+        return $true
+    } catch {
+        $script:SICmdbCacheReadIssues['sicmdbcis'] = $_.Exception.Message
+        Write-Warning ('CMDB cache INCOMPLETE -- the CIs could not be read: {0}' -f $_.Exception.Message)
+        return $false
+    }
+}
+
 function Get-SICmdbCacheAge {
     <#
         Returns @{ HoursOld = <int>; State = 'fresh' | 'stale' | 'critical' | 'never' }

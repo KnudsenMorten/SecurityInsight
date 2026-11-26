@@ -1238,6 +1238,14 @@ $global:SI_StorageAccount = '<storage-account-name>'
 # $global:SI_Throttle_StuckHours = 6
 # How many throttled runs in a row, without one that completes, send the one "stuck" alert (whichever comes first).
 # $global:SI_Throttle_StuckRuns = 12
+# Data getting old: no complete run (data.published.stale). Off: no event on the Guards page and no report to Invardia when the newest complete data is older than the warning limit. The warning on the Home page and at the top of the pages follows the limit alone.
+# $global:SI_Guard_DataPublishedStale_Enabled = $false
+# Its mail: this check never mails (it is a warning only).
+# $global:SI_Guard_DataPublishedStale_Mail = $true
+# Data getting old: when no new data has been published for this many hours (counted from when the shown data was complete),
+# a warning on the Home page for everyone and at the top of every page for Admins (and one warning a day on the Guards
+# page when the check above is switched on -- off by default). 0 = off. Nothing is ever held or stopped by it.
+# $global:SI_Pro_StaleDataWarnHours = 36
 
 # --- azure engine: Defender for Cloud recommendations + CVEs -------------------
 # Collected by default into their own table. Opt out, or rename the destination:
@@ -2335,6 +2343,40 @@ $global:SI_StorageAccount = '<storage-account-name>'
 #   Recommended:      Keep the default. Change it when: Turn it off for a check whose mails you do not need, instead
 #                     of turning the check off.
 #   More info:        https://invardia.com/docs/si/settings/SI_Guard_FlowRunCatchUp_Mail/
+#
+# Data getting old: no complete run  [SI_Guard_DataPublishedStale_Enabled]
+#   What it is for:   The safety check that protects the data the web app and its reports show: No new data has been
+#                     published for longer than the warning limit.
+#   Default:          Off
+#   If you change it: Off: no event on the Guards page and no report to Invardia when the newest complete data is
+#                     older than the warning limit. The warning on the Home page and at the top of the pages follows
+#                     the limit alone. On: one warning a day on the Guards page while the data stays older than the
+#                     limit.
+#   When to change:   Off by default: the warning on the Home page and at the top of the pages already says it. Turn
+#                     it on when you also want one event a day on the Guards page; it only warns and nothing is held
+#                     or stopped by it.
+#   Risk:             Turning this check off removes a protection: when its condition happens, nothing holds or stops
+#                     the step and no event is raised. Reversible at once: switch it back on; it applies from the next
+#                     run.
+#   Recommended:      Keep the default (off) unless you want this check to hold or stop the step. Change it when: Off
+#                     by default: the warning on the Home page and at the top of the pages already says it. Turn it on
+#                     when you also want one event a day on the Guards page; it only warns and nothing is held or
+#                     stopped by it.
+#   More info:        https://invardia.com/docs/si/settings/SI_Guard_DataPublishedStale_Enabled/
+#
+# Data getting old: no complete run: mail  [SI_Guard_DataPublishedStale_Mail]
+#   What it is for:   This safety check never sends a mail: it is a warning only, shown on the Guards page, on the
+#                     Home page and at the top of the pages for Admins. This switch changes nothing and is not shown
+#                     on the Settings page.
+#   Default:          On (follows the check: nothing is mailed while the check is off)
+#   If you change it: Off: the event is still shown on the Guards page and kept in run health and the audit trail, but
+#                     no mail is sent for it. The install-wide switch "Mail when a safety check stops a step" still
+#                     applies to every check.
+#   When to change:   Never: this check sends no mail either way.
+#   Risk:             Low: no data is changed and the check still works; only its mail stops, so a trip is seen only
+#                     on the Guards page, in run health and in the audit trail. Reversible at once.
+#   Recommended:      Keep the default. Change it when: Never: this check sends no mail either way.
+#   More info:        https://invardia.com/docs/si/settings/SI_Guard_DataPublishedStale_Mail/
 #
 # Data sync: collection not read in full  [SI_Guard_DatasyncCollectionShortRead_Enabled]
 #   What it is for:   The safety check that protects the collections shown in the Pro web app: A collection could not
@@ -3475,6 +3517,22 @@ $global:SI_StorageAccount = '<storage-account-name>'
 #   Recommended:      Keep the default. Change it when: Raise it for jobs that run very often; lower it if you need to
 #                     know sooner.
 #   More info:        https://invardia.com/docs/si/settings/SI_Throttle_StuckRuns/
+#
+# Warn when the newest complete data is older than (hours)  [SI_Pro_StaleDataWarnHours]  (advanced, hours)
+#   What it is for:   When no new data has been published for this many hours (counted from when the shown data was
+#                     complete), SecurityInsight warns: on the Home page for everyone and at the top of every page for
+#                     Admins (and once a day on the Guards page when that check is switched on).
+#   Default:          36
+#   If you change it: Lower warns sooner, higher later. 0 turns the warning off. It is a warning only: nothing is held
+#                     or stopped, and the pages keep showing the newest complete data.
+#   When to change:   Raise it when your pipeline runs less often than once a day; lower it if you need to know
+#                     sooner.
+#   Risk:             Higher, or 0: data that is getting old is said later, or not at all. Lower: the warning comes
+#                     sooner, also after one slow run. It is a warning only: nothing is held, stopped or mailed by it.
+#                     Reversible at once.
+#   Recommended:      Keep the default. Change it when: Raise it when your pipeline runs less often than once a day;
+#                     lower it if you need to know sooner.
+#   More info:        https://invardia.com/docs/si/settings/SI_Pro_StaleDataWarnHours/
 #
 # ----------------------------------------------------------------------------------------------------
 # Schedules & what runs

@@ -17,7 +17,9 @@
       2. the web app, its MCP server and the sign-in front -- a new revision each (Invoke-SIUpdaterAppRoll -ImagesOnly:
          built, rolled, health-checked, put back on failure; no sign-in or Entra change);
       3. the record of what now runs (tags si-installed on the updater job) -- only when 1 and 2 are healthy;
-      4. the updater ITSELF, LAST (Invoke-SIUpdaterSelfRoll).
+      4. the updater ITSELF (Invoke-SIUpdaterSelfRoll);
+      5. LAST (SI #1414, framework SEC-PATCH-PIPELINE-1 point 6): one active revision per container app with an ingress --
+         Single mode, only the new (healthy) revision active, 100 % of the traffic, read back (Invoke-SIUpdaterSingleRevisionStep).
     THEN (owner 2026-11-14: "when swap works we remove old"): ONLY when every part read back healthy, the install's own
     registry keeps only what runs -- every template, active revision, the pending self-update image and every image a running
     execution started with (SI-UpdaterImagePrune.ps1 Invoke-SIUpdaterImageOnlyPruneStep, called by SI-UpdaterInvardia.ps1);
@@ -128,6 +130,7 @@ function Invoke-SIUpdaterImageOnly {
           AppSwap    { param($SIRoot, $Tag) } -> @{ Code; Text }
           Record     { param($Version, $Commit) } -> $true / $false
           SelfSwap   { param($SIRoot, $Tag) } -> @{ Action; Reason }
+          Revisions  { } -> @{ Ok; Text }  (the last step, Invoke-SIUpdaterSingleRevisionStep)
         Returns @{ Code (0 = the update is installed; 1 = a part failed, the next run tries again); Result (done | build-failed |
         swap-failed); Component (where it stopped, '' = nowhere); Why; Parts (the parts in the order they ran); SelfAction }.
         Never throws.
@@ -191,6 +194,27 @@ function Invoke-SIUpdaterImageOnly {
                         -Tag $tag -JobName $UpdaterJob -JobId $Environment.UpdaterId -CurrentImage $Environment.UpdaterImage -Disabled:$SelfOff
                 } else { [pscustomobject]@{ Action = 'skipped'; Reason = 'no environment record -- the updater keeps its image' } }
         $sa = if ($self) { [string]$self.Action } else { '' }
+        # 5. SI #1414, LAST: nothing old answers -- every container app with an ingress in Single revision mode with exactly
+        # one active revision (the new one, proven healthy by 2.), 100 % of the traffic, read back. Not proven = the swap is
+        # NOT whole (component 'revisions': the images run, an older revision may still answer; the caller fails the run).
+        # Runs even when the updater's own move failed: the web app's old revision must not stay reachable for that.
+        $rv = if ($Seams['Revisions']) { & $Seams.Revisions }
+              elseif (Get-Command -Name Invoke-SIUpdaterSingleRevisionStep -ErrorAction SilentlyContinue) { Invoke-SIUpdaterSingleRevisionStep -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId -Apps @($WebApp, $McpApp) }
+              else { $null }
+        if ($rv) { $parts.Add('revisions') }
+        if ($rv -and -not $rv.Ok) {
+            # (the release counts as installed and is not installed again: the post-roll run checks once more, and the
+            # heartbeat's Update.revisions + Invardia's daily check show an older revision that still answers until it is fixed)
+            $why = 'the revisions: {0} -- the patched images run; the post-roll run checks again, the heartbeat shows it until it is fixed' -f $rv.Text
+            if ($Seams['Revisions']) { & $fail 'post-roll' ('image-only update {0}: {1}' -f $Version, $why) }
+            # the updater's own move that failed too is reported as well, never hidden behind the revisions
+            if ($sa -eq 'failed') {
+                $sw = 'the updater itself: {0}' -f $self.Reason
+                & $fail 'post-roll' ('image-only update {0}: {1}' -f $Version, $sw)
+                $why = '{0}; {1}' -f $why, $sw
+            }
+            return (& $out 0 'swap-failed' 'revisions' $why $sa)
+        }
         if ($sa -eq 'failed') {
             $why = 'the updater itself: {0}' -f $self.Reason
             & $fail 'post-roll' ('image-only update {0}: {1}' -f $Version, $why)

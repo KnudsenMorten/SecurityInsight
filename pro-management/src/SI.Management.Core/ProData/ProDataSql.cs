@@ -322,6 +322,59 @@ OPTION (RECOMPILE);
         return new SqlQuery(text, p);
     }
 
+    /// <summary>
+    /// #1400 (owner 2026-11-26: "SI never fewer rows than the source"): ONE CHUNK of the whole filtered view for an export --
+    /// rows <paramref name="skip"/> + 1 .. + <paramref name="take"/> in the view's sort, then the finding's own id, so the
+    /// chunks neither overlap nor leave a finding out. The export reads every chunk; nothing caps it.
+    /// </summary>
+    public static SqlQuery FindingsExportChunk(FindingFilter raw, long skip, int take)
+    {
+        var f = ProDataFilters.Normalize(raw);
+        var text = $"""
+{CollectionCte}
+SELECT {FindingColumns}
+FROM sidata.Finding AS f
+JOIN c ON f.CollectionId = c.CollectionId
+LEFT JOIN sidata.Asset AS a ON a.AssetKey = f.AssetKey
+{WhereOf(f)}
+ORDER BY {Sorts[f.Sort]}, f.CollectionId, f.FindingId
+OFFSET @Skip ROWS FETCH NEXT @Take ROWS ONLY
+OPTION (RECOMPILE);
+""";
+        var p = FilterParams(f);
+        p["Skip"] = Math.Max(0, skip);
+        p["Take"] = Math.Clamp(take, 1, ProDataFilters.ExportChunk);
+        return new SqlQuery(text, p);
+    }
+
+    /// <summary>
+    /// #1400 review: how many findings <see cref="FindingsExportChunk"/> reads in all -- the SAME FROM / JOIN / WHERE, counted
+    /// (never the stored page totals: they may differ from the live rows, and a false difference would refuse every export).
+    /// </summary>
+    public static SqlQuery FindingsExportCount(FindingFilter raw) => FindingsExportCount(raw, null);
+
+    /// <summary>
+    /// #1400 review of e2bd16d72: with <paramref name="ids"/> (the findings a person ticked) -- how many of THEM the filter
+    /// keeps: the expected rows of a "selected rows" export (a ticked finding outside the view is not one of them).
+    /// </summary>
+    public static SqlQuery FindingsExportCount(FindingFilter raw, IReadOnlyCollection<string>? ids)
+    {
+        var f = ProDataFilters.Normalize(raw);
+        var ticked = ids is null ? "" : "\n  AND CONVERT(nvarchar(64), f.FindingId) IN (SELECT tv.[value] FROM OPENJSON(@Ids) AS tv)";
+        var text = $"""
+{CollectionCte}
+SELECT COUNT_BIG(*) AS N
+FROM sidata.Finding AS f
+JOIN c ON f.CollectionId = c.CollectionId
+LEFT JOIN sidata.Asset AS a ON a.AssetKey = f.AssetKey
+{WhereOf(f)}{ticked}
+OPTION (RECOMPILE);
+""";
+        var p = FilterParams(f);
+        if (ids is not null) p["Ids"] = System.Text.Json.JsonSerializer.Serialize(ids);
+        return new SqlQuery(text, p);
+    }
+
     /// The dimension pivot (tier x severity x domain) of the filtered view of one collection.
     public static SqlQuery Pivot(FindingFilter raw)
     {

@@ -657,7 +657,36 @@ $publishAssetPropsHandover = {
 }
 $useQueue   =(Get-OptionalEnv 'SI_TRIGGER_FROM_QUEUE' '0') -eq '1'
 $siEntryScript = $PSCommandPath   # this entry point: the records processes of a run (#874) run it again
-# #475 -- KEDA: every worker, once its part is marked (done or failed), checks whether it was the LAST; the last one
+# #1399 THE DEFENDER FOR CLOUD RECOMMENDATIONS OF A RUN IN PARTS, ONCE (the two-agent review of 716e218a9): after the run's
+# records are published -- the point that knows the whole run -- one process runs the engine's 'recommendations' phase: the
+# whole list read once, the child -> parent map from the STORED records of every part, rolled up to disk, posted all or nothing
+# with its completion marker. A part never publishes them. Never fails the caller; a run that cannot publish them says so.
+$publishRunRecommendations = {
+    param([string]$RecEngineRun, [datetime]$RecCt)
+    # returns @{ Refreshed; Reason } ($null for another engine) -- the run's report says it (Get-SICollectRunReport -Recommendations)
+    if ([string]$engine -ne 'azure' -or -not $RecEngineRun) { return }
+    $resFile = [IO.Path]::Combine([IO.Path]::GetTempPath(), ('si-recommendations-{0}.json' -f [guid]::NewGuid().ToString('N')))
+    $out = [pscustomobject]@{ Refreshed = $false; Reason = 'the publishing process did not say how it ended' }
+    $vars = @{ SI_COLLECT_PHASE = 'recommendations'; SI_COLLECT_ENGINE_RUN = $RecEngineRun; SI_COLLECTION_TIME = $RecCt.ToString('o'); SI_TRIGGER_FROM_QUEUE = '0'; SI_ROLE = ''; SI_COLLECT_RECOMMENDATIONS_RESULT_FILE = $resFile }
+    $before = @{}; foreach ($k in $vars.Keys) { $before[$k] = [Environment]::GetEnvironmentVariable($k) }
+    try {
+        foreach ($k in $vars.Keys) { [Environment]::SetEnvironmentVariable($k, $(if ($vars[$k]) { [string]$vars[$k] } else { $null })) }
+        Write-Host ('[parts] {0}: the run''s Defender for Cloud recommendations -- read and published once (run {1})' -f $engine, $RecEngineRun)
+        & pwsh -NoProfile -File $siEntryScript | Out-Host
+        $code = $LASTEXITCODE
+        $said = $null; if (Test-Path -LiteralPath $resFile) { try { $said = Get-Content -LiteralPath $resFile -Raw | ConvertFrom-Json } catch { $said = $null } }
+        if ($code -eq 0 -and $said -and [string]$said.ExitReason -eq 'success') { $out = [pscustomobject]@{ Refreshed = $true; Reason = '' } }
+        else {
+            $why = if ($code -ne 0) { 'the publishing process ended with exit code {0}' -f $code } elseif ($said) { 'the publishing process ended {0}' -f [string]$said.ExitReason } else { 'the publishing process did not say how it ended' }
+            $out = [pscustomobject]@{ Refreshed = $false; Reason = ($why + ' (its run-health record azure-recommendations says why)') }
+            Write-Warning ('[parts] {0}: recommendations not refreshed this run: {1} -- the previous complete snapshot stays the latest.' -f $engine, $out.Reason)
+        }
+    } catch {
+        Write-Warning ('[parts] {0}: recommendations not refreshed this run: {1} -- the previous complete snapshot stays the latest.' -f $engine, $_.Exception.Message)
+        $out = [pscustomobject]@{ Refreshed = $false; Reason = [string]$_.Exception.Message }
+    } finally { foreach ($k in $vars.Keys) { [Environment]::SetEnvironmentVariable($k, $before[$k]) }; Remove-Item -LiteralPath $resFile -Force -ErrorAction SilentlyContinue }
+    $out
+}# #475 -- KEDA: every worker, once its part is marked (done or failed), checks whether it was the LAST; the last one
 # claims the run and publishes the records that the producer and every part handed over -- each record once, whole.
 # Never throws: a records publish that fails is written to the run's records marker, and the pipeline's step fails on it.
 $finishKedaRecords = {
@@ -702,8 +731,8 @@ $finishKedaRecords = {
             }
         }
         switch ($recState) {
-            'published' { Write-Host ('[parts] {0}: the last part -- the run''s records published' -f $recEngineName) }
-            'failed' { Write-Warning ('[parts] {0}: the last part -- the run''s records were NOT all published (see the run''s records marker)' -f $recEngineName) }
+            'published' { Write-Host ('[parts] {0}: the last part -- the run''s records published' -f $recEngineName); $recRecs = & $publishRunRecommendations $RecEngineRun $recCt }
+            'failed' { Write-Warning ('[parts] {0}: the last part -- the run''s records were NOT all published (see the run''s records marker)' -f $recEngineName); $recRecs = $null; if ($recEngineName -eq 'azure') { Write-Warning ('[parts] azure: recommendations not refreshed this run: the run''s records were not all published, so the child resources of every part are not known -- the previous complete snapshot stays the latest.') } }
             default { }
         }
         # the ONE report of the job to Invardia for a run in parts: the execution that published the records knows the whole
@@ -714,7 +743,7 @@ $finishKedaRecords = {
             try {
                 if (-not (Get-Command -Name Send-SITelemetryRunEnd -ErrorAction SilentlyContinue)) { . '/app/engine/asset-profiling/shared/Send-SIRunHealthRow.ps1' }
                 $recFailedParts = @(@(Read-SICollectPartMarkers -Store $recStore -Engine $recEngineName -RunId $RecCollectKey) | Where-Object { $_ -and [string]$_.State -eq 'failed' }).Count
-                $recReport = Get-SICollectRunReport -Engine $recEngineName -RecordsState $recState -FailedParts $recFailedParts -RunId $RecEngineRun -StartedAt $recCt
+                $recReport = Get-SICollectRunReport -Engine $recEngineName -RecordsState $recState -FailedParts $recFailedParts -RunId $RecEngineRun -StartedAt $recCt -Recommendations $recRecs
                 if ($recReport) { $null = Send-SITelemetryRunEnd -RunContext $recReport.RunContext -ExitReason $recReport.ExitReason -ErrorMessage $recReport.Message }
             } catch { Write-Warning ('[parts] the run''s report to Invardia could not be sent: {0}' -f $_.Exception.Message) }
         }
@@ -868,6 +897,12 @@ if ($collectChild -eq 'parts') {
     $shardCount       = [int](Get-OptionalEnv 'SI_COLLECT_PARTS' 1)
     Write-Host ('[parts] part {0} of {1} (run {2})' -f ($shardIndex + 1), $shardCount, $collectEngineRun)
 }
+elseif ($collectChild -eq 'recommendations') {
+    # #1399 the run's Defender for Cloud recommendations, once (after its records)
+    $collectPhase     = 'recommendations'
+    $collectEngineRun = [string](Get-OptionalEnv 'SI_COLLECT_ENGINE_RUN' '')
+    $shardIndex = 0; $shardCount = 1
+}
 $collectInParts = (-not $useQueue -and -not $producerDiscovers -and -not $collectChild -and $shardCount -le 1 -and
                    $engine -in @('identity', 'endpoint', 'azure') -and
                    ([string](Get-OptionalEnv 'SI_COLLECT_IN_PARTS' 'off')).Trim().ToLowerInvariant() -in @('on', 'true', '1', 'yes'))
@@ -927,6 +962,10 @@ if ($collectInParts) {
         if ([int]$recPar.Failed -gt 0 -or [int]$recPar.ExitCode -ne 0) { $rExit = 1 }
     }
     if ($rExit -ne 0) { Write-Warning ('[parts] {0}: the run''s records were not all published (exit {1}) -- the profiles are; the missing records are unknown, not gone.' -f $engine, $rExit) }
+    # #1399 the run's Defender for Cloud recommendations, once, after its records (all or nothing)
+    # (a run in parts of a scheduled job sends no job report of its own here: the phase's not-refreshed report stands)
+    if ($rExit -eq 0) { $null = & $publishRunRecommendations ([string]$info.RunId) $partsCt }
+    elseif ($engine -eq 'azure') { Write-Warning ('[parts] azure: recommendations not refreshed this run: the run''s records were not all published, so the child resources of every part are not known -- the previous complete snapshot stays the latest.') }
     if ($failedParts.Count -gt 0) {
         Write-Warning ('[parts] {0}: {1} of {2} part(s) failed ({3}) -- this run is INCOMPLETE for those objects; they are unknown, not gone.' -f $engine, $failedParts.Count, $parts, ($failedParts -join ', '))
         exit 1
@@ -1040,6 +1079,7 @@ if ($collectionTime) { $orchArgs['CollectionTime'] = $collectionTime }
 # producer's run (a message from the older producer carries no phase: the worker runs the whole engine, as before)
 if ($producerDiscovers -or $collectChild -eq 'discover') { $orchArgs['Phase'] = 'discover'; $orchArgs['ShardCount'] = 1; $orchArgs['ShardIndex'] = 0 }
 elseif ($collectPhase -eq 'parts' -and $collectEngineRun) { $orchArgs['Phase'] = 'parts'; $orchArgs['RunId'] = $collectEngineRun }
+elseif ($collectPhase -eq 'recommendations' -and $collectEngineRun) { $orchArgs['Phase'] = 'recommendations'; $orchArgs['RunId'] = $collectEngineRun; $orchArgs['ShardCount'] = 1; $orchArgs['ShardIndex'] = 0 }
 if ($runOpts.ForceFullRun) {
     $orchArgs['ForceFullRun'] = $true
     Write-Host ('[trigger] full run ({0}) -- bypassing fingerprint cache for this execution' -f $runOpts.Source.ForceFullRun)
@@ -1057,6 +1097,11 @@ try {
     if ($_.InvocationInfo) { Write-Warning ('  at: {0}' -f $_.InvocationInfo.PositionMessage.Trim()) }
     if ($_.ScriptStackTrace) { Write-Warning ('  stack:'); $_.ScriptStackTrace -split "`n" | ForEach-Object { Write-Warning ('    {0}' -f $_) } }
     $orchExit = 1
+}
+
+# #1399 the run's recommendations phase says how it ended to the process that started it (the run's report carries it)
+if ($collectChild -eq 'recommendations' -and [string](Get-OptionalEnv 'SI_COLLECT_RECOMMENDATIONS_RESULT_FILE' '')) {
+    try { [IO.File]::WriteAllText([string](Get-OptionalEnv 'SI_COLLECT_RECOMMENDATIONS_RESULT_FILE' ''), (ConvertTo-Json -Compress -InputObject ([ordered]@{ Exit = $orchExit; ExitReason = $(if ($orchExit -ne 0) { 'error' } else { [string]$global:SI_LastRunExitReason }) }))) } catch { Write-Warning ('[parts] the recommendations phase could not say how it ended: {0}' -f $_.Exception.Message) }
 }
 
 # #475: a part whose records were not handed over is a failed part (the run's records would be quietly smaller) -- in

@@ -34,7 +34,7 @@ BeforeAll {
     $script:SavedWs = $global:SI_WorkspaceResourceId
     $global:SI_WorkspaceResourceId = '/subscriptions/s1/resourceGroups/rg/providers/Microsoft.OperationalInsights/workspaces/ws'
     foreach ($n in 'Write-SIInfo', 'Write-SIProgress', 'Reset-SIProgress', 'Write-SIWarn') {
-        if (-not (Get-Command -Name $n -ErrorAction SilentlyContinue)) { Set-Item -Path ("function:global:{0}" -f $n) -Value { param() } }
+        if (-not (Get-Command -Name $n -ErrorAction SilentlyContinue)) { Set-Item -Path ("function:script:{0}" -f $n) -Value { param() } }
     }
 
     # ---- the source data: every property the source has (Graph returns what $select names; MDE / ARG everything) ----

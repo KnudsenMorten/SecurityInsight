@@ -131,6 +131,7 @@
         else if (Model.InForceCounts is not null)
         {
             <p class="hint">@(spec.Assets ? "Every CI in the Pro database" : $"The newest complete collection ({Fmt.Time(Model.Collection!.CollectionTime)})"), counted from what is stored -- nothing is re-run. "Stored" is what the last run wrote.</p>
+            @if (Model.PreviewCut is { } cut) { <p class="notice" role="status" data-mapping-preview-cut>@cut</p> }
             var keys = Model.InForce.Buckets.Concat(Model.EnteredCounts?.Keys ?? Enumerable.Empty<string>()).Concat(Model.StoredCounts!.Keys).Distinct(StringComparer.Ordinal).ToList();
             <div class="table-wrap">
                 <table class="grid" data-sortable>

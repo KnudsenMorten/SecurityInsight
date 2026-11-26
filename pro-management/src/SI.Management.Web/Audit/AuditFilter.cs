@@ -121,6 +121,7 @@ public sealed class AuditPageFilter : IAsyncPageFilter, IAsyncAlwaysRunResultFil
                 ["rows"] = scope.Rows,
             };
             if (result is FileResult f) o["file"] = f.FileDownloadName;
+            if (scope.Note is { Length: > 0 } note) o["note"] = note;
             scope.AfterJson ??= JsonSerializer.Serialize(o);
         }
         // the response is already decided: the write must not cancel with the request
@@ -206,9 +207,12 @@ public static class AuditTargets
 /// Exports: the row count and the filter of what left the app.
 public static partial class AuditExports
 {
-    /// The rows of a CSV answer (records after the header, quote-aware); null when the answer is not a counted file.
+    /// The rows of a CSV answer (records after the header); null when the answer is not a counted file. #1400: an export
+    /// written by <see cref="SI.Management.Web.Export.CsvExport"/> carries the count it wrote -- the file is never read
+    /// again; a small CSV held in memory (a template, a pivot) is counted quote-aware without copying it.
     public static long? CountRows(IActionResult? result)
     {
+        if (result is SI.Management.Web.Export.CsvFileResult counted) return counted.Rows;
         if (result is not FileContentResult f || !f.ContentType.StartsWith("text/csv", StringComparison.OrdinalIgnoreCase)) return null;
         long records = 0; var inQuotes = false; var any = false;
         foreach (var b in f.FileContents)

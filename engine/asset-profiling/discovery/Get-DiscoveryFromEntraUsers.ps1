@@ -258,7 +258,7 @@ function Get-DiscoveryFromEntraUsers {
         foreach ($e in @(Get-SIAzureDelegationsFromGroupReach -Reach $reach -AzureLookup $azureLookup -Names $groupNames)) { [void]$azDelegations.Add($e) }
 
         # IdentityInfo enrichment (AD groups + MFA + risk + investigation priority)
-        $ii = $identityInfoMap[[string]$u.id]
+        $ii = Get-SIIdentityInfoRow -Map $identityInfoMap -Id ([string]$u.id)   # #1398: the row from the on-disk lookup
         $adGroups = if ($ii) { ConvertTo-SIADGroupNames $ii.GroupMembership } else { @() }
         # v3 data model (unwritten-fields): the IdentityInfo row this read already holds IS the user's Defender for Identity
         # record (data-model/mappings/mdi.locked.json, part 'identity') -- service account, investigation priority

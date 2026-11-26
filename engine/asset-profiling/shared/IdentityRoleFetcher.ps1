@@ -1139,14 +1139,148 @@ function Add-SIGoneGroups {
     $new.Count
 }
 
+function Add-SIGroupAssignedOn {
+    <#
+        #1403 when the role assignment naming a group was made (Azure RBAC createdOn): the NEWEST per group, kept for the run.
+        A group named only by assignments made in the last 24 hours may still be replicating -- never called gone for that.
+        An assignment WITHOUT a time (-At empty / not a date) is remembered too: a group one of whose assignments has no known
+        time is never "settled" (every assignment must be known).
+    #>
+    param([string]$GroupId, $At)
+    if (-not $GroupId) { return }
+    $t = $null
+    if ($null -ne $At -and -not ($At -is [DBNull])) {
+        if ($At -is [datetime]) { $t = ([datetime]$At).ToUniversalTime() }
+        else { $d = [datetime]::MinValue; if ([datetime]::TryParse([string]$At, [Globalization.CultureInfo]::InvariantCulture, ([Globalization.DateTimeStyles]::AssumeUniversal -bor [Globalization.DateTimeStyles]::AdjustToUniversal), [ref]$d)) { $t = $d } }
+    }
+    if ($null -eq $t) {
+        if (-not $script:_SICache.ContainsKey('GroupAssignedUnknown') -or $null -eq $script:_SICache['GroupAssignedUnknown']) { $script:_SICache['GroupAssignedUnknown'] = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase) }
+        [void]$script:_SICache['GroupAssignedUnknown'].Add($GroupId)
+        return
+    }
+    if (-not $script:_SICache.ContainsKey('GroupAssignedOn') -or $null -eq $script:_SICache['GroupAssignedOn']) { $script:_SICache['GroupAssignedOn'] = @{} }
+    $m = $script:_SICache['GroupAssignedOn']
+    if (-not $m.ContainsKey($GroupId) -or $t -gt $m[$GroupId]) { $m[$GroupId] = $t }
+}
+
+function Test-SIGroupAssignmentSettled {
+    <# PURE (over the run's cache). #1403 EVERY role assignment naming the group is known and older than 24 hours. Unknown (no time, or one without a time) = not settled. #>
+    param([string]$GroupId, [datetime]$Now = [datetime]::UtcNow)
+    if ($script:_SICache.ContainsKey('GroupAssignedUnknown') -and $null -ne $script:_SICache['GroupAssignedUnknown'] -and $script:_SICache['GroupAssignedUnknown'].Contains($GroupId)) { return $false }
+    if (-not $script:_SICache.ContainsKey('GroupAssignedOn') -or $null -eq $script:_SICache['GroupAssignedOn']) { return $false }
+    $m = $script:_SICache['GroupAssignedOn']
+    if (-not $m.ContainsKey($GroupId)) { return $false }
+    return ([datetime]$m[$GroupId] -lt $Now.ToUniversalTime().AddHours(-24))
+}
+
+# #1403 THE BOUNDED FALLBACK: a group the directory never confirms and that never settles (no createdOn, an eligibility
+# only, out of the deleted items after 30 days) would keep the role read incomplete for ever. Its misses are STORED
+# (sidata.GroupGoneWatch, the install's database): not confirmed by getByIds in 3 runs in a row (one run a day: a miss more
+# than 48 hours after the last starts again at 1) = gone, said with its id. A group the directory returns again is cleared.
+$script:SIGroupGoneMisses = 3
+
+function Get-SIGroupGoneWatchSql {
+    <# One statement: the groups in @miss (JSON array) missed once more this run (once per 12 hours, consecutive within 48 hours),
+       the groups in @seen (JSON array) cleared; answers GroupId, Misses of the missed ones. #>
+    @'
+SET NOCOUNT ON;
+IF OBJECT_ID(N'sidata.GroupGoneWatch') IS NULL BEGIN SELECT CAST(NULL AS NVARCHAR(64)) AS GroupId, CAST(0 AS INT) AS Misses WHERE 1 = 0; RETURN; END
+DECLARE @now DATETIME2(3) = SYSUTCDATETIME();
+DELETE w FROM sidata.GroupGoneWatch AS w WHERE w.GroupId IN (SELECT LOWER(LEFT([value], 64)) FROM OPENJSON(ISNULL(NULLIF(@seen, N''), N'[]')));
+MERGE sidata.GroupGoneWatch AS t
+USING (SELECT DISTINCT LOWER(LEFT([value], 64)) AS GroupId FROM OPENJSON(ISNULL(NULLIF(@miss, N''), N'[]')) WHERE [value] IS NOT NULL) AS s ON t.GroupId = s.GroupId
+WHEN MATCHED AND t.LastMissedAt < DATEADD(hour, -12, @now) THEN
+    UPDATE SET Misses = CASE WHEN t.LastMissedAt >= DATEADD(hour, -48, @now) THEN t.Misses + 1 ELSE 1 END, LastMissedAt = @now
+WHEN NOT MATCHED THEN INSERT (GroupId, Misses, FirstMissedAt, LastMissedAt) VALUES (s.GroupId, 1, @now, @now);
+SELECT w.GroupId, w.Misses FROM sidata.GroupGoneWatch AS w WHERE w.GroupId IN (SELECT LOWER(LEFT([value], 64)) FROM OPENJSON(ISNULL(NULLIF(@miss, N''), N'[]')));
+'@
+}
+
+function Update-SIGroupGoneWatch {
+    <# The stored misses of -Missed (and -Seen cleared): group id -> misses. The seam: $script:_SICache['GroupWatchInvoke'] (tests),
+       else the install's database (New-SIRecordSqlInvoke); no database = @{} (no fallback, as before). Never throws. #>
+    param([AllowEmptyCollection()][string[]]$Missed = @(), [AllowEmptyCollection()][string[]]$Seen = @())
+    $out = @{}
+    if (@($Missed).Count -eq 0 -and @($Seen).Count -eq 0) { return $out }
+    $inv = $null
+    if ($script:_SICache.ContainsKey('GroupWatchInvoke')) { $inv = $script:_SICache['GroupWatchInvoke'] }
+    elseif (Get-Command -Name New-SIRecordSqlInvoke -ErrorAction SilentlyContinue) { try { $inv = New-SIRecordSqlInvoke } catch { $inv = $null }; $script:_SICache['GroupWatchInvoke'] = $inv }
+    if (-not ($inv -is [scriptblock])) { return $out }
+    try {
+        $m = ConvertTo-Json -InputObject @([string[]]@($Missed)) -Compress; if (-not $m.TrimStart().StartsWith('[')) { $m = '[' + $m + ']' }
+        $s = ConvertTo-Json -InputObject @([string[]]@($Seen)) -Compress; if (-not $s.TrimStart().StartsWith('[')) { $s = '[' + $s + ']' }
+        foreach ($r in @(& $inv (Get-SIGroupGoneWatchSql) @{ miss = $m; seen = $s } 'rows')) {
+            if ($null -eq $r) { continue }
+            $gid = if ($r -is [System.Collections.IDictionary]) { [string]$r['GroupId'] } else { [string]$r.GroupId }
+            $n = if ($r -is [System.Collections.IDictionary]) { $r['Misses'] } else { $r.Misses }
+            if ($gid) { $out[$gid.ToLowerInvariant()] = [int]$n }
+        }
+    } catch { $out = @{} }
+    $out
+}
+
+function Resolve-SIGoneGroups {
+    <#
+        #1403 (review of 3.1.51: "404 = group gone during replication lag"). Which of -Ids (groups the directory did not
+        return, or whose read answered 404) are really GONE -- a group is gone only when
+          * it is in the Entra ID deleted items (/directory/deletedItems/<id>, one batched read), OR
+          * this run never confirmed it (getByIds did not return it, or it was never asked) AND every role assignment naming
+            it is known and older than 24 hours (Test-SIGroupAssignmentSettled), OR
+          * this run never confirmed it and it was not confirmed in $script:SIGroupGoneMisses runs in a row (stored,
+            Update-SIGroupGoneWatch) -- the bounded fallback for a group that never settles.
+        A group getByIds CONFIRMED this run that then answers 404, or a group named by a fresh assignment, is NOT gone: the
+        caller marks its read INCOMPLETE (never "complete and wrong"). Returns @{ Gone; NotGone } (string arrays). Never throws.
+    #>
+    param([string]$Token, [AllowEmptyCollection()][string[]]$Ids = @(), [scriptblock]$PostMany, [scriptblock]$Sleep, [datetime]$Now = [datetime]::UtcNow)
+    $gone = New-Object System.Collections.Generic.List[string]; $not = New-Object System.Collections.Generic.List[string]
+    $ids = @(@($Ids) | Where-Object { $_ } | ForEach-Object { [string]$_ } | Select-Object -Unique)
+    if ($ids.Count -eq 0) { return [pscustomobject]@{ Gone = @(); NotGone = @() } }
+    $deleted = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    try {
+        $read = Invoke-SIGraphBatchGet -Token $Token -PostMany $PostMany -Sleep $Sleep -Label 'groups: the Entra ID deleted items' `
+            -Requests @(foreach ($id in $ids) { @{ Key = $id; Url = ('/directory/deletedItems/{0}?$select=id' -f $id) } })
+        foreach ($id in $ids) {
+            $o = $read.Items[$id]
+            if ($null -ne $o -and [int]$o.Status -eq 200 -and @($o.Rows).Count -gt 0) { [void]$deleted.Add($id) }
+        }
+    } catch { }
+    $known = $null; if ($script:_SICache.ContainsKey('PrincipalTypes')) { $known = $script:_SICache['PrincipalTypes'] }
+    $unconfirmed = New-Object System.Collections.Generic.List[string]
+    $seen = New-Object System.Collections.Generic.List[string]
+    foreach ($id in $ids) {
+        if ($deleted.Contains($id)) { $gone.Add($id); continue }
+        $confirmed = ($null -ne $known -and $known.ContainsKey($id) -and [string]$known[$id] -ne '')
+        if ($confirmed) { $not.Add($id); $seen.Add($id); continue }
+        if (Test-SIGroupAssignmentSettled -GroupId $id -Now $Now) { $gone.Add($id); continue }
+        $unconfirmed.Add($id)
+    }
+    # a group the directory returns again is cleared from the stored misses
+    if ($unconfirmed.Count -eq 0 -and $seen.Count -gt 0) { $null = Update-SIGroupGoneWatch -Seen $seen.ToArray() }
+    if ($unconfirmed.Count -gt 0) {
+        $misses = Update-SIGroupGoneWatch -Missed $unconfirmed.ToArray() -Seen $seen.ToArray()
+        $long = New-Object System.Collections.Generic.List[string]
+        foreach ($id in $unconfirmed) {
+            $k = $id.ToLowerInvariant()
+            if ($misses.ContainsKey($k) -and [int]$misses[$k] -ge $script:SIGroupGoneMisses) { $gone.Add($id); $long.Add($id) } else { $not.Add($id) }
+        }
+        if ($long.Count -gt 0) {
+            $msg = ('[perms] {0} privilege-holding group(s) the directory has not returned in {1} runs in a row (no deleted item, no known assignment time) -- counted as gone: {2}' -f $long.Count, $script:SIGroupGoneMisses, (($long | Sort-Object) -join ', '))
+            if (Get-Command -Name Write-SIInfo -ErrorAction SilentlyContinue) { Write-SIInfo $msg } else { Write-Host $msg }
+        }
+    }
+    [pscustomobject]@{ Gone = $gone.ToArray(); NotGone = $not.ToArray() }
+}
+
 function Remove-SIGonePrivilegeGroups {
     <#
         The privilege-holding group map without the groups that no longer exist. Only the groups this run has NOT confirmed are
         asked -- the Azure-only ones (an Azure role assignment names them; the Entra role groups were just confirmed by
         Get-SIRoleAssignedGroups' getByIds) -- through Get-SIDirectoryObjectTypes (ONE getByIds per 1000). An id the service
-        did not return is gone; an id whose kind read FAILED is kept and read as before (unknown is never gone).
+        did not return is gone only by Resolve-SIGoneGroups (#1403: in the deleted items, or every assignment naming it older
+        than 24 hours) -- else it is kept and read as before (its read then decides); an id whose kind read FAILED is kept and
+        read as before (unknown is never gone).
     #>
-    param([string]$Token, [hashtable]$GroupMap = @{}, [hashtable]$RoleAssignedGroupMap = @{})
+    param([string]$Token, [hashtable]$GroupMap = @{}, [hashtable]$RoleAssignedGroupMap = @{}, [scriptblock]$PostMany, [scriptblock]$Sleep)
     if ($null -eq $GroupMap -or $GroupMap.Count -eq 0) { return $GroupMap }
     $gone = Get-SIGoneGroupSet
     $ask = @(@($GroupMap.Keys) | ForEach-Object { [string]$_ } | Where-Object { $_ -and -not $RoleAssignedGroupMap.ContainsKey($_) -and -not $gone.Contains($_) })
@@ -1154,7 +1288,17 @@ function Remove-SIGonePrivilegeGroups {
         $null = Get-SIDirectoryObjectTypes -Token $Token -Ids $ask
         $known = $script:_SICache['PrincipalTypes']
         $missing = @(foreach ($id in $ask) { if ($known -and $known.ContainsKey($id) -and [string]$known[$id] -eq '') { $id } })
-        if ($missing.Count -gt 0) { $null = Add-SIGoneGroups -Ids $missing -How 'an Azure role assignment still names them' }
+        # #1403 the asked groups the directory returned (again): their stored misses are cleared
+        $back = @(foreach ($id in $ask) { if ($known -and $known.ContainsKey($id) -and [string]$known[$id] -ne '') { $id } })
+        if ($back.Count -gt 0) { $null = Update-SIGroupGoneWatch -Seen $back }
+        if ($missing.Count -gt 0) {
+            # settled ones first (no call); the rest asked in the deleted items
+            $settled = @($missing | Where-Object { Test-SIGroupAssignmentSettled -GroupId $_ })
+            $fresh = @($missing | Where-Object { $settled -notcontains $_ })
+            $g = @($settled)
+            if ($fresh.Count -gt 0) { $g += @((Resolve-SIGoneGroups -Token $Token -Ids $fresh -PostMany $PostMany -Sleep $Sleep).Gone) }
+            if ($g.Count -gt 0) { $null = Add-SIGoneGroups -Ids $g -How 'an Azure role assignment still names them' }
+        }
     }
     $out = @{}
     foreach ($k in @($GroupMap.Keys)) { if (-not $gone.Contains([string]$k)) { $out[[string]$k] = $GroupMap[$k] } }
@@ -1260,7 +1404,16 @@ function Get-SIGroupTransitiveMembers {
             if ($tp -and [string]$tp.Value -eq '#microsoft.graph.group') { [void]$nestedGroups.Add($mid) }
         }
     }
-    if ($goneNow.Count -gt 0) { $null = Add-SIGoneGroups -Ids $goneNow.ToArray() -How 'reading their members answered 404' }
+    if ($goneNow.Count -gt 0) {
+        # #1403 a 404 is gone only by Resolve-SIGoneGroups (deleted items, or never confirmed + a settled assignment); a group
+        # getByIds confirmed this run, or one a fresh assignment names, leaves the read INCOMPLETE (replication lag)
+        $dec = Resolve-SIGoneGroups -Token $Token -Ids $goneNow.ToArray() -PostMany $PostMany -Sleep $Sleep
+        if (@($dec.Gone).Count -gt 0) { $null = Add-SIGoneGroups -Ids @($dec.Gone) -How 'reading their members answered 404' }
+        foreach ($gid in @($dec.NotGone)) {
+            Write-Warning ('transitiveMembers answered 404 for group {0}, which this run saw or a recent assignment names (not in the deleted items): the read is not complete' -f $gid)
+            Set-SIEntraRoleReadPart -Part 'GroupMembers' -Complete $false -ErrorText ('group {0}: 404 on a group not proven gone' -f $gid)
+        }
+    }
     $script:_SICache['NestedMemberGroups'] = $nestedGroups
     Set-SIEntraRoleReadPart -Part 'GroupMembers' -Complete $true      # AND-ed with a group that failed above
     $script:_SICache['MemberToGroups'] = $byMember
@@ -1428,7 +1581,15 @@ function Get-SIPimForGroupsByPrincipal {
             [void]$pimGroupMembers[$mid].Add($pg)
         }
     }
-    if ($goneF.Count -gt 0) { $null = Add-SIGoneGroups -Ids $goneF.ToArray() -How 'reading their members answered 404' }
+    if ($goneF.Count -gt 0) {
+        # #1403 as Get-SIGroupTransitiveMembers: a 404 on a group not proven gone leaves the read INCOMPLETE
+        $decF = Resolve-SIGoneGroups -Token $Token -Ids $goneF.ToArray() -PostMany $PostMany -Sleep $Sleep
+        if (@($decF.Gone).Count -gt 0) { $null = Add-SIGoneGroups -Ids @($decF.Gone) -How 'reading their members answered 404' }
+        foreach ($pg in @($decF.NotGone)) {
+            Write-Warning ('transitiveMembers answered 404 for group {0}, which this run saw (not in the deleted items): the read is not complete' -f $pg)
+            Set-SIEntraRoleReadPart -Part 'PimForGroups' -Complete $false -ErrorText ('group {0}: 404 on a group not proven gone' -f $pg)
+        }
+    }
     $script:_SICache['PimGroupMembers'] = $pimGroupMembers
     Write-SIInfo ('[perms] PIM for Groups loaded: {0} principal->group entries across {1} principals' -f $totalRows, $byPrincipal.Count)
     if ($followed.Count -gt 0) {
@@ -1771,10 +1932,21 @@ function Get-SIAzureEligibleRoleEntries {
             EffectiveTier    = [Math]::Max($roleTier, $scopeLvl)
             Assignment       = 'eligible'
         }
+        if ($ptype -eq 'Group') { $ca = $null; if ($p.PSObject.Properties['createdOn']) { $ca = $p.createdOn } elseif ($p.PSObject.Properties['startDateTime']) { $ca = $p.startDateTime }; Add-SIGroupAssignedOn -GroupId $oid -At $ca }
         $out.Add(@{ ObjectId = $oid; Entry = $entry })
     }
     $res.Entries = $out.ToArray()
     return $res
+}
+
+function Get-SIAzureAssignmentKey {
+    <# PURE. #1398 One Azure role assignment's identity: its id + its scope (lower case); '' when the read carried no id. #>
+    param($Assignment)
+    if ($null -eq $Assignment) { return '' }
+    $id = ''
+    $p = $Assignment.PSObject.Properties['RoleAssignmentId']; if ($p) { $id = [string]$p.Value }
+    if (-not $id) { return '' }
+    ('{0}|{1}' -f $id.Trim().ToLowerInvariant(), ([string]$Assignment.Scope).Trim().ToLowerInvariant())
 }
 
 function Get-SIAzureDelegationsByPrincipal {
@@ -1824,6 +1996,13 @@ function Get-SIAzureDelegationsByPrincipal {
     $ProgressPreference = 'SilentlyContinue'
     $failedSubs = 0; $firstFail = ''
     $failedEligSubs = 0; $firstEligFail = ''
+    # #1398: ONE ENTRY PER ASSIGNMENT. A subscription's role-assignment list also holds every assignment made ABOVE it
+    # (management group, tenant root) -- so one root assignment came back once per subscription and was kept once per
+    # subscription (773 subscriptions = 773 copies per principal; the out-of-memory of #702 grew with exactly that). An
+    # assignment is kept once, the first time it is read (its id + scope), as the eligible ones already were.
+    $seenActive = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    $seenElig   = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    $dupActive = 0L
     try {
         foreach ($sub in $subs) {
             $assignments = $null   # one subscription's answer at a time (#702: memory follows a subscription, not the tenant)
@@ -1846,6 +2025,8 @@ function Get-SIAzureDelegationsByPrincipal {
                 if ([string]::IsNullOrWhiteSpace($oid)) { continue }
                 $roleName = [string]$a.RoleDefinitionName
                 $scope    = [string]$a.Scope
+                $asgKey = Get-SIAzureAssignmentKey -Assignment $a
+                if ($asgKey -and -not $seenActive.Add($asgKey)) { $dupActive++; continue }
                 $roleTier = Get-SITierFromAzureRoles -Roles @($roleName)
                 if ($null -eq $roleTier) { $roleTier = 2 }
                 $scopeLvl = Get-SIAzureScopeLevel  -Scope $scope
@@ -1864,8 +2045,11 @@ function Get-SIAzureDelegationsByPrincipal {
                 }
                 if (-not $lookup.ContainsKey($oid)) { $lookup[$oid] = New-Object System.Collections.ArrayList }
                 [void]$lookup[$oid].Add($entry)
+                # #1403 when the assignment naming a group was made (a group named only by a fresh one is never called gone)
+                if ([string]$a.ObjectType -eq 'Group') { $ca = $null; if ($a.PSObject.Properties['CreatedOn']) { $ca = $a.CreatedOn }; Add-SIGroupAssignedOn -GroupId $oid -At $ca }
                 $count++
             }
+            $assignments = $null
             # #1192 (PIM-DELEGATION-1): Azure RBAC ELIGIBILITY -- an eligible role at any scope (tenant root, management
             # group, subscription, resource group, resource) is an attach point too; the role-assignment list holds only
             # what is active. A failed read = the eligible Azure roles there are UNKNOWN (said), never "none".
@@ -1878,9 +2062,8 @@ function Get-SIAzureDelegationsByPrincipal {
                 $oid = [string]$pe.ObjectId
                 if (-not $lookup.ContainsKey($oid)) { $lookup[$oid] = New-Object System.Collections.ArrayList }
                 # an eligibility seen from several subscriptions (inherited from a management group / the root) once only
-                $dup = $false
-                foreach ($x in @($lookup[$oid])) { if ($x['Assignment'] -eq 'eligible' -and $x['RoleName'] -eq $pe.Entry['RoleName'] -and $x['Scope'] -eq $pe.Entry['Scope']) { $dup = $true; break } }
-                if ($dup) { continue }
+                # (#1398: a set of what was kept, not a walk over the principal's whole list for every entry)
+                if (-not $seenElig.Add(('{0}|{1}|{2}' -f $oid, [string]$pe.Entry['RoleName'], [string]$pe.Entry['Scope']))) { continue }
                 [void]$lookup[$oid].Add($pe.Entry)
                 $count++
             }
@@ -1897,6 +2080,7 @@ function Get-SIAzureDelegationsByPrincipal {
         Write-Warning ('  Azure RBAC: the role assignments of {0} of {1} subscription(s) could not be read (first: {2}) -- the Azure roles held there are UNKNOWN this run, not absent.' -f $failedSubs, $subs.Count, $firstFail)
     }
     Write-SIInfo ('[perms] Azure RBAC delegations: {0} assignments across {1} principals' -f $count, $lookup.Count)
+    if ($dupActive -gt 0) { Write-SIInfo ('[perms] Azure RBAC: {0:N0} assignment(s) made above a subscription were read again from the next subscription -- each is kept once' -f $dupActive) }
     $script:_SICache['AzureLookup'] = $lookup
     return $lookup
 }
@@ -1950,11 +2134,30 @@ IdentityInfo
           AccountCreationTime, DeletedDateTime, LastSeenDate
 "@
 
+    # #1398 (owner 2026-10-21: "memory issues must not be a problem in any step"): the rows go to an ON-DISK text lookup as
+    # each part of the read arrives (SI-DiskLookup.ps1, #727: each row on disk as compact JSON, only the object ids in
+    # memory) -- never every user's row in memory. A caller reads a row with Get-SIIdentityInfoRow (the row as the read
+    # gave it: Log Analytics cells are text, and stay text) and $map.Count as before. Which users' LATEST row carries a
+    # percentile is kept as it is read.
+    if (-not (Get-Command -Name New-SIDiskTextLookup -ErrorAction SilentlyContinue)) { . ([IO.Path]::Combine((Split-Path -Parent (Split-Path -Parent $PSScriptRoot)), '_shared', 'SI-DiskLookup.ps1')) }
+    $iiDisk = New-SIDiskTextLookup -Name 'identity-info'
+    $iiPct = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
     try {
         # #639 lane 4: one row per user (millions at a large tenant) -- read in parts when one answer cannot carry it; a cut
         # answer is refused (the read is then not complete, below), never taken as every user
-        $resp = Read-SILaParts -WorkspaceId $wsGuid -Query $kql -Key 'AccountObjectId' -What 'IdentityInfo' -Log { param($l, $m) Write-SIInfo ('[perms] ' + $m) }
+        $null = Read-SILaParts -WorkspaceId $wsGuid -Query $kql -Key 'AccountObjectId' -What 'IdentityInfo' -Log { param($l, $m) Write-SIInfo ('[perms] ' + $m) } -OnRows {
+            param($iiPart)
+            foreach ($iiRow in @($iiPart)) {
+                if ($null -eq $iiRow) { continue }
+                $iiOid = [string]$iiRow.AccountObjectId
+                if ([string]::IsNullOrWhiteSpace($iiOid)) { continue }
+                $null = $iiDisk.Put($iiOid, (ConvertTo-Json -InputObject $iiRow -Depth 6 -Compress))
+                if ($iiRow.PSObject.Properties['InvestigationPriorityPercentile'] -and -not [string]::IsNullOrWhiteSpace([string]$iiRow.InvestigationPriorityPercentile)) { [void]$iiPct.Add($iiOid) } else { [void]$iiPct.Remove($iiOid) }
+            }
+        }
     } catch {
+        # nothing of a read that did not complete is used (as before: the parts read so far are let go with the file)
+        Remove-SIDiskLookup $iiDisk
         $iiMsg = [string]$_.Exception.Message
         if ($_.ErrorDetails -and $_.ErrorDetails.Message) { $iiMsg = $iiMsg + ' ' + [string]$_.ErrorDetails.Message }
         if (Test-SIIdentityInfoTableAbsent -Message $iiMsg) {
@@ -1971,24 +2174,34 @@ IdentityInfo
         return $byOid
     }
 
-    foreach ($row in @($resp.Rows)) {
-        $oid = [string]$row.AccountObjectId
-        if ([string]::IsNullOrWhiteSpace($oid)) { continue }
-        $byOid[$oid] = $row
-    }
+    $byOid = $iiDisk
     Write-SIInfo ('[perms] IdentityInfo: {0} users with on-prem / Defender enrichment' -f $byOid.Count)
     # the investigation priority is UEBA's (BehaviorAnalytics.InvestigationPriority, per activity); IdentityInfo leaves its
     # percentile empty -- internal 2026-10-15: si_mdi_investigation_priority_pct on 0 of 6,943 identities, BehaviorAnalytics
     # scores 21 users (the 3 at or above the 90th percentile were missing from Identity_HighMDIInvestigationPriority)
-    $hasPct = $false
-    foreach ($row in $byOid.Values) {
-        if ($row.PSObject.Properties['InvestigationPriorityPercentile'] -and -not [string]::IsNullOrWhiteSpace([string]$row.InvestigationPriorityPercentile)) { $hasPct = $true; break }
-    }
+    $hasPct = ($iiPct.Count -gt 0)
+    $iiPct = $null
     if (-not $hasPct -and $byOid.Count -gt 0) { Add-SIIdentityInvestigationPriority -ByOid $byOid -WorkspaceId $wsGuid -LookbackDays 30 }
     $script:_SICache['IdentityInfo'] = $byOid
     # the v3 Defender for Identity record pull (Get-DiscoveryFromEntraUsers: Set-SIRecordPull -Provider mdi)
     $script:_SICache['IdentityInfoState'] = [pscustomobject]@{ Complete = $true; Error = '' }
     return $byOid
+}
+
+function Get-SIIdentityInfoRow {
+    <#
+        PURE but for the lookup. One user's IdentityInfo row from the map Get-SIIdentityInfoByObjectId returns: the on-disk
+        text lookup (#1398: the JSON parsed back, text kept as text) or a plain hashtable (a test, an older caller). $null
+        when the user has none.
+    #>
+    param([AllowNull()]$Map, [AllowNull()][string]$Id)
+    if ($null -eq $Map -or [string]::IsNullOrEmpty($Id)) { return $null }
+    $v = $Map[$Id]
+    if ($v -is [string]) {
+        if ($null -eq $script:SIJsonDateKind) { $script:SIJsonDateKind = [bool](Get-Command -Name ConvertFrom-Json).Parameters.ContainsKey('DateKind') }; if ($script:SIJsonDateKind) { return (ConvertFrom-Json -InputObject $v -DateKind String) }
+        return (ConvertFrom-Json -InputObject $v)
+    }
+    $v
 }
 
 function ConvertTo-SIInvestigationPriorityPercentile {
@@ -2022,7 +2235,8 @@ function Add-SIIdentityInvestigationPriority {
         record part the mdi mapping reads (si_mdi_investigation_priority_pct). The same workspace and the same read as
         IdentityInfo; a workspace without UEBA leaves the rows as they are (said once).
     #>
-    param([Parameter(Mandatory)][hashtable]$ByOid, [Parameter(Mandatory)][string]$WorkspaceId, [int]$LookbackDays = 30)
+    # -ByOid: a hashtable, or the on-disk lookup Get-SIIdentityInfoByObjectId builds (#1398) -- a changed row is put back
+    param([Parameter(Mandatory)]$ByOid, [Parameter(Mandatory)][string]$WorkspaceId, [int]$LookbackDays = 30)
     $kql = @"
 BehaviorAnalytics
 | where TimeGenerated > ago($($LookbackDays)d)
@@ -2045,12 +2259,14 @@ BehaviorAnalytics
     foreach ($k in @($ByOid.Keys)) {
         $o = ([string]$k).Trim().ToLowerInvariant()
         if (-not $max.ContainsKey($o)) { continue }
-        $row = $ByOid[$k]
+        $row = Get-SIIdentityInfoRow -Map $ByOid -Id ([string]$k)
         foreach ($pair in @(@('InvestigationPriority', $max[$o]), @('InvestigationPriorityPercentile', $pct[$o]))) {
             $prop = $row.PSObject.Properties[$pair[0]]
             if ($null -eq $prop) { $row | Add-Member -NotePropertyName $pair[0] -NotePropertyValue $pair[1] -Force }
             elseif ([string]::IsNullOrWhiteSpace([string]$prop.Value)) { $prop.Value = $pair[1] }
         }
+        # an on-disk lookup hands out a COPY of its row: the changed row is put back under the same key
+        if ($ByOid.GetType().FullName -eq 'SecurityInsight.DiskTextLookup') { $null = $ByOid.Put([string]$k, (ConvertTo-Json -InputObject $row -Depth 6 -Compress)) }
         $set++
     }
     Write-SIInfo ('[perms] BehaviorAnalytics: investigation priority for {0} of {1} scored users' -f $set, $max.Count)

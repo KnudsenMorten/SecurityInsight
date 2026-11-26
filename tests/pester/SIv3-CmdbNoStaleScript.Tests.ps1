@@ -47,7 +47,7 @@ $global:SITestCmdbScriptRan = 'shipped'
 
     function script:Invoke-SIScheduleIn {
         param([string]$Root)
-        function global:Write-SIInfo { param($m) }
+        function Write-SIInfo { param($m) }   # this call only, never global (#1415)
         . (Join-Path $Root 'engine\asset-profiling\stages\Invoke-Schedule.ps1')
         $ctx = [pscustomobject]@{
             WhatIf         = $false

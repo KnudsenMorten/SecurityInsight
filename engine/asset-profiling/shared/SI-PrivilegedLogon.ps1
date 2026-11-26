@@ -89,6 +89,17 @@ $script:SIPrivilegedLogonKeyChars = 60000
 # how many privileged accounts the PrivilegedLogons column lists per device (a display length; the tier uses every one)
 $script:SIPrivilegedLogonListMax = 10
 $script:SIPrivilegedLogonBlobName = 'privileged-logons.json'
+# #1398 THE STORED LOGONS IN CHUNKS (owner 2026-10-21: "memory issues must not be a problem in any step"): the state was ONE
+# JSON document -- every privileged account x device row of the tenant read as one text, parsed as one object and written
+# as one text, three copies of it at once. In SI's storage it is now a small HEAD (privileged-logons-v3.json: the read
+# points, the run, the summary, which generation of rows is current) and the rows in chunk blobs of a generation
+# (privileged-logons-v3/<generation>/rows-NNNNN.json, $script:SIPrivilegedLogonChunkRows rows each), read and written one
+# chunk at a time. The head is written last, ETag-conditional as before -- it makes a new generation current; the
+# generation before the previous one is removed after it (a part still reading the previous one finds it). The first run
+# of this version reads the one-document blob of the earlier versions (privileged-logons.json), which is left as it was.
+$script:SIPrivilegedLogonHeadName   = 'privileged-logons-v3.json'
+$script:SIPrivilegedLogonChunkPrefix = 'privileged-logons-v3'
+$script:SIPrivilegedLogonChunkRows  = 20000
 
 function Get-SIPrivilegedLogonSettings {
     <# PURE (reads the globals). Every setting with its default; a value that is not valid falls back to the default. #>
@@ -373,17 +384,26 @@ _t
           SIRules = tostring(column_ifexists("SIRules", "")), TierReason = tostring(column_ifexists("SI_TierReason", "")),
           Groups = strcat(tostring(column_ifexists("NestedGroups", "")), " ", tostring(column_ifexists("AdNestedGroupNames", "")))
 "@
+    # #1415 read IN PARTS (#639 lane 4: every Log Analytics read of a result that can outgrow one answer): the Tier 0-2
+    # identities of a very large install no longer fail the tier source on a cut answer; a part that fails fails the read
+    if (-not (Get-Command -Name Read-SILaParts -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot '../../_shared/SI-LaParts.ps1') }
     try {
-        $resp = Invoke-SIAzOperationalInsightsQuery -WorkspaceId $guid -Query $kql -ErrorAction Stop
-        foreach ($r in @($resp.Results)) {
+        $resp = Read-SILaParts -WorkspaceId $guid -Query $kql -Key 'ObjectId' -What 'the Tier 0-2 identities' -Log { param($l, $m) if (Get-Command -Name Write-SIInfo -ErrorAction SilentlyContinue) { Write-SIInfo $m } else { Write-Verbose $m } }
+        foreach ($r in @($resp.Rows)) {
             if ($null -ne $r) { $out.Rows.Add([pscustomobject]@{ ObjectId = [string]$r.ObjectId; Sid = [string]$r.Sid; Upn = [string]$r.Upn; Tier = $r.Tier; SIRules = [string]$r.SIRules; TierReason = [string]$r.TierReason; Groups = [string]$r.Groups }) }
         }
         $out.Complete = $true
     } catch {
         $out.Error = $_.Exception.Message
-        $missing = $false
-        try { Invoke-SIAzOperationalInsightsQuery -WorkspaceId $guid -Query 'SI_Identity_Profile_CL | take 0' -ErrorAction Stop | Out-Null } catch { $missing = $true }
-        if ($missing) { $out.Missing = $true; $out.Complete = $true }
+        # (one query: a 'take' is never cut into parts). #1415: the table is MISSING only when the probe's error says so
+        # (Log Analytics' "Failed to resolve table ... named 'SI_Identity_Profile_CL'" / SEM0100 naming it); any other probe
+        # failure (a transient error, a refusal) is not a missing table: the read stays NOT complete and both errors are said
+        if (-not (Get-Command -Name Test-SIKqlTableMissing -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot '../../_shared/SI-KqlError.ps1') }
+        try { $null = Read-SILaParts -WorkspaceId $guid -Query 'SI_Identity_Profile_CL | take 0' -What 'the identity profile table' -Log { param($l, $m) } }
+        catch {
+            if (Test-SIKqlTableMissing -ErrorRecord $_ -TableName 'SI_Identity_Profile_CL') { $out.Missing = $true; $out.Complete = $true }
+            else { $out.Error = ('{0}; the table check failed too: {1}' -f $out.Error, $_.Exception.Message) }
+        }
     }
     # #1223 ROOT CAUSE (found 2026-11-12, pwsh 7.6.9 / .NET 10.0.14 on the Linux test runner): the array subexpression @( )
     # around a System.Collections.Generic.List[object] throws "Argument types do not match" -- @($list), @($list).Count,
@@ -400,56 +420,99 @@ function New-SIPrivilegedLogonBlobStore {
         (Write throws on a lost race: 412 / ConditionNotMet). $null without a storage context or in Mock mode (the state is
         then this run's only). A blob that is not there yet reads as no state (the first run); a blob that cannot be read
         THROWS (never an empty state written over a good one). The container is created on the first write.
+        #1398: the HEAD is read and written (privileged-logons-v3.json), the rows in chunks: ReadChunk($Name) -> doc,
+        WriteChunk($Name, $Json), RemoveChunk($Name). No head yet: the one-document blob of the earlier versions is read
+        (its ETag is not used -- the head does not exist yet, so the first write creates it).
     #>
-    param($StorageContext, [string]$Container, [string]$Blob = $script:SIPrivilegedLogonBlobName)
+    param($StorageContext, [string]$Container, [string]$Blob = $script:SIPrivilegedLogonBlobName, [string]$Head = $script:SIPrivilegedLogonHeadName)
     if ($null -eq $StorageContext -or [string]$StorageContext.Mode -eq 'Mock' -or -not $StorageContext.PSObject.Properties['AzContext']) { return $null }
     if (-not $Container) { $Container = $(if ($global:SI_LedgerContainer) { [string]$global:SI_LedgerContainer } else { 'siledger' }) }
-    $st = [pscustomobject]@{ Container = $Container; Blob = $Blob; Context = $StorageContext.AzContext }
-    Add-Member -InputObject $st -MemberType ScriptMethod -Name Read -Value {
+    $st = [pscustomobject]@{ Container = $Container; Blob = $Blob; Head = $Head; Context = $StorageContext.AzContext }
+    # one blob as its JSON document: @{ Doc; ETag; Existed } (not there: no doc; unreadable: throws)
+    Add-Member -InputObject $st -MemberType ScriptMethod -Name ReadBlob -Value {
+        param([string]$Name)
         $r = @{ Doc = $null; ETag = $null; Existed = $false }
         $b = $null
-        try { $b = Get-SIAzStorageBlob -Container $this.Container -Blob $this.Blob -Context $this.Context -ErrorAction Stop }
+        try { $b = Get-SIAzStorageBlob -Container $this.Container -Blob $Name -Context $this.Context -ErrorAction Stop }
         catch { if ([string]$_.Exception.Message -match 'does not exist|NotFound|ResourceNotFound|BlobNotFound|ContainerNotFound') { return $r }; throw }
         $r.Existed = $true; $r.ETag = [string]$b.ICloudBlob.Properties.ETag
         $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ('si-privlogon-{0}.json' -f [guid]::NewGuid().ToString('N'))
         try {
-            $null = Get-SIAzStorageBlobContent -Container $this.Container -Blob $this.Blob -Context $this.Context -Destination $tmp -Force -ErrorAction Stop
+            $null = Get-SIAzStorageBlobContent -Container $this.Container -Blob $Name -Context $this.Context -Destination $tmp -Force -ErrorAction Stop
             $json = [IO.File]::ReadAllText($tmp)
             if (-not [string]::IsNullOrWhiteSpace($json)) { $r.Doc = $json | ConvertFrom-Json -ErrorAction Stop }
+            $json = $null
         } finally { if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue } }
         return $r
     }
-    Add-Member -InputObject $st -MemberType ScriptMethod -Name Write -Value {
-        param([string]$Json, [string]$ETag)
+    Add-Member -InputObject $st -MemberType ScriptMethod -Name WriteBlob -Value {
+        param([string]$Name, [string]$Json, [string]$ETag)
         $existing = Get-SIAzStorageContainer -Name $this.Container -Context $this.Context -ErrorAction SilentlyContinue
         if (-not $existing) { New-SIAzStorageContainer -Name $this.Container -Context $this.Context -Permission Off | Out-Null }
         $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ('si-privlogon-out-{0}.json' -f [guid]::NewGuid().ToString('N'))
         try {
             [IO.File]::WriteAllText($tmp, $Json, (New-Object System.Text.UTF8Encoding($false)))
-            if ($ETag) { Set-SIAzStorageBlobContentIfMatch -File $tmp -Container $this.Container -Blob $this.Blob -Context $this.Context -IfMatchETag $ETag }
-            else { $null = Set-SIAzStorageBlobContent -File $tmp -Container $this.Container -Blob $this.Blob -Context $this.Context -Force -ErrorAction Stop }
+            if ($ETag -eq '*') {
+                # create only (the first head after the update): a part that loses the race gets a lost race, never an overwrite
+                try { $null = Set-SIBlobContent -Account (Get-SIAzRestStorageAccountName -Context $this.Context) -Container $this.Container -Blob $Name -File $tmp -ContentType 'application/json' -IfNoneMatch }
+                catch { if ([string]$_.Exception.Message -match '409|412|BlobAlreadyExists|ConditionNotMet') { throw ('412 ConditionNotMet: {0} was written by another part first' -f $Name) }; throw }
+            }
+            elseif ($ETag) { Set-SIAzStorageBlobContentIfMatch -File $tmp -Container $this.Container -Blob $Name -Context $this.Context -IfMatchETag $ETag }
+            else { $null = Set-SIAzStorageBlobContent -File $tmp -Container $this.Container -Blob $Name -Context $this.Context -Force -ErrorAction Stop }
         } finally { if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue } }
     }
+    Add-Member -InputObject $st -MemberType ScriptMethod -Name Read -Value {
+        $h = $this.ReadBlob($this.Head)
+        if ($h.Existed) { return $h }
+        $legacy = $this.ReadBlob($this.Blob)
+        $legacy.ETag = ''
+        return $legacy
+    }
+    # no ETag = the head is not there yet: written create-only ('*'), so two parts never both write a first head
+    Add-Member -InputObject $st -MemberType ScriptMethod -Name Write -Value { param([string]$Json, [string]$ETag) if (-not $ETag) { $ETag = '*' }; $this.WriteBlob($this.Head, $Json, $ETag) }
+    # the chunks of generations no head names any more (a crash between the chunks and the head), older than -Hours
+    Add-Member -InputObject $st -MemberType ScriptMethod -Name RemoveOrphans -Value {
+        param([string[]]$Keep, [int]$Hours = 6)
+        $n = 0
+        foreach ($b in @(Get-SIAzStorageBlob -Container $this.Container -Prefix ($script:SIPrivilegedLogonChunkPrefix + '/') -Context $this.Context -ErrorAction SilentlyContinue)) {
+            $name = [string]$b.Name
+            $gen = ($name -split '/')[1]
+            if (-not $gen -or $Keep -contains $gen) { continue }
+            $lm = $null; try { $lm = ([DateTimeOffset]$b.LastModified).UtcDateTime } catch { $lm = $null }
+            if ($null -eq $lm -or $lm -gt [datetime]::UtcNow.AddHours(-$Hours)) { continue }
+            try { Remove-SIAzStorageBlob -Container $this.Container -Blob $name -Context $this.Context -Force -ErrorAction Stop | Out-Null; $n++ } catch { }
+        }
+        $n
+    }
+    Add-Member -InputObject $st -MemberType ScriptMethod -Name ReadChunk -Value {
+        param([string]$Name)
+        $c = $this.ReadBlob($Name)
+        if (-not $c.Existed) { throw ('the stored logons'' chunk {0} is not there' -f $Name) }
+        return $c.Doc
+    }
+    Add-Member -InputObject $st -MemberType ScriptMethod -Name WriteChunk -Value { param([string]$Name, [string]$Json) $this.WriteBlob($Name, $Json, '') }
+    Add-Member -InputObject $st -MemberType ScriptMethod -Name RemoveChunk -Value { param([string]$Name) try { Remove-SIAzStorageBlob -Container $this.Container -Blob $Name -Context $this.Context -Force -ErrorAction Stop | Out-Null } catch { } }
     return $st
 }
 
-function ConvertFrom-SIPrivilegedLogonState {
-    <# PURE. The stored document as @{ RunId; Complete; WindowDays; Types; Summary; Accounts = @{ id -> readUntil };
-       Rows = @{ 'dev|id' -> @{ D; A; T; Y; C; S = days (yyyy-MM-dd); P = types } } }. #>
-    param($Doc)
-    $s = @{ RunId = ''; Complete = $false; WindowDays = 0; Types = ''; Summary = $null; Accounts = @{}; Rows = @{} }
-    if ($null -eq $Doc) { return $s }
-    if ($Doc.PSObject.Properties['RunId']) { $s.RunId = [string]$Doc.RunId }
-    if ($Doc.PSObject.Properties['Complete']) { $s.Complete = [bool]$Doc.Complete }
-    if ($Doc.PSObject.Properties['WindowDays']) { $s.WindowDays = [int]$Doc.WindowDays }
-    if ($Doc.PSObject.Properties['Types']) { $s.Types = [string]$Doc.Types }
-    if ($Doc.PSObject.Properties['Summary']) { $s.Summary = $Doc.Summary }
-    foreach ($a in @($Doc.Accounts)) {
-        if ($null -eq $a) { continue }
-        $u = ConvertTo-SIUtcDate $a.ReadUntil
-        if ($a.Id -and $u) { $s.Accounts[([string]$a.Id).ToLowerInvariant()] = $u }
-    }
-    foreach ($r in @($Doc.Rows)) {
+function Test-SIPrivilegedLogonChunkedStore {
+    <# Does the store keep the rows in chunks (ReadChunk / WriteChunk / RemoveChunk)? A store without them keeps one document. #>
+    param($Store)
+    if ($null -eq $Store) { return $false }
+    foreach ($m in 'ReadChunk', 'WriteChunk', 'RemoveChunk') { if (-not $Store.PSObject.Methods[$m]) { return $false } }
+    $true
+}
+
+function Get-SIPrivilegedLogonChunkName {
+    <# PURE. The blob of one chunk of rows of a generation. #>
+    param([Parameter(Mandatory)][string]$Generation, [Parameter(Mandatory)][int]$Chunk)
+    '{0}/{1}/rows-{2:D5}.json' -f $script:SIPrivilegedLogonChunkPrefix, $Generation, $Chunk
+}
+
+function Add-SIPrivilegedLogonStateRows {
+    <# PURE. Stored rows (the document's Rows, or one chunk's) into the state's Rows -- each as ConvertFrom-SIPrivilegedLogonState reads it. #>
+    param([Parameter(Mandatory)]$State, $Rows)
+    foreach ($r in @($Rows)) {
         if ($null -eq $r -or -not $r.D -or -not $r.A) { continue }
         $t = ConvertTo-SIUtcDate $r.T
         if (-not $t) { continue }
@@ -457,16 +520,45 @@ function ConvertFrom-SIPrivilegedLogonState {
         if ($days.Count -eq 0) { $days = @($t.ToString('yyyy-MM-dd', [System.Globalization.CultureInfo]::InvariantCulture)) }
         $types = @(); if ($r.PSObject.Properties['P']) { $types = @($r.P | Where-Object { $_ } | ForEach-Object { [string]$_ }) }
         $k = ('{0}|{1}' -f ([string]$r.D).ToLowerInvariant(), ([string]$r.A).ToLowerInvariant())
-        $s.Rows[$k] = @{ D = ([string]$r.D).ToLowerInvariant(); A = ([string]$r.A).ToLowerInvariant(); T = $t; Y = [string]$r.Y; C = [int]$r.C
-                         S = (New-Object 'System.Collections.Generic.HashSet[string]' (, [string[]]$days)); P = (New-Object 'System.Collections.Generic.HashSet[string]' (, [string[]]$types)) }
+        $State.Rows[$k] = @{ D = ([string]$r.D).ToLowerInvariant(); A = ([string]$r.A).ToLowerInvariant(); T = $t; Y = [string]$r.Y; C = [int]$r.C
+                             S = (New-Object 'System.Collections.Generic.HashSet[string]' (, [string[]]$days)); P = (New-Object 'System.Collections.Generic.HashSet[string]' (, [string[]]$types)) }
     }
+}
+
+function ConvertFrom-SIPrivilegedLogonState {
+    <# PURE. The stored document as @{ RunId; Complete; WindowDays; Types; Summary; Accounts = @{ id -> readUntil };
+       Rows = @{ 'dev|id' -> @{ D; A; T; Y; C; S = days (yyyy-MM-dd); P = types } }; RowGen; RowChunks; PrevGen; PrevGenChunks }.
+       A chunked head (#1398) carries no rows: Read-SIPrivilegedLogonStore adds its chunks. #>
+    param($Doc)
+    $s = @{ RunId = ''; Complete = $false; WindowDays = 0; Types = ''; Summary = $null; Accounts = @{}; Rows = @{}; RowGen = ''; RowChunks = 0; PrevGen = ''; PrevGenChunks = 0 }
+    if ($null -eq $Doc) { return $s }
+    if ($Doc.PSObject.Properties['RunId']) { $s.RunId = [string]$Doc.RunId }
+    if ($Doc.PSObject.Properties['Complete']) { $s.Complete = [bool]$Doc.Complete }
+    if ($Doc.PSObject.Properties['WindowDays']) { $s.WindowDays = [int]$Doc.WindowDays }
+    if ($Doc.PSObject.Properties['Types']) { $s.Types = [string]$Doc.Types }
+    if ($Doc.PSObject.Properties['Summary']) { $s.Summary = $Doc.Summary }
+    foreach ($n in 'RowGen', 'PrevGen') { if ($Doc.PSObject.Properties[$n]) { $s[$n] = [string]$Doc.$n } }
+    foreach ($n in 'RowChunks', 'PrevGenChunks') { if ($Doc.PSObject.Properties[$n]) { $s[$n] = [int]$Doc.$n } }
+    foreach ($a in @($Doc.Accounts)) {
+        if ($null -eq $a) { continue }
+        $u = ConvertTo-SIUtcDate $a.ReadUntil
+        if ($a.Id -and $u) { $s.Accounts[([string]$a.Id).ToLowerInvariant()] = $u }
+    }
+    Add-SIPrivilegedLogonStateRows -State $s -Rows $Doc.Rows
     return $s
+}
+
+function ConvertTo-SIPrivilegedLogonStoredRow {
+    <# PURE. One state row as it is stored (compact names, see ConvertTo-SIPrivilegedLogonStateJson). #>
+    param([Parameter(Mandatory)]$Row)
+    [ordered]@{ D = $Row.D; A = $Row.A; T = $Row.T.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ', [System.Globalization.CultureInfo]::InvariantCulture); Y = $Row.Y; C = $Row.C; S = @($Row.S | Sort-Object); P = @($Row.P | Sort-Object) }
 }
 
 function ConvertTo-SIPrivilegedLogonStateJson {
     <# PURE. The state as the stored document (compact row names: D device, A account object id, T last logon, Y its type,
-       C count, S the distinct days, P the types seen). #>
-    param([Parameter(Mandatory)]$State, [datetime]$Now = [datetime]::UtcNow)
+       C count, S the distinct days, P the types seen). -RowGeneration (#1398): a chunked HEAD -- no rows; the generation
+       of its rows, how many chunks it has, and the generation it replaced (removed after the next write). #>
+    param([Parameter(Mandatory)]$State, [datetime]$Now = [datetime]::UtcNow, [string]$RowGeneration = '', [int]$RowChunks = 0)
     $iso = { param($d) $d.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ', [System.Globalization.CultureInfo]::InvariantCulture) }
     $doc = [ordered]@{
         SchemaVersion = 2
@@ -477,11 +569,66 @@ function ConvertTo-SIPrivilegedLogonStateJson {
         Types         = [string]$State.Types
         Summary       = $State.Summary
         Accounts      = @($State.Accounts.Keys | Sort-Object | ForEach-Object { [ordered]@{ Id = $_; ReadUntil = (& $iso $State.Accounts[$_]) } })
-        Rows          = @($State.Rows.Values | ForEach-Object { [ordered]@{ D = $_.D; A = $_.A; T = (& $iso $_.T); Y = $_.Y; C = $_.C; S = @($_.S | Sort-Object); P = @($_.P | Sort-Object) } })
+        Rows          = @()
+    }
+    if ($RowGeneration) {
+        $doc.SchemaVersion = 3
+        $doc['RowGen'] = $RowGeneration; $doc['RowChunks'] = $RowChunks
+        $doc['PrevGen'] = [string]$State.RowGen; $doc['PrevGenChunks'] = [int]$State.RowChunks
+    } else {
+        $doc.Rows = @($State.Rows.Values | ForEach-Object { ConvertTo-SIPrivilegedLogonStoredRow $_ })
     }
     return (ConvertTo-Json -InputObject $doc -Depth 6 -Compress)
 }
 
+function Read-SIPrivilegedLogonStore {
+    <#
+        The stored state: @{ Read = the head read (@{ Doc; ETag; Existed }); State }. A chunked head's rows are read chunk by
+        chunk (one chunk's text at a time). Throws when anything of it cannot be read (the caller then reads the whole window).
+    #>
+    param([Parameter(Mandatory)]$Store)
+    $read = $Store.Read()
+    $doc = $null; if ($read) { $doc = $read.Doc }
+    $state = ConvertFrom-SIPrivilegedLogonState $doc
+    if ($state.RowGen -and $state.RowChunks -gt 0) {
+        if (-not (Test-SIPrivilegedLogonChunkedStore $Store)) { throw 'the stored logons are kept in chunks, which this store cannot read' }
+        for ($c = 0; $c -lt $state.RowChunks; $c++) {
+            $cd = $Store.ReadChunk((Get-SIPrivilegedLogonChunkName -Generation $state.RowGen -Chunk $c))
+            Add-SIPrivilegedLogonStateRows -State $state -Rows $(if ($cd) { $cd.Rows } else { $null })
+            $cd = $null
+        }
+    }
+    [pscustomobject]@{ Read = $read; State = $state }
+}
+
+function Write-SIPrivilegedLogonStore {
+    <#
+        Saves the state. A chunked store: the rows of a NEW generation chunk by chunk, then the head (ETag-conditional -- a
+        lost race throws, and the new chunks are removed), then the generation before the previous one is removed. A store
+        without chunks: the one document, as before.
+    #>
+    param([Parameter(Mandatory)]$Store, [Parameter(Mandatory)]$State, [Parameter(Mandatory)][datetime]$Now, [string]$ETag)
+    if (-not (Test-SIPrivilegedLogonChunkedStore $Store)) { $Store.Write((ConvertTo-SIPrivilegedLogonStateJson -State $State -Now $Now), $ETag); return }
+    $gen = [guid]::NewGuid().ToString('N')
+    $n = 0; $buf = New-Object System.Collections.Generic.List[object]
+    try {
+        foreach ($r in $State.Rows.Values) {
+            $buf.Add((ConvertTo-SIPrivilegedLogonStoredRow $r))
+            if ($buf.Count -ge $script:SIPrivilegedLogonChunkRows) { $Store.WriteChunk((Get-SIPrivilegedLogonChunkName -Generation $gen -Chunk $n), (ConvertTo-Json -InputObject ([ordered]@{ Rows = $buf.ToArray() }) -Depth 5 -Compress)); $n++; $buf.Clear() }
+        }
+        if ($buf.Count -gt 0) { $Store.WriteChunk((Get-SIPrivilegedLogonChunkName -Generation $gen -Chunk $n), (ConvertTo-Json -InputObject ([ordered]@{ Rows = $buf.ToArray() }) -Depth 5 -Compress)); $n++; $buf.Clear() }
+        $Store.Write((ConvertTo-SIPrivilegedLogonStateJson -State $State -Now $Now -RowGeneration $gen -RowChunks $n), $ETag)
+    } catch {
+        for ($c = 0; $c -lt $n; $c++) { $Store.RemoveChunk((Get-SIPrivilegedLogonChunkName -Generation $gen -Chunk $c)) }
+        throw
+    }
+    # the generation before the one just replaced: no part reads it any more
+    if ($State.PrevGen -and $State.PrevGen -ne $gen) { for ($c = 0; $c -lt [int]$State.PrevGenChunks; $c++) { $Store.RemoveChunk((Get-SIPrivilegedLogonChunkName -Generation $State.PrevGen -Chunk $c)) } }
+    # chunks no head names (a crash between the chunks and the head), older than a few hours: no part reads them
+    if ($Store.PSObject.Methods['RemoveOrphans']) { try { $null = $Store.RemoveOrphans(@($gen, [string]$State.RowGen)) } catch { } }
+    $State.PrevGen = $State.RowGen; $State.PrevGenChunks = $State.RowChunks
+    $State.RowGen = $gen; $State.RowChunks = $n
+}
 function Update-SIPrivilegedLogonState {
     <#
         PURE but for -Query. Brings the state up to date for -Accounts (this run's Tier 0-2 accounts): an account not read
@@ -713,12 +860,13 @@ function Get-SIBulkPrivilegedLogons {
 
     # 2. the stored state (another part of THIS run may already have read it)
     $global:SI_PrivilegedLogonPart = 'reading the stored sign-ins'
-    $read = $null; $stateOk = $true
+    $read = $null; $stateOk = $true; $state = $null
     if ($Store) {
-        try { $read = $Store.Read() } catch { $stateOk = $false; & $info ('[perms] privileged logons: the stored logons could not be read ({0}) -- the whole window is read this run and the store is left as it is' -f $_.Exception.Message) }
+        # #1398: the head, then its rows chunk by chunk (Read-SIPrivilegedLogonStore)
+        try { $sr = Read-SIPrivilegedLogonStore -Store $Store; $read = $sr.Read; $state = $sr.State; $sr = $null }
+        catch { $stateOk = $false; $read = $null; $state = $null; & $info ('[perms] privileged logons: the stored logons could not be read ({0}) -- the whole window is read this run and the store is left as it is' -f $_.Exception.Message) }
     }
-    $doc = $null; if ($read) { $doc = $read.Doc }
-    $state = ConvertFrom-SIPrivilegedLogonState $doc
+    if ($null -eq $state) { $state = ConvertFrom-SIPrivilegedLogonState $null }
     $etag = ''; if ($read) { $etag = [string]$read.ETag }
     $typesKey = (@($Settings.LogonTypes | Sort-Object) -join ',')
     $upd = $null
@@ -753,12 +901,12 @@ function Get-SIBulkPrivilegedLogons {
     $global:SI_PrivilegedLogonPart = 'saving the sign-ins'
     if ($Store -and $stateOk -and $null -ne $upd) {
         $state.Summary = [pscustomobject]$sum
-        try { $Store.Write((ConvertTo-SIPrivilegedLogonStateJson -State $state -Now $Now), $etag); $out.Saved = $true }
+        try { Write-SIPrivilegedLogonStore -Store $Store -State $state -Now $Now -ETag $etag; $out.Saved = $true }
         catch {
             $m = [string]$_.Exception.Message
             if ($m -match 'ConditionNotMet|412|conditional header') {
                 try {
-                    $again = $Store.Read(); $other = ConvertFrom-SIPrivilegedLogonState $again.Doc
+                    $other = (Read-SIPrivilegedLogonStore -Store $Store).State
                     if ($RunId -and $other.RunId -eq $RunId -and $other.Complete) { $state = $other; $out.Reused = $true; $pat = Get-SIPrivilegedLogonPatterns -State $state }
                     else { & $info '[perms] privileged logons: another run wrote the stored logons meanwhile -- this run''s read is used, not stored; the next run reads from the stored point' }
                 } catch { }

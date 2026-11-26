@@ -1118,10 +1118,15 @@ function Send-SIGuardEvent {
             return [pscustomobject]$res
         }
         $global:SI_GuardSeenThisRun[$runKey] = $true
-        # A 'warning' is not prefixed: the console's own "WARNING:" already says it (it printed "WARNING: WARNING: ...").
-        # #425: what, where, the numbers and what to do -- one line a person can act on (Format-SIGuardSummary)
+        # #425: what, where, the numbers and what to do -- one line a person can act on (Format-SIGuardSummary). It is SAID
+        # only after the once-per-cause check below (#1396 two-agent check 2026-11-26: a cause reported before printed a WARN
+        # line on every run -- every heartbeat tick for a once-a-day check -- although nothing was recorded).
         $summary = Format-SIGuardSummary -Event $ev
-        & $Log 'WARN' ('{0}{1}' -f $(if ($ev.Outcome -ieq 'warning') { '' } else { $ev.Outcome.ToUpperInvariant() + ': ' }), $summary)
+        # A check that HOLDS, REFUSES or STOPS data says its line on EVERY occurrence, also for a cause reported before (round 2,
+        # 2026-11-26: datasync.collection.refused passes its causes with Outcome refused -- held data is never quiet); only a
+        # warn-only outcome is said once per cause, below.
+        $sayWarn = { & $Log 'WARN' ('{0}{1}' -f $(if ($ev.Outcome -ieq 'warning') { '' } else { $ev.Outcome.ToUpperInvariant() + ': ' }), $summary) }
+        if ($ev.Outcome -ine 'warning') { & $sayWarn }
 
         # #735: every guard in ONE place -- a step that hands in no database (the collection's asset-drop guard, Risk
         # Analysis' row-count / column-fill / bucket-jump guards) still writes its row to cfg.GuardEvent when the install has a
@@ -1148,6 +1153,8 @@ function Send-SIGuardEvent {
                 return [pscustomobject]$res
             }
         }
+        # A 'warning' is not prefixed: the console's own "WARNING:" already says it (it printed "WARNING: WARNING: ...").
+        if ($ev.Outcome -ieq 'warning') { & $sayWarn }
         $prev = $null
         try { $prev = & $StateStore.Get $ev.GuardKey } catch { & $Log 'WARN' ('the guard''s earlier trips could not be read ({0}) -- treated as a first trip' -f $_.Exception.Message) }
         # ---- WHICH RELEASE (owner 2026-10-17): the version it tripped on, the one before, "the first run after the update" ----

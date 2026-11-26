@@ -20,7 +20,7 @@ BeforeAll {
     $script:SIRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSCommandPath))
     $script:Shared = Join-Path $script:SIRoot 'engine\asset-profiling\shared'
     foreach ($n in 'Write-SIInfo', 'Write-SIProgress', 'Reset-SIProgress', 'Write-SIWarn') {
-        if (-not (Get-Command -Name $n -ErrorAction SilentlyContinue)) { Set-Item -Path ("function:global:{0}" -f $n) -Value { param($Message) } }
+        if (-not (Get-Command -Name $n -ErrorAction SilentlyContinue)) { Set-Item -Path ("function:script:{0}" -f $n) -Value { param($Message) } }
     }
     . (Join-Path $script:Shared 'Invoke-SIPagedRest.ps1')
     . (Join-Path $script:Shared 'IdentityRoleFetcher.ps1')

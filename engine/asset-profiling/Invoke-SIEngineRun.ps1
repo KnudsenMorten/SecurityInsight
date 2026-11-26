@@ -61,7 +61,7 @@ param(
     # object into its part and decides the part count); 'parts' = a WORKER (Collect onward, on part -ShardIndex of the
     # producer's run -RunId); 'all' = the whole run in one process (as before).
     [Parameter()]
-    [ValidateSet('all', 'discover', 'parts')]
+    [ValidateSet('all', 'discover', 'parts', 'recommendations')]
     [string]$Phase = 'all',
 
     # the producer's run id ('parts' only): the worker reads what the producer wrote under it
@@ -281,7 +281,7 @@ try {
     if (Get-Command -Name Reset-SIFullAssetProperties -ErrorAction SilentlyContinue) { $null = Reset-SIFullAssetProperties -Engine $Engine }
 }
 
-$runId = if ($Phase -eq 'parts' -and "$RunId".Trim()) { "$RunId".Trim() } else { '{0:yyyyMMddTHHmmssZ}-{1}-{2}' -f ([datetime]::UtcNow), $Engine, [guid]::NewGuid().ToString().Substring(0,8) }   # #475: a worker uses its producer's run
+$runId = if ($Phase -in 'parts', 'recommendations' -and "$RunId".Trim()) { "$RunId".Trim() } else { '{0:yyyyMMddTHHmmssZ}-{1}-{2}' -f ([datetime]::UtcNow), $Engine, [guid]::NewGuid().ToString().Substring(0,8) }   # #475: a worker uses its producer's run
 
 # ---- CollectionTime (shared across all shards of one execution) ----
 # Resolution order documented above on parameter declaration.
@@ -368,6 +368,10 @@ $runContext = [pscustomobject]@{
     ForceFullRun     = $forceFullRun
     WhatIf           = $script:SIWhatIf
     Engine           = $Engine
+    # #1399 the run's Defender recommendations phase writes its RUN-HEALTH record under its own name, so it never masks the Azure
+    # collection's END record; the report to Invardia keeps the Azure job (the same wire values as 3.1.51: a phase that fails or
+    # does not refresh them is a failed step 'recommendations' of the Azure job's run, success-partial)
+    HealthEngine     = $(if ($Phase -eq 'recommendations') { '{0}-recommendations' -f $Engine } else { '' })
     StartedAt        = [datetime]::UtcNow
     AssetLimit       = $AssetLimit
     Sinks            = $Sinks
@@ -380,7 +384,7 @@ $runContext = [pscustomobject]@{
     Phase            = $Phase
     # the job's ok goes to Invardia only from the execution that knows the whole result: in a run in parts that is the
     # execution that publishes the records (the container entrypoint), never the producer before its hand-over nor a part
-    SuppressJobOk    = ($Phase -in @('discover', 'parts'))
+    SuppressJobOk    = ($Phase -in @('discover', 'parts', 'recommendations'))
 }
 
 $siVersion = 'unknown'
@@ -452,7 +456,9 @@ $stages = if ($Engine -eq 'schema-discovery') {
     if ($Engine -eq 'azure') { $__st += 'Recommendations' }
     # #475: the producer discovers; a worker runs the rest on its part of the producer's run
     if ($Phase -eq 'discover') { $__st = @('Schedule', 'Discover') }
-    elseif ($Phase -eq 'parts') { $__st = @($__st | Where-Object { $_ -notin 'Schedule', 'Discover' }) }
+    # #1399 a part never publishes the Defender recommendations: the run does, ONCE, after its records (phase 'recommendations')
+    elseif ($Phase -eq 'parts') { $__st = @($__st | Where-Object { $_ -notin 'Schedule', 'Discover', 'Recommendations' }) }
+    elseif ($Phase -eq 'recommendations') { $__st = @('Recommendations') }
     $__st
 }
 # #1227: the scoped notes of a rule / tier source belong to THIS run -- never carried over from an earlier run in the same process
@@ -480,6 +486,11 @@ try {
             if (Get-Command -Name Remove-SIDiskLookup -ErrorAction SilentlyContinue) { Remove-SIDiskLookup $script:_SICache['EgIdentitiesMap'] }   # #726: its file goes too
             $script:_SICache.Remove('EgIdentitiesMap')
             Write-SIInfo '[perms] EG identity nodes: released after discovery'
+        }
+        # #1398: the IdentityInfo rows (an on-disk lookup since #1398) are read only by discovery -- their file goes too
+        if ($s -eq 'Discover' -and (Get-Variable -Name _SICache -Scope Script -ErrorAction SilentlyContinue) -and $script:_SICache -is [hashtable] -and $script:_SICache.ContainsKey('IdentityInfo')) {
+            if (Get-Command -Name Remove-SIDiskLookup -ErrorAction SilentlyContinue) { Remove-SIDiskLookup $script:_SICache['IdentityInfo'] }
+            $script:_SICache.Remove('IdentityInfo')
         }
         # #475: memory after every stage -- what a large tenant's run needs is read from the run log, never guessed. A full
         # collection first, so "in use" is what the run still holds, not garbage not yet collected.
@@ -517,6 +528,8 @@ try {
         throw ('Nothing was published: {0}' -f $__outcome.Message)
     }
     $exitReason   = $__outcome.ExitReason
+    # #1399 the recommendations phase that did not refresh them: a failed step of the Azure job's run (its report says which)
+    if ($Phase -eq 'recommendations' -and $exitReason -eq 'success-partial') { $runContext | Add-Member -NotePropertyName 'FailedStep' -NotePropertyValue 'recommendations' -Force }
     $exitErrorMsg = $__outcome.Message
     # #474: the licence's device limit reached -- said on the END record too (the run's outcome is unchanged)
     if ($Engine -eq 'endpoint' -and $global:SI_LicenceLimitNote) { $exitErrorMsg = (@(@($exitErrorMsg, [string]$global:SI_LicenceLimitNote) | Where-Object { $_ }) -join ' | ') }

@@ -60,11 +60,15 @@ public abstract class TaskListPage : SI.Management.Web.Columns.DataViewPageModel
             Results = await Tasks.ListAsync(User, Query, ct);
             if (Exporting)
             {
-                // #589: an export takes EVERY task matching the choices, page by page
-                var all = Results.Rows.ToList();
-                for (var p = 2; p <= Results.Pages && all.Count < ProDataFilters.MaxExport; p++)
-                    all.AddRange((await Tasks.ListAsync(User, Query with { Page = p }, ct)).Rows);
-                ExportRows = all;
+                // #589: an export takes EVERY task matching the choices, page by page -- #1400 (owner 2026-11-26: "SI never fewer
+                // rows than the source"; "memory issues must not be a problem in any step"): no 50,000 cut, and each page is
+                // written on before the next is read
+                var first = Results;
+                var query = Query;
+                ExportRows = Array.Empty<FindingTaskRow>();
+                ExportChunks = async (n, t) =>
+                    n > first.Pages ? Array.Empty<object>()
+                    : (n == 1 ? first.Rows : (await Tasks.ListAsync(User, query with { Page = n }, t)).Rows).Cast<object>().ToList();
                 return;
             }
             if (View == TaskQuery.ViewMine) Counts = await Tasks.CountsAsync(User, ct);
@@ -94,6 +98,8 @@ public abstract class TaskListPage : SI.Management.Web.Columns.DataViewPageModel
 
     /// Every task matching the choices (an export's rows).
     private IReadOnlyList<FindingTaskRow>? ExportRows { get; set; }
+    /// #1400 the export's pages, read one at a time (<see cref="SI.Management.Web.Columns.DataTable.Chunks"/>).
+    private Func<int, CancellationToken, Task<IReadOnlyList<object>>>? ExportChunks { get; set; }
 
     protected override Task LoadForExportAsync(CancellationToken ct) => OnGetAsync(ct);
 
@@ -107,7 +113,7 @@ public abstract class TaskListPage : SI.Management.Web.Columns.DataViewPageModel
         var sortOf = new Dictionary<string, string> { ["Title"] = "title", ["Finding"] = "asset", ["Assignee"] = "assignee", ["CreatedBy"] = "creator", ["Department"] = "department", ["DueDate"] = "due", ["Status"] = "status" };
         var t = new SI.Management.Web.Columns.DataTable
         {
-            Id = "tasks", View = ViewKey, Title = Heading, Rows = (ExportRows ?? Results.Rows).Cast<object>().ToList(), Marker = "data-grid=\"tasks\" data-view=\"" + View + "\"",
+            Id = "tasks", View = ViewKey, Title = Heading, Rows = (ExportRows ?? Results.Rows).Cast<object>().ToList(), Chunks = ExportChunks, ExpectedRows = ExportChunks is null ? null : Results.Total, KeyOf = o => T(o).TaskId.ToString(System.Globalization.CultureInfo.InvariantCulture), Marker = "data-grid=\"tasks\" data-view=\"" + View + "\"",
             Ci = RowCiKey.AssetKey, Findings = RowFindingKey.Issue, CollectionId = "",
             RefOf = o => new SI.Management.Web.Columns.RowRef(T(o).AssetKey, null, T(o).RecommendationKey),
             RowAttributes = o => new Dictionary<string, string?> { ["data-task"] = T(o).TaskId.ToString(CultureInfo.InvariantCulture), ["data-status"] = T(o).Status, ["data-bucket"] = Bucket(T(o)) },

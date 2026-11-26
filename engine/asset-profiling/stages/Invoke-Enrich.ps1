@@ -263,27 +263,8 @@ function Add-SIEnrichIssue {
 
 function Get-SIEnrichIssues { if ($null -eq $global:SI_EnrichIssues) { return }; foreach ($x in $global:SI_EnrichIssues) { $x } }
 
-function ConvertTo-SIKqlKeyLists {
-    <#
-        PURE. Distinct, lower-cased, non-empty keys -> KQL dynamic-array literals (dynamic(["a","b"])), each at most
-        -MaxChars long: the key list of a query is cut by its MEASURED text, never by a count. Empty input -> no list.
-    #>
-    param([AllowNull()][AllowEmptyCollection()][object[]]$Keys = @(), [int]$MaxChars = 0)
-    if ($MaxChars -le 0) { $MaxChars = 200000; if ($global:SI_EnrichKeyListChars -gt 0) { $MaxChars = [int]$global:SI_EnrichKeyListChars } }
-    $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
-    $out = New-Object System.Collections.Generic.List[string]
-    $sb = New-Object System.Text.StringBuilder
-    foreach ($k in @($Keys)) {
-        $s = ([string]$k).Trim().ToLowerInvariant()
-        if (-not $s -or -not $seen.Add($s)) { continue }
-        $lit = '"' + $s.Replace('\', '\\').Replace('"', '\"').Replace("`r", '\r').Replace("`n", '\n').Replace("`t", '\t') + '"'
-        if ($sb.Length -gt 0 -and ($sb.Length + $lit.Length + 11) -gt $MaxChars) { $out.Add('dynamic([' + $sb.ToString() + '])'); [void]$sb.Clear() }
-        if ($sb.Length -gt 0) { [void]$sb.Append(',') }
-        [void]$sb.Append($lit)
-    }
-    if ($sb.Length -gt 0) { $out.Add('dynamic([' + $sb.ToString() + '])') }
-    foreach ($x in $out) { $x }
-}
+# ConvertTo-SIKqlKeyLists: in ../shared/HuntingQuery.ps1 (dot-sourced above) since #1398 -- the collect and discovery
+# reads filter by their part's keys with it too
 
 function Resolve-SIEnrichWorkspaceGuid {
     <# The workspace's customer id (GUID) from its ARM id; $null + a run issue when it cannot be read. #>
@@ -1553,21 +1534,37 @@ function Invoke-SIEnrich {
         $_kqlTotal = $kqlRules.Count; $_kqlIdx = 0
         if ($_kqlTotal -gt 0) { Write-SIInfo ('running {0} KQL posture-rule hunting queries...' -f $_kqlTotal) }
         Reset-SIProgress -Label 'KqlPostureRules' -ErrorAction SilentlyContinue
+        # #1398: a rule's answer is taken part by part (each hash bucket / Log Analytics part as it arrives, never one list of
+        # the whole answer), and only the hits of THIS part's assets are kept (the keys the asset loop below looks up) -- a
+        # rule answers for the whole tenant. A rule whose read fails adds nothing, as before.
+        $partHitKeys = Get-SIEnrichPostureKeys -Records @($records)
         foreach ($rule in $kqlRules) {
             $_kqlIdx++
             $_ruleStart = [System.Diagnostics.Stopwatch]::StartNew()
+            $ruleHits = New-Object System.Collections.Generic.List[object]
+            $ruleRows = @{ N = 0L }   # a holder: the -OnRows block runs in its own scope
             # v2: route per QueryEngine. v1 rules default to DefenderGraph.
-            $rows = Invoke-SIHuntingQuery -Query $rule.Query -QueryEngine $rule.QueryEngine
+            $ruleOk = Invoke-SIHuntingQuery -Query $rule.Query -QueryEngine $rule.QueryEngine `
+                -OnRestart { $ruleHits.Clear(); $ruleRows.N = 0L } `
+                -OnRows {
+                    param($part)
+                    foreach ($row in @($part)) {
+                        if ($null -eq $row) { continue }
+                        $ruleRows.N++
+                        $key = if ($row.DeviceId)        { [string]$row.DeviceId }
+                               elseif ($row.AccountObjectId) { ([string]$row.AccountObjectId).ToLowerInvariant() }
+                               elseif ($row.UserId)      { ([string]$row.UserId).ToLowerInvariant() }
+                               else { $null }
+                        if (-not $key -or -not $partHitKeys.Contains($key)) { continue }
+                        $ruleHits.Add($key)
+                    }
+                }
             $_ruleStart.Stop()
-            Write-SIInfo ('  [{0,3}/{1}] rule="{2}" engine={3} rows={4} took={5:N1}s' -f $_kqlIdx, $_kqlTotal, $rule.Name, $rule.QueryEngine, @($rows).Count, $_ruleStart.Elapsed.TotalSeconds)
+            if (-not $ruleOk) { $ruleHits.Clear() }
+            Write-SIInfo ('  [{0,3}/{1}] rule="{2}" engine={3} rows={4} took={5:N1}s' -f $_kqlIdx, $_kqlTotal, $rule.Name, $rule.QueryEngine, $(if ($ruleOk) { $ruleRows.N } else { 0 }), $_ruleStart.Elapsed.TotalSeconds)
             try { Write-SIProgress -Label 'KqlPostureRules' -Index $_kqlIdx -Total $_kqlTotal } catch { }
             $rulesRun++
-            foreach ($row in $rows) {
-                $key = if ($row.DeviceId)        { [string]$row.DeviceId }
-                       elseif ($row.AccountObjectId) { ([string]$row.AccountObjectId).ToLowerInvariant() }
-                       elseif ($row.UserId)      { ([string]$row.UserId).ToLowerInvariant() }
-                       else { $null }
-                if (-not $key) { continue }
+            foreach ($key in $ruleHits) {
                 if (-not $hitsByKey.ContainsKey($key)) {
                     $hitsByKey[$key] = New-Object System.Collections.ArrayList
                 }
@@ -1586,6 +1583,7 @@ function Invoke-SIEnrich {
                 }
                 [void]$hitsByKey[$key].Add($proofEntry)
             }
+            $ruleHits = $null
         }
 
         if ($RunContext.Engine -eq 'endpoint') {
@@ -1731,7 +1729,9 @@ function Invoke-SIEnrich {
             # classifies via metaprofile + posture rules alone.
             # discovery moved from v2.2/engine/discovery/ to v2.2/engine/asset-profiling/discovery/
             . (Join-Path (Split-Path -Parent $PSScriptRoot) 'discovery\Get-DiscoveryFromAzureExposureGraph.ps1')
-            $azureEgEdges    = Get-AzureExposureGraphAccessEdges
+            # #1398: only the edges that reach THIS part's resources (by node id and resource name) -- never the whole graph
+            try { $azureEgEdges = Get-AzureExposureGraphAccessEdges -Keys (Get-SIAzureEgAccessEdgeKeys -Records @($records)) }
+            catch { Add-SIEnrichIssue ('Which identities can reach this part''s Azure resources was not read ({0}) -- unknown this run, not "none".' -f $_.Exception.Message); $azureEgEdges = @{} }
             # #639: the identities that reach THIS part's resources only -- never the whole identity table
             $identityTierMap = Get-SIIdentityTierMap -WorkspaceResourceId $global:SI_WorkspaceResourceId -Keys ([string[]]@(Get-SIEnrichAccessorKeys -Records $records -Edges $azureEgEdges))
         }
@@ -2125,6 +2125,25 @@ function Invoke-SIEnrich {
         Summary       = ($enrichIncomplete + ('{0} enriched -- {1} kql rules ran, {2} metadata-rule hits, {3} matched, {4} {5}, {6} reuse cached{7}' -f $enriched.Count, $rulesRun, $metadataRuleHits, $hitAssets, $behaviourHits, $behaviourLabel, $skipAi, $crossEngineNote))
         Issues        = $enrichIssues
     }
+}
+
+function Get-SIEnrichPostureKeys {
+    <#
+        PURE. #1398 The keys THIS part's records look their KQL posture hits up by -- exactly as the asset loop builds
+        $assetKey (Defender device id, else the user's, else the service principal's object id, lower case). A posture
+        rule's answer covers the tenant; only these keys are kept from it. Case-insensitive, like the hit index.
+    #>
+    param([AllowNull()][AllowEmptyCollection()][object[]]$Records = @())
+    $keys = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    foreach ($r in @($Records)) {
+        if ($null -eq $r -or $null -eq $r.Metadata) { continue }
+        $k = if ($r.Metadata.MDE_DeviceId)     { [string]$r.Metadata.MDE_DeviceId }
+             elseif ($r.Metadata.ENTRA_UserId) { ([string]$r.Metadata.ENTRA_UserId).ToLowerInvariant() }
+             elseif ($r.Metadata.ENTRA_SPObjectId) { ([string]$r.Metadata.ENTRA_SPObjectId).ToLowerInvariant() }
+             else { $null }
+        if ($k) { [void]$keys.Add($k) }
+    }
+    , $keys
 }
 
 function Get-SIEnrichAccessorKeys {

@@ -217,23 +217,43 @@ function Get-SIFindingSoftwarePairs {
     $out = New-Object System.Collections.Generic.List[object]
     $items = New-Object 'System.Collections.Generic.List[string]'
     foreach ($v in (Get-SIFindingFieldFlat ([System.Collections.Generic.List[object]]@(, $Software)))) { foreach ($p in ([string]$v).Split(';')) { $t = $p.Trim(); if ($t) { $items.Add($t) } } }
+    # #1403 a text stored cut to its column is read in full by the SQL that reads it, or without its last (cut) item
+    # (engine\_shared\data-sql\SI-FullListSql.ps1) -- the pairing never guesses a cut from the length
     if ($items.Count -eq 0 -or @($Products).Count -eq 0) { return , $out.ToArray() }
     $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
     $pl = @($Products | Sort-Object -Property @{ Expression = { $_.Length }; Descending = $true }, @{ Expression = { $_ } })
     foreach ($it in $items) {
-        $rest0 = $it; $d = ''
-        $m = [regex]::Match($it, '^(.*?)\s*\(([^()]*)\)$')
-        if ($m.Success) { $rest0 = $m.Groups[1].Value.Trim(); $d = $m.Groups[2].Value.Trim() }
+        # #1403 an item with a bracket left open is a cut one: never paired
+        $depth = 0; foreach ($ch in $it.ToCharArray()) { if ($ch -eq '(') { $depth++ } elseif ($ch -eq ')' -and $depth -gt 0) { $depth-- } }
+        if ($depth -gt 0) { continue }
+        # the vendor is the LAST bracket group (a product or vendor with its own brackets, "foo (x64) 1.0 (bar (eu))"); the
+        # whole item without a vendor is tried too ("foo (x64)" -- a product with brackets and no vendor)
+        $cands = New-Object System.Collections.Generic.List[object]
+        if ($it.EndsWith(')')) {
+            $open = -1; $dd = 0
+            for ($i = $it.Length - 1; $i -ge 0; $i--) {
+                if ($it[$i] -eq ')') { $dd++ } elseif ($it[$i] -eq '(') { $dd--; if ($dd -eq 0) { $open = $i; break } }
+            }
+            if ($open -lt 0) { $open = $it.LastIndexOf('(') }
+            if ($open -ge 0) { $cands.Add(@($it.Substring(0, $open).Trim(), $it.Substring($open + 1, $it.Length - $open - 2).Trim())) }
+        }
+        $cands.Add(@($it, ''))
         $hit = $null
-        foreach ($p in $pl) {
-            $v = $null
-            if ([string]::Equals($rest0, $p, [StringComparison]::OrdinalIgnoreCase)) { $v = '' }
-            elseif ($rest0.StartsWith($p + ' ', [StringComparison]::OrdinalIgnoreCase)) { $v = $rest0.Substring($p.Length).Trim(); if ($v -match '\s') { $v = $null } }
-            if ($null -eq $v) { continue }
-            $dv = $d
-            foreach ($x in @($Vendors)) { if ([string]::Equals($x, $d, [StringComparison]::OrdinalIgnoreCase)) { $dv = $x; break } }
-            $hit = @{ Product = $p; Version = $v; Vendor = $dv.ToLowerInvariant() }
-            break
+        foreach ($cd in $cands) {
+            $rest0 = [string]$cd[0]; $d = [string]$cd[1]
+            if (-not $rest0) { continue }
+            foreach ($p in $pl) {
+                $v = $null
+                if ([string]::Equals($rest0, $p, [StringComparison]::OrdinalIgnoreCase)) { $v = '' }
+                # #1403 a version with a space in it ("2.1 build 7") is the remainder after the product's name
+                elseif ($rest0.StartsWith($p + ' ', [StringComparison]::OrdinalIgnoreCase)) { $v = ($rest0.Substring($p.Length).Trim() -replace '\s{2,}', ' ') }
+                if ($null -eq $v) { continue }
+                $dv = $d
+                foreach ($x in @($Vendors)) { if ([string]::Equals($x, $d, [StringComparison]::OrdinalIgnoreCase)) { $dv = $x; break } }
+                $hit = @{ Product = $p; Version = $v; Vendor = $dv.ToLowerInvariant() }
+                break
+            }
+            if ($null -ne $hit) { break }
         }
         if ($null -eq $hit) { continue }
         if ($seen.Add(('{0}|{1}|{2}' -f $hit.Product, $hit.Version, $hit.Vendor))) { $out.Add([pscustomobject]$hit) }
@@ -249,8 +269,8 @@ function Get-SIFindingSoftwareVariants {
     <#
     .SYNOPSIS  PURE. The software variants of one finding item: @() when it names at most one product (nothing to split);
                else one per product and version, each @{ si_affected_product; si_affected_version; si_affected_vendor;
-               NoVersion } -- the pairs of its affected software; without pairs and one version: one per product (the vendors,
-               when several, sorted); without pairs and several versions: one per product, its version not named (NoVersion).
+               NoVersion } -- the pairs of its affected software, and for every product no pair covers (#1403): one version
+               named = that version (the vendors, when several, sorted); else its version not named (NoVersion). Sorted.
     #>
     param($Item)
     $prods = Get-SIFindingFieldList $Item 'si_affected_product'
@@ -260,14 +280,23 @@ function Get-SIFindingSoftwareVariants {
     $sortedVend = { $x = New-Object 'System.Collections.Generic.List[string]'; foreach ($i in $vends) { $x.Add($i) }; $x.Sort([StringComparer]::OrdinalIgnoreCase); ($x.ToArray() -join ';') }
     $out = New-Object System.Collections.Generic.List[object]
     $pairs = Get-SIFindingSoftwarePairs -Products $prods -Vendors $vends -Software (Resolve-SISourcePath -Object $Item -Path 'si_affected_software')
-    if (@($pairs).Count -gt 0) {
-        foreach ($s in @($pairs)) { $out.Add(@{ si_affected_product = $s.Product; si_affected_version = $s.Version; si_affected_vendor = $s.Vendor; NoVersion = $false }) }
-    } elseif ($vers.Count -le 1) {
-        $vv = $(if ($vers.Count -eq 1) { $vers[0] } else { '' })
-        foreach ($p in $prods) { $out.Add(@{ si_affected_product = $p; si_affected_version = $vv; si_affected_vendor = $(if ($vends.Count -eq 1) { $vends[0] } else { & $sortedVend }); NoVersion = $false }) }
-    } else {
-        foreach ($p in $prods) { $out.Add(@{ si_affected_product = $p; si_affected_version = ''; si_affected_vendor = $(if ($vends.Count -eq 1) { $vends[0] } else { '' }); NoVersion = $true }) }
+    # #1403 (review of 3.1.51, owner "data quality is key. trust" / "no data drop"): EVERY product of the finding has a
+    # variant -- its pairs, and a product no pair covers (its software item capped away by the source, cut, or spelled
+    # otherwise) its own. What a product without a pair gets depends only on the finding's own lists, never on which OTHER
+    # items survived the source's cap: one version named = that version; else its version not named (NoVersion,
+    # "Update <product> (<vendor>)")
+    $covered = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    foreach ($s in @($pairs)) { [void]$covered.Add([string]$s.Product); $out.Add(@{ si_affected_product = $s.Product; si_affected_version = $s.Version; si_affected_vendor = $s.Vendor; NoVersion = $false }) }
+    foreach ($p in $prods) {
+        if ($covered.Contains($p)) { continue }
+        if ($vers.Count -eq 1) { $out.Add(@{ si_affected_product = $p; si_affected_version = $vers[0]; si_affected_vendor = $(if ($vends.Count -eq 1) { $vends[0] } else { & $sortedVend }); NoVersion = $false }) }
+        else { $out.Add(@{ si_affected_product = $p; si_affected_version = ''; si_affected_vendor = $(if ($vends.Count -eq 1) { $vends[0] } else { '' }); NoVersion = $true }) }
     }
+    # sorted (product, version, vendor): the same variants in the same order whatever order the lists come in
+    $out.Sort([Comparison[object]] { param($a, $b)
+            $c = [StringComparer]::OrdinalIgnoreCase.Compare([string]$a['si_affected_product'], [string]$b['si_affected_product']); if ($c -ne 0) { return $c }
+            $c = [StringComparer]::Ordinal.Compare([string]$a['si_affected_version'], [string]$b['si_affected_version']); if ($c -ne 0) { return $c }
+            [StringComparer]::OrdinalIgnoreCase.Compare([string]$a['si_affected_vendor'], [string]$b['si_affected_vendor']) })
     , $out.ToArray()
 }
 

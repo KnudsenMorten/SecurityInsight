@@ -118,6 +118,26 @@ function Get-SIUpdaterInstallEdition {
     } catch { '' }
 }
 
+function Get-SIUpdaterPostRollOutcome {
+    <#
+        PURE. What a code roll's post-roll result means (Invoke-SIUpdaterInvardia, after Invoke-SIUpdaterInvardiaPostRoll):
+          PostRollFailed  the post-roll answered an error (the run fails with it)
+          SecondPass      the post-roll succeeded AND moved the updater onto the release (SelfAction 'rolled') -- the second
+                          update starts at the end of this run (#1262); never after a failed post-roll
+          ClearResume     #1406: a resume (-ResumeTries > 0) whose post-roll succeeded -- its count is cleared
+          FailResume      #1406: a resume tried 2+ times whose post-roll failed -- the failure 'resume'
+        The first two are the chain of before, unchanged; the resume outcome stands beside it.
+    #>
+    param([int]$PostCode, [string]$SelfAction = '', [int]$ResumeTries = 0)
+    $failed = ($PostCode -ne 0)
+    [pscustomobject]@{
+        PostRollFailed = $failed
+        SecondPass     = ((-not $failed) -and ("$SelfAction" -eq 'rolled'))
+        ClearResume    = (($ResumeTries -gt 0) -and -not $failed)
+        FailResume     = (($ResumeTries -ge 2) -and $failed)
+    }
+}
+
 function Get-SIUpdaterInvardiaCodeDecision {
     <#
         PURE. A verified CODE manifest result against what the jobs run. Returns @{ Act; Applied; Hold; Reason }:
@@ -131,11 +151,35 @@ function Get-SIUpdaterInvardiaCodeDecision {
                 of a wave; it follows its ring again once the ring reaches its version;
               - otherwise                                           -> roll it.
     #>
-    param([Parameter(Mandatory)]$Result, [AllowEmptyString()][string]$Deployed, [long]$AppliedSequence = -1, [AllowEmptyString()][string]$AppliedWave = '')
+    # -Recorded (#1406): the release the install RECORDS as installed (the si-installed tag, written only at the END of an
+    # update). The jobs on a version the record does not reach = an update to it was stopped part-way (live 2026-11-26: jobs on
+    # 3.1.51, the record on 3.1.43.5, the steps after the roll never ran) -- the update is FINISHED now, never "already runs".
+    param([Parameter(Mandatory)]$Result, [AllowEmptyString()][string]$Deployed, [long]$AppliedSequence = -1, [AllowEmptyString()][string]$AppliedWave = '',
+          [AllowEmptyString()][AllowNull()][string]$Recorded = '')
     $no = { param($why, $applied = $false, $hold = '') [pscustomobject]@{ Act = $false; Applied = $applied; Hold = $hold; Reason = $why } }
     if ($Result.Action -notin @('update', 'current')) { return (& $no $Result.Reason) }
     $v = [string]$Result.Version
-    if ($Deployed -and (Compare-SIInvardiaVersion $v $Deployed) -eq 0) { return (& $no ("the jobs run {0} already (sequence {1})" -f $v, $Result.Sequence) $true) }
+    if ($Deployed -and (Compare-SIInvardiaVersion $v $Deployed) -eq 0) {
+        $rec = "$Recorded".Trim()
+        if ($rec -match '^\d+(?:\.\d+){1,3}$' -and (Compare-SIInvardiaVersion $rec $v) -lt 0) {
+            # (review) an IMAGE-ONLY patch of the recorded release (3.1.52 -> 3.1.52.1: the same first three parts) is never
+            # finished by a full update -- its own short path tries it again (SEC-LANE-1)
+            $p3 = { param($x) (@("$x".Split('.')) | Select-Object -First 3) -join '.' }
+            $imageOnlyDiff = (@("$v".Split('.')).Count -ge 4) -and ((& $p3 $v) -eq (& $p3 $rec))
+            # (review) finished at most ONCE per sequence: a sequence already applied whose record still lags (the record /
+            # tag write failed) is never rolled again and again -- said as a problem instead (never silent)
+            $done = ($AppliedSequence -ge [long]$Result.Sequence)
+            if (-not $imageOnlyDiff -and -not $done) {
+                return [pscustomobject]@{ Act = $true; Applied = $false; Hold = ''; Resume = $true; RecordLags = $false
+                                          Reason = ("the jobs run {0} but the update to it did not finish (the install records {1} as installed) -- the update is finished now: the steps after the roll run again and {0} is recorded" -f $v, $rec) }
+            }
+            if ($done -and -not $imageOnlyDiff) {
+                return [pscustomobject]@{ Act = $false; Applied = $true; Hold = ''; Resume = $false; RecordLags = $true
+                                          Reason = ("the jobs run {0} (sequence {1} applied) but the install still records {2} as installed: the record could not be written -- it is not rolled again; the record is written by the next update that installs a release" -f $v, $Result.Sequence, $rec) }
+            }
+        }
+        return (& $no ("the jobs run {0} already (sequence {1})" -f $v, $Result.Sequence) $true)
+    }
     if ($Result.Action -eq 'current') { return (& $no $Result.Reason) }
     $min = if ($Result.Manifest.PSObject.Properties['minFromVersion']) { "$($Result.Manifest.minFromVersion)".Trim() } else { '' }
     if ($min -and $Deployed -and (Compare-SIInvardiaVersion $Deployed $min) -lt 0) {
@@ -511,7 +555,7 @@ function Invoke-SIUpdaterFromInvardia {
         else { $code = & $ask 'code' }
         if ($imgCheck -and -not $code) { & $icIdle (Get-SIImageCheckCandidate -Result $null).Line; return 0 }
         if ($code) {
-            $dec = Get-SIUpdaterInvardiaCodeDecision -Result $code -Deployed $Deployed -AppliedSequence $state.code.appliedSequence -AppliedWave ([string]$state.code.appliedWave)
+            $dec = Get-SIUpdaterInvardiaCodeDecision -Result $code -Deployed $Deployed -AppliedSequence $state.code.appliedSequence -AppliedWave ([string]$state.code.appliedWave) -Recorded ([string]$global:SI_UpdaterRecordedVersion)
             if ($imgCheck) {
                 # #1344: only an image-only release of what runs goes on -- a code release stays on the nightly update
                 $cand = Get-SIImageCheckCandidate -Result $code -Decision $dec -Deployed "$Deployed" -Ring $ringPick.Ring
@@ -519,6 +563,17 @@ function Invoke-SIUpdaterFromInvardia {
                 Stop-SIUpdaterQuiet -Flush
                 Write-UpdLog $cand.Line
             }
+            # #1406 (review): a half-done update finished again -- counted per version; from the 2nd try on it is a PROBLEM that
+            # reaches the run health and the heartbeat's Update problem (never a silent nightly retry). A record that lags after
+            # its sequence was applied is said the same way.
+            # (the try is COUNTED only where the update really starts -- after the run gate, right before the roll, below: a
+            # resume that waits behind a pipeline run never counts or alarms)
+            if ($dec.PSObject.Properties['RecordLags'] -and $dec.RecordLags) {
+                # (final review) the record is NEVER written here: a lag after an applied sequence most often means the post-roll
+                # stopped before it (a web app roll that failed) -- writing it would mark the release installed while the web
+                # app is still old. It stays the failure 'record' every run (never silent) until a release installs fully.
+                Write-UpdLog ('WARNING: code: ' + $dec.Reason); $state.lastError = "code: $($dec.Reason)"; & $fail 'record' ([string]$dec.Reason)
+            } elseif ("$($state.code.resumeVersion)".Trim() -and -not $dec.Act) { $state.code.resumeVersion = ''; $state.code.resumeTries = '' }
             if ($dec.Hold) { $state.code.hold = $dec.Hold }
             if ($dec.Applied) { Set-SIInvardiaUpdateApplied -State $state -Result $code -NowUtc $now }
             Write-UpdLog ("code: {0}" -f $dec.Reason)
@@ -596,6 +651,8 @@ function Invoke-SIUpdaterFromInvardia {
                     $global:SI_UpdaterEngineVersion = "$($code.Version)".Trim()
                     & $track 'applied' $code.Version
                     if ("$($ioRes.Result)" -ne 'done') { $state.lastError = ("code: image-only update {0}: {1}" -f $code.Version, $ioRes.Why) }
+                    # SI #1414: the images run, but it is NOT proven that only the newest revision answers -- the run FAILS
+                    if ("$($ioRes.Component)" -eq 'revisions') { $rc = 1 }
                     # #1262: the updater moved itself LAST onto the release's image -- its post-roll steps run in that code in
                     # the post-roll run, started at the end of this run (as after the full update)
                     if ($ioRes.PSObject.Properties['SelfAction'] -and [string]$ioRes.SelfAction -eq 'rolled') { $gate.SecondPass = $true }
@@ -618,6 +675,8 @@ function Invoke-SIUpdaterFromInvardia {
                 # against the digest its build produced (framework RELEASE-DRYRUN-1 case (h)); not proven = the run fails, said why
                 if ($imgCheck -and [int]$ioRes.Code -eq 0) {
                     if ($s['ImageCheckJob']) { $null = & $s.ImageCheckJob } elseif ($real -and (Get-Command -Name Invoke-SIUpdaterImageCheckJob -ErrorAction SilentlyContinue)) { $null = Invoke-SIUpdaterImageCheckJob -SubscriptionId $SubscriptionId -ResourceGroup $ResourceGroup -UpdaterJob (& $nameOf 'updater') }
+                    # #1413: then a deleted user-assigned identity taken off SI's jobs and apps (fail closed, read back; never fails the run)
+                    if ($s['DeadIdentities']) { $null = & $s.DeadIdentities } elseif ($real -and (Get-Command -Name Invoke-SIUpdaterDeadIdentities -ErrorAction SilentlyContinue)) { $null = Invoke-SIUpdaterDeadIdentities -SubscriptionId $SubscriptionId -ResourceGroup $ResourceGroup }
                     $proof = if ($s['DigestProof']) { & $s.DigestProof "$($code.Version)" } elseif ($real -and (Get-Command -Name Invoke-SIImageCheckDigestProof -ErrorAction SilentlyContinue)) { Invoke-SIImageCheckDigestProof -Version "$($code.Version)" -ResourceGroup $ResourceGroup -AcrName $AcrName -SubscriptionId $SubscriptionId -LoginServer $(if ($pre.Environment) { [string]$pre.Environment.LoginServer } else { '' }) } else { $null }
                     if ($proof) {
                         foreach ($pl in @($proof.Lines)) { Write-UpdLog ('digest read-back: ' + $pl) }
@@ -656,6 +715,17 @@ function Invoke-SIUpdaterFromInvardia {
                         -ResourceGroup $ResourceGroup -AcrName $AcrName -SubscriptionId $SubscriptionId -UpdaterJob (& $nameOf 'updater') `
                         -SelfOff:((& $get 'SI_UPDATER_SELF_UPDATE') -match '^(?i)(0|false|off|no)$') -SelfRoll $s['SelfMove']
                 }
+                # #1406 (review round 2): a half-done update FINISHED again -- counted HERE, where it really starts (the run gate
+                # passed, the release script runs next), and saved before the roll: a run stopped in it still counts. From
+                # the 2nd try on it is said as a warning at once, and raised as the failure 'resume' only when this try fails
+                # too (a try that succeeds clears the count -- never an alarm for a repaired install)
+                $resumeTries = 0
+                if ($dec.PSObject.Properties['Resume'] -and $dec.Resume) {
+                    if ([string]$state.code.resumeVersion -eq [string]$code.Version) { [void][int]::TryParse([string]$state.code.resumeTries, [ref]$resumeTries) }
+                    $resumeTries++; $state.code.resumeVersion = [string]$code.Version; $state.code.resumeTries = [string]$resumeTries
+                    if ($resumeTries -ge 2) { Write-UpdLog ('WARNING: the update to {0} did not finish {1} time(s) before (the install still records {2}) -- it is finished now' -f $code.Version, ($resumeTries - 1), $global:SI_UpdaterRecordedVersion) }
+                    & $save
+                }
                 # #405: ring 1 (internal) gets the release's templates installed directly, exactly as on the ring channel
                 $roll = Invoke-SIUpdaterRoll -SIRoot $si -ResourceGroup $ResourceGroup -AcrName $AcrName -SubscriptionId $SubscriptionId -Store $Store `
                             -AcceptFingerprint $AcceptFingerprint -TemplatesFollowChannel:$channel -InstallTemplatesDirect:($ringPick.Ring -eq 1) `
@@ -664,7 +734,15 @@ function Invoke-SIUpdaterFromInvardia {
                             -McpApp (& $nameOf 'mcp') `
                             -UpdaterJob (& $nameOf 'updater') `
                             -SelfOff:((& $get 'SI_UPDATER_SELF_UPDATE') -match '^(?i)(0|false|off|no)$')
-                if ($roll.Held) { $state.code.hold = $roll.Reason; & $track 'waiting' $roll.Reason }
+                if ($roll.Held) {
+                    $state.code.hold = $roll.Reason; & $track 'waiting' $roll.Reason
+                    # #1406 (review): a roll that was HELD did not try -- its count is taken back (only an attempt that rolls counts)
+                    if ($resumeTries -gt 0) {
+                        $back = $resumeTries - 1
+                        $state.code.resumeTries = $(if ($back -gt 0) { [string]$back } else { '' }); if ($back -le 0) { $state.code.resumeVersion = '' }
+                        $resumeTries = 0
+                    }
+                }
                 elseif ($roll.Code -eq 0) {
                     Set-SIInvardiaUpdateApplied -State $state -Result $code -NowUtc $now; $siNow = $si; $runs = $code.Version
                     # the engine version this install runs from now on -- reported by THIS run, not only from the next one
@@ -684,9 +762,19 @@ function Invoke-SIUpdaterFromInvardia {
                                        -McpApp (& $nameOf 'mcp') `
                                        -SelfOff:((& $get 'SI_UPDATER_SELF_UPDATE') -match '^(?i)(0|false|off|no)$') }
                     Write-UpdLog ("code: {0}" -f $post.Text)
-                    if ($post.Code -ne 0) { $rc = 1; $state.lastError = "code: $($post.Text)"; & $fail 'post-roll' ([string]$post.Text) }
+                    # (one decision, Get-SIUpdaterPostRollOutcome: the post-roll check and the second pass exactly as before;
+                    # #1406's resume count is its own outcome beside them)
+                    $pro = Get-SIUpdaterPostRollOutcome -PostCode ([int]$post.Code) -SelfAction $(if ($post.PSObject.Properties['SelfAction']) { [string]$post.SelfAction } else { '' }) -ResumeTries $resumeTries
+                    if ($pro.PostRollFailed) { $rc = 1; $state.lastError = "code: $($post.Text)"; & $fail 'post-roll' ([string]$post.Text) }
                     # the updater moved onto this release: its update steps run in the second update, started at the end of this run
-                    elseif ($post.PSObject.Properties['SelfAction'] -and [string]$post.SelfAction -eq 'rolled') { $gate.SecondPass = $true }
+                    elseif ($pro.SecondPass) { $gate.SecondPass = $true }
+                    # #1406: the finished try clears its count; a try that failed again from the 2nd on is the failure 'resume'
+                    if ($pro.ClearResume) { $state.code.resumeVersion = ''; $state.code.resumeTries = '' }
+                    if ($pro.FailResume) { & $fail 'resume' ('the update to {0} did not finish {1} times (the install still records {2})' -f $code.Version, $resumeTries, $global:SI_UpdaterRecordedVersion) }
+                    # SI #1414: the update's last step did not prove that only the newest revision answers -- the run FAILS (the
+                    # release IS installed and is not installed again; the step wrote its own failure report, the post-roll run
+                    # checks once more, and the heartbeat's Update.revisions + Invardia's daily check show it until it is fixed)
+                    if ($post.Code -eq 0 -and $post.PSObject.Properties['RevisionsOk'] -and -not $post.RevisionsOk) { $rc = 1; $state.lastError = ('code: {0}' -f $post.RevisionsText) }
                     # IMAGE-PRUNE (owner 2026-11-16, current only): ONLY after the update AND its read-back ended well (the engine roll
                     # verified, the post-roll healthy): the install's own registry keeps ONLY what runs now -- no previous release;
                     # one line per repository and per image. Never fails the update (SI-UpdaterImagePrune.ps1; SI_Updater_ImagePrune = off turns it off).
@@ -704,6 +792,7 @@ function Invoke-SIUpdaterFromInvardia {
                     $rc = [int]$roll.Code; $state.lastError = $(if ($roll.Reason) { "code: $($roll.Reason)" } else { "code: the roll failed (exit $($roll.Code)); the jobs were restored" })
                     # the database / templates / build / roll step recorded its own failure (Invoke-SIUpdaterRoll); this only when none did
                     if ((Get-Command -Name Get-SIUpdaterFailures -ErrorAction SilentlyContinue) -and -not @(Get-SIUpdaterFailures).Count) { & $fail 'roll' $state.lastError }
+                    if ($resumeTries -ge 2) { & $fail 'resume' ('the update to {0} did not finish {1} times (the install still records {2})' -f $code.Version, $resumeTries, $global:SI_UpdaterRecordedVersion) }
                 }
             }
         }
@@ -723,6 +812,15 @@ function Invoke-SIUpdaterFromInvardia {
             elseif ($s['SizingPass']) { & $beat 'the sizes'; $null = & $s.SizingPass $why }
             # (a test that brings no seam never runs the real update script against Azure)
             elseif (-not (Get-Module -Name Pester)) { & $beat 'the sizes'; $null = Invoke-SIUpdaterSizingPass -SIRoot $SIRoot -ResourceGroup $ResourceGroup -AcrName $AcrName -SubscriptionId $SubscriptionId -Store $Store -Why $why }
+        }
+        # SI #1414: NO CODE INSTALLED THIS RUN (current, held, nothing asked) -- the last step still runs on every updater run, so
+        # an older revision that still answers is tried again every night (only reads when all is right). Not proven = the run
+        # FAILS, said (the step writes the failure report). An image check (every 15 minutes) leaves it to the nightly run.
+        if (-not $imgCheck -and (-not $roll -or $roll.Held)) {
+            $rvn = if ($s['Revisions']) { & $s.Revisions }
+                   elseif (Get-Command -Name Invoke-SIUpdaterSingleRevisionStep -ErrorAction SilentlyContinue) { Invoke-SIUpdaterSingleRevisionStep -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId -Apps @((& $nameOf 'web'), (& $nameOf 'mcp')) }
+                   else { $null }
+            if ($rvn -and -not $rvn.Ok) { $rc = 1; $state.lastError = ('code: {0}' -f $rvn.Text) }
         }
         # #350 (c): nothing rolled this run, but an earlier run could not move the updater itself -- try that again (the image
         # in the registry; a failed build is rebuilt with the next release). A failure here never fails the run.

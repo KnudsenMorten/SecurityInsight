@@ -24,6 +24,38 @@ public sealed record NotSeenAsset(
 public sealed record NotSeenView(bool HasTable, IReadOnlyList<NotSeenAsset> NotSeen, IReadOnlyList<NotSeenAsset> Retired, long Active)
 {
     public static readonly NotSeenView Missing = new(false, Array.Empty<NotSeenAsset>(), Array.Empty<NotSeenAsset>(), 0);
+
+    /// #1400 each list's total (the lists hold one page); null = the list holds every row.
+    public long? NotSeenTotalRead { get; init; }
+    public long? RetiredTotalRead { get; init; }
+    /// Where each list's page starts (rows before it).
+    public int NotSeenSkip { get; init; }
+    public int RetiredSkip { get; init; }
+    public long NotSeenTotal => NotSeenTotalRead ?? NotSeenSkip + NotSeen.Count;
+    public long RetiredTotal => RetiredTotalRead ?? RetiredSkip + Retired.Count;
+
+    /// One page of each list of a whole view, with the whole lists' totals (a store that holds the lists in memory).
+    public static NotSeenView Page(NotSeenView all, NotSeenPaging paging)
+    {
+        if (!all.HasTable) return all;
+        var take = Math.Max(1, paging.Take);
+        return all with
+        {
+            NotSeen = paging.Only is null or NotSeenPaging.NotSeen ? all.NotSeen.Skip(paging.NotSeenSkip).Take(take).ToList() : Array.Empty<NotSeenAsset>(),
+            Retired = paging.Only is null or NotSeenPaging.RetiredList ? all.Retired.Skip(paging.RetiredSkip).Take(take).ToList() : Array.Empty<NotSeenAsset>(),
+            NotSeenTotalRead = all.NotSeen.Count, RetiredTotalRead = all.Retired.Count, NotSeenSkip = paging.NotSeenSkip, RetiredSkip = paging.RetiredSkip,
+        };
+    }
+}
+
+/// <summary>
+/// #1400 which page of each "Not seen anymore" list to read (rows skipped, rows per page); <paramref name="Only"/> reads one
+/// list alone (<see cref="NotSeen"/> or <see cref="RetiredList"/>; null = both, and the active count).
+/// </summary>
+public sealed record NotSeenPaging(int NotSeenSkip, int RetiredSkip, int Take, string? Only = null)
+{
+    public const string NotSeen = "notseen";
+    public const string RetiredList = "retired";
 }
 
 /// The outcome of an early retirement: retired, or why not.
@@ -41,6 +73,8 @@ public sealed record RetireEarlyResult(bool Retired, string Message);
 public interface IAssetLifecycleStore
 {
     Task<NotSeenView> ReadAsync(int retiredDays, CancellationToken ct);
+    /// #1400 one page of each list, with each list's total. Every store implements it itself (no fallback over a whole read).
+    Task<NotSeenView> ReadPageAsync(int retiredDays, NotSeenPaging paging, CancellationToken ct);
     Task<RetireEarlyResult> RetireEarlyAsync(string ciKey, string by, string? reason, CancellationToken ct);
 }
 
@@ -57,7 +91,7 @@ public sealed class SqlAssetLifecycleStore : IAssetLifecycleStore
     // period from the rules in force; "since" and "why" are the CI's own lifecycle evidence (si_lifecycle_since / _reason).
     // Retiring EARLY stays the existing action on cmdbsync.AssetLifecycle (keyed by the same CI key), unchanged.
     private const string ListBody = """
-SELECT 1 AS HasTable, c.CiId AS CiKey, c.Name, x.Category, c.Class AS Kind, c.LastSeen,
+SELECT 1 AS HasTable, COUNT_BIG(*) OVER () AS Total, c.CiId AS CiKey, c.Name, x.Category, c.Class AS Kind, c.LastSeen,
        CASE WHEN c.Lifecycle = N'not_seen' THEN N'not-seen' ELSE N'retired' END AS State, x.Since AS StateChangedAt, x.Reason AS RetireReason,
        CONVERT(bigint, ISNULL(c.OpenFindings, 0)) AS OpenFindings,
        (SELECT STRING_AGG(CAST(t.FindingKey AS nvarchar(max)), N', ') FROM (SELECT TOP (5) s.FindingKey FROM sidata.CiFindingState AS s
@@ -73,9 +107,15 @@ CROSS APPLY (SELECT CASE WHEN ISJSON(c.DocJson) = 1 THEN TRY_CONVERT(datetime2(0
                          WHEN c.Class = N'identity' THEN N'user'
                          WHEN c.Class = N'cloud_resource' THEN N'azure-resource'
                          ELSE N'other' END AS Category) AS x
-WHERE c.Lifecycle = N'not_seen' OR (c.Lifecycle = N'retired' AND x.Since >= DATEADD(day, -@Days, SYSUTCDATETIME()))
-ORDER BY CASE WHEN c.Lifecycle = N'not_seen' THEN 0 ELSE 1 END, c.LastSeen, x.Since DESC, c.Name, c.CiId
+WHERE (@State = N'not_seen' AND c.Lifecycle = N'not_seen') OR (@State = N'retired' AND c.Lifecycle = N'retired' AND x.Since >= DATEADD(day, -@Days, SYSUTCDATETIME()))
+ORDER BY c.LastSeen, x.Since DESC, c.Name, c.CiId
+OFFSET @Skip ROWS FETCH NEXT @Take ROWS ONLY
+OPTION (RECOMPILE)
 """;
+
+    /// #1400 (owner 2026-11-26: "memory issues must not be a problem in any step"): the rows of one list a page shows -- each
+    /// list (not seen, retired recently) is read a page at a time, its total counted in SQL; an export reads every page.
+    public const int PageSize = 200;
 
     private static string Quote(string sql) => sql.Replace("'", "''");
 
@@ -84,7 +124,7 @@ ORDER BY CASE WHEN c.Lifecycle = N'not_seen' THEN 0 ELSE 1 END, c.LastSeen, x.Si
     public static readonly string ListSql =
         "SET NOCOUNT ON;\n" +
         "IF OBJECT_ID(N'sidata.Ci') IS NULL OR OBJECT_ID(N'sidata.CiFindingState') IS NULL\n    SELECT 0 AS HasTable;\n" +
-        "ELSE\n    EXEC sp_executesql N'" + Quote(ListBody) + "', N'@Days int', @Days = @Days;\n";
+        "ELSE\n    EXEC sp_executesql N'" + Quote(ListBody) + "', N'@Days int, @State nvarchar(16), @Skip int, @Take int', @Days = @Days, @State = @State, @Skip = @Skip, @Take = @Take;\n";
 
     /// How many CIs are active (the CI's own lifecycle; none = active) -- the count the CI list's default shows.
     public const string ActiveSql = """
@@ -115,31 +155,60 @@ COMMIT;
 SELECT N'retired' AS Outcome;
 """;
 
-    public async Task<NotSeenView> ReadAsync(int retiredDays, CancellationToken ct)
+    /// The first page of each list (<see cref="ReadPageAsync"/>).
+    public Task<NotSeenView> ReadAsync(int retiredDays, CancellationToken ct) => ReadPageAsync(retiredDays, new NotSeenPaging(0, 0, PageSize), ct);
+
+    /// <summary>
+    /// #1400 one page of each list -- the CIs not seen (their grace period) and the ones retired in the last
+    /// <paramref name="retiredDays"/> days -- with each list's total; <see cref="NotSeenPaging.Only"/> reads one list alone (an
+    /// export's next chunk). Never every not-seen CI in one read.
+    /// </summary>
+    public async Task<NotSeenView> ReadPageAsync(int retiredDays, NotSeenPaging paging, CancellationToken ct)
     {
         var days = Math.Clamp(retiredDays, 1, 365);
-        var rows = await _sql.QueryAsync(ListSql, new Dictionary<string, object?> { ["Days"] = days }, ct);
-        if (rows.Count == 0) return new NotSeenView(true, Array.Empty<NotSeenAsset>(), Array.Empty<NotSeenAsset>(), await ActiveAsync(ct));
-        if ((rows[0].Long("HasTable") ?? 0) != 1) return NotSeenView.Missing;
+        var take = Math.Clamp(paging.Take, 1, SI.Management.Core.ProData.ProDataFilters.ExportChunk);
         // the grace period of each CI's category from the lifecycle rules in force (#859: never a day count of the page's own)
         var rules = SI.Management.Core.ProData.CiLifecycleDefinitions.Defaults;
-        if (_rules is not null)
+        var rulesRead = false;
+        async Task<(bool Has, IReadOnlyList<NotSeenAsset> Rows, long Total)> List(string state, string mark, int skip)
         {
-            try { rules = await _rules.ReadAsync(ct); }
-            catch (Exception ex) when (ex is not OperationCanceledException) { _ = ex; }
+            var rows = await _sql.QueryAsync(ListSql, new Dictionary<string, object?> { ["Days"] = days, ["State"] = state, ["Skip"] = Math.Max(0, skip), ["Take"] = take }, ct);
+            if (rows.Count == 0 && skip > 0)
+            {
+                // a page past the last one: the list's total is still said (read from its first row), never 0
+                var head = await _sql.QueryAsync(ListSql, new Dictionary<string, object?> { ["Days"] = days, ["State"] = state, ["Skip"] = 0, ["Take"] = 1 }, ct);
+                if (head.Count > 0 && (head[0].Long("HasTable") ?? 0) != 1) return (false, Array.Empty<NotSeenAsset>(), 0);
+                return (true, Array.Empty<NotSeenAsset>(), head.Count == 0 ? 0 : head[0].Long("Total") ?? 1);
+            }
+            if (rows.Count == 0) return (true, Array.Empty<NotSeenAsset>(), 0);
+            if ((rows[0].Long("HasTable") ?? 0) != 1) return (false, Array.Empty<NotSeenAsset>(), 0);
+            if (!rulesRead && _rules is not null)
+            {
+                rulesRead = true;
+                try { rules = await _rules.ReadAsync(ct); }
+                catch (Exception ex) when (ex is not OperationCanceledException) { _ = ex; }
+            }
+            var list = rows.Select(r =>
+            {
+                var cat = r.Str("Category") ?? "other";
+                var grace = rules.Grace(cat);
+                var seen = r.Date("LastSeen");
+                var st = r.Str("State") ?? "";
+                var since = r.Date("StateChangedAt");
+                return new NotSeenAsset(r.Str("CiKey") ?? "", r.Str("Name"), cat, r.Str("Kind"), seen ?? DateTime.MinValue, grace,
+                    seen is { } s ? s.AddDays(grace) : null, st, since, st == "retired" ? since : null,
+                    null, r.Str("RetireReason"), r.Long("OpenFindings") ?? 0, r.Str("TopFindings"));
+            }).Where(a => a.State == mark).ToList();
+            return (true, list, Math.Max(list.Count + Math.Max(0, skip), rows[0].Long("Total") ?? list.Count));
         }
-        var all = rows.Select(r =>
+        (bool Has, IReadOnlyList<NotSeenAsset> Rows, long Total) notSeen = paging.Only is null or NotSeenPaging.NotSeen ? await List("not_seen", "not-seen", paging.NotSeenSkip) : (true, Array.Empty<NotSeenAsset>(), 0L);
+        if (!notSeen.Has) return NotSeenView.Missing;
+        (bool Has, IReadOnlyList<NotSeenAsset> Rows, long Total) retired = paging.Only is null or NotSeenPaging.RetiredList ? await List("retired", "retired", paging.RetiredSkip) : (true, Array.Empty<NotSeenAsset>(), 0L);
+        if (!retired.Has) return NotSeenView.Missing;
+        return new NotSeenView(true, notSeen.Rows, retired.Rows, paging.Only is null ? await ActiveAsync(ct) : 0)
         {
-            var cat = r.Str("Category") ?? "other";
-            var grace = rules.Grace(cat);
-            var seen = r.Date("LastSeen");
-            var state = r.Str("State") ?? "";
-            var since = r.Date("StateChangedAt");
-            return new NotSeenAsset(r.Str("CiKey") ?? "", r.Str("Name"), cat, r.Str("Kind"), seen ?? DateTime.MinValue, grace,
-                seen is { } s ? s.AddDays(grace) : null, state, since, state == "retired" ? since : null,
-                null, r.Str("RetireReason"), r.Long("OpenFindings") ?? 0, r.Str("TopFindings"));
-        }).ToList();
-        return new NotSeenView(true, all.Where(a => a.State == "not-seen").ToList(), all.Where(a => a.State == "retired").ToList(), await ActiveAsync(ct));
+            NotSeenTotalRead = notSeen.Total, RetiredTotalRead = retired.Total, NotSeenSkip = paging.NotSeenSkip, RetiredSkip = paging.RetiredSkip,
+        };
     }
 
     private async Task<long> ActiveAsync(CancellationToken ct)

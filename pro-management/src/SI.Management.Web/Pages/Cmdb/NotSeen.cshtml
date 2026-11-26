@@ -20,6 +20,23 @@
             </form>;
     }
 }
+@functions {
+    // #1400: a list longer than one page says which rows it shows of how many, with links to the pages around (the exports
+    // take every row of the list)
+    private Microsoft.AspNetCore.Html.IHtmlContent Pager(string key, int skip, int shown, long total, string marker)
+    {
+        if (total <= shown && skip == 0) return Microsoft.AspNetCore.Html.HtmlString.Empty;
+        var page = skip / SqlAssetLifecycleStore.PageSize + 1;
+        var pages = NotSeenModel.Pages(total);
+        var b = new Microsoft.AspNetCore.Html.HtmlContentBuilder();
+        b.AppendHtml("<p class=\"hint noprint\" " + marker + ">");
+        b.Append($"Showing {Fmt.Int(shown == 0 ? 0 : skip + 1L)}–{Fmt.Int(skip + (long)shown)} of {Fmt.Int(total)} · page {Fmt.Int(page)} of {Fmt.Int(pages)} (the exports take every row) ");
+        if (page > 1) b.AppendHtml("<a href=\"" + System.Net.WebUtility.HtmlEncode(Model.PageLink(key, page - 1)) + "\" rel=\"prev\">Previous</a> ");
+        if (page < pages) b.AppendHtml("<a href=\"" + System.Net.WebUtility.HtmlEncode(Model.PageLink(key, page + 1)) + "\" rel=\"next\">Next</a>");
+        b.AppendHtml("</p>");
+        return b;
+    }
+}
 <h1>Not seen anymore</h1>
 <p class="lede">Assets SecurityInsight no longer sees. Each one is retired automatically when the grace period of its kind has passed -- its open findings then close as <em>Asset retired</em>, never as fixed. Until then it is listed here.</p>
 <details class="help">
@@ -33,20 +50,22 @@ else
 {
     <section class="card" aria-labelledby="h-ns" data-not-seen>
         <div class="split">
-            <h2 id="h-ns">@Fmt.Int(v.NotSeen.Count) asset(s) in their grace period</h2>
+            <h2 id="h-ns">@Fmt.Int(v.NotSeenTotal) asset(s) in their grace period</h2>
             <span class="muted">@Fmt.Int(v.Active) active</span>
         </div>
-        @if (v.NotSeen.Count == 0)
+        @if (v.NotSeenTotal == 0)
         {
             <p class="hint">Every asset SecurityInsight tracks was seen recently.</p>
         }
         @* #589: the CI, its identifiers and context, every field -- the chooser and the all-rows exports *@
         @if (notSeen is not null) { <partial name="~/Pages/Shared/_DataTable.cshtml" model="notSeen" /> }
+        @Pager("p", v.NotSeenSkip, v.NotSeen.Count, v.NotSeenTotal, "data-not-seen-pager")
     </section>
 
     <section class="card" aria-labelledby="h-ret" data-retired>
-        <h2 id="h-ret">Retired in the last @NotSeenModel.RetiredDays days (@Fmt.Int(v.Retired.Count))</h2>
+        <h2 id="h-ret">Retired in the last @NotSeenModel.RetiredDays days (@Fmt.Int(v.RetiredTotal))</h2>
         @if (retired is not null) { <partial name="~/Pages/Shared/_DataTable.cshtml" model="retired" /> }
+        @Pager("rp", v.RetiredSkip, v.Retired.Count, v.RetiredTotal, "data-retired-pager")
         @if (v.Retired.Count > 0)
         {
             <p class="hint">"Still open" are findings the vulnerability connector has not closed yet -- it closes them as Asset retired on its next run, within the close limit.</p>

@@ -24,6 +24,8 @@
     stops), it is FINISHING, not dead, for 10 minutes after the mark; after that it is judged as before (live 2026-11-25: a
     finished update was stopped as "never reported that it was working" 27 s after its end). An execution with neither a start time nor a beat is never
     judged dead. When the lock rows cannot be read the old rule holds (everything Running counts; nothing is stopped).
+    #1406: an UPDATE that has beaten (and wrote no end mark) is never dead while Azure runs it: a stale beat makes it QUIET
+    (Quiet $true, Alive $true -- the work waits, one warning) until the outer fallback; only past 6 h is it stopped.
     A DEAD execution is STOPPED (ARM executions/<name>/stop), said in one plain WARNING line, and raised to Invardia as the
     alert si.execution.stopped-dead; the queued work goes on in the same wake-up. A stop that fails is a WARNING and the
     execution still holds the work back -- unless it started more than 6 hours ago (the outer fallback): never two runs side
@@ -45,6 +47,8 @@ function Get-SIExecutionLivenessContract {
         # #1357: the end mark of an update's run (written at its end, before its own row is let go): the execution is
         # FINISHING -- Azure may still show it running for a moment -- and is not judged dead for EndedGraceMinutes after it
         UpdaterEndedLock      = 'updater-ended'
+        # #1406: the release script's run beat (setup\_shared\SI-UpdateSqlBeat.ps1) -- the update is changing the install
+        UpdaterRunLock        = 'updater-run'
         EndedGraceMinutes     = 10
         StopApi               = '2024-03-01'
         UpdaterHolderPrefix   = 'caj-si-updater:'
@@ -140,6 +144,19 @@ function Get-SIExecutionLiveness {
     # short grace after the mark; past it, a still-running execution is judged by the mark like any last beat
     $ended = [bool]($beat -and $beat.LockName -eq $c.UpdaterEndedLock)
     $alive = if ($ended) { $since -lt $c.EndedGraceMinutes } elseif ($beat) { $since -lt $c.BeatStaleMinutes } elseif ($null -ne $age) { $age -lt $c.NeverBeatGraceMinutes } else { $true }
+    $pastFallback = [bool]($null -ne $age -and $age -gt ($c.FallbackHours * 60))
+    # #1406 (live 2026-11-26, a large install: the pipeline stopped an update in its key figures step -- jobs on the new
+    # release, the record on the old one): an UPDATE that has reported that it works (it beat at least once, it has not
+    # written its end mark) is NEVER judged dead while Azure still runs it -- a stale beat is QUIET, not dead: the work waits
+    # for it (one warning), until the outer fallback (6 h after its start). Stopping it would leave the install half updated.
+    # One that never beat never ran SecurityInsight's code (nothing is half done): the 30 minutes hold as before.
+    # (review: quiet only once the run CHANGES the install -- it holds the install lock, or the release script's run beat took
+    # its row 'updater-run'; an idle hourly run that only signed in is judged by the 15 / 30 minutes as before)
+    $quiet = $false
+    if (-not $alive -and $k -eq 'updater' -and $beat -and -not $ended -and -not $pastFallback) {
+        $changing = @($Locks | Where-Object { $_ -and ([string](Get-SIExecLiveField $_ 'LockName')) -in @($c.InstallLock, $c.UpdaterRunLock) -and (Test-SIExecutionHolder -Holder ([string](Get-SIExecLiveField $_ 'Holder')) -Name $name) }).Count -gt 0
+        if ($changing) { $alive = $true; $quiet = $true }
+    }
     [pscustomobject]@{
         Name = $name; Kind = $k; StartedUtc = $start
         AgeMin = $(if ($null -ne $age) { [int][Math]::Floor($age) } else { $null })
@@ -148,7 +165,8 @@ function Get-SIExecutionLiveness {
         LockName = $(if ($beat) { $beat.LockName } else { '' })
         Alive = [bool]$alive
         Ended = $ended
-        PastFallback = [bool]($null -ne $age -and $age -gt ($c.FallbackHours * 60))
+        Quiet = [bool]$quiet
+        PastFallback = $pastFallback
         Execution = $Execution
     }
 }
@@ -220,6 +238,23 @@ function Get-SIExecutionStoppedText {
         $(if ($QueuedRunStarted) { 'the waiting work goes on now' } else { 'nothing else was held back by it' }))
 }
 
+function Get-SIExecutionQuietText {
+    <# PURE. #1406: the one WARNING line of an update that is quiet (a stale beat) while Azure still runs it -- it is waited for, never stopped. #>
+    param([Parameter(Mandatory)]$Quiet)
+    ('{0} has not reported for {1} minutes but Azure still runs it: {2} -- it is not stopped (that would leave the install half updated); the waiting work goes on when it has ended' -f
+        (Get-SIExecutionKindText $Quiet.Kind), $Quiet.MinutesSinceBeat, (Get-SIExecutionLifeText $Quiet))
+}
+
+function Write-SIExecutionQuietOnce {
+    <# #1406: says Get-SIExecutionQuietText ONCE per execution in this process (-Said: the names said already). Never throws. #>
+    param([object[]]$Live = @(), [scriptblock]$Log, [System.Collections.IDictionary]$Said)
+    foreach ($q in @($Live | Where-Object { $_ -and $_.PSObject.Properties['Quiet'] -and $_.Quiet })) {
+        if ($Said -and $Said.Contains([string]$q.Name)) { continue }
+        if ($Said) { $Said[[string]$q.Name] = $true }
+        if ($Log) { try { & $Log 'WARN' (Get-SIExecutionQuietText -Quiet $q) } catch { } }
+    }
+}
+
 function Get-SIExecutionStopFailedText {
     <# PURE. The WARNING line of a stop that failed. #>
     param([Parameter(Mandatory)]$Dead, [string]$Reason = '')
@@ -276,6 +311,7 @@ function ConvertTo-SIExecutionStoppedAlert {
         'housekeeping' { 'its last beat was on the clean-up''s own lock' }
         'wakeup'       { 'its last beat was on the wake-up''s own lock' }
         'updater-ended' { 'its run had ended (its end mark) but its container did not stop' }
+        'updater-run'  { 'its last beat was on the update''s own run beat' }
         default        { 'it never beat a lock' }
     }
     $at = ('SecurityInsight stopped the {0} execution {1}: Azure still showed it running, but {2}{3} -- {4}.' -f [string]$Event.Kind, [string]$Event.Execution, $lockWords,
@@ -458,7 +494,7 @@ function Read-SIExecutionLocks {
         return [pscustomobject]@{ Known = $true; Rows = $out.ToArray() }
     }
     $c = Get-SIExecutionLivenessContract
-    $docs = @(foreach ($n in @($c.InstallLock, $c.UpdaterLock, $c.HousekeepingLock, $c.WakeupLock, $c.UpdaterEndedLock)) { Read-SIExecLiveDoc -Store $Store -Lock $n })
+    $docs = @(foreach ($n in @($c.InstallLock, $c.UpdaterLock, $c.HousekeepingLock, $c.WakeupLock, $c.UpdaterEndedLock, $c.UpdaterRunLock)) { Read-SIExecLiveDoc -Store $Store -Lock $n })
     [pscustomobject]@{ Known = $true; Rows = @($docs | Where-Object { $_ -and $_.Holder }) }
 }
 

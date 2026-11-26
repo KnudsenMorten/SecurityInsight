@@ -5474,6 +5474,9 @@ IF OBJECT_ID(N'sidata.StatisticsRefreshTable') IS NULL
    OR NOT EXISTS (SELECT 1 FROM sys.sql_modules AS m JOIN sys.database_principals AS p ON p.principal_id = m.execute_as_principal_id
                   WHERE m.object_id = OBJECT_ID(N'sidata.StatisticsRefreshTable'))
     EXEC (@SIStatsProc);
+-- the v1 gate is made only while no newer one (v2, with @Only, appended below) is there -- otherwise every re-apply made v1
+-- over v2 and v2 again (the gate flipped once per update). Its body text is unchanged; only this guard line is added.
+IF CHARINDEX(N'@Only', ISNULL(OBJECT_DEFINITION(OBJECT_ID(N'sidata.StatisticsRefresh')), N'')) = 0
 EXEC (N'CREATE OR ALTER PROCEDURE sidata.StatisticsRefresh @After nvarchar(300) = NULL, @AsyncOnly bit = 0, @Table nvarchar(300) = NULL OUTPUT,
     @Refreshed int = NULL OUTPUT, @Failed int = NULL OUTPUT, @Error nvarchar(2000) = NULL OUTPUT, @Async bit = NULL OUTPUT
 AS
@@ -5842,6 +5845,10 @@ DECLARE @SIRemWeb nvarchar(max) = CASE WHEN OBJECT_ID('cfg.Setting') IS NOT NULL
 -- clearable columns that are empty, in the push's order (SI-DataOutContract.ps1, $script:SIDataOutClearable). The SQL route
 -- has no batch (u_si_batch_id NULL) and does not know what ServiceNow last read: u_action says the task's state (out_of_scope,
 -- close, update) -- a reopened task's cleared close reason and time are in u_si_cleared, as on the push.
+-- #1403 a software task: yes = its findings named every affected software item; no = a list reached the limit (the source listed
+-- more than SI keeps) -- the task is then HELD, never closed as task changed on a product the cut list may only have left out.
+-- Before the hand-off views (they carry it as u_si_software_lists_complete). Additive.
+IF COL_LENGTH('sidata.RemediationTask', 'SoftwareListsComplete') IS NULL ALTER TABLE sidata.RemediationTask ADD SoftwareListsComplete NVARCHAR(3) NULL;
 IF OBJECT_ID('vuln.VulnerabilityItem') IS NOT NULL
     EXEC (N'CREATE OR ALTER VIEW snowstage.vImportRemediationTask AS
 SELECT LOWER(CONVERT(nvarchar(64), t.TaskId, 2)) AS u_si_task_id, t.CiId AS u_si_correlation_id, t.AssetName AS u_asset_name, t.CmdbId AS u_cmdb_ci,
@@ -5883,7 +5890,8 @@ SELECT LOWER(CONVERT(nvarchar(64), t.TaskId, 2)) AS u_si_task_id, t.CiId AS u_si
                  CASE WHEN NULLIF(LTRIM(RTRIM(t.AssetEnvironment)), N'''') IS NULL THEN N'',u_environment'' END,
                  CASE WHEN t.InternetExposed IS NULL THEN N'',u_internet_exposed'' END,
                  CASE WHEN NULLIF(LTRIM(RTRIM(t.AlsoReportedBy)), N'''') IS NULL THEN N'',u_also_reported_by'' END,
-                 CASE WHEN wb.Web IS NULL THEN N'',u_si_more_info'' END), 1, 1, N''''), N'''') AS u_si_cleared,
+                 CASE WHEN wb.Web IS NULL THEN N'',u_si_more_info'' END,
+                 CASE WHEN NULLIF(LTRIM(RTRIM(t.SoftwareListsComplete)), N'''') IS NULL THEN N'',u_si_software_lists_complete'' END), 1, 1, N''''), N'''') AS u_si_cleared,
        t.WhatToDo AS u_what_to_do, t.ApplicationVersion AS u_application_version, t.DetectedPaths AS u_detected_paths,
        t.RecommendedUpdate AS u_recommended_update, t.RemediationSteps AS u_remediation, t.CveList AS u_cve_ids,
        t.HighestRiskRating AS u_risk_rating, t.MaxWeightedRisk AS u_weighted_risk, t.SecurityDomain AS u_security_domain, t.Channel AS u_tool,
@@ -5895,7 +5903,7 @@ SELECT LOWER(CONVERT(nvarchar(64), t.TaskId, 2)) AS u_si_task_id, t.CiId AS u_si
        t.AssetEnvironment AS u_environment, CASE t.InternetExposed WHEN 1 THEN N''yes'' WHEN 0 THEN N''no'' END AS u_internet_exposed,
        t.AlsoReportedBy AS u_also_reported_by,
        CASE WHEN wb.Web IS NOT NULL THEN CONCAT(wb.Web, N''/Remediations/Task?id='', LOWER(CONVERT(nvarchar(64), t.TaskId, 2))) END AS u_si_more_info,
-       LOWER(CONVERT(nvarchar(64), t.ContextHash, 2)) AS u_si_context_hash
+       LOWER(CONVERT(nvarchar(64), t.ContextHash, 2)) AS u_si_context_hash, t.SoftwareListsComplete AS u_si_software_lists_complete
 FROM sidata.RemediationTask AS t
 JOIN sidata.Collection AS c ON c.CollectionId = t.CollectionId
 CROSS APPLY (SELECT ' + @SIRemWeb + N' AS Web) AS wb
@@ -6732,3 +6740,27 @@ END');
 IF COL_LENGTH('sidata.CveSummary', 'ExploitVerified') IS NULL ALTER TABLE sidata.CveSummary ADD ExploitVerified BIT NULL;
 
 IF COL_LENGTH('sidata.CveSummary', 'InExploitKit') IS NULL ALTER TABLE sidata.CveSummary ADD InExploitKit BIT NULL;
+
+-- ---------------------------------------------------------------------------------------------
+-- #1403 (review of 3.1.51, owner "data quality is key. trust": nothing lost, nothing cut silently). Appended, guarded, additive.
+--   Finding.AffectedSoftwareComplete   si_affected_software_complete: false when the source listed more affected software than
+--                                      SI keeps per device and CVE (256) -- never cut silently (a stored view column)
+--   IssueContext.AffectedSoftwareComplete  the same per issue
+--   CiRecord.FirstSeen                 the record's first collection (SI-RecordSql.ps1): an Azure resource that appears under a
+--                                      new id after another id of the same type and name was deleted is a MOVE, never a deletion
+--                                      (SI-DeletionProof.ps1); NULL = a record first seen before this column existed
+--   GroupGoneWatch                     a privilege-holding group the directory does not return and that never settles: its misses
+--                                      run to run -- not confirmed in 3 runs in a row = gone (IdentityRoleFetcher.ps1)
+-- ---------------------------------------------------------------------------------------------
+IF COL_LENGTH('sidata.Finding', 'AffectedSoftwareComplete') IS NULL
+    ALTER TABLE sidata.Finding ADD AffectedSoftwareComplete NVARCHAR(8) NULL;
+IF COL_LENGTH('sidata.IssueContext', 'AffectedSoftwareComplete') IS NULL
+    ALTER TABLE sidata.IssueContext ADD AffectedSoftwareComplete NVARCHAR(MAX) NULL;
+IF COL_LENGTH('sidata.CiRecord', 'FirstSeen') IS NULL ALTER TABLE sidata.CiRecord ADD FirstSeen DATETIME2(3) NULL;
+IF OBJECT_ID('sidata.GroupGoneWatch') IS NULL
+CREATE TABLE sidata.GroupGoneWatch (
+    GroupId         NVARCHAR(64)   NOT NULL CONSTRAINT PK_GroupGoneWatch PRIMARY KEY,
+    Misses          INT            NOT NULL,
+    FirstMissedAt   DATETIME2(3)   NOT NULL,
+    LastMissedAt    DATETIME2(3)   NOT NULL
+);

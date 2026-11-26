@@ -1982,9 +1982,11 @@ function Remove-SIDataHeldReportRows {
     $total = 0L
     foreach ($h in $held) {
         $name = [string]$h['ReportName']; $ord = [int]$h['HeldRaReport']
-        $size = [Math]::Max(1L, $StartSize); $floor = 0; $removed = 0L
+        $size = [Math]::Max(1L, $StartSize); $floor = 0; $removed = 0L; $walk = 0L
+        # #1397: done only when PROVEN -- a pass that finds nothing (the same condition, the same index)
         while ($true) {
             $sw = [Diagnostics.Stopwatch]::StartNew()
+            $n = 0L
             try { $n = [long](@(& $Invoke (Get-SIDataHeldRowsBatchSql) @{ CollectionId = [string]$CollectionId; Report = [string]$ord; Batch = [string]$size } 'scalar')[-1]) }
             catch {
                 $msg = [string]$_.Exception.Message
@@ -1997,8 +1999,11 @@ function Remove-SIDataHeldReportRows {
                 throw ("{0}: the rows report '{1}' left in this run (held back by Risk Analysis) could not be removed ({2}) -- the collection is not taken in this time, so no part of that report is ever shown as the report; the earlier collection stays current and the next data sync tries again" -f $What, $name, $msg)
             }
             $sw.Stop(); $floor = 0
-            $removed += $n
-            if ($n -lt $size) { break }
+            $removed += $n; $walk += $n
+            if ($n -lt $size) {
+                if ($walk -eq 0) { break }        # this pass found nothing: no row of the report is left
+                $walk = 0L; continue              # rows were removed in this pass: ask again from the start to prove it
+            }
             $size = Get-SIDataNextSize -Current $size -ElapsedMs $sw.ElapsedMilliseconds -TargetMs $TargetMs -Minimum 1
         }
         $total += $removed
@@ -2047,12 +2052,13 @@ function Invoke-SIDataAdoptRaCollection {
     $set = Build-SIDataAssets -Profiles $Profiles -FindingAssets @($byAsset.Values) -Index $Index -Properties $Properties -SeenAt $Item.CollectionTime
     $kindCoverage = Get-SIDataKindCoverage -FindingAssets @($byAsset.Values) -Set $set
     foreach ($dk in @($kindCoverage.Dropped)) { & $Log 'WARN' ("  {0}: findings on {1} {2} asset(s), but 0 CIs of kind {2} were stored -- the web app's '{2}' filter shows none of them" -f $tText, $kindCoverage.Implied[$dk], $dk) }
-    $assetItems = @($set.Assets | ForEach-Object { ConvertTo-SIDataJsonObject -Values ([ordered]@{ AssetKey = $_.AssetKey; AssetName = $_.AssetName; AssetKind = $_.AssetKind
-        AssetKinds = $_.AssetKinds; Tier = $_.Tier; KeySource = $_.KeySource; LastSeen = $_.LastSeen; PropertiesJson = $_.PropertiesJson }) })
-    $nAssets = Write-SIDataJsonRows -Invoke $Invoke -Sql (Get-SIDataUpsertAssetSql) -Items $assetItems -ChunkChars $ChunkChars -What 'assets'
-    $idItems = @($set.Identifiers | ForEach-Object { ConvertTo-SIDataJsonObject -Values ([ordered]@{ AssetKey = $_.AssetKey; IdentifierType = $_.IdentifierType
-        IdentifierValue = $_.IdentifierValue; SeenAt = $_.SeenAt }) })
-    [void](Write-SIDataJsonRows -Invoke $Invoke -Sql (Get-SIDataUpsertIdentifierSql) -Items $idItems -ChunkChars $ChunkChars -What 'asset identifiers')
+    # #1399 the CIs and their identifiers written in asset chunks (Write-SIDataJsonRowsFrom) -- the JSON of every asset is never held at once
+    $nAssets = Write-SIDataJsonRowsFrom -Invoke $Invoke -Sql (Get-SIDataUpsertAssetSql) -Source @($set.Assets) -ChunkChars $ChunkChars -What 'assets' -Convert {
+        param($x) ConvertTo-SIDataJsonObject -Values ([ordered]@{ AssetKey = $x.AssetKey; AssetName = $x.AssetName; AssetKind = $x.AssetKind
+        AssetKinds = $x.AssetKinds; Tier = $x.Tier; KeySource = $x.KeySource; LastSeen = $x.LastSeen; PropertiesJson = $x.PropertiesJson }) }
+    [void](Write-SIDataJsonRowsFrom -Invoke $Invoke -Sql (Get-SIDataUpsertIdentifierSql) -Source @($set.Identifiers) -ChunkChars $ChunkChars -What 'asset identifiers' -Convert {
+        param($x) ConvertTo-SIDataJsonObject -Values ([ordered]@{ AssetKey = $x.AssetKey; IdentifierType = $x.IdentifierType
+        IdentifierValue = $x.IdentifierValue; SeenAt = $x.SeenAt }) })
     $tierFilled = [int](& $Invoke (Get-SIDataFindingTierFromAssetSql) @{ CollectionId = $cid } 'scalar')
     if ($tierFilled -gt 0) { & $Log 'INFO' ("  {0} finding(s) without a tier took the tier of their asset" -f $tierFilled) }
     $evidence = $null
@@ -2200,12 +2206,13 @@ function Invoke-SIDataLoadCollection {
     $kindCoverage = Get-SIDataKindCoverage -FindingAssets @($findingAssets.Values) -Set $set
     foreach ($dk in @($kindCoverage.Dropped)) { & $Log 'WARN' ("  {0}: findings on {1} {2} asset(s), but 0 CIs of kind {2} were stored -- the web app's '{2}' filter shows none of them" -f $tText, $kindCoverage.Implied[$dk], $dk) }
     if ($kindCoverage.Kindless -gt 0) { & $Log 'WARN' ("  {0}: {1} CI(s) with findings have no asset kind -- no kind filter shows them" -f $tText, $kindCoverage.Kindless) }
-    $assetItems = @($set.Assets | ForEach-Object { ConvertTo-SIDataJsonObject -Values ([ordered]@{ AssetKey = $_.AssetKey; AssetName = $_.AssetName; AssetKind = $_.AssetKind
-        AssetKinds = $_.AssetKinds; Tier = $_.Tier; KeySource = $_.KeySource; LastSeen = $_.LastSeen; PropertiesJson = $_.PropertiesJson }) })
-    $nAssets = Write-SIDataJsonRows -Invoke $Invoke -Sql (Get-SIDataUpsertAssetSql) -Items $assetItems -ChunkChars $ChunkChars -What 'assets'
-    $idItems = @($set.Identifiers | ForEach-Object { ConvertTo-SIDataJsonObject -Values ([ordered]@{ AssetKey = $_.AssetKey; IdentifierType = $_.IdentifierType
-        IdentifierValue = $_.IdentifierValue; SeenAt = $_.SeenAt }) })
-    [void](Write-SIDataJsonRows -Invoke $Invoke -Sql (Get-SIDataUpsertIdentifierSql) -Items $idItems -ChunkChars $ChunkChars -What 'asset identifiers')
+    # #1399 the CIs and their identifiers written in asset chunks (Write-SIDataJsonRowsFrom) -- the JSON of every asset is never held at once
+    $nAssets = Write-SIDataJsonRowsFrom -Invoke $Invoke -Sql (Get-SIDataUpsertAssetSql) -Source @($set.Assets) -ChunkChars $ChunkChars -What 'assets' -Convert {
+        param($x) ConvertTo-SIDataJsonObject -Values ([ordered]@{ AssetKey = $x.AssetKey; AssetName = $x.AssetName; AssetKind = $x.AssetKind
+        AssetKinds = $x.AssetKinds; Tier = $x.Tier; KeySource = $x.KeySource; LastSeen = $x.LastSeen; PropertiesJson = $x.PropertiesJson }) }
+    [void](Write-SIDataJsonRowsFrom -Invoke $Invoke -Sql (Get-SIDataUpsertIdentifierSql) -Source @($set.Identifiers) -ChunkChars $ChunkChars -What 'asset identifiers' -Convert {
+        param($x) ConvertTo-SIDataJsonObject -Values ([ordered]@{ AssetKey = $x.AssetKey; IdentifierType = $x.IdentifierType
+        IdentifierValue = $x.IdentifierValue; SeenAt = $x.SeenAt }) })
     if ($set.Skipped -gt 0) { & $Log 'WARN' ("  {0} identifier(s) are longer than 256 characters and were not stored" -f $set.Skipped) }
     # A finding without a tier on an asset that has one takes the asset's tier -- the pages never show a finding as
     # Unclassified while the Tier board shows its asset in a tier.

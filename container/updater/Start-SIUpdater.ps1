@@ -1315,6 +1315,8 @@ function Get-SIUpdaterDeployed {
         $img = $null; try { $img = [string]$_.properties.template.containers[0].image } catch { }
         [pscustomobject]@{ Name = [string]$_.name; Image = $img }
     }
+    # #1406: the record itself, for the decision (jobs on a version the record does not reach = an update stopped part-way)
+    $global:SI_UpdaterRecordedVersion = $recorded
     Get-SIDeployedVersionFromJobs -Jobs @($jobs) -LoginServer $acr.loginServer -Recorded $recorded
 }
 
@@ -1496,7 +1498,17 @@ function Invoke-SIUpdaterCore {
     # NO FRESH BEAT = DEAD (d): this update's own sign of life from here on -- its 'updater' lock row, beaten at once and with
     # every log line (Invoke-SIUpdaterLockBeat), released at the end of the run
     if ($proStore -and (Get-Command -Name Register-SIUpdaterExecutionBeat -ErrorAction SilentlyContinue)) {
-        try { $null = Register-SIUpdaterExecutionBeat -Store (New-SIUpdaterProStore -Server $proSql -Database $proDb -SubscriptionId $sub -FreshToken) -Holder (Get-SIUpdaterRunGateHolder -Env $Env) } catch { }
+        # #1406 (review): the other executions Azure still runs -- a row one of them holds is never taken over (every mode:
+        # apply-settings and the second pass skip the overlap check above, so they read the executions here)
+        $busyNames = @()
+        try {
+            $bx = $null; if (Get-Variable -Name execs -Scope Local -ErrorAction SilentlyContinue) { $bx = $execs }
+            if ($null -eq $bx) { $bx = @(Invoke-SIUpdaterArm -Path (Get-SIUpdaterRgPath -SubscriptionId $sub -ResourceGroup $rg -Provider ('Microsoft.App/jobs/{0}/executions' -f (Get-SIUpdaterInstallName -Role updater -Env $Env))) -List) }
+            if (Get-Command -Name Get-SIUpdaterBusyExecutions -ErrorAction SilentlyContinue) { $busyNames = @(Get-SIUpdaterBusyExecutions -Executions @($bx) -Self (& $get 'CONTAINER_APP_JOB_EXECUTION_NAME')) }
+            # (one the overlap check just stopped as dead may still read Running for a moment: never a reason to hold back)
+            if ($global:SI_ExecutionStopped) { $busyNames = @($busyNames | Where-Object { -not $global:SI_ExecutionStopped.Contains([string]$_) }) }
+        } catch { $busyNames = @() }
+        try { $null = Register-SIUpdaterExecutionBeat -Store (New-SIUpdaterProStore -Server $proSql -Database $proDb -SubscriptionId $sub -FreshToken) -Holder (Get-SIUpdaterRunGateHolder -Env $Env) -Busy $busyNames } catch { }
     }
     $script:SIUpdaterProStore = $proStore   # #427: the telemetry switch on the Settings page, read when a failure is reported
     # CR5 step 1 (#655): the names this install runs with, recorded -- every lookup below reads them (Get-SIUpdaterInstallName)
@@ -1631,6 +1643,9 @@ function Invoke-SIUpdaterCore {
     # #1344: the image check job caj-si-image-check ('*/15 * * * *') kept present and on this updater's image, read back --
     # existing installs get it on their next update, no manual step. Never fails or holds the update; quiet when it is right.
     if (Get-Command -Name Invoke-SIUpdaterImageCheckJob -ErrorAction SilentlyContinue) { $global:SI_UpdaterStep = 'settings'; $null = Invoke-SIUpdaterImageCheckJob -SubscriptionId $sub -ResourceGroup $rg -UpdaterJob (Get-SIUpdaterInstallName -Role updater -Env $Env) -Quiet }
+    # #1413: a deleted user-assigned identity taken off SI's jobs and apps (fail closed, identity-only PATCH, read back) -- right after
+    # the job ensure, BEFORE the update's roll and the web app's revision checks. Never fails or holds the update.
+    if (Get-Command -Name Invoke-SIUpdaterDeadIdentities -ErrorAction SilentlyContinue) { $global:SI_UpdaterStep = 'settings'; $null = Invoke-SIUpdaterDeadIdentities -SubscriptionId $sub -ResourceGroup $rg }
     # framework SEC-LANE-1 (owner 2026-11-14 "things must work automatically"): the image clean-up switch set off by hand on
     # this job is taken away by the updater itself once it runs 3.1.14+ (read back; one line) -- never by hand again
     if (Get-Command -Name Invoke-SIUpdaterPruneSwitchClear -ErrorAction SilentlyContinue) {
@@ -1715,7 +1730,15 @@ function Invoke-SIUpdaterPostRollRun {
     Invoke-SIUpdaterWebAppStepsAfter -Rc 0 -Env $Env -Store $Store -SubscriptionId $SubscriptionId -ResourceGroup $ResourceGroup
     # the release's schema step may have re-stated the vulnerable-item view to today's columns: the switched-on ones again
     $null = Invoke-SIUpdaterVulnViewStep -Store $Store
+    # SI #1414 THE LAST STEP, in the release's own code: nothing old answers -- one active revision per container app with an
+    # ingress, read back (the update that installed this release ran in the OLD updater code, which may not have it). Not
+    # proven = this run FAILS (exit 1); the step wrote the failure report (step post-roll)
+    $rv = $null
+    if (Get-Command -Name Invoke-SIUpdaterSingleRevisionStep -ErrorAction SilentlyContinue) {
+        $rv = Invoke-SIUpdaterSingleRevisionStep -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId -Apps @((Get-SIUpdaterInstallName -Role web -Env $Env), (Get-SIUpdaterInstallName -Role mcp -Env $Env))
+    }
     Write-UpdLog 'post-roll run: done'
+    if ($rv -and -not $rv.Ok) { return 1 }
     0
 }
 

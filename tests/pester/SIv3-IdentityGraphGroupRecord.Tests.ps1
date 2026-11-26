@@ -32,6 +32,9 @@ BeforeAll {
     . (Join-Path $script:SIRoot 'engine\data-model\SI-DataModelTemplates.ps1')
     . (Join-Path $script:SIRoot 'engine\data-model\SI-CiBuild.ps1')
 
+    # the identity scope settings this file clears (Invoke-GraphIdentityRun) -- put back in AfterAll (#1415)
+    $script:SavedScope = @{}
+    foreach ($n in 'SI_Identity_SkipNeverSyncedAd', 'SI_Identity_SkipNeverSyncedDisabledAd', 'SI_Identity_SkipDeletedGroups') { if (Test-Path "variable:global:$n") { $script:SavedScope[$n] = Get-Variable -Name $n -Scope Global -ValueOnly } }
     $script:GroupOid = '11111111-2222-4333-8444-555555555555'
     $script:MiOid = '66666666-7777-4888-8999-aaaaaaaaaaaa'
     $script:GroupNode = '2239201f239e4857bd271c53b5b699b5'
@@ -62,6 +65,18 @@ BeforeAll {
     # One identity run's graph fetch -> the captured records -> their mapped rows -> one classified CI per record.
     function script:Invoke-GraphIdentityRun {
         param([switch]$FullMetadata)
+        # #1415 THE IDENTITY SCOPE CHOICE (#1056) IS DECIDED HERE, not left to the process: its shipped default has
+        # SI_Identity_SkipDeletedGroups ON, so the fetch reads Entra ID's group list and a group Entra ID does not return is
+        # not recorded -- and a list that cannot be read HOLDS every group (none recorded, the pull not complete). Offline
+        # that read had no token, so the group was held (red on its own), or another suite's leftover token stub / setting
+        # decided it (order-dependent). The run below is the shipped default with Entra ID returning this group: the
+        # real Read-SIEntraGroupIds and the real decision, over Graph stand-ins defined for this call only.
+        foreach ($n in 'SI_Identity_SkipNeverSyncedAd', 'SI_Identity_SkipNeverSyncedDisabledAd', 'SI_Identity_SkipDeletedGroups') { Remove-Variable -Name $n -Scope Global -ErrorAction SilentlyContinue }
+        function Get-SIGraphToken { param($Resource) 'offline-token' }
+        function Invoke-SIGraphPaged {
+            param($RelativeUrl, $Token, $OnPage)
+            if ([string]$RelativeUrl -like '/groups*') { & $OnPage @([pscustomobject]@{ id = $script:GroupOid }) } else { & $OnPage @() }
+        }
         $script:_SICache = @{}
         $null = Reset-SIRecordCapture -Engine 'identity' -Clear
         $null = Reset-SIFullAssetProperties -Engine 'identity'
@@ -85,6 +100,7 @@ BeforeAll {
 }
 
 AfterAll {
+    foreach ($n in @($script:SavedScope.Keys)) { Set-Variable -Name $n -Scope Global -Value $script:SavedScope[$n] }
     $global:SIRecordCaptureState = $null
     $global:SIFullAssetPropertiesState = $null
 }

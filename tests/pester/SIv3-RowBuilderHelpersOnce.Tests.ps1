@@ -49,7 +49,7 @@ param($Path, $Function, $RecordText, $Helpers, $Engine)
 $ErrorActionPreference = 'Continue'
 $WarningPreference = 'SilentlyContinue'
 $global:SI_DisableEndpointAzureCorrelation = $true
-function global:Write-SIInfo { param([Parameter(Position = 0)]$Message) }
+function Write-SIInfo { param([Parameter(Position = 0)]$Message) }
 . $Path
 $missing = @($Helpers | Where-Object { -not (Test-Path -Path ('function:' + $_)) })
 $global:__siGc = 0

@@ -29,7 +29,7 @@ Describe 'the access-edge query targets ARM-typed resources' {
     It 'the default query matches ARM-typed targets (not only short names) and excludes role assignments' {
         $script:body = $null
         $script:ask = { param($q) $script:body = $q; [pscustomobject]@{ Ok = $true; Rows = @($script:LiveShaped.results); Error = '' } }
-        $null = Get-AzureExposureGraphAccessEdges -Ask $script:ask
+        $null = Get-AzureExposureGraphAccessEdges -Keys @('kv-ait-lic-mfn') -Ask $script:ask
         $q = $script:body
         $q | Should -Match "TargetNodeLabel startswith 'microsoft\.'"
         $q | Should -Match "TargetNodeLabel !startswith 'microsoft\.authorization/'"
@@ -37,7 +37,7 @@ Describe 'the access-edge query targets ARM-typed resources' {
     }
     It 'a live-shaped edge lands in the map under the resource name and the node id' {
         $script:ask = { param($q) [pscustomobject]@{ Ok = $true; Rows = @($script:LiveShaped.results); Error = '' } }
-        $m = Get-AzureExposureGraphAccessEdges -Ask $script:ask
+        $m = Get-AzureExposureGraphAccessEdges -Keys @('kv-ait-lic-mfn') -Ask $script:ask
         $m.ContainsKey('kv-ait-lic-mfn') | Should -BeTrue
         $m.ContainsKey('nodeid:e831b0466fda412d91b212300a5a56d9') | Should -BeTrue
         @($m['kv-ait-lic-mfn'])[0].EdgeLabel | Should -Be 'has permissions to'
@@ -46,7 +46,7 @@ Describe 'the access-edge query targets ARM-typed resources' {
         $global:SI_AzureExposureGraph_ResourceLabels = @('microsoft.keyvault/vaults')
         $script:body = $null
         $script:ask = { param($q) $script:body = $q; [pscustomobject]@{ Ok = $true; Rows = @($script:LiveShaped.results); Error = '' } }
-        $null = Get-AzureExposureGraphAccessEdges -Ask $script:ask
+        $null = Get-AzureExposureGraphAccessEdges -Keys @('kv-ait-lic-mfn') -Ask $script:ask
         $q = $script:body
         $q | Should -Not -Match "startswith 'microsoft\.'"
         $q | Should -Match "TargetNodeLabel in~ \('microsoft\.keyvault/vaults'\)"

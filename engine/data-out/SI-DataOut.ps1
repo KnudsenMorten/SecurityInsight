@@ -870,7 +870,7 @@ SELECT TOP (CONVERT(int, @Take)) t.CollectionId, CONVERT(varchar(64), t.TaskId, 
        CONVERT(varchar(64), {HASH}, 2) AS RowHashHex, @run AS SourceRun,
        t.WhatToDo, t.ApplicationVersion, t.DetectedPaths, t.RecommendedUpdate, t.RemediationSteps, t.CveList, t.HighestRiskRating, t.MaxWeightedRisk, t.SecurityDomain,
        t.Channel, t.ExploitAvailable, t.EndOfSupport, t.EndOfSupportDate, t.DueDate, t.FirstDetected, t.WithinAcceptedLifecycle, t.AssetType, t.AssetOs, t.AssetIp,
-       t.AssetEnvironment, t.InternetExposed, t.AlsoReportedBy, LOWER(CONVERT(varchar(64), t.ContextHash, 2)) AS ContextHashHex, {MOREINFO} AS MoreInfo
+       t.AssetEnvironment, t.InternetExposed, t.AlsoReportedBy, LOWER(CONVERT(varchar(64), t.ContextHash, 2)) AS ContextHashHex, {MOREINFO} AS MoreInfo, t.SoftwareListsComplete
 FROM sidata.RemediationTask AS t
 CROSS APPLY (SELECT @web AS Web) AS wb
 WHERE t.CollectionId = @c AND (@a IS NULL OR t.TaskId > @a)
@@ -1228,6 +1228,8 @@ function ConvertFrom-SIDataOutTaskRow {
                          @('due_date', 'DueDate'), @('first_detected', 'FirstDetected'), @('within_accepted_lifecycle', 'WithinAcceptedLifecycle'), @('asset_type', 'AssetType'),
                          @('os', 'AssetOs'), @('ip_address', 'AssetIp'), @('environment', 'AssetEnvironment'), @('also_reported_by', 'AlsoReportedBy'), @('more_info', 'MoreInfo'),
                          @('context_hash', 'ContextHashHex'))) { $h[$p[0]] = (& $g $p[1]) }
+        # #1403 yes = the task's findings named every affected software item (no = a list reached the limit: the task is held, never closed on it)
+        if ($Row.Contains('SoftwareListsComplete')) { $h['software_lists_complete'] = (& $g 'SoftwareListsComplete') }
         $h['exploit_available'] = (ConvertTo-SIDataOutYesNo (& $g 'ExploitAvailable'))
         $h['internet_exposed'] = (ConvertTo-SIDataOutYesNo (& $g 'InternetExposed'))
     }

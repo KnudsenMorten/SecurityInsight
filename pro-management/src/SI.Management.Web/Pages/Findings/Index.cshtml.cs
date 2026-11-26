@@ -239,13 +239,59 @@ public sealed class IndexModel : SI.Management.Web.Columns.DataViewPageModel
     protected override async Task LoadForExportAsync(CancellationToken ct)
     {
         Normalize();
-        // "Export this page": the rows the page shows (its filters, sort, page and size); else every matching finding
-        var rows = SI.Management.Web.Columns.ExportChoices.PageOnly(Request)
-            ? (await _q.FindingsAsync(ProDataFilters.Normalize(Filter()), ct)).Data.Rows
-            : (await _q.ExportAsync(ProDataFilters.Normalize(Filter()), ProDataFilters.MaxExport, ct)).Data;
         // "Export selected rows": only the ticked findings (Sel travels in the query from the selection strip)
         var sel = Request.Query["Sel"].Concat(Request.Query["sel"]).Where(v => !string.IsNullOrWhiteSpace(v)).Select(v => v!).ToHashSet(StringComparer.Ordinal);
-        ExportRows = sel.Count == 0 ? rows : rows.Where(r => sel.Contains(r.FindingId)).ToList();
+        // "Export this page": the rows the page shows (its filters, sort, page and size)
+        if (SI.Management.Web.Columns.ExportChoices.PageOnly(Request))
+        {
+            var rows = (await _q.FindingsAsync(ProDataFilters.Normalize(Filter()), ct)).Data.Rows;
+            ExportRows = sel.Count == 0 ? rows : rows.Where(r => sel.Contains(r.FindingId)).ToList();
+            return;
+        }
+        // #1400 (owner 2026-11-26: "SI never fewer rows than the source"): else EVERY matching finding -- no 50,000 cut -- read
+        // a chunk at a time and written on before the next is read ("memory issues must not be a problem in any step")
+        // the first chunk is read here (the file name and the workbook name its collection); the rest when it is written
+        var chunks = FindingChunks(_q, ProDataFilters.Normalize(Filter()), sel);
+        ExportRows = (await chunks(1, ct)).Cast<FindingRow>().ToList();
+        ExportChunks = chunks;
+        // #1400 completeness: the exact count of what the chunks read (the same statement counted, the collection the export
+        // is pinned to; never the stored page totals); a selection: the findings ticked -- rows that differ refuse the file
+        // (review of e2bd16d72) a selection: the ticked findings the filter keeps, counted in the same snapshot -- a ticked one
+        // outside the view is said on the Export sheet / the audit row, never a refusal
+        var counted = ProDataFilters.Normalize(Filter()) with { Skip = 0 };
+        if (counted.CollectionId is null && ExportRows.FirstOrDefault()?.CollectionId is { Length: > 0 } pinned) counted = counted with { CollectionId = pinned };
+        ExportExpected = await _q.ExportCountAsync(counted, sel.Count == 0 ? null : sel.ToList(), ct);
+        if (sel.Count > ExportExpected)
+            SI.Management.Web.Data.ExportSession.Current?.Note($"{sel.Count - ExportExpected:N0} of the {sel.Count:N0} ticked findings are not in this view (its filter or collection) and are not in the file.");
+    }
+
+    /// #1400 the export's chunk reader (<see cref="SI.Management.Web.Columns.DataTable.Chunks"/>) and the count it began with.
+    private Func<int, CancellationToken, Task<IReadOnlyList<object>>>? ExportChunks { get; set; }
+    private long? ExportExpected { get; set; }
+
+    /// <summary>
+    /// #1400 every finding the filter keeps (only the ticked ones when <paramref name="selected"/> names any), a chunk of
+    /// <see cref="ProDataFilters.ExportChunk"/> at a time in the view's order. A chunk the selection empties reads on: only a
+    /// read that answers no rows ends the export, so a ticked finding past the first chunk is never left out.
+    /// </summary>
+    public static Func<int, CancellationToken, Task<IReadOnlyList<object>>> FindingChunks(IProDataQueries q, FindingFilter filter, IReadOnlySet<string> selected, int size = ProDataFilters.ExportChunk)
+    {
+        long at = 0;
+        return async (_, ct) =>
+        {
+            while (true)
+            {
+                var raw = (await q.ExportChunkAsync(filter, at, size, ct)).Data;
+                if (raw.Count == 0) return Array.Empty<object>();
+                // #1400 review: the export is PINNED to the collection its first chunk came from -- without ?c= every chunk would
+                // resolve "the published run" again, and a publish during the export would mix two collections (rows lost or
+                // twice, ticked findings dropped)
+                if (filter.CollectionId is null && raw[0].CollectionId is { Length: > 0 } pinned) filter = filter with { CollectionId = pinned };
+                at += raw.Count;
+                var kept = selected.Count == 0 ? raw : raw.Where(r => selected.Contains(r.FindingId)).ToList();
+                if (kept.Count > 0) return kept.Cast<object>().ToList();
+            }
+        };
     }
 
     protected override IReadOnlyList<SI.Management.Web.Columns.DataTable> BuildTables()
@@ -283,6 +329,7 @@ public sealed class IndexModel : SI.Management.Web.Columns.DataViewPageModel
         var t = new SI.Management.Web.Columns.DataTable
         {
             Id = "findings", View = ViewKey, Title = "Findings", Rows = rows.Cast<object>().ToList(), Columns = cols, Marker = "data-grid=\"findings\"",
+            Chunks = ExportChunks, ExpectedRows = ExportChunks is null ? null : ExportExpected, KeyOf = o => F(o).CollectionId + "|" + F(o).FindingId,
             Ci = RowCiKey.AssetKey, Findings = RowFindingKey.FindingId, CollectionId = collection ?? "",
             RefOf = o => new SI.Management.Web.Columns.RowRef(F(o).AssetKey, SI.Management.Web.Columns.DataViewLayout.FindingId(F(o).FindingId)),
             SelectName = User.IsReader() ? "Sel" : null, SelectValue = o => F(o).FindingId,
@@ -316,8 +363,9 @@ public sealed class IndexModel : SI.Management.Web.Columns.DataViewPageModel
         return new[] { t };
     }
 
-    /// CSV of the current filtered view: every matching finding (all pages, bounded; or the ticked ones), exactly the
-    /// chosen columns. Cells that a spreadsheet would run as a formula are prefixed with a quote.
+    /// CSV of the current filtered view: EVERY matching finding (all pages, no row cap; or the ticked ones), exactly the
+    /// chosen columns, streamed a chunk at a time to the file (#1400). Cells that a spreadsheet would run as a formula are
+    /// prefixed with a quote.
     [SI.Management.Web.Audit.Audited("data.export.download")]
     public async Task<IActionResult> OnGetCsvAsync(CancellationToken ct)
     {
@@ -326,12 +374,15 @@ public sealed class IndexModel : SI.Management.Web.Columns.DataViewPageModel
         catch (ArgumentException ex) { return BadRequest(ViewerError.Text(ex)); }
         if (t is null) return NotFound(Error ?? Notice ?? "nothing to export");
         var name = "securityinsight-findings-" + DateTime.UtcNow.ToString("yyyyMMdd-HHmm", CultureInfo.InvariantCulture) + ".csv";
-        return File(Encoding.UTF8.GetPreamble().Concat(Encoding.UTF8.GetBytes(t.Csv(t.ExportKeys(false)))).ToArray(), "text/csv; charset=utf-8", name);
+        var keys = t.ExportKeys(false);
+        try { return await CsvExport.FileAsync(name, t.Headers(keys), sink => t.CsvAsync(sink, keys, ct), ct); }
+        catch (ArgumentException ex) { return BadRequest(ViewerError.Text(ex)); }
     }
 
     /// Excel workbook of the current filtered view: EVERY matching row of the collection (not just this page; or the ticked
-    /// ones), exactly the chosen columns, read by the fixed parameterised export statement -- at most
-    /// <see cref="ProDataFilters.MaxExport"/> rows, under the Pro database's query timeout (Estate:QueryTimeoutSeconds).
+    /// ones), exactly the chosen columns, read by the fixed parameterised export statement a chunk at a time (#1400: no row
+    /// cap; each chunk under the Pro database's query timeout, Estate:QueryTimeoutSeconds), continued on a next sheet at
+    /// Excel's row limit.
     [SI.Management.Web.Audit.Audited("data.export.download")]
     public Task<IActionResult> OnGetXlsxAsync(CancellationToken ct) => WorkbookAsync(false, ct);
 
@@ -352,7 +403,7 @@ public sealed class IndexModel : SI.Management.Web.Columns.DataViewPageModel
         catch (ArgumentException ex) { return BadRequest(ViewerError.Text(ex)); }
         if (t is null) return NotFound(Error ?? Notice ?? "nothing to export");
         var keys = t.ExportKeys(all);
-        return await ExcelExport.FileAsync(all ? "findings-all-columns" : "findings", C ?? ExportRows?.FirstOrDefault()?.CollectionId, (x, info) =>
+        return await ExcelExport.FileAsync(all ? "findings-all-columns" : "findings", C ?? ExportRows?.FirstOrDefault()?.CollectionId, async (x, info) =>
         {
             info.Collection = C ?? ExportRows?.FirstOrDefault()?.CollectionId;
             info.Filter("Asset tier", Or(f.Tier)).Filter("Severity", Or(f.Severity)).Filter("Security domain", Or(f.Domain)).Filter("Report", Or(f.Report))
@@ -361,10 +412,7 @@ public sealed class IndexModel : SI.Management.Web.Columns.DataViewPageModel
             if (SI.Management.Web.Columns.ExportChoices.PageOnly(Request)) info.Add("Rows", "the page shown (page " + Fmt.Int(P) + ", " + Fmt.Int(Size) + " per page)");
             info.Add("Columns", all ? "every column this view offers" : t.Layout.Source == ColumnLayout.FromUser ? "your own columns" : t.Layout.Source == ColumnLayout.FromTenant ? "the tenant default columns" : "the standard columns");
             info.Add("Exempted findings", ExemptedState is not { Ready: true } ? "counted as before (no mark in this database)" : ShowsExempted ? "included (column Exempted)" : "left out");
-            x.Sheet(info, "Findings", keys.Select(t.Label).ToList(), t.Rows.Select(row => (IReadOnlyList<object?>)keys.Select(k => t.Excel(row, k)).ToList()));
-            if (t.Rows.Count >= ProDataFilters.MaxExport)
-                info.Notes.Add($"The export stops at {ProDataFilters.MaxExport:N0} rows; narrow the filter to get the rest.");
-            return Task.CompletedTask;
+            await t.SheetAsync(x, info, "Findings", keys, ct);
         }, ct);
     }
 

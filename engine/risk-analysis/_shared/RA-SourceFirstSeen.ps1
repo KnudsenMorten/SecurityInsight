@@ -60,18 +60,60 @@ function ConvertFrom-RASourceFirstSeenLine {
     @{ Key = $k; FirstSeen = $t }
 }
 
+function ConvertTo-RASourceFirstSeenCompactKey {
+    <# PURE. #1397: the index key (ConvertTo-RASourceFirstSeenKey) as 16 bytes (MD5 of its UTF-8 text) -- a Guid key holds a
+       device + CVE in 16 bytes instead of a ~60-character string (~150 bytes). [Guid]::Empty for an empty key. #>
+    param([string]$Key)
+    if (-not $Key) { return [Guid]::Empty }
+    [Guid]::new([System.Security.Cryptography.MD5]::HashData([Text.Encoding]::UTF8.GetBytes($Key)))
+}
+
+function New-RASourceFirstSeenIndex {
+    <# #1397: the run's index -- device + CVE (ConvertTo-RASourceFirstSeenCompactKey) -> the first sighting in whole seconds
+       since 0001-01-01 UTC (the rows get it in whole seconds, and the earliest of whole seconds is the whole seconds of the
+       earliest: the same value as before). Live 2026-11-25: the string -> datetime index of a large tenant (7 M+ device-CVE
+       pairs) was ~1.2-1.5 GB in EVERY worker that ran a part of the CVE report; this one is ~40 bytes a pair. #>
+    New-Object 'System.Collections.Generic.Dictionary[Guid,long]'
+}
+
 function Add-RASourceFirstSeenLines {
-    <# PURE over -Index. Lines into the index, the earliest sighting per key kept. Answers the lines read. #>
-    param([Parameter(Mandatory)][System.Collections.Generic.Dictionary[string, datetime]]$Index, [AllowEmptyCollection()][string[]]$Lines = @())
+    <# PURE over -Index. Lines into the index, the earliest sighting per key kept. Answers the lines read. -Index: the compact
+       index (New-RASourceFirstSeenIndex) or a string -> datetime dictionary (as before). #>
+    param([Parameter(Mandatory)]$Index, [AllowEmptyCollection()][string[]]$Lines = @())
     $n = 0
+    $compact = $Index -is [System.Collections.Generic.Dictionary[Guid, long]]
     foreach ($l in $Lines) {
         $x = ConvertFrom-RASourceFirstSeenLine -Line $l
         if ($null -eq $x) { continue }
         $n++
+        if ($compact) {
+            $g = ConvertTo-RASourceFirstSeenCompactKey -Key $x.Key
+            # whole seconds in integer arithmetic (a double holds ~15-16 digits: ticks have 18, so a division in double can
+            # round a time up by a second)
+            $rem = 0L
+            $s = [Math]::DivRem([long]([datetime]$x.FirstSeen).Ticks, [long][TimeSpan]::TicksPerSecond, [ref]$rem)
+            $cs = 0L
+            if (-not $Index.TryGetValue($g, [ref]$cs) -or $s -lt $cs) { $Index[$g] = $s }
+            continue
+        }
         $cur = [datetime]::MinValue
         if (-not $Index.TryGetValue($x.Key, [ref]$cur) -or $x.FirstSeen -lt $cur) { $Index[$x.Key] = $x.FirstSeen }
     }
     $n
+}
+
+function Find-RASourceFirstSeen {
+    <# PURE. The first sighting of -Key in -Index as a UTC datetime (whole seconds on the compact index), or $null. #>
+    param($Index, [string]$Key)
+    if (-not $Key -or $null -eq $Index) { return $null }
+    if ($Index -is [System.Collections.Generic.Dictionary[Guid, long]]) {
+        $s = 0L
+        if ($Index.TryGetValue((ConvertTo-RASourceFirstSeenCompactKey -Key $Key), [ref]$s)) { return [datetime]::new($s * [TimeSpan]::TicksPerSecond, [DateTimeKind]::Utc) }
+        return $null
+    }
+    $t = [datetime]::MinValue
+    if ($Index.TryGetValue($Key, [ref]$t)) { return $t }
+    $null
 }
 
 function Read-RASourceFirstSeenIndex {
@@ -84,7 +126,7 @@ function Read-RASourceFirstSeenIndex {
     #>
     param([scriptblock]$Fetch, [scriptblock]$Download, [switch]$Refresh)
     if (-not $Refresh -and $null -ne $global:RA_SourceFirstSeenIndex) { return $global:RA_SourceFirstSeenIndex }
-    $state = @{ Index = (New-Object 'System.Collections.Generic.Dictionary[string,datetime]' ([StringComparer]::Ordinal)); Complete = $false; Error = $null; Files = 0; Lines = 0 }
+    $state = @{ Index = (New-RASourceFirstSeenIndex); Complete = $false; Error = $null; Files = 0; Lines = 0 }
     $sw = [Diagnostics.Stopwatch]::StartNew()
     try {
         $files = @()
@@ -196,8 +238,8 @@ function Add-RASourceFirstSeen {
     $ix = $Index.Index
     foreach ($r in $cveRows) {
         $k = ConvertTo-RASourceFirstSeenKey -DeviceId ([string](Get-RASourceFirstSeenRowValue $r @('MdeDeviceId', 'DeviceId', 'si_link_mde'))) -Cve ([string](Get-RASourceFirstSeenRowValue $r @('si_cve', 'Cve', 'CveId', 'ConfigurationId', 'FindingName')))
-        $t = [datetime]::MinValue
-        if ($k -and $ix.TryGetValue($k, [ref]$t)) { & $setv $r ($t.ToString('yyyy-MM-ddTHH:mm:ssZ', [Globalization.CultureInfo]::InvariantCulture)) }
+        $t = Find-RASourceFirstSeen -Index $ix -Key $k
+        if ($null -ne $t) { & $setv $r (([datetime]$t).ToString('yyyy-MM-ddTHH:mm:ssZ', [Globalization.CultureInfo]::InvariantCulture)) }
     }
     , @($Rows)
 }

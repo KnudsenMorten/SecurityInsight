@@ -31,6 +31,9 @@ public static class ExcelExport
                 if (SI.Management.Web.Collection.SourceNoteScope.Current is { } sourceNotes)
                     foreach (var line in await SI.Management.Web.Collection.SourceNoteView.ExportLinesAsync(sourceNotes, collection ?? info.Collection, ct))
                         if (!info.Notes.Contains(line)) info.Notes.Add(line);
+                // #1400 what the export found about itself (its rows against the count it began with): on the Export sheet too
+                if (SI.Management.Web.Data.ExportSession.Current is { } session)
+                    foreach (var n in session.Notes) if (!info.Notes.Contains(n)) info.Notes.Add(n);
                 // the audit trail (#260): an export records what left the app -- its rows and the filter it was made with
                 if (SI.Management.Web.Audit.AuditScope.Current is { } audit)
                 {
@@ -52,12 +55,50 @@ public static class ExcelExport
         }
     }
 
-    /// Writes one sheet and records its row count on the Export sheet.
+    /// Writes one sheet and records its row count on the Export sheet. #1400: at Excel's row limit the rows go on on
+    /// "&lt;name&gt; 2", "&lt;name&gt; 3", ... -- never cut.
     public static void Sheet(this XlsxWriter x, ExportInfo info, string name, IReadOnlyList<string> headers, IEnumerable<IReadOnlyList<object?>> rows)
     {
-        using var s = x.AddSheet(name, headers);
-        foreach (var r in rows) s.WriteRow(r);
-        info.Rows.Add((s.Name, s.RowCount));
+        var no = 1;
+        var s = x.AddSheet(name, headers);
+        try
+        {
+            foreach (var r in rows)
+            {
+                if (s.RowCount + 2 > XlsxWriter.MaxRows) s = Next(x, info, s, name, headers, ++no);
+                s.WriteRow(r);
+            }
+            info.Rows.Add((s.Name, s.RowCount));
+        }
+        finally { s.Dispose(); }
+    }
+
+    /// <summary>
+    /// #1400 (owner 2026-11-26: "memory issues must not be a problem in any step"): every row of a CHUNKED read on one sheet,
+    /// each written as it comes (the workbook goes to a temporary file) -- continued on "&lt;name&gt; 2", ... at Excel's row
+    /// limit, never cut.
+    /// </summary>
+    public static async Task SheetAsync(this XlsxWriter x, ExportInfo info, string name, IReadOnlyList<string> headers, IAsyncEnumerable<IReadOnlyList<object?>> rows, CancellationToken ct)
+    {
+        var no = 1;
+        var s = x.AddSheet(name, headers);
+        try
+        {
+            await foreach (var r in rows.WithCancellation(ct))
+            {
+                if (s.RowCount + 2 > XlsxWriter.MaxRows) s = Next(x, info, s, name, headers, ++no);
+                s.WriteRow(r);
+            }
+            info.Rows.Add((s.Name, s.RowCount));
+        }
+        finally { s.Dispose(); }
+    }
+
+    private static SheetWriter Next(XlsxWriter x, ExportInfo info, SheetWriter full, string name, IReadOnlyList<string> headers, int no)
+    {
+        info.Rows.Add((full.Name, full.RowCount));
+        full.Dispose();
+        return x.AddSheet(name + " " + no.ToString(CultureInfo.InvariantCulture), headers);
     }
 
     /// <c>&lt;page&gt;[-&lt;collection&gt;]-&lt;yyyyMMdd-HHmm&gt;Z.xlsx</c>; the collection is reduced to letters, digits, - and _.

@@ -46,9 +46,19 @@ Describe 'the rule: 15 minutes after the last beat, 30 minutes when it never bea
         $d = Get-SIExecutionLiveness -Execution (Exec 'caj-si-updater-1' 45) -Kind updater -NowUtc $script:Now
         $d.Alive | Should -BeFalse; $d.LastBeatUtc | Should -BeNullOrEmpty; $d.AgeMin | Should -Be 45
     }
-    It 'one that beat, but not for more than 15 minutes, is dead -- even 10 minutes after its start' {
-        $d = Get-SIExecutionLiveness -Execution (Exec 'caj-si-updater-2' 40) -Kind updater -Locks @(Lock 'updater' 'caj-si-updater:caj-si-updater-2' 16) -NowUtc $script:Now
-        $d.Alive | Should -BeFalse; $d.MinutesSinceBeat | Should -Be 16; $d.LockName | Should -Be 'updater'
+    It 'a RUNNER that beat, but not for more than 15 minutes, is dead; an UPDATE that only signed in is dead the same way; one CHANGING the install is QUIET while Azure runs it (#1406) -- until 6 h after its start' {
+        $f = Get-SIExecutionLiveness -Execution (Exec 'caj-si-flow-2' 40) -Kind flow -Locks @(Lock 'install' 'caj-si-flow-2' 16) -NowUtc $script:Now
+        $f.Alive | Should -BeFalse; $f.Quiet | Should -BeFalse
+        $i = Get-SIExecutionLiveness -Execution (Exec 'caj-si-updater-2' 40) -Kind updater -Locks @(Lock 'updater' 'caj-si-updater:caj-si-updater-2' 16) -NowUtc $script:Now
+        $i.Alive | Should -BeFalse -Because 'an idle hourly run (its sign-in row only) that hangs is freed as before'; $i.MinutesSinceBeat | Should -Be 16; $i.LockName | Should -Be 'updater'
+        foreach ($row in 'install', 'updater-run') {
+            $d = Get-SIExecutionLiveness -Execution (Exec 'caj-si-updater-2' 40) -Kind updater -Locks @((Lock 'updater' 'caj-si-updater:caj-si-updater-2' 16), (Lock $row 'caj-si-updater:caj-si-updater-2' 17)) -NowUtc $script:Now
+            $d.Alive | Should -BeTrue -Because $row; $d.Quiet | Should -BeTrue
+            $o = Get-SIExecutionLiveness -Execution (Exec 'caj-si-updater-2' 400) -Kind updater -Locks @((Lock 'updater' 'caj-si-updater:caj-si-updater-2' 16), (Lock $row 'caj-si-updater:caj-si-updater-2' 17)) -NowUtc $script:Now
+            $o.Alive | Should -BeFalse; $o.Quiet | Should -BeFalse; $o.PastFallback | Should -BeTrue
+        }
+        # another execution's install lock is no reason for THIS one
+        (Get-SIExecutionLiveness -Execution (Exec 'caj-si-updater-2' 40) -Kind updater -Locks @((Lock 'updater' 'caj-si-updater:caj-si-updater-2' 16), (Lock 'install' 'caj-si-updater:other' 1)) -NowUtc $script:Now).Alive | Should -BeFalse
     }
     It 'a live long updater (fresh beat, running 3 hours) is NOT dead; the freshest of its beats counts' {
         $l = Get-SIExecutionLiveness -Execution (Exec 'caj-si-updater-3' 180) -Kind updater -Locks @((Lock 'updater' 'caj-si-updater:caj-si-updater-3' 40), (Lock 'install' 'caj-si-updater:caj-si-updater-3' 2)) -NowUtc $script:Now
@@ -87,9 +97,11 @@ Describe '(a) the pipeline and the updater: a dead update no longer holds the da
         $again = Get-SIPipelineUpdateLiveness -Executions $ex -Locks @() -LocksKnown $true -NowUtc $script:Now -Stopped $mem
         $again.Running | Should -Be ''; @($again.Dead).Count | Should -Be 0
     }
-    It 'an updater that beat but not for more than 15 minutes is dead; a live long one (fresh beat, 3 h) still holds the run' {
+    It '#1406: an updater that beat but not for more than 15 minutes still HOLDS the run (quiet, never stopped); past 6 h it is dead; a live long one (fresh beat, 3 h) holds the run' {
         $u = Get-SIPipelineUpdateLiveness -Executions @((Exec 'u-stale' 50)) -Locks @(Lock 'install' 'caj-si-updater:u-stale' 20) -LocksKnown $true -NowUtc $script:Now
-        $u.Running | Should -Be ''; @($u.Dead).Name | Should -Be 'u-stale'
+        $u.Running | Should -Match '^caj-si-updater execution u-stale'; @($u.Dead).Count | Should -Be 0; @($u.Quiet).Name | Should -Be 'u-stale'
+        $x = Get-SIPipelineUpdateLiveness -Executions @((Exec 'u-stale' 400)) -Locks @(Lock 'install' 'caj-si-updater:u-stale' 20) -LocksKnown $true -NowUtc $script:Now
+        $x.Running | Should -Be ''; @($x.Dead).Name | Should -Be 'u-stale'
         $l = Get-SIPipelineUpdateLiveness -Executions @((Exec 'u-live' 180)) -Locks @(Lock 'install' 'caj-si-updater:u-live' 3) -LocksKnown $true -NowUtc $script:Now
         $l.Running | Should -Match '^caj-si-updater execution u-live'; @($l.Dead).Count | Should -Be 0
     }
@@ -118,8 +130,14 @@ Describe '(a) the pipeline and the updater: a dead update no longer holds the da
 
 Describe '(a) the updater''s own step-aside' {
     BeforeEach { $global:SI_ExecutionStopped = @{}; $script:UpdLines.Clear() }
-    It 'an earlier update that is dead is stopped and this update goes on' {
+    It '#1406: an earlier update that is only QUIET (beat 25 minutes ago, 90 minutes old) is stepped aside for -- never stopped' {
         $ex = @((Exec 'caj-si-updater-1630' 90), (Exec 'caj-si-updater-1730' 1))
+        $stops = New-Object System.Collections.Generic.List[string]
+        $e = Get-SIUpdaterEarlierLiveness -Executions $ex -Self 'caj-si-updater-1730' -NowUtc $script:Now -Locks @(Lock 'install' 'caj-si-updater:caj-si-updater-1630' 25) -LocksKnown $true -Stop { param($n) $stops.Add($n) } -Alert { }
+        $e.Name | Should -Be 'caj-si-updater-1630'; $stops.Count | Should -Be 0
+    }
+    It 'an earlier update that is dead (past the 6 h fallback) is stopped and this update goes on' {
+        $ex = @((Exec 'caj-si-updater-1630' 400), (Exec 'caj-si-updater-1730' 1))
         $stops = New-Object System.Collections.Generic.List[string]; $alerts = New-Object System.Collections.Generic.List[object]
         $e = Get-SIUpdaterEarlierLiveness -Executions $ex -Self 'caj-si-updater-1730' -NowUtc $script:Now -Locks @(Lock 'install' 'caj-si-updater:caj-si-updater-1630' 25) -LocksKnown $true `
                  -Stop { param($n) $stops.Add($n) } -Alert { param($ev) $alerts.Add($ev) }

@@ -92,15 +92,19 @@ function New-SIDiscoverStream {
         [Parameter(Mandatory)][string[]]$ReservedKeys,
         [int]$ShardSize = 2000,
         [int]$FlushTotal = 10000,
-        $Store
+        $Store,
+        # #1398: the number of objects could not be read before discovery -- the rows still stream: they go into -RawBuckets
+        # raw buckets, and the part count is decided from the rows read (Get-SICollectPartCount) when the last source is done
+        [switch]$PartsFromRows,
+        [int]$RawBuckets = 64
     )
     $P = [Math]::Max(1, $Parts)
-    $buf = @{}; $chunk = @{}
-    for ($i = 0; $i -lt $P; $i++) { $buf[$i] = New-Object System.Collections.Generic.List[object]; $chunk[$i] = 0 }
+    if ($PartsFromRows) { $P = [Math]::Max(1, $RawBuckets) }
+    # the buffers (one per bucket of the stage being written) are made as a bucket is first written
     [pscustomobject]@{
         Parts = $P; RunContext = $RunContext; SourcePriority = $SourcePriority; ReservedKeys = $ReservedKeys
         ShardSize = $ShardSize; FlushTotal = $FlushTotal; Store = $Store
-        Buffers = $buf; Chunks = $chunk; Buffered = 0; RawRows = 0
+        Buffers = @{}; Chunks = @{}; Buffered = 0; RawRows = 0; PartsFromRows = [bool]$PartsFromRows
         Parent = New-Object 'System.Collections.Generic.Dictionary[string,string]' ([StringComparer]::Ordinal)
     }
 }
@@ -131,7 +135,7 @@ function Write-SIDiscoverStreamBuffer {
     <# One buffer -> one chunk of -Stage, the buffer emptied. #>
     param([Parameter(Mandatory)]$Stream, [Parameter(Mandatory)][string]$Stage, [Parameter(Mandatory)][int]$Part)
     $b = $Stream.Buffers[$Part]
-    if ($b.Count -eq 0) { return }
+    if ($null -eq $b -or $b.Count -eq 0) { return }
     Write-SIDiscoverStreamChunk -Stream $Stream -Stage $Stage -Part $Part -Chunk ([int]$Stream.Chunks[$Part]) -Records $b.ToArray()
     $Stream.Chunks[$Part] = [int]$Stream.Chunks[$Part] + 1
     $Stream.Buffered -= $b.Count
@@ -141,14 +145,16 @@ function Write-SIDiscoverStreamBuffer {
 function Add-SIDiscoverStreamRow {
     <# One row into buffer -Bucket; a full buffer, or -FlushTotal rows waiting, is written to -Stage. #>
     param([Parameter(Mandatory)]$Stream, [Parameter(Mandatory)][string]$Stage, [Parameter(Mandatory)][int]$Bucket, [Parameter(Mandatory)]$Row)
+    if (-not $Stream.Buffers.ContainsKey($Bucket)) { $Stream.Buffers[$Bucket] = New-Object System.Collections.Generic.List[object]; if (-not $Stream.Chunks.ContainsKey($Bucket)) { $Stream.Chunks[$Bucket] = 0 } }
     $Stream.Buffers[$Bucket].Add($Row); $Stream.Buffered++
     if ($Stream.Buffers[$Bucket].Count -ge $Stream.ShardSize) { Write-SIDiscoverStreamBuffer -Stream $Stream -Stage $Stage -Part $Bucket }
-    if ($Stream.Buffered -ge $Stream.FlushTotal) { for ($i = 0; $i -lt $Stream.Parts; $i++) { Write-SIDiscoverStreamBuffer -Stream $Stream -Stage $Stage -Part $i } }
+    if ($Stream.Buffered -ge $Stream.FlushTotal) { foreach ($i in @($Stream.Buffers.Keys | Sort-Object)) { Write-SIDiscoverStreamBuffer -Stream $Stream -Stage $Stage -Part ([int]$i) } }
 }
 
 function Reset-SIDiscoverStreamBuffers {
     param([Parameter(Mandatory)]$Stream, [Parameter(Mandatory)][string]$Stage)
-    for ($i = 0; $i -lt $Stream.Parts; $i++) { Write-SIDiscoverStreamBuffer -Stream $Stream -Stage $Stage -Part $i; $Stream.Chunks[$i] = 0 }
+    foreach ($i in @($Stream.Buffers.Keys | Sort-Object)) { Write-SIDiscoverStreamBuffer -Stream $Stream -Stage $Stage -Part ([int]$i) }
+    $Stream.Buffers.Clear(); $Stream.Chunks.Clear()
 }
 
 function Add-SIDiscoverStreamAssets {
@@ -174,6 +180,9 @@ function Complete-SIDiscoverStream {
     #>
     param([Parameter(Mandatory)]$Stream)
     Reset-SIDiscoverStreamBuffers -Stream $Stream -Stage 'DiscoverRaw'
+    $rawBuckets = $Stream.Parts
+    # #1398: a count that could not be read before discovery -- the part count from the rows that were read
+    if ($Stream.PartsFromRows) { $Stream.Parts = Get-SICollectPartCount -Objects ([long]$Stream.RawRows) }
     # B -- route by group
     $groupRows = New-Object 'System.Collections.Generic.Dictionary[string,int]' ([StringComparer]::Ordinal)
     # #721: a raw bucket is read row by row -- each row is routed (into a bounded buffer) as it is read; the bucket is never held
@@ -184,7 +193,7 @@ function Complete-SIDiscoverStream {
         $c = 0; if ($groupRows.TryGetValue($g, [ref]$c)) { $groupRows[$g] = $c + 1 } else { $groupRows[$g] = 1 }
         Add-SIDiscoverStreamRow -Stream $Stream -Stage 'DiscoverRouted' -Bucket (Get-SICollectPartIndex -Key $g -Parts $Stream.Parts) -Row $r
     }
-    for ($b = 0; $b -lt $Stream.Parts; $b++) {
+    for ($b = 0; $b -lt $rawBuckets; $b++) {
         Read-SIDiscoverStreamPart -Stream $Stream -Stage 'DiscoverRaw' -Part $b -OnRecord $route
     }
     Reset-SIDiscoverStreamBuffers -Stream $Stream -Stage 'DiscoverRouted'
@@ -257,8 +266,9 @@ function Get-SIIdentityDiscoverCount {
 function Test-SIDiscoverStreamWanted {
     <#
         PURE. Whether this Discover streams: only the 'discover' phase of a run collected in parts, never with an asset limit
-        (a test run keeps the whole-set path), never with full asset properties (that pull keeps the whole set itself), and
-        not when SI_DiscoverStreaming = off. Returns @{ Stream; Reason }.
+        (a test run keeps the whole-set path), and not when SI_DiscoverStreaming = off. Returns @{ Stream; Reason }.
+        #1398: full asset properties no longer keep the whole set -- their kept objects go to a spool on disk
+        (SI-FullAssetProperties.ps1) -- so they stream like every other run. -FullProperties is accepted and does not decide.
     #>
     param($RunContext, $Setting = $global:SI_DiscoverStreaming, [bool]$FullProperties = $false)
     $phase = ''
@@ -266,6 +276,5 @@ function Test-SIDiscoverStreamWanted {
     if ($phase -ne 'discover') { return [pscustomobject]@{ Stream = $false; Reason = 'not the discover phase of a run in parts' } }
     if ([string]$Setting -and ([string]$Setting).Trim().ToLowerInvariant() -in 'off', 'false', '0', 'no') { return [pscustomobject]@{ Stream = $false; Reason = 'SI_DiscoverStreaming = off' } }
     if ($RunContext.AssetLimit -gt 0) { return [pscustomobject]@{ Stream = $false; Reason = 'an asset limit is set' } }
-    if ($FullProperties) { return [pscustomobject]@{ Stream = $false; Reason = 'full asset properties are on (that pull keeps the whole set)' } }
     [pscustomobject]@{ Stream = $true; Reason = '' }
 }

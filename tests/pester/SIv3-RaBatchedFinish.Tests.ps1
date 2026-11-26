@@ -196,9 +196,10 @@ Describe '(a) keeping once the findings two query slices both returned -- in pag
     It 'a passing failure (a dropped connection) asks the same batch again; any other error fails at once' {
         Mock Start-Sleep { }
         $state = @{ N = 0 }
-        $st = @{ Grain = 'Detailed'; Log = $null; Invoke = { param($Sql, $P, $Mode) $state.N++; if ($state.N -eq 1) { throw 'A transport-level error has occurred when receiving results from the server.' }; 3 }.GetNewClosure() }
+        # (#1397: the remover asks again from the start until a pass removes nothing -- the fake answers 3 once, then 0)
+        $st = @{ Grain = 'Detailed'; Log = $null; Invoke = { param($Sql, $P, $Mode) $state.N++; if ($state.N -eq 1) { throw 'A transport-level error has occurred when receiving results from the server.' }; if ($state.N -eq 2) { 3 } else { 0 } }.GetNewClosure() }
         (Remove-RAStreamRowsBatched -Stream $st -Sql 'DELETE TOP (CONVERT(int, @Batch)) x' -What 'w') | Should -Be 3
-        $state.N | Should -Be 2
+        $state.N | Should -Be 3 -Because 'the dropped connection, the batch again, the pass that proves nothing is left'
         $bad = @{ Grain = 'Detailed'; Log = $null; Invoke = { param($Sql, $P, $Mode) throw 'Invalid column name x' } }
         { Remove-RAStreamRowsBatched -Stream $bad -Sql 'DELETE TOP (CONVERT(int, @Batch)) x' -What 'w' } | Should -Throw 'Invalid column name x'
     }

@@ -2309,7 +2309,7 @@ function Get-SIAzRoleAssignmentRest {
             RoleAssignmentId = [string]$a.id; RoleAssignmentName = [string]$a.name; Scope = [string]$a.properties.scope
             DisplayName = $(if ($names.ContainsKey($oid)) { $names[$oid] } else { $null }); SignInName = $null
             RoleDefinitionName = $rdName; RoleDefinitionId = $rdId; ObjectId = $oid; ObjectType = [string]$a.properties.principalType
-            CanDelegate = $false; Condition = $a.properties.condition; Description = [string]$a.properties.description
+            CanDelegate = $false; Condition = $a.properties.condition; Description = [string]$a.properties.description; CreatedOn = $a.properties.createdOn
         }
     }
 }

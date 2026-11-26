@@ -1,0 +1,19 @@
+@model (SI.Management.Web.Collection.StaleDataNotice Notice, bool ForAdmin)
+@using SI.Management.Web.Navigation
+@* #1396 DATA GETTING OLD (owner 2026-11-26 "fix it"): ONE warning for both layouts (the pages and the full-screen wall board).
+   An Admin: the newest run's result and failed step, why the newest run was not shown, the link to the runs. Anyone else
+   (a reader, the Wallboard screen): the reader's words, no link, no run detail. Collection/StaleDataWarning.cs *@
+@{
+    var runsPath = NavModel.PathOf(SI.Management.Web.Collection.StaleDataWarning.RunsPage);
+}
+<div class="notice warn" role="alert" data-utc data-stale-data="@(Model.ForAdmin ? "admin" : "reader")">
+    <strong>Warning:</strong> @(Model.ForAdmin ? Model.Notice.AdminText(runsPath) : Model.Notice.ReaderText(runsPath))
+    @if (Model.ForAdmin)
+    {
+        foreach (var staleLine in Model.Notice.AdminDetail())
+        {
+            <div data-stale-data-detail>@staleLine</div>
+        }
+        <a href="@NavModel.HrefOf(SI.Management.Web.Collection.StaleDataWarning.RunsPage)" data-stale-data-link>Open @runsPath</a>
+    }
+</div>

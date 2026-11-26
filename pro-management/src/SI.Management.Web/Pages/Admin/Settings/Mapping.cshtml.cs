@@ -57,6 +57,8 @@ public sealed class MappingModel : PageModel
     public IReadOnlyDictionary<string, long>? InForceCounts { get; private set; }
     public IReadOnlyDictionary<string, long>? EnteredCounts { get; private set; }
     public string? PreviewNotice { get; private set; }
+    /// #1400 the preview counted only the most common combinations: how many of all (null = every combination counted).
+    public string? PreviewCut { get; private set; }
 
     public bool CanEdit => User.IsAdmin();
     public string Route => "/Admin/Settings/Mapping/" + Spec.Id;
@@ -147,8 +149,11 @@ public sealed class MappingModel : PageModel
                 if (!int.TryParse(Collection.CollectionId, NumberStyles.Integer, CultureInfo.InvariantCulture, out var cid)) { PreviewNotice = "The newest collection could not be read."; return; }
                 collectionId = cid;
             }
-            var groups = await _preview.ReadAsync(Spec, collectionId, ct);
+            var read = await _preview.ReadAsync(Spec, collectionId, ct);
+            var groups = read?.Groups;
             if (groups is null || groups.Count == 0) { PreviewNotice = Spec.Assets ? "No CI is in the Pro database yet, so there is nothing to count." : "The newest collection holds no findings to count."; return; }
+            // #1400: the preview reads at most the most common combinations -- when there are more, it says so in numbers
+            PreviewCut = read!.Note(Spec.Assets ? "CIs" : "findings");
             var stored = new Dictionary<string, long>(StringComparer.Ordinal);
             foreach (var g in groups) { var k = string.IsNullOrWhiteSpace(g.Stored) ? NotSet : g.Stored!; stored[k] = (stored.TryGetValue(k, out var c) ? c : 0) + g.N; }
             StoredCounts = stored;

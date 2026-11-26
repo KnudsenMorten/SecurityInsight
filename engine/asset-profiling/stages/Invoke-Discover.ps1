@@ -34,6 +34,44 @@ function Get-SIDiscoverySourceNotInTenant {
     return ''
 }
 
+function Save-SIEgExportsForParts {
+    <#
+        #1398 THE PRODUCER of a run collected in parts: the Exposure Graph tables its parts join on -- identity nodes (identity
+        engine), Azure nodes + access edges (azure engine) -- read ONCE for the whole run, streamed, and handed over in the
+        run's state store (shared\SI-EgNodeExport.ps1); every part opens them instead of asking Defender itself. Never
+        throws: a failure is said (each part then says its Exposure Graph values are unknown). -Store: the test seam.
+    #>
+    param([Parameter(Mandatory)]$RunContext, $Store, [scriptblock]$Ask)
+    $engine = [string]$RunContext.Engine
+    if ($engine -notin 'identity', 'azure') { return @() }
+    if ($RunContext.StorageContext -and [string]$RunContext.StorageContext.Mode -eq 'Mock') { return @() }
+    $disc = Join-Path (Split-Path -Parent $PSScriptRoot) 'discovery'
+    $out = New-Object System.Collections.Generic.List[object]
+    try {
+        if (-not $Store -and $global:SI_CollectStateStore) { $Store = $global:SI_CollectStateStore }   # test seam (the state store of a test)
+        if (-not $Store) {
+            if (-not (Get-Command -Name New-SICollectBlobStore -ErrorAction SilentlyContinue)) { . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) '_shared\SI-CollectParts.ps1') }
+            $Store = New-SICollectBlobStore -Account ([string]$global:SI_StorageAccount)
+        }
+        $jobs = @()
+        if ($engine -eq 'identity') {
+            if (-not (Get-Command -Name Get-SIIdentityEgQuery -ErrorAction SilentlyContinue)) { . (Join-Path $disc 'Get-DiscoveryFromIdentityExposureGraph.ps1') }
+            # the unary comma: ONE job stays one job (@(@(a, b)) flattens to a, b -- the e2e test caught kinds 'i' / 'E')
+            $jobs = @(, @('identity-nodes', (Get-SIIdentityEgQuery)))
+        } else {
+            if (-not (Get-Command -Name Get-SIAzureEgNodeQuery -ErrorAction SilentlyContinue)) { . (Join-Path $disc 'Get-DiscoveryFromAzureExposureGraph.ps1') }
+            $jobs = @(@('azure-nodes', (Get-SIAzureEgNodeQuery)), @('azure-edges', (Get-SIAzureEgEdgeQuery)))
+        }
+        foreach ($j in $jobs) {
+            $d = Export-SIEgRows -Store $Store -Engine $engine -RunId ([string]$RunContext.RunId) -Kind $j[0] -Query $j[1] -Ask $Ask
+            $out.Add($d)
+            if ($d.Ok) { Write-SIInfo ('Exposure Graph {0}: {1:N0} row(s) read once for the run and handed over to the parts ({2} chunk(s))' -f $j[0], $d.Rows, $d.Chunks) }
+            else { Write-SIWarn ('Exposure Graph {0}: the read for the parts did not complete ({1}) -- the parts'' Exposure Graph values are unknown this run, not "none".' -f $j[0], $d.Error) }
+        }
+    } catch { Write-SIWarn ('Exposure Graph: the tables for the parts could not be handed over -- {0}. The parts'' Exposure Graph values are unknown this run, not "none".' -f $_.Exception.Message) }
+    $out.ToArray()
+}
+
 function Invoke-SIDiscover {
     [CmdletBinding()]
     param(
@@ -173,8 +211,8 @@ function Invoke-SIDiscover {
     $streamParts = 0
     if ($RunContext.Engine -in 'identity', 'azure', 'endpoint') {
         if (-not (Get-Command -Name New-SIDiscoverStream -ErrorAction SilentlyContinue)) { . (Join-Path (Split-Path -Parent $PSScriptRoot) 'shared\SI-DiscoverStream.ps1') }
-        $streamFull = [bool]((Get-Command -Name Test-SIFullAssetPropertiesOn -ErrorAction SilentlyContinue) -and (Test-SIFullAssetPropertiesOn))
-        $streamWant = Test-SIDiscoverStreamWanted -RunContext $RunContext -FullProperties $streamFull
+        # #1398: full asset properties stream too (their kept objects go to a spool on disk, SI-FullAssetProperties.ps1)
+        $streamWant = Test-SIDiscoverStreamWanted -RunContext $RunContext
         if ($streamWant.Stream) {
             # the engine's objects before anything is read: identity = users + service principals ($count); azure = the
             # larger of the Resource Graph and Exposure Graph counts (the two describe mostly the same resources, which merge)
@@ -225,7 +263,11 @@ function Invoke-SIDiscover {
                 $global:SI_DiscoverStreamCounts = @{}
                 Write-SIInfo ('discovery streams: {0} counted -> {1} part(s); each page goes straight into its part' -f $streamWhat, $streamParts)
             } else {
-                Write-SIWarn 'discovery: the number of objects could not be read -- this run discovers the whole set in one process (it holds every object in memory until it is split).'
+                # #1398 (owner 2026-10-21: "memory issues must not be a problem in any step"): the whole set is never held --
+                # the pages still go straight into raw buckets on disk, and the part count is decided from the rows read
+                $global:SI_DiscoverStream = New-SIDiscoverStream -RunContext $RunContext -Parts 1 -PartsFromRows -SourcePriority $sourcePriority -ReservedKeys $reservedKeys
+                $global:SI_DiscoverStreamCounts = @{}
+                Write-SIInfo ('discovery streams: the number of objects could not be read before discovery -- each page goes straight into one of {0} raw bucket(s); the part count is decided from the rows read' -f $global:SI_DiscoverStream.Parts)
             }
         } elseif ($RunContext.PSObject.Properties['Phase'] -and [string]$RunContext.Phase -eq 'discover') {
             Write-SIInfo ('discovery: the whole set in this process -- {0}' -f $streamWant.Reason)
@@ -357,9 +399,21 @@ function Invoke-SIDiscover {
             [System.GC]::Collect()
             Write-SIInfo '[perms] EG identity nodes: released before the parts are routed'
         }
+        # #1398: the IdentityInfo rows (on disk) the same way -- read only by the identity sources
+        if ((Get-Variable -Name _SICache -Scope Script -ErrorAction SilentlyContinue) -and $script:_SICache -is [hashtable] -and $script:_SICache.ContainsKey('IdentityInfo')) {
+            if (Get-Command -Name Remove-SIDiskLookup -ErrorAction SilentlyContinue) { Remove-SIDiskLookup $script:_SICache['IdentityInfo'] }
+            $script:_SICache.Remove('IdentityInfo')
+        }
         $streamDone = Complete-SIDiscoverStream -Stream $global:SI_DiscoverStream
         $global:SI_DiscoverStream = $null; $global:SI_DiscoverStreamCounts = $null
         if ($global:SI_CollectRunInfo) { $global:SI_CollectRunInfo.Parts = $streamDone.Parts }
+        # #1089 / #1398: the tags every azure record inherits are handed over beside the records in a STREAMED run too (the
+        # whole-set branch below always did; a streamed azure run handed none over, so its records carried no inherited tag)
+        if ($RunContext.Engine -eq 'azure') {
+            if (-not (Get-Command -Name Save-SIParentChainForParts -ErrorAction SilentlyContinue)) { . (Join-Path (Split-Path -Parent $PSScriptRoot) 'shared\RuleIndexes.ps1') }
+            $null = Save-SIParentChainForParts -Engine azure -RunId ([string]$RunContext.RunId) -RunContext $RunContext
+        }
+        $null = Save-SIEgExportsForParts -RunContext $RunContext
         $perSourceSummary = ($perSourceCounts.GetEnumerator() | ForEach-Object { '{0}:{1}' -f $_.Key, $_.Value }) -join ' '
         Write-SIInfo ('{0} object(s) from {1} source row(s) written into {2} part(s) for the workers, streamed and merged per part ({3} chunk(s); the largest group of linked rows: {4}{5})' -f $streamDone.Written, $streamDone.RawRows, $streamDone.Parts, $streamDone.Chunks, $streamDone.LargestGroup, $(if ($streamDone.EmptyParts) { (', {0} part(s) empty' -f $streamDone.EmptyParts) } else { '' }))
         return [pscustomobject]@{
@@ -446,6 +500,8 @@ function Invoke-SIDiscover {
             if (-not (Get-Command -Name Save-SIParentChainForParts -ErrorAction SilentlyContinue)) { . (Join-Path (Split-Path -Parent $PSScriptRoot) 'shared\RuleIndexes.ps1') }
             $null = Save-SIParentChainForParts -Engine 'azure' -RunId ([string]$RunContext.RunId) -RunContext $RunContext
         }
+        # #1398: the Exposure Graph tables the parts join on, read ONCE for the run and handed over beside the records
+        $null = Save-SIEgExportsForParts -RunContext $RunContext
     } else {
         for ($i = 0; $i -lt $assets.Count; $i += $shardSize) {
             $shardIdx = [int]($i / $shardSize)

@@ -59,37 +59,43 @@ function Invoke-SITagging {
 
         Write-SIInfo ("   Tagging rule: {0}  [Test/read-only]" -f $rule.AssetTagName)
 
-        $rows = Invoke-SIHuntingQuery -Query $rule.Query -QueryEngine $rule.QueryEngine
-        if (@($rows).Count -eq 0) {
+        # #1398: the rule's answer is taken part by part (each hash bucket / Log Analytics part as it arrives) and turned into
+        # its audit rows at once -- the raw answer is never held as one list beside them. A read that fails adds nothing
+        # (as before: the rows of a failed read are dropped).
+        $ruleActivity = New-Object System.Collections.Generic.List[object]
+        $ruleOk = Invoke-SIHuntingQuery -Query $rule.Query -QueryEngine $rule.QueryEngine -OnRestart { $ruleActivity.Clear() } -OnRows {
+            param($part)
+            foreach ($row in @($part)) {
+                if ($null -eq $row) { continue }
+                $assetTag    = [string]$row.AssetTag
+                $assetTagId  = if ($row.NodeId) { [string]$row.NodeId } else { '' }
+                $targetId    = if ($row.DeviceId) { [string]$row.DeviceId }
+                               elseif ($row.UserId) { [string]$row.UserId }
+                               elseif ($row.AzureResourceId) { [string]$row.AzureResourceId }
+                               else { '<unknown>' }
+                $ruleActivity.Add([pscustomobject]@{
+                    CollectionTime = $RunContext.CollectionTime
+                    SI_RunId       = $RunContext.RunId
+                    SI_Engine      = $RunContext.Engine
+                    AssetTagName   = $rule.AssetTagName
+                    Mode           = $rule.Mode
+                    QueryEngine    = $rule.QueryEngine
+                    TargetId       = $targetId
+                    AssetTag       = $assetTag
+                    AssetTagType   = if ($row.AssetTagType) { [string]$row.AssetTagType } else { '' }
+                    AssetTierLevel = if ($null -ne $row.AssetTierLevel) { [int]$row.AssetTierLevel } else { -1 }
+                    Status         = 'WouldApply'
+                    NodeId         = $assetTagId
+                })
+            }
+        }
+        if (-not $ruleOk) { $ruleActivity.Clear() }
+        if ($ruleActivity.Count -eq 0) {
             Write-SIInfo '     -> 0 rows (no candidates / all already tagged via leftanti)'
             continue
         }
-
-        foreach ($row in $rows) {
-            $assetTag    = [string]$row.AssetTag
-            $assetTagId  = if ($row.NodeId) { [string]$row.NodeId } else { '' }
-            $targetId    = if ($row.DeviceId) { [string]$row.DeviceId }
-                           elseif ($row.UserId) { [string]$row.UserId }
-                           elseif ($row.AzureResourceId) { [string]$row.AzureResourceId }
-                           else { '<unknown>' }
-
-            $stats.WouldApply++
-
-            [void]$activity.Add([pscustomobject]@{
-                CollectionTime = $RunContext.CollectionTime
-                SI_RunId       = $RunContext.RunId
-                SI_Engine      = $RunContext.Engine
-                AssetTagName   = $rule.AssetTagName
-                Mode           = $rule.Mode
-                QueryEngine    = $rule.QueryEngine
-                TargetId       = $targetId
-                AssetTag       = $assetTag
-                AssetTagType   = if ($row.AssetTagType) { [string]$row.AssetTagType } else { '' }
-                AssetTierLevel = if ($null -ne $row.AssetTierLevel) { [int]$row.AssetTierLevel } else { -1 }
-                Status         = 'WouldApply'
-                NodeId         = $assetTagId
-            })
-        }
+        foreach ($a in $ruleActivity) { $stats.WouldApply++; [void]$activity.Add($a) }
+        $ruleActivity = $null
     }
 
     # Ship audit rows to SI_AssetTagActivity_CL via the same AzLogDcrIngestPS

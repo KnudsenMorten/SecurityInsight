@@ -138,7 +138,8 @@ IF OBJECT_ID(N'sidata.CiRecord') IS NULL BEGIN SELECT CAST(NULL AS NVARCHAR(450)
 DECLARE @lb DATETIME2(3) = DATEADD(day, -CAST(@lbDays AS INT), SYSUTCDATETIME());
 WITH f AS (SELECT Provider, ISNULL(RecordType, N'') AS RecordType, MAX(CollectionTime) AS Latest FROM sidata.CiRecord
            WHERE CollectionTime >= @lb AND Provider IN (SELECT [value] FROM OPENJSON(@prov)) GROUP BY Provider, ISNULL(RecordType, N'')),
-     fl AS (SELECT f.Provider, f.RecordType, f.Latest, MIN(CAST(ISNULL(r.Complete, 1) AS INT)) AS Complete
+     /* #1403 an EXPLICIT complete collection only: a collection without the flag decides nothing */
+     fl AS (SELECT f.Provider, f.RecordType, f.Latest, MIN(CAST(ISNULL(r.Complete, 0) AS INT)) AS Complete
             FROM f JOIN sidata.CiRecord r ON r.Provider = f.Provider AND ISNULL(r.RecordType, N'') = f.RecordType AND r.CollectionTime = f.Latest
             GROUP BY f.Provider, f.RecordType, f.Latest)
 SELECT r.RecordKey, r.Provider, ISNULL(r.RecordType, N'') AS RecordType,
@@ -219,26 +220,135 @@ function Read-SIEntraDeletionProof {
 }
 
 function Get-SIAzureDeletionKql {
-    <# PURE. Azure Resource Graph: every resource DELETED in the last -Days days (resourcechanges keeps 14), newest delete. #>
+    <#
+        PURE. Azure Resource Graph: every resource DELETED in the last -Days days (resourcechanges keeps 14), newest delete.
+        #1403 a resource MOVED to another resource group / subscription shows as a Delete of its old id and a Create of the new
+        one: per deleted id, Moved = 1 when the same resource (its type and name -- the id from '/providers/' on, the part a
+        move keeps) in the same tenant was CREATED under another id from one hour before to six hours after the delete (a
+        slow move too; an unrelated resource of the same name created days later never undoes a real deletion). A moved resource is never proof of a deletion. A same-named resource that was there all
+        along (NetworkWatcher_<region>, a default NSG name) has no such Create: it never blocks a real deletion.
+    #>
     param([int]$Days = 14)
     if ($Days -lt 1 -or $Days -gt 14) { $Days = 14 }
     @"
 resourcechanges
-| extend ChangeTime = todatetime(properties.changeAttributes.timestamp), ResourceId = tolower(tostring(properties.targetResourceId)), ChangeType = tostring(properties.changeType)
+| extend ChangeTime = todatetime(properties.changeAttributes.timestamp), ResourceId = tolower(tostring(properties.targetResourceId)), ChangeType = tostring(properties.changeType), TenantId = tolower(tostring(tenantId))
 | where ChangeTime > ago($($Days)d) and ChangeType =~ 'Delete' and isnotempty(ResourceId)
-| summarize DeletedAt = max(ChangeTime) by ResourceId
+| extend Sfx = extract('^/subscriptions/[^/]+(/resourcegroups/[^/]+)?(/providers/.+)$', 2, ResourceId)
+| summarize DeletedAt = max(ChangeTime) by ResourceId, Sfx, TenantId
+| join kind=leftouter (resourcechanges
+    | extend CreatedAt = todatetime(properties.changeAttributes.timestamp), CreatedId = tolower(tostring(properties.targetResourceId)), CreateType = tostring(properties.changeType), TenantId = tolower(tostring(tenantId))
+    | where CreatedAt > ago($($Days + 1)d) and CreateType =~ 'Create' and isnotempty(CreatedId)
+    | extend Sfx = extract('^/subscriptions/[^/]+(/resourcegroups/[^/]+)?(/providers/.+)$', 2, CreatedId)
+    | where isnotempty(Sfx)
+    | project Sfx, TenantId, CreatedId, CreatedAt) on Sfx, TenantId
+| extend IsMove = iff(isnotempty(Sfx) and isnotempty(CreatedId) and CreatedId != ResourceId and CreatedAt between ((DeletedAt - 1h) .. (DeletedAt + 6h)), 1, 0)
+| summarize DeletedAt = max(DeletedAt), Moved = max(IsMove) by ResourceId
 | order by ResourceId asc
 "@
+}
+
+function Get-SIAzureResourceMoveSuffix {
+    <#
+        PURE. #1403 the part of an Azure resource id a move to another resource group / subscription KEEPS -- its type and
+        name: from the first '/providers/' on, lower case ('/providers/microsoft.compute/virtualmachines/vm1'); '' for an id
+        without one (a subscription, a resource group: never moved this way).
+    #>
+    param([AllowEmptyString()][string]$Id)
+    if (-not $Id) { return '' }
+    $m = [regex]::Match($Id.Trim().ToLowerInvariant(), '^/subscriptions/[^/]+(/resourcegroups/[^/]+)?(/providers/.+)$')
+    if (-not $m.Success) { return '' }
+    $m.Groups[2].Value
+}
+
+function Get-SIDeletionProofAzureListedSql {
+    <#
+        #1403 the proven Azure records (@rows, JSON [{ k (record key); s (Get-SIAzureResourceMoveSuffix of its id); n (its
+        name, the id's last part); d (deleted at) }]) that are NOT (yet) proof of a deletion, each with its Verdict:
+          move  the resource -- the same type and name -- is listed under ANOTHER id in the azure feed's newest COMPLETE
+                collection, and that id was FIRST SEEN AFTER the delete, in the first collection after it (within 30 hours, one
+                collection a day; sidata.CiRecord.FirstSeen): moved to another resource
+                group / subscription. A same-named resource that was there before the delete never blocks it.
+          wait  no COMPLETE azure collection newer than the delete has been read yet (a move is only ruled out by one).
+        A record not answered is proof. Joined on the name (a hash join over the collection's azure records, once), never a
+        string compare per pair -- a large resource-group deletion stays one pass. (An install reads one tenant: the same type
+        and name in its collection is the same tenant's.)
+    #>
+    @'
+SET NOCOUNT ON;
+IF OBJECT_ID(N'sidata.CiRecord') IS NULL BEGIN SELECT CAST(NULL AS NVARCHAR(450)) AS RecordKey, CAST(NULL AS NVARCHAR(8)) AS Verdict WHERE 1 = 0; RETURN; END
+;WITH f AS (SELECT ISNULL(RecordType, N'') AS RecordType, MAX(CollectionTime) AS Latest FROM sidata.CiRecord WHERE Provider = N'azure' GROUP BY ISNULL(RecordType, N'')),
+     fl AS (SELECT f.RecordType, f.Latest FROM f JOIN sidata.CiRecord r ON r.Provider = N'azure' AND ISNULL(r.RecordType, N'') = f.RecordType AND r.CollectionTime = f.Latest
+            GROUP BY f.RecordType, f.Latest HAVING MIN(CAST(ISNULL(r.Complete, 0) AS INT)) = 1),
+     x AS (SELECT j.k, LOWER(j.s) AS s, LOWER(j.n) AS n, j.d, ISNULL(r.RecordType, N'') AS RecordType
+           FROM OPENJSON(@rows) WITH (k NVARCHAR(450), s NVARCHAR(450), n NVARCHAR(450), d DATETIME2(3)) AS j
+           LEFT JOIN sidata.CiRecord AS r ON r.RecordKey = j.k
+           WHERE j.k IS NOT NULL),
+     c AS (SELECT LOWER(r2.RecordKey) AS lk, r2.FirstSeen,
+                  LOWER(RIGHT(r2.RecordKey, CHARINDEX(N'/', REVERSE(r2.RecordKey)) - 1)) AS nm
+           FROM sidata.CiRecord AS r2 JOIN fl ON fl.RecordType = ISNULL(r2.RecordType, N'') AND r2.CollectionTime = fl.Latest
+           WHERE r2.Provider = N'azure' AND CHARINDEX(N'/', r2.RecordKey) > 0)
+SELECT x.k AS RecordKey,
+       CASE WHEN x.d IS NULL OR fl.Latest IS NULL OR fl.Latest <= x.d THEN N'wait' ELSE N'move' END AS Verdict
+FROM x
+LEFT JOIN fl ON fl.RecordType = x.RecordType
+WHERE x.d IS NULL OR fl.Latest IS NULL OR fl.Latest <= x.d
+   OR (x.s IS NOT NULL AND LEN(x.s) > 0 AND x.n IS NOT NULL
+       AND EXISTS (SELECT 1 FROM c WHERE c.nm = x.n AND c.lk <> LOWER(x.k) AND RIGHT(c.lk, LEN(x.s)) = x.s AND c.FirstSeen > x.d AND c.FirstSeen <= DATEADD(hour, 30, x.d)));
+'@
+}
+
+function Get-SIDeletionProofAzureRecordedSql {
+    <#
+        #1403 THE ONE-TIME HEAL of the 3.1.51 Azure proofs: the Azure proofs recorded BEFORE this release's first run (its time kept in
+        sidata.CiBuildState 'DeletionProofHealBefore', written by the first run) -- record key and deleted at -- and only while the
+        newest azure collection is COMPLETE (a held or failed collection heals nothing). A proof recorded since was judged by the
+        move rule when it was recorded.
+    #>
+    @'
+SET NOCOUNT ON;
+IF OBJECT_ID(N'sidata.CiDeletionProof') IS NULL OR OBJECT_ID(N'sidata.CiRecord') IS NULL OR OBJECT_ID(N'sidata.CiBuildState') IS NULL
+BEGIN SELECT CAST(NULL AS NVARCHAR(450)) AS RecordKey, CAST(NULL AS DATETIME2(3)) AS DeletedAt WHERE 1 = 0; RETURN; END
+DECLARE @before DATETIME2(3) = (SELECT TRY_CONVERT(DATETIME2(3), Value, 127) FROM sidata.CiBuildState WHERE Name = N'DeletionProofHealBefore');
+IF @before IS NULL
+BEGIN
+    SET @before = SYSUTCDATETIME();
+    MERGE sidata.CiBuildState AS b USING (SELECT N'DeletionProofHealBefore' AS Name, CONVERT(NVARCHAR(400), @before, 127) AS Value) AS v ON b.Name = v.Name
+    WHEN NOT MATCHED THEN INSERT (Name, Value) VALUES (v.Name, v.Value);
+    SET @before = (SELECT TRY_CONVERT(DATETIME2(3), Value, 127) FROM sidata.CiBuildState WHERE Name = N'DeletionProofHealBefore');
+END
+DECLARE @complete BIT = 1;
+;WITH f AS (SELECT ISNULL(RecordType, N'') AS RecordType, MAX(CollectionTime) AS Latest FROM sidata.CiRecord WHERE Provider = N'azure' GROUP BY ISNULL(RecordType, N''))
+SELECT @complete = CASE WHEN EXISTS (SELECT 1 FROM f JOIN sidata.CiRecord AS r ON r.Provider = N'azure' AND ISNULL(r.RecordType, N'') = f.RecordType AND r.CollectionTime = f.Latest
+                                     WHERE ISNULL(r.Complete, 0) = 0) OR NOT EXISTS (SELECT 1 FROM f) THEN 0 ELSE 1 END;
+SELECT p.RecordKey, p.DeletedAt FROM sidata.CiDeletionProof AS p WHERE p.Source = N'azure' AND p.ProvedAt < @before AND @complete = 1;
+'@
+}
+
+function Get-SIDeletionProofRevokeSql {
+    <# #1403 the proofs of @rks (JSON array of record keys) that no longer hold are removed; their records are due in the next
+       CI build (NextDueAt = now): the CI follows the lifecycle rule again (reactivated, its findings reopened). Answers Removed. #>
+    @'
+SET NOCOUNT ON;
+IF OBJECT_ID(N'sidata.CiDeletionProof') IS NULL BEGIN SELECT 0 AS Removed; RETURN; END
+DECLARE @now DATETIME2(3) = SYSUTCDATETIME();
+DECLARE @gone TABLE (RecordKey NVARCHAR(450) NOT NULL);
+DELETE p OUTPUT deleted.RecordKey INTO @gone (RecordKey)
+FROM sidata.CiDeletionProof AS p WHERE p.RecordKey IN (SELECT [value] FROM OPENJSON(@rks)) /* one-statement-ok: only the proofs that no longer hold */;
+IF COL_LENGTH('sidata.CiRecord', 'NextDueAt') IS NOT NULL
+    EXEC sp_executesql N'UPDATE r SET NextDueAt = @n FROM sidata.CiRecord r WHERE r.RecordKey IN (SELECT [value] FROM OPENJSON(@k)) AND (r.NextDueAt IS NULL OR r.NextDueAt > @n) /* one-statement-ok: only the records whose proof was removed */;', N'@n DATETIME2(3), @k NVARCHAR(MAX)', @n = @now, @k = @rks;
+SELECT COUNT(*) AS Removed FROM @gone;
+'@
 }
 
 function Read-SIAzureDeletionProof {
     <#
         Azure: a Delete in Resource Graph's resource changes (Reader, which the engine identity has). Returns @{ Ok; Resources
-        (lower resource id -> @{ DeletedAt; Evidence }); Error }. -Fetch: test seam { param($Query) } -> the rows; throws on a
-        failed read.
+        (lower resource id -> @{ DeletedAt; Evidence }); Moved (the deleted ids that were a move, #1403 -- never proof);
+        Error }. -Fetch: test seam { param($Query) } -> the rows; throws on a failed read.
     #>
     param([scriptblock]$Fetch)
-    $res = [ordered]@{ Ok = $true; Resources = @{}; Error = '' }
+    $res = [ordered]@{ Ok = $true; Resources = @{}; Moved = @{}; Error = '' }
     if (-not $Fetch) {
         $Fetch = {
             param($Query)
@@ -248,7 +358,10 @@ function Read-SIAzureDeletionProof {
     try {
         foreach ($x in @(& $Fetch (Get-SIAzureDeletionKql))) {
             if ($null -eq $x) { continue }
-            Add-SIDeletionProofItem -Into $res.Resources -Id ([string](Get-SIDeletionProofValue $x 'ResourceId')) -At (Get-SIDeletionProofValue $x 'DeletedAt') -Evidence 'a Delete in the Azure resource changes'
+            $id = [string](Get-SIDeletionProofValue $x 'ResourceId')
+            $mv = Get-SIDeletionProofValue $x 'Moved'
+            if ($null -ne $mv -and -not ($mv -is [DBNull]) -and ([string]$mv) -match '^(1|true)$') { if ($id) { $res.Moved[$id.Trim().ToLowerInvariant()] = $true }; continue }
+            Add-SIDeletionProofItem -Into $res.Resources -Id $id -At (Get-SIDeletionProofValue $x 'DeletedAt') -Evidence 'a Delete in the Azure resource changes'
         }
     } catch { $res.Ok = $false; $res.Error = $_.Exception.Message }
     [pscustomobject]$res
@@ -398,6 +511,103 @@ function ConvertTo-SIDeletionProofIndex {
     $idx
 }
 
+function ConvertTo-SIDeletionProofAzureCheckRows {
+    <# PURE. #1403 proof rows (k = record key, d = deleted at) -> the moved-resource check's rows @{ k; s (type and name); n (name); d }. #>
+    param([AllowEmptyCollection()][object[]]$Rows = @())
+    $out = New-Object System.Collections.Generic.List[object]
+    foreach ($r in @($Rows)) {
+        if ($null -eq $r) { continue }
+        $k = [string](Get-SIDeletionProofValue $r 'k'); if (-not $k) { continue }
+        $d = Get-SIDeletionProofValue $r 'd'; if ($d -is [DBNull]) { $d = $null }
+        if ($d -is [datetime]) { $d = ([datetime]$d).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ', [Globalization.CultureInfo]::InvariantCulture) }
+        $i = $k.IndexOf(':'); $nid = $(if ($i -ge 0) { $k.Substring($i + 1) } else { $k })
+        $s = Get-SIAzureResourceMoveSuffix $nid
+        $n = ''; $j = $nid.TrimEnd('/').LastIndexOf('/'); if ($j -ge 0) { $n = $nid.TrimEnd('/').Substring($j + 1).ToLowerInvariant() }
+        $out.Add([ordered]@{ k = $k; s = $s; n = $n; d = $(if ($d) { [string]$d } else { $null }) })
+    }
+    $out.ToArray()
+}
+
+function Get-SIDeletionProofAzureVerdicts {
+    <# #1403 the check's answer: record key -> 'move' | 'wait' (a key not answered is proof); $null when the check could not run. #>
+    param([AllowEmptyCollection()][object[]]$CheckRows = @(), [Parameter(Mandatory)][scriptblock]$Sql)
+    $v = @{}
+    if (@($CheckRows).Count -eq 0) { return $v }
+    try {
+        $j = ConvertTo-Json -InputObject @($CheckRows) -Compress -Depth 3
+        if (-not $j.TrimStart().StartsWith('[')) { $j = '[' + $j + ']' }
+        foreach ($x in @(& $Sql (Get-SIDeletionProofAzureListedSql) @{ rows = $j } 'rows')) {
+            $rk = [string](Get-SIDeletionProofValue $x 'RecordKey'); if (-not $rk) { continue }
+            $vv = [string](Get-SIDeletionProofValue $x 'Verdict'); if (-not $vv) { $vv = 'move' }
+            $v[$rk] = $vv
+        }
+    } catch { return $null }
+    $v
+}
+
+function Remove-SIDeletionProofAzureMoves {
+    <#
+        #1403 the proven Azure rows that are no proof (Get-SIDeletionProofAzureListedSql): MOVED (the same type and name
+        listed under another id first seen after the delete) or WAIT (no complete azure collection newer than the delete has
+        been read yet) -- the normal not-seen window applies. The check could not run = no Azure row is proof this run (never
+        retired on a doubt). Never throws.
+    #>
+    param([AllowEmptyCollection()][object[]]$Rows = @(), [Parameter(Mandatory)][scriptblock]$Sql, $Res, [scriptblock]$Log)
+    $az = @($Rows | Where-Object { $null -ne $_ -and [string]$_['s'] -eq 'azure' })
+    if ($az.Count -eq 0) { return @($Rows) }
+    $verdicts = Get-SIDeletionProofAzureVerdicts -CheckRows (ConvertTo-SIDeletionProofAzureCheckRows -Rows $az) -Sql $Sql
+    $failed = ($null -eq $verdicts)
+    if ($failed -and $Res) { $Res.Issues.Add('Azure: the moved-resource check could not run -- no Azure deletion counts this run; the assets wait the not-seen grace period') }
+    $out = New-Object System.Collections.Generic.List[object]
+    $moved = 0; $wait = 0
+    foreach ($r in @($Rows)) {
+        if ($null -eq $r) { continue }
+        if ([string]$r['s'] -eq 'azure') {
+            if ($failed) { continue }
+            $k = [string]$r['k']
+            if ($verdicts.ContainsKey($k)) { if ($verdicts[$k] -eq 'wait') { $wait++ } else { $moved++ }; continue }
+        }
+        $out.Add($r)
+    }
+    if ($Log -and ($moved -gt 0 -or $wait -gt 0)) { & $Log 'INFO' ('CIs: deletion proof -- Azure: {0} deleted id(s) are listed under another id first seen after the delete (moved to another resource group or subscription): not a deletion; {1} wait for a complete collection newer than the delete' -f $moved, $wait) }
+    $out.ToArray()
+}
+
+function Invoke-SIDeletionProofAzureRecheck {
+    <#
+        #1403 THE ONE-TIME HEAL: the Azure proofs recorded before this release (Get-SIDeletionProofAzureRecordedSql -- none while
+        the newest azure collection is not complete) re-checked with the move rule (so a 3.1.51 "deleted in Azure" retirement of
+        a resource that was only MOVED heals by itself): a proof whose resource is a MOVE by this run's resource changes
+        (-Moved, the reader's moved ids) or by the collection (Get-SIDeletionProofAzureListedSql: move -- never wait) is REMOVED --
+        its record is due in the next CI build and the CI follows the lifecycle rule again (reactivated, its findings reopen).
+        A check that cannot run removes nothing. Returns the number removed. Never throws.
+    #>
+    param([Parameter(Mandatory)][scriptblock]$Sql, [hashtable]$Moved = @{}, $Res, [scriptblock]$Log)
+    try {
+        $rec = @(& $Sql (Get-SIDeletionProofAzureRecordedSql) @{} 'rows' | Where-Object { $null -ne $_ })
+        if ($rec.Count -eq 0) { return 0 }
+        $rows = @(foreach ($r in $rec) { [ordered]@{ k = [string](Get-SIDeletionProofValue $r 'RecordKey'); d = (Get-SIDeletionProofValue $r 'DeletedAt') } })
+        $verdicts = Get-SIDeletionProofAzureVerdicts -CheckRows (ConvertTo-SIDeletionProofAzureCheckRows -Rows $rows) -Sql $Sql
+        if ($null -eq $verdicts) { return 0 }
+        $revoke = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+        foreach ($r in $rows) {
+            $k = [string]$r['k']; if (-not $k) { continue }
+            $i = $k.IndexOf(':'); $nid = $(if ($i -ge 0) { $k.Substring($i + 1) } else { $k }).Trim().ToLowerInvariant()
+            # only a MOVE removes a proof: "wait" (no complete collection after the delete) leaves it untouched
+            if (($verdicts.ContainsKey($k) -and $verdicts[$k] -eq 'move') -or ($Moved -and $Moved.ContainsKey($nid))) { [void]$revoke.Add($k) }
+        }
+        if ($revoke.Count -eq 0) { return 0 }
+        $kj = ConvertTo-Json -InputObject @([string[]]@($revoke)) -Compress; if (-not $kj.TrimStart().StartsWith('[')) { $kj = '[' + $kj + ']' }
+        $w = @(& $Sql (Get-SIDeletionProofRevokeSql) @{ rks = $kj } 'rows') | Select-Object -First 1
+        $n = [int](Get-SIDeletionProofValue $w 'Removed')
+        if ($n -gt 0 -and $Log) { & $Log 'INFO' ('CIs: deletion proof -- Azure: {0} recorded deletion(s) no longer hold (moved, or no complete collection after the delete yet): the proof is removed and the CI follows the lifecycle rule again' -f $n) }
+        return $n
+    } catch {
+        if ($Res) { $Res.Issues.Add(('Azure: the recorded deletions could not be re-checked ({0}) -- they stay as they are this run' -f $_.Exception.Message)) }
+        return 0
+    }
+}
+
 function Invoke-SIDeletionProof {
     <#
         The CI build's deletion-proof step (Invoke-SICiBuild calls it before it finds the dirty groups). Never throws.
@@ -415,6 +625,7 @@ function Invoke-SIDeletionProof {
     $onJson = ConvertTo-Json -InputObject @([string[]]@($Choice.On)) -Compress
     if (-not $onJson.TrimStart().StartsWith('[')) { $onJson = '[' + $onJson + ']' }
     $rows = @()
+    $azMoved = @{}
     if ($Choice.Any) {
         $provs = New-Object System.Collections.Generic.List[string]
         foreach ($k in @($Choice.On)) { foreach ($p in @($script:SIDeletionProofSources[$k].Providers)) { if (-not $provs.Contains($p)) { $provs.Add($p) } } }
@@ -460,8 +671,10 @@ function Invoke-SIDeletionProof {
                     }
                 }
                 $proof[$k] = $read
+                if ($k -eq 'azure' -and $read.PSObject.Properties['Moved'] -and $read.Moved) { $azMoved = $read.Moved }
             }
             $rows = @(Find-SIDeletionProofMatches -Candidates $cands -Proof $proof)
+            $rows = @(Remove-SIDeletionProofAzureMoves -Rows $rows -Sql $Sql -Res $res -Log $Log)
         }
         foreach ($k in @($Choice.On)) { $res.Proven[$k] = @($rows | Where-Object { $_.s -eq $k }).Count }
         & $Log 'INFO' ('CIs: deletion proof -- {0} record(s) missing from a complete collection checked; proven deleted: {1}' -f @($cands).Count, ((@($Choice.On) | ForEach-Object { '{0} {1}' -f (Get-SIDeletionProofLabel $_), [int]$res.Proven[$_] }) -join ', '))
@@ -475,6 +688,8 @@ function Invoke-SIDeletionProof {
             $w = @(& $Sql (Get-SIDeletionProofWriteSql) @{ rows = $rj; on = $onJson } 'rows') | Select-Object -First 1
             $res.Added = [int](Get-SIDeletionProofValue $w 'Added'); $res.Removed = [int](Get-SIDeletionProofValue $w 'Removed')
             if ($res.Added -gt 0 -or $res.Removed -gt 0) { & $Log 'INFO' ('CIs: deletion proof -- {0} record(s) newly proven deleted, {1} proof(s) no longer apply (listed again, or the source switched off); their CIs are rebuilt in this build' -f $res.Added, $res.Removed) }
+            # #1403 the recorded Azure proofs re-checked with the move rule (a wrong 3.1.51 "deleted in Azure" heals by itself)
+            if (@($Choice.On) -contains 'azure') { $res.Removed += (Invoke-SIDeletionProofAzureRecheck -Sql $Sql -Moved $azMoved -Res $res -Log $Log) }
         } catch {
             # every switch off: only the clean-up of a switched-off source ran -- nothing to say (a database without the table)
             if (-not $Choice.Any) { return [pscustomobject]$res }

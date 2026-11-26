@@ -433,7 +433,8 @@ Describe 'the update runs it (setup\Invoke-SIContainerUpdate.ps1)' {
     It 'as a step of every completed update, before the templates' {
         # the permission note runs after the web app's size and the sign-in front's store (#852), before the display names and the templates
         # #1390: the one permission an update grants (Invoke-SIUpdatePermissionGrant) runs just before the note, so the note reads its result
-        $script:U | Should -Match ([regex]::Escape('$null = Invoke-SIUpdateWebAppSize; $null = Invoke-SIUpdateSigninStore; $null = Invoke-SIUpdatePermissionGrant; $null = Invoke-SIUpdatePermissionNote; $null = Invoke-SIUpdateDisplayNames; Install-SIUpdateDefaultTemplates }'))
+        # #1414: the one-active-revision check (Invoke-SIUpdateSingleRevision) runs right after the note, before the display names
+        $script:U | Should -Match ([regex]::Escape('$null = Invoke-SIUpdateWebAppSize; $null = Invoke-SIUpdateSigninStore; $null = Invoke-SIUpdatePermissionGrant; $null = Invoke-SIUpdatePermissionNote; $null = Invoke-SIUpdateSingleRevision; $null = Invoke-SIUpdateDisplayNames; if ($global:SI_UpdateRunBeat) { Stop-SIUpdateRunBeatAtEnd }; Install-SIUpdateDefaultTemplates }'))
         @([regex]::Matches($script:U, 'exit \(Complete-SIUpdate\)')).Count | Should -Be 3
     }
     It 'with the jobs the update read and this install''s names; its lines are plain lines, never the update''s first warning' {

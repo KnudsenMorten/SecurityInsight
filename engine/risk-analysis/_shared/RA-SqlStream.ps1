@@ -548,6 +548,8 @@ SELECT @n;
         # #831 B: one part of a split report -- its write-number range [@From, @To)
         'Seq' { return 'DELETE TOP (CONVERT(int, @Batch)) FROM sidata.Finding WHERE CollectionId = CONVERT(int, @CollectionId) AND RaReport = CONVERT(int, @Report) AND RaSeq >= CONVERT(bigint, @From) AND RaSeq < CONVERT(bigint, @To); SELECT @@ROWCOUNT;' }
     }
+    # #1397: the 3.1.51 statement, kept after measuring (1 M rows, every index, accelerated database recovery on): it removed
+    # 1,158 rows/s against 1,016 for a forward walk -- the cost is the indexes per row, and larger batches are cheaper per row
     "DELETE TOP (CONVERT(int, @Batch)) FROM sidata.Finding WHERE CollectionId = CONVERT(int, @CollectionId) AND RaReport = CONVERT(int, @Report) AND RaSeq IS NOT NULL AND (@Bucket = '*' OR RaBucket = @Bucket); SELECT @@ROWCOUNT;"
 }
 
@@ -560,15 +562,61 @@ function Get-RAStreamTraceCandidatesSql {
     # NOT NULL -- every row Risk Analysis writes has them, no other writer sets RaReport), the shared hashes are found in
     # that index alone (two different keys on one hash = MIN <> MAX, the same test as COUNT(DISTINCT) > 1 under the same
     # collation, without a sort), and only the rows that really share a name are read whole. The same rows as before.
-    param([ValidateSet('Detailed', 'Summary')][string]$Grain)
+    # -Paged (#1397, live 2026-11-25: the worker that put a 7M+ row Detailed report together ran out of memory in GetValue --
+    # this statement answered every candidate row, its whole JSON, in one list): only the hashes in (@After, @UpTo], the page
+    # Get-RAStreamTracePageSql found. Without -Paged: the whole report (the statement as it was).
+    param([ValidateSet('Detailed', 'Summary')][string]$Grain, [switch]$Paged)
     $t = 'sidata.Finding'; $run = 'CollectionId = CONVERT(int, @CollectionId)'; $cond = 'RaSeq IS NOT NULL'; $id = 'f.FindingId'; $j = 'f.DetailJson'
     if ($Grain -eq 'Summary') { $t = 'sidata.SummaryRow'; $run = 'CollectionTime = CONVERT(datetime2(3), @CollectionTime, 126)'; $cond = 'RaReport IS NOT NULL'; $id = 'f.RowNo'; $j = 'f.RowJson' }
+    $range = ''; $fRange = ''; $head = ''; $tail = ';'
+    if ($Paged) {
+        $head = "DECLARE @a binary(16) = CONVERT(binary(16), NULLIF(@After, N''), 2); DECLARE @u binary(16) = CONVERT(binary(16), @UpTo, 2);`r`n"
+        $range = ' AND (@a IS NULL OR RaTraceHash > @a) AND RaTraceHash <= @u'
+        $fRange = ' AND (@a IS NULL OR f.RaTraceHash > @a) AND f.RaTraceHash <= @u'
+        $tail = "`r`nOPTION (RECOMPILE);"
+    }
     @"
-WITH s AS (SELECT RaTraceHash FROM $t
-           WHERE $run AND RaReport = CONVERT(int, @Report) AND $cond AND RaTraceKey IS NOT NULL
+${head}WITH s AS (SELECT RaTraceHash FROM $t
+           WHERE $run AND RaReport = CONVERT(int, @Report) AND $cond AND RaTraceKey IS NOT NULL$range
            GROUP BY RaTraceHash HAVING MIN(RaTraceKey) <> MAX(RaTraceKey))
 SELECT $id AS Id, $j AS Json FROM $t f JOIN s ON s.RaTraceHash = f.RaTraceHash
-WHERE f.$run AND f.RaReport = CONVERT(int, @Report) AND f.$cond AND f.RaTraceSuffixed = 0 AND f.RaTraceKey IS NOT NULL;
+WHERE f.$run AND f.RaReport = CONVERT(int, @Report) AND f.$cond AND f.RaTraceSuffixed = 0 AND f.RaTraceKey IS NOT NULL$fRange$tail
+"@
+}
+
+function Get-RAStreamTracePageSql {
+    <#
+        #1397: the next @Page trace names two different assets of the report share, after @After, in name (hash) order,
+        through the trace index alone (IX_Finding_RaTrace / IX_SummaryRow_RaTrace), each with how many rows it holds:
+        H (the hash, hex) and N. Names and counts only -- the rows are read by Complete-RAStreamReport ~5,000 at a time.
+    #>
+    param([ValidateSet('Detailed', 'Summary')][string]$Grain)
+    $t = 'sidata.Finding'; $run = 'CollectionId = CONVERT(int, @CollectionId)'; $cond = 'RaSeq IS NOT NULL'
+    if ($Grain -eq 'Summary') { $t = 'sidata.SummaryRow'; $run = 'CollectionTime = CONVERT(datetime2(3), @CollectionTime, 126)'; $cond = 'RaReport IS NOT NULL' }
+    @"
+SET NOCOUNT ON;
+DECLARE @a binary(16) = CONVERT(binary(16), NULLIF(@After, N''), 2);
+SELECT TOP (CONVERT(bigint, @Page)) CONVERT(varchar(32), RaTraceHash, 2) AS H, COUNT_BIG(*) AS N FROM $t
+WHERE $run AND RaReport = CONVERT(int, @Report) AND $cond AND RaTraceKey IS NOT NULL AND RaTraceHash IS NOT NULL AND (@a IS NULL OR RaTraceHash > @a)
+GROUP BY RaTraceHash HAVING MIN(RaTraceKey) <> MAX(RaTraceKey)
+ORDER BY RaTraceHash
+OPTION (RECOMPILE);
+"@
+}
+
+function Get-RAStreamTraceNameRowsSql {
+    <# #1397: the next @Rows candidate rows of ONE shared trace name (@Hash, hex) after row id @AfterId, in row id order
+       (the trace index: the run, the report, the hash, then the row id) -- one name that holds more rows than a page. #>
+    param([ValidateSet('Detailed', 'Summary')][string]$Grain)
+    $t = 'sidata.Finding'; $run = 'CollectionId = CONVERT(int, @CollectionId)'; $cond = 'RaSeq IS NOT NULL'; $id = 'FindingId'; $j = 'DetailJson'
+    if ($Grain -eq 'Summary') { $t = 'sidata.SummaryRow'; $run = 'CollectionTime = CONVERT(datetime2(3), @CollectionTime, 126)'; $cond = 'RaReport IS NOT NULL'; $id = 'RowNo'; $j = 'RowJson' }
+    @"
+SET NOCOUNT ON;
+DECLARE @h binary(16) = CONVERT(binary(16), @Hash, 2); DECLARE @i bigint = CONVERT(bigint, NULLIF(@AfterId, N''));
+SELECT TOP (CONVERT(bigint, @Rows)) $id AS Id, $j AS Json FROM $t
+WHERE $run AND RaReport = CONVERT(int, @Report) AND $cond AND RaTraceHash = @h AND RaTraceSuffixed = 0 AND RaTraceKey IS NOT NULL AND (@i IS NULL OR $id > @i)
+ORDER BY $id
+OPTION (RECOMPILE);
 "@
 }
 
@@ -1089,8 +1137,11 @@ function Invoke-RAStreamDedup {
 function Remove-RAStreamRowsBatched {
     <#
         Runs a 'DELETE TOP (@Batch) ...; SELECT <rows removed>' statement (Get-RAStreamDeleteReportBatchSql) until it removes
-        fewer rows than the batch -- each batch its own short statement, sized by its measured time (Invoke-RAStreamBatched).
-        Returns the rows removed.
+        fewer rows than the batch -- each batch its own short statement, sized by its measured time (Invoke-RAStreamBatched,
+        5,000 first, aimed at 5 s: the 3.1.51 batching, kept after measuring it against a forward walk, #1397).
+        #1397 (two-agent check): "done" only when PROVEN -- after a pass, the statement is asked again from the start (the same
+        condition, the same index); a pass that removes nothing shows that no row is left. A pass that still removes rows is
+        followed by another. Returns the rows removed.
     #>
     param([Parameter(Mandatory)]$Stream, [Parameter(Mandatory)][string]$Sql, [hashtable]$Params = @{}, [Parameter(Mandatory)][string]$What, [string]$Kind = 'remove')
     $__rmStep = {
@@ -1100,7 +1151,13 @@ function Remove-RAStreamRowsBatched {
         $n = [long](@(Invoke-RAStreamSql -Stream $Stream -Sql $Sql -Params $q -Attempts 1)[-1])
         @{ Removed = $n; Done = ($n -lt [long]$Size) }
     }
-    [long](Invoke-RAStreamBatched -Stream $Stream -Batch $__rmStep -What $What -Kind $Kind -StartSize 5000 -TargetMs 5000).Removed
+    $total = 0L
+    while ($true) {
+        $n = [long](Invoke-RAStreamBatched -Stream $Stream -Batch $__rmStep -What $What -Kind $Kind -StartSize 5000 -TargetMs 5000).Removed
+        $total += $n
+        if ($n -eq 0) { break }
+    }
+    $total
 }
 
 function New-RAStream {
@@ -1716,23 +1773,79 @@ function Complete-RAStreamReport {
     $dup = [long](Invoke-RAStreamDedup -Stream $Stream -Params $p -What 'keeping once the findings two query slices both returned')
     Add-RAStreamTime -Stream $Stream -Phase 'dedup' -Seconds $phSw.Elapsed.TotalSeconds; $phSw.Restart()
     if ($dup -gt 0) { & $Stream.Log 'INFO' ("{0} finding(s) two query slices both returned are kept once" -f $dup) }
-    $cand = @(Invoke-RAStreamSql -Stream $Stream -Sql (Get-RAStreamTraceCandidatesSql -Grain $Stream.Grain) -Params $p -Mode 'reader' -What 'checking which findings share a trace name with another asset''s finding')
-    $fix = [System.Collections.Generic.List[string]]::new()
-    foreach ($x in $cand) {
-        foreach ($h in @($x)) {
-            if (-not $h) { continue }
-            $row = ConvertFrom-RAStreamJson -Json ([string]$h['Json'])
-            $b = Get-RATraceBase -Row $row -IsDetailed $true
-            if (-not $b.AssetKey) { continue }
-            $name = (@($b.Parts) + $b.AssetKey + 'SI') -join '-'
-            $fix.Add((ConvertTo-SIDataJsonObject -Values ([ordered]@{ Id = [long]$h['Id']; N = $name; I = (Get-RATraceId -TraceName $name) })))
-        }
-    }
-    $cand = $null
+    # #1397 (live 2026-11-25: the worker putting a 7M+ row Detailed report together ran out of memory in GetValue here --
+    # every candidate row, its whole JSON, was read into one list): bounded by ROWS, never by names. The shared names come a
+    # page at a time with how many rows each holds (Get-RAStreamTracePageSql: names and counts only); consecutive names are
+    # read together while their rows stay within ~5,000 (Get-RAStreamTraceCandidatesSql -Paged, the range of names); a name
+    # that alone holds more (the trace name falls back to the finding's own fields when the asset has no name: one name
+    # can hold 50,000+ rows) is read by itself in pages of ~5,000 rows by row id (Get-RAStreamTraceNameRowsSql). Each read
+    # is named, written and let go before the next. The same rows get the same names as the one statement gave them.
     $traces = 0L
-    if ($fix.Count) {
-        $chunk = [ref]$Stream.Chunk
-        $traces = Write-SIDataJsonRows -Invoke $Stream.Invoke -Sql (Get-RAStreamTraceUpdateSql -Grain $Stream.Grain -Typed $Stream.Typed) -Items $fix.ToArray() -Params $p -ChunkChars $chunk -What 'trace names'
+    $__trSql = Get-RAStreamTraceCandidatesSql -Grain $Stream.Grain -Paged
+    $__trPageSql = Get-RAStreamTracePageSql -Grain $Stream.Grain
+    $__trOneSql = Get-RAStreamTraceNameRowsSql -Grain $Stream.Grain
+    $__trTarget = 5000L; $__trNames = 1000L
+    $__trSw = [Diagnostics.Stopwatch]::StartNew(); $__trSt = @{ Reads = 0; Said = 0.0; Written = 0L }   # (the reads below change it: one object, not a copy per scope)
+    $__trWhat = 'checking which findings share a trace name with another asset''s finding'
+    # one read: its rows named and written, then let go. Answers @{ Rows; LastId }.
+    $__trNameRows = {
+        param([hashtable]$Q, [string]$Sql)
+        $__trSt.Reads++
+        if (($__trSw.Elapsed.TotalSeconds - $__trSt.Said) -ge 60) {
+            $__trSt.Said = $__trSw.Elapsed.TotalSeconds
+            & $Stream.Log 'INFO' ("checking which findings share a trace name: {0:N0} finding(s) named so far in {1:N0} read(s), {2:N0} s" -f $traces, $__trSt.Reads, [Math]::Round($__trSt.Said))
+        }
+        $cand = @(Invoke-RAStreamSql -Stream $Stream -Sql $Sql -Params $Q -Mode 'reader' -What $__trWhat)
+        $fix = [System.Collections.Generic.List[string]]::new()
+        $got = 0L; $lastId = -1L
+        foreach ($x in $cand) {
+            foreach ($h in @($x)) {
+                if (-not $h) { continue }
+                $got++
+                $id = [long]$h['Id']; if ($id -gt $lastId) { $lastId = $id }
+                $row = ConvertFrom-RAStreamJson -Json ([string]$h['Json'])
+                $b = Get-RATraceBase -Row $row -IsDetailed $true
+                if (-not $b.AssetKey) { continue }
+                $name = (@($b.Parts) + $b.AssetKey + 'SI') -join '-'
+                $fix.Add((ConvertTo-SIDataJsonObject -Values ([ordered]@{ Id = $id; N = $name; I = (Get-RATraceId -TraceName $name) })))
+            }
+        }
+        $cand = $null
+        if ($fix.Count) {
+            $chunk = [ref]$Stream.Chunk
+            $__trSt.Written = [long](Write-SIDataJsonRows -Invoke $Stream.Invoke -Sql (Get-RAStreamTraceUpdateSql -Grain $Stream.Grain -Typed $Stream.Typed) -Items $fix.ToArray() -Params $p -ChunkChars $chunk -What 'trace names')
+        } else { $__trSt.Written = 0L }
+        @{ Rows = $got; LastId = $lastId }
+    }
+    $__trQ = { $q = @{}; foreach ($k in $p.Keys) { $q[$k] = $p[$k] }; $q }
+    $lo = ''          # every name up to here is done (exclusive lower bound of the next read)
+    while ($true) {
+        $q = & $__trQ; $q['Page'] = [string]$__trNames; $q['After'] = $lo
+        $names = @(@(Invoke-RAStreamSql -Stream $Stream -Sql $__trPageSql -Params $q -Mode 'reader' -What $__trWhat) | ForEach-Object { $_ } | Where-Object { $_ -is [System.Collections.IDictionary] })
+        if (-not $names.Count) { break }
+        $acc = 0L; $hi = ''
+        foreach ($nm in $names) {
+            $hName = [string]$nm['H']; $n = [long]$nm['N']
+            if ($n -gt $__trTarget) {
+                # the names before it, together; then this one by itself, a page of rows at a time
+                if ($hi) { $g = & $__trQ; $g['After'] = $lo; $g['UpTo'] = $hi; $null = & $__trNameRows $g $__trSql; $traces += $__trSt.Written; $lo = $hi; $hi = ''; $acc = 0L }
+                $afterId = ''
+                while ($true) {
+                    $g = & $__trQ; $g['Hash'] = $hName; $g['AfterId'] = $afterId; $g['Rows'] = [string]$__trTarget
+                    $r = & $__trNameRows $g $__trOneSql; $traces += $__trSt.Written
+                    if ($r.Rows -lt $__trTarget -or $r.LastId -lt 0) { break }
+                    $afterId = [string]$r.LastId
+                }
+                $lo = $hName
+                continue
+            }
+            if ($hi -and ($acc + $n) -gt $__trTarget) { $g = & $__trQ; $g['After'] = $lo; $g['UpTo'] = $hi; $null = & $__trNameRows $g $__trSql; $traces += $__trSt.Written; $lo = $hi; $acc = 0L }
+            $acc += $n; $hi = $hName
+        }
+        if ($hi) { $g = & $__trQ; $g['After'] = $lo; $g['UpTo'] = $hi; $null = & $__trNameRows $g $__trSql; $traces += $__trSt.Written; $lo = $hi }
+        if ($names.Count -lt $__trNames) { break }
+    }
+    if ($traces -gt 0) {
         & $Stream.Log 'INFO' ("{0} finding(s) share a trace name with another asset's finding in another query slice -- the asset id is added to theirs" -f $traces)
     }
     Add-RAStreamTime -Stream $Stream -Phase 'trace' -Seconds $phSw.Elapsed.TotalSeconds; $phSw.Restart()

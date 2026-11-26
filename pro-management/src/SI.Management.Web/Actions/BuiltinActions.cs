@@ -410,21 +410,21 @@ public sealed class ExportSelectedAction(IAccessScope access) : IFindingAction
         }
         else
         {
-            var sb = new StringBuilder();
-            sb.AppendLine(string.Join(",", cols.Select(Pages.Findings.IndexModel.Csv)));
-            foreach (var t in findings)
-            {
-                var r = t.Finding;
-                var cells = new[]
-                {
-                    r.CollectionTime?.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture) ?? "", r.Tier, r.AssetName, r.AssetKind, r.Severity,
-                    r.RiskScore.ToString("0.##", CultureInfo.InvariantCulture), r.SecurityDomain, r.ReportName, r.Cve, r.ConfigurationId, r.Title, r.AssetKey, r.FindingId,
-                    t.DepartmentName ?? (t.DepartmentId is null ? "Unassigned" : ""),
-                };
-                sb.AppendLine(string.Join(",", cells.Select(Pages.Findings.IndexModel.Csv)));
-            }
+            // #1400: written straight to a temporary file, a row at a time (never the file in memory, never copied)
             var name = "securityinsight-findings-selected-" + DateTime.UtcNow.ToString("yyyyMMdd-HHmm", CultureInfo.InvariantCulture) + ".csv";
-            file = new FileContentResult(Encoding.UTF8.GetPreamble().Concat(Encoding.UTF8.GetBytes(sb.ToString())).ToArray(), "text/csv; charset=utf-8") { FileDownloadName = name };
+            file = await CsvExport.FileAsync(name, cols, async sink =>
+            {
+                foreach (var t in findings)
+                {
+                    var r = t.Finding;
+                    await sink.RowAsync(new[]
+                    {
+                        r.CollectionTime?.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture) ?? "", r.Tier, r.AssetName, r.AssetKind, r.Severity,
+                        r.RiskScore.ToString("0.##", CultureInfo.InvariantCulture), r.SecurityDomain, r.ReportName, r.Cve, r.ConfigurationId, r.Title, r.AssetKey, r.FindingId,
+                        t.DepartmentName ?? (t.DepartmentId is null ? "Unassigned" : ""),
+                    });
+                }
+            }, ct);
         }
         return new ActionOutcome(findings.Select(t => FindingActionResult.Ok(t)).ToList(), $"{Fmt.Int(rows.Count)} finding(s) exported.", file);
     }

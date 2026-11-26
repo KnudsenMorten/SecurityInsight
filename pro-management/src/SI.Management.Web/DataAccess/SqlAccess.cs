@@ -64,6 +64,14 @@ public sealed class AzureSqlExecutor : ISqlExecutor
         var started = System.Diagnostics.Stopwatch.GetTimestamp();
         try
         {
+            // #1400 an export: every statement on the export's one connection, inside its one snapshot (DataAccess/ExportSession.cs)
+            if (ExportSession.Current is { } export && ExportSession.Takes(sql))
+                return await export.RunAsync(async t =>
+                {
+                    var c = new SqlConnection(ConnectionString) { AccessToken = await TokenAsync(t) };
+                    try { await c.OpenAsync(t); return c; }
+                    catch { await c.DisposeAsync(); throw; }
+                }, sql, parameters, _o.QueryTimeoutSeconds, ct);
             await using var cn = new SqlConnection(ConnectionString) { AccessToken = await TokenAsync(ct) };
             await cn.OpenAsync(ct);
             return await RunCoreAsync(cn, null, sql, parameters, ct, _o.QueryTimeoutSeconds);

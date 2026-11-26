@@ -151,7 +151,8 @@ Describe 'the part count and which runs stream' {
         @{ why = 'one-process run -> whole set'; ctx = @{ Phase = 'all'; AssetLimit = 0 }; set = $null; full = $false; want = $false }
         @{ why = 'a part -> whole set'; ctx = @{ Phase = 'parts'; AssetLimit = 0 }; set = $null; full = $false; want = $false }
         @{ why = 'an asset limit -> whole set'; ctx = @{ Phase = 'discover'; AssetLimit = 50 }; set = $null; full = $false; want = $false }
-        @{ why = 'full asset properties -> whole set'; ctx = @{ Phase = 'discover'; AssetLimit = 0 }; set = $null; full = $true; want = $false }
+        # #1398: the kept full objects go to a spool on disk -- a full run streams like every other run
+        @{ why = 'full asset properties -> streams too (#1398)'; ctx = @{ Phase = 'discover'; AssetLimit = 0 }; set = $null; full = $true; want = $true }
         @{ why = 'SI_DiscoverStreaming = off -> whole set'; ctx = @{ Phase = 'discover'; AssetLimit = 0 }; set = 'off'; full = $false; want = $false }
     ) {
         (Test-SIDiscoverStreamWanted -RunContext ([pscustomobject]$ctx) -Setting $set -FullProperties $full).Stream | Should -Be $want

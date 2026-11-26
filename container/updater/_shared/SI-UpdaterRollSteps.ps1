@@ -177,8 +177,53 @@ function Invoke-SIUpdaterInvardiaPostRoll {
                     -Tag $tag -JobName $UpdaterJob -JobId $Environment.UpdaterId -CurrentImage $Environment.UpdaterImage -Disabled:$SelfOff
         Write-UpdLog ("updater: {0} -- {1}" -f $self.Action, $self.Reason)
     }
+    # SI #1414 THE LAST STEP: nothing old answers -- one active revision per container app with an ingress, read back. Not
+    # proven = RevisionsOk $false (the caller fails the run and says why; the failure report is written by the step)
+    $rv = Invoke-SIUpdaterSingleRevisionStep -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId -Apps @($WebApp, $McpApp)
     # SelfAction 'rolled' = the updater now runs this release's image: its update steps run in the second update
-    [pscustomobject]@{ Code = 0; Text = ("this environment now runs SecurityInsight {0}" -f $Version); SelfAction = $(if ($self) { [string]$self.Action } else { '' }) }
+    [pscustomobject]@{ Code = 0; Text = ("this environment now runs SecurityInsight {0}" -f $Version); SelfAction = $(if ($self) { [string]$self.Action } else { '' })
+                       RevisionsOk = [bool](-not $rv -or $rv.Ok); RevisionsText = $(if ($rv) { [string]$rv.Text } else { '' }) }
+}
+
+function Invoke-SIUpdaterSingleRevisionStep {
+    <#
+        SI #1414 (framework SEC-PATCH-PIPELINE-1 point 6, owner 2026-11-26: "will an attacker see the new or old image if they
+        try to attack ?"): THE LAST STEP of an update -- every container app of the install with an ingress in Single revision
+        mode with exactly one active revision, its newest, proven healthy, 100 % of the traffic, no label; read back
+        (setup\_shared\SI-SingleRevision.ps1, Invoke-SISingleRevision). Called ONLY after the web app roll read back healthy
+        (never deactivates the only healthy revision: an app whose newest revision is not proven healthy is not changed).
+        A result that is not proven is LOUD: the update's failure report (step post-roll, which Invardia's uplink knows) and
+        a WARNING line; the caller fails the run. -Apps: the install's names (looked after even when the list misses them).
+        -Step: test seam { param($ResourceGroup, $SubscriptionId, $Apps) } -> the step's result. Returns the result, or $null
+        when this image has no such step (nothing said). Never throws.
+    #>
+    param([Parameter(Mandatory)][string]$ResourceGroup, [Parameter(Mandatory)][string]$SubscriptionId, [string[]]$Apps = @(), [scriptblock]$Step)
+    $r = $null
+    # tests: the run-wide seam $global:SI_SingleRevisionSeam; a test session without a seam never calls Azure
+    if (-not $Step -and $global:SI_SingleRevisionSeam -is [scriptblock]) { $Step = $global:SI_SingleRevisionSeam }
+    if (-not $Step -and (Get-Module -Name Pester)) { return $null }
+    try {
+        if ($Step) { $r = & $Step $ResourceGroup $SubscriptionId @($Apps) }
+        else {
+            if (-not (Get-Command -Name Invoke-SISingleRevision -ErrorAction SilentlyContinue)) {
+                foreach ($f in @('/si/setup/_shared/SI-SingleRevision.ps1', [IO.Path]::Combine($PSScriptRoot, '..', '..', '..', 'setup', '_shared', 'SI-SingleRevision.ps1'))) {
+                    if (Test-Path -LiteralPath $f) { . $f; break }
+                }
+            }
+            if (-not (Get-Command -Name Invoke-SISingleRevision -ErrorAction SilentlyContinue) -or -not (Get-Command -Name Get-SIUpdaterRest -ErrorAction SilentlyContinue)) { return $null }
+            $r = Invoke-SISingleRevision -Rest (Get-SIUpdaterRest) -SubscriptionId $SubscriptionId -ResourceGroup $ResourceGroup -Apps @($Apps) -Log { param($m) Write-UpdLog $m }
+        }
+    } catch {
+        $r = [pscustomobject]@{ Ok = $false; Text = ('one active revision NOT proven: the step stopped ({0}) -- an older revision may still answer' -f $_.Exception.Message); Apps = @(); Failures = @($_.Exception.Message); Changed = @() }
+    }
+    if (-not $r) { return $null }
+    if ($r.Ok) { Write-UpdLog ([string]$r.Text) }
+    else {
+        Write-UpdLog ('WARNING: ' + [string]$r.Text)
+        if (Get-Command -Name Add-SIUpdaterFailureIf -ErrorAction SilentlyContinue) { Add-SIUpdaterFailureIf 'post-roll' ([string]$r.Text) }
+        elseif (Get-Command -Name Add-SIUpdaterFailure -ErrorAction SilentlyContinue) { Add-SIUpdaterFailure -Step 'post-roll' -Text ([string]$r.Text) }
+    }
+    $r
 }
 
 function Invoke-SIUpdaterInvardiaSelfRetry {

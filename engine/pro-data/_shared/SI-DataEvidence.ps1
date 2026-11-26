@@ -472,10 +472,11 @@ function Invoke-SIDataEvidence {
     $seenAt = Format-SIDataSqlTime -Time $CollectionTime
     $base = @{ LoadId = $CollectionId; SeenAt = $seenAt }
 
-    $evItems = @($built.Evidence | ForEach-Object { ConvertTo-SIDataJsonObject -Values ([ordered]@{ AssetKey = $_.AssetKey; Source = $_.Source; RecordKind = $_.RecordKind
-        MemberAssetId = $_.MemberAssetId; KeyType = $_.KeyType; KeyValue = $_.KeyValue; MatchRule = $_.MatchRule; Confidence = $_.Confidence; IsJoinKey = [bool]$_.IsJoinKey
-        SourceLastSeen = $_.SourceLastSeen; RecordSeenAt = $_.RecordSeenAt }) })
-    $nEv = Write-SIDataJsonRows -Invoke $Invoke -Sql (Get-SIDataEvidenceUpsertSql) -Items $evItems -Params $base -ChunkChars $ChunkChars -What 'correlation evidence'
+    # #1399 written in chunks (Write-SIDataJsonRowsFrom) -- the JSON of every evidence row is never held at once
+    $nEv = Write-SIDataJsonRowsFrom -Invoke $Invoke -Sql (Get-SIDataEvidenceUpsertSql) -Source @($built.Evidence) -Params $base -ChunkChars $ChunkChars -What 'correlation evidence' -Convert {
+        param($x) ConvertTo-SIDataJsonObject -Values ([ordered]@{ AssetKey = $x.AssetKey; Source = $x.Source; RecordKind = $x.RecordKind
+        MemberAssetId = $x.MemberAssetId; KeyType = $x.KeyType; KeyValue = $x.KeyValue; MatchRule = $x.MatchRule; Confidence = $x.Confidence; IsJoinKey = [bool]$x.IsJoinKey
+        SourceLastSeen = $x.SourceLastSeen; RecordSeenAt = $x.RecordSeenAt }) }
 
     # the id history this load reveals -- after EVERY evidence row of the load is stamped
     $durable = @(@(Get-SIJoinableIdTypes | ForEach-Object { Get-SICanonicalIdType -Type $_ }) + 'SI_AssetId')
@@ -497,10 +498,10 @@ function Invoke-SIDataEvidence {
 
     foreach ($c in $built.Correlation) { if ($changes.ContainsKey([string]$c.AssetKey)) { $c.IdChanges = [int]$changes[[string]$c.AssetKey] } }
     [void](& $Invoke (Get-SIDataEvidenceClearCorrelationSql) @{ LoadId = $CollectionId } 'scalar')
-    $coItems = @($built.Correlation | ForEach-Object { ConvertTo-SIDataJsonObject -Values ([ordered]@{ AssetKey = $_.AssetKey; AssetName = $_.AssetName; AssetKind = $_.AssetKind
-        Tier = $_.Tier; Records = [int]$_.Records; SourceCount = [int]$_.SourceCount; Sources = $_.Sources; Confidence = $_.Confidence; JoinRule = $_.JoinRule
-        Conflicts = [int]$_.Conflicts; IdChanges = [int]$_.IdChanges; PossibleDuplicateOf = $_.PossibleDuplicateOf; CmdbState = $_.CmdbState; CmdbSource = $_.CmdbSource; CmdbId = $_.CmdbId }) })
-    $nCo = Write-SIDataJsonRows -Invoke $Invoke -Sql (Get-SIDataEvidenceCorrelationSql) -Items $coItems -Params @{ LoadId = $CollectionId } -ChunkChars $ChunkChars -What 'correlation per CI'
+    $nCo = Write-SIDataJsonRowsFrom -Invoke $Invoke -Sql (Get-SIDataEvidenceCorrelationSql) -Source @($built.Correlation) -Params @{ LoadId = $CollectionId } -ChunkChars $ChunkChars -What 'correlation per CI' -Convert {
+        param($x) ConvertTo-SIDataJsonObject -Values ([ordered]@{ AssetKey = $x.AssetKey; AssetName = $x.AssetName; AssetKind = $x.AssetKind
+        Tier = $x.Tier; Records = [int]$x.Records; SourceCount = [int]$x.SourceCount; Sources = $x.Sources; Confidence = $x.Confidence; JoinRule = $x.JoinRule
+        Conflicts = [int]$x.Conflicts; IdChanges = [int]$x.IdChanges; PossibleDuplicateOf = $x.PossibleDuplicateOf; CmdbState = $x.CmdbState; CmdbSource = $x.CmdbSource; CmdbId = $x.CmdbId }) }
     $stamped = [int](& $Invoke (Get-SIDataEvidenceStampSql) @{ LoadId = $CollectionId } 'scalar')
     if ($stamped -ne 1) { throw ("the correlation evidence of collection {0} could not be stamped" -f $CollectionId) }
     if ($built.Skipped -gt 0) { & $Log 'WARN' ("  {0} correlation key(s) are longer than the evidence columns and were not stored" -f $built.Skipped) }

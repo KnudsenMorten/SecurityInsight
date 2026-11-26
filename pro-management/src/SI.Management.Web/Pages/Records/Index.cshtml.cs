@@ -115,15 +115,12 @@ public sealed class IndexModel : PageModel
         catch (ArgumentException ex) { return BadRequest(ViewerError.Text(ex)); }
         if (page is null || ViewLayout is null) return NotFound(Error ?? SI.Management.Web.Pages.Cis.IndexModel.NotLoadedText);
         var cols = SI.Management.Web.Columns.GridLayout.All(Spec, ViewLayout);
-        var rows = await FillAsync(cols, page.Rows, ct);
-        return await ExcelExport.FileAsync("records-all-columns", null, (x, info) =>
+        return await ExcelExport.FileAsync("records-all-columns", null, async (x, info) =>
         {
             info.Add("Columns", "every column of the view, and every column of the record's CI (its identifiers, linked objects, fields, source properties)");
             info.Filter("Search", page.State.Search);
             foreach (var f in page.State.Filters) info.Add("Filter: " + (Spec.Column(f.Key)?.Label ?? f.Key), CollectionPageModel.FilterText(f));
-            x.Sheet(info, "Records", cols.Select(c => c.Label).ToList(), rows.Select(row => (IReadOnlyList<object?>)cols.Select(c => SI.Management.Web.Columns.GridLayout.IsExtra(c) ? SI.Management.Web.Columns.GridLayout.Excel(row, c.Key) : CollectionPageModel.ExcelValue(c, row)).ToList()));
-            if (page.Rows.Count >= ProDataFilters.MaxExport) info.Notes.Add($"The export stops at {ProDataFilters.MaxExport:N0} rows; narrow the filter to get the rest.");
-            return Task.CompletedTask;
+            await x.SheetAsync(info, "Records", SI.Management.Core.ProData.DataColumnKeys.UniqueTitles(cols).ToList(), ExcelRows(page, cols, ct), ct);
         }, ct);
     }
 
@@ -188,9 +185,29 @@ public sealed class IndexModel : PageModel
         _ => null,
     };
 
-    private async Task<GridPage?> ExportRowsAsync(CancellationToken ct) =>
-        // "Export this page" reads the page shown; every other export every matching record
-        await PrepareAsync(ct) && await LayoutAsync(ct) ? (await _cis.GridAsync(Applied, ReadGrid(), !SI.Management.Web.Columns.ExportChoices.PageOnly(Request), ct)).Data : null;
+    private async Task<GridPage?> ExportRowsAsync(CancellationToken ct)
+    {
+        if (!(await PrepareAsync(ct) && await LayoutAsync(ct))) return null;
+        // "Export this page" reads the page shown; every other export every matching record -- #1400: a chunk at a time,
+        // the first chunk here, ExportRows reads the rest, all with ONE request (its relative dates fixed once)
+        _exportRequest = ReadGrid().Pinned();
+        return SI.Management.Web.Columns.ExportChoices.PageOnly(Request)
+            ? (await _cis.GridAsync(Applied, _exportRequest, false, ct)).Data
+            : (await _cis.GridChunkAsync(Applied, _exportRequest, 1, ProDataFilters.ExportChunk, ct)).Data;
+    }
+
+    private GridRequest? _exportRequest;
+
+    /// #1400 every row of the export (<see cref="GridChunks"/>), each chunk filled with <paramref name="cols"/>' extra columns.
+    private IAsyncEnumerable<IReadOnlyDictionary<string, object?>> ExportRows(GridPage first, IReadOnlyList<GridColumn> cols, CancellationToken ct) =>
+        GridChunks.RowsAsync(first, !SI.Management.Web.Columns.ExportChoices.PageOnly(Request),
+            async (n, t) => (await _cis.GridChunkAsync(Applied, _exportRequest ?? ReadGrid().Pinned(), n, ProDataFilters.ExportChunk, t)).Data, (rows, t) => FillAsync(cols, rows, t), ct, keyColumn: Applied.KeyColumn);
+
+    private async IAsyncEnumerable<IReadOnlyList<object?>> ExcelRows(GridPage first, IReadOnlyList<GridColumn> cols, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
+    {
+        await foreach (var row in ExportRows(first, cols, ct))
+            yield return cols.Select(c => SI.Management.Web.Columns.GridLayout.IsExtra(c) ? SI.Management.Web.Columns.GridLayout.Excel(row, c.Key) : CollectionPageModel.ExcelValue(c, row)).ToList();
+    }
 
     [SI.Management.Web.Audit.Audited("data.export.download")]
     public async Task<IActionResult> OnGetXlsxAsync(CancellationToken ct)
@@ -200,19 +217,17 @@ public sealed class IndexModel : PageModel
         catch (ArgumentException ex) { return BadRequest(ViewerError.Text(ex)); }
         if (page is null) return NotFound(Error ?? SI.Management.Web.Pages.Cis.IndexModel.NotLoadedText);
         var cols = DisplayColumns.Count > 0 ? DisplayColumns : CollectionPageModel.Visible(Spec);
-        var rows = await FillAsync(cols, page.Rows, ct);
-        return await ExcelExport.FileAsync("records", null, (x, info) =>
+        return await ExcelExport.FileAsync("records", null, async (x, info) =>
         {
             info.Add("Sort", page.State.Sort + (page.State.Desc ? " (descending)" : ""));
             info.Filter("Search", page.State.Search);
             foreach (var f in page.State.Filters) info.Add("Filter: " + (Spec.Column(f.Key)?.Label ?? f.Key), CollectionPageModel.FilterText(f));
             if (page.State.Selected.Count > 0) info.Add("Selected rows", page.State.Selected.Count);
-            x.Sheet(info, "Records", cols.Select(c => c.Label).ToList(), rows.Select(row => (IReadOnlyList<object?>)cols.Select(c => SI.Management.Web.Columns.GridLayout.IsExtra(c) ? SI.Management.Web.Columns.GridLayout.Excel(row, c.Key) : CollectionPageModel.ExcelValue(c, row)).ToList()));
-            if (page.Rows.Count >= ProDataFilters.MaxExport) info.Notes.Add($"The export stops at {ProDataFilters.MaxExport:N0} rows; narrow the filter to get the rest.");
-            return Task.CompletedTask;
+            await x.SheetAsync(info, "Records", SI.Management.Core.ProData.DataColumnKeys.UniqueTitles(cols).ToList(), ExcelRows(page, cols, ct), ct);
         }, ct);
     }
 
+    /// CSV: every matching record (#1400: no row cap, streamed a chunk at a time to the file), the chosen columns in words.
     [SI.Management.Web.Audit.Audited("data.export.download")]
     public async Task<IActionResult> OnGetCsvAsync(CancellationToken ct)
     {
@@ -221,11 +236,11 @@ public sealed class IndexModel : PageModel
         catch (ArgumentException ex) { return BadRequest(ViewerError.Text(ex)); }
         if (page is null) return NotFound(Error ?? SI.Management.Web.Pages.Cis.IndexModel.NotLoadedText);
         var cols = DisplayColumns.Count > 0 ? DisplayColumns : CollectionPageModel.Visible(Spec);
-        var rows = await FillAsync(cols, page.Rows, ct);
-        var sb = new StringBuilder();
-        sb.AppendLine(string.Join(",", cols.Select(c => Findings.IndexModel.Csv(c.Label))));
-        foreach (var row in rows) sb.AppendLine(string.Join(",", cols.Select(c => Findings.IndexModel.Csv(SI.Management.Web.Columns.GridLayout.IsExtra(c) ? SI.Management.Web.Columns.GridLayout.Text(row, c.Key) : CollectionPageModel.Text(c, row, csv: true)))));
         var name = "records-" + DateTime.UtcNow.ToString("yyyyMMdd-HHmm", CultureInfo.InvariantCulture) + "Z.csv";
-        return File(Encoding.UTF8.GetPreamble().Concat(Encoding.UTF8.GetBytes(sb.ToString())).ToArray(), "text/csv; charset=utf-8", name);
+        return await CsvExport.FileAsync(name, SI.Management.Core.ProData.DataColumnKeys.UniqueTitles(cols).ToList(), async sink =>
+        {
+            await foreach (var row in ExportRows(page, cols, ct))
+                await sink.RowAsync(cols.Select(c => SI.Management.Web.Columns.GridLayout.IsExtra(c) ? SI.Management.Web.Columns.GridLayout.Text(row, c.Key) : CollectionPageModel.Text(c, row, csv: true)));
+        }, ct);
     }
 }

@@ -132,18 +132,18 @@ public abstract class DataViewPageModel : PageModel
         await LoadTablesAsync(ct, all);
         if (t is null || Table(t) is not { } table) return NotFound("That table is not on this page.");
         var keys = table.ExportKeys(all);
-        var stem = new string(table.Title.ToLowerInvariant().Select(ch => char.IsAsciiLetterOrDigit(ch) ? ch : '-').ToArray()).Trim('-');
+        var stem = table.Stem;
+        // #1400: every row, written straight to a temporary file (chunk by chunk when the table reads its rows in chunks)
         if (f == "csv")
         {
             var name = stem + "-" + DateTime.UtcNow.ToString("yyyyMMdd-HHmm", CultureInfo.InvariantCulture) + "Z.csv";
-            return File(Encoding.UTF8.GetPreamble().Concat(Encoding.UTF8.GetBytes(table.Csv(keys))).ToArray(), "text/csv; charset=utf-8", name);
+            return await CsvExport.FileAsync(name, table.Headers(keys), sink => table.CsvAsync(sink, keys, ct), ct);
         }
-        return await ExcelExport.FileAsync(all ? stem + "-all-columns" : stem, null, (x, info) =>
+        return await ExcelExport.FileAsync(all ? stem + "-all-columns" : stem, null, async (x, info) =>
         {
             info.Add("Columns", all ? "every column this view offers" : table.Layout.SourceWords);
             foreach (var kv in Request.Query.Where(q => q.Key is not ("handler" or "t" or "f"))) info.Add(kv.Key, string.Join(", ", kv.Value.ToArray()));
-            x.Sheet(info, table.Title, keys.Select(table.Label).ToList(), table.Rows.Select(row => (IReadOnlyList<object?>)keys.Select(k => table.Excel(row, k)).ToList()));
-            return Task.CompletedTask;
+            await table.SheetAsync(x, info, table.Title, keys, ct);
         }, ct);
     }
 }

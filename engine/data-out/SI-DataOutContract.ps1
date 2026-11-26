@@ -56,7 +56,7 @@ $script:SIDataOutClearable = @{
                                               'u_application_version', 'u_detected_paths', 'u_recommended_update', 'u_remediation', 'u_cve_ids', 'u_risk_rating', 'u_weighted_risk',
                                               'u_security_domain', 'u_exploit_available', 'u_end_of_support', 'u_end_of_support_date', 'u_due_date', 'u_first_detected',
                                               'u_within_accepted_lifecycle', 'u_asset_type', 'u_os', 'u_ip_address', 'u_environment', 'u_internet_exposed', 'u_also_reported_by',
-                                              'u_si_more_info')
+                                              'u_si_more_info', 'u_si_software_lists_complete')
     'servicenow-remediation-task-finding' = @('u_title', 'u_severity', 'u_product_version',
                                               'u_cvss', 'u_risk_score', 'u_risk_rating', 'u_weighted_risk', 'u_exploit_available', 'u_first_detected', 'u_due_date', 'u_si_more_info')
 }

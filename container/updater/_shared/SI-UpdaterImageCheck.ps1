@@ -206,16 +206,38 @@ function Invoke-SIImageCheckDigestProof {
 function Invoke-SIUpdaterImageCheckJob {
     <# caj-si-image-check kept present and on the updater's image (setup\_shared\SI-ImageCheckJob.ps1, read back) -- on every
        updater run and after an image check's swap. A job that is as it must be says nothing (-Quiet). Never throws. -Arm: seam. #>
-    param([Parameter(Mandatory)][string]$SubscriptionId, [Parameter(Mandatory)][string]$ResourceGroup, [string]$UpdaterJob = 'caj-si-updater', [scriptblock]$Arm, [switch]$Quiet)
+    # -Rest (#1413): the SI REST seam the resource group's identities are read with (default: the updater's own; with -Arm = a test, only when given)
+    param([Parameter(Mandatory)][string]$SubscriptionId, [Parameter(Mandatory)][string]$ResourceGroup, [string]$UpdaterJob = 'caj-si-updater', [scriptblock]$Arm, [switch]$Quiet, [scriptblock]$Rest)
     try {
         if (-not (Get-Command -Name Invoke-SIImageCheckJobEnsure -ErrorAction SilentlyContinue)) { return $null }
+        if (-not $Rest -and -not $Arm -and (Get-Command -Name Get-SIUpdaterRest -ErrorAction SilentlyContinue)) { try { $Rest = Get-SIUpdaterRest } catch { $Rest = $null } }
         if (-not $Arm) { $Arm = { param([string]$Method, [string]$Path, $Body) Invoke-SIUpdaterArm -Method $Method -Path $Path -ApiVersion (Get-SIImageCheckJobNames).AppApi -Body $Body -AllowNotFound:($Method -eq 'GET') } }
-        $r = Invoke-SIImageCheckJobEnsure -Arm $Arm -SubscriptionId $SubscriptionId -ResourceGroup $ResourceGroup -UpdaterJob $UpdaterJob
+        $ensure = @{ Arm = $Arm; SubscriptionId = $SubscriptionId; ResourceGroup = $ResourceGroup; UpdaterJob = $UpdaterJob }; if ($Rest) { $ensure.Rest = $Rest }
+        $r = Invoke-SIImageCheckJobEnsure @ensure
         if (-not ($Quiet -and $r.Action -eq 'kept')) { Write-UpdLog $r.Reason }
         $r
     } catch { Write-UpdLog ('WARNING: the image check job could not be checked ({0}) -- the next update tries again' -f $_.Exception.Message); $null }
 }
 
+function Invoke-SIUpdaterDeadIdentities {
+    <# #1413: a deleted user-assigned identity taken off SI's jobs and apps (setup\_shared\SI-LiveIdentities.ps1,
+       Invoke-SIDeadIdentityCleanup: fail closed, identity-only PATCH, read back) -- on every updater run right after the image
+       check job is kept present, and after an image check's swap. Each problem is a WARNING line and an updater failure report
+       (step settings). Quiet when every identity exists. Never throws. -Rest: seam. #>
+    # -Switch: the off-switch's value (default: SI_UPDATER_IDENTITY_CLEANUP of this job's environment; off = nothing checked)
+    param([Parameter(Mandatory)][string]$SubscriptionId, [Parameter(Mandatory)][string]$ResourceGroup, [scriptblock]$Rest, [AllowNull()][string]$Switch = $([Environment]::GetEnvironmentVariable('SI_UPDATER_IDENTITY_CLEANUP')))
+    $soft = { param($t) Write-UpdLog $t; if (Get-Command -Name Add-SIUpdaterFailure -ErrorAction SilentlyContinue) { Add-SIUpdaterFailure -Step 'settings' -Text $t } }
+    try {
+        if (-not (Get-Command -Name Invoke-SIDeadIdentityCleanup -ErrorAction SilentlyContinue)) { & $soft 'identities: the clean-up of deleted identities is not in this image (setup\_shared\SI-LiveIdentities.ps1 not loaded) -- nothing checked'; return $null }
+        if (-not (Test-SIDeadIdentityCleanupOn $Switch)) { Write-UpdLog 'identities: the clean-up of deleted identities is switched off (SI_UPDATER_IDENTITY_CLEANUP = off) -- nothing checked'; return $null }
+        if (-not $Rest) { if (-not (Get-Command -Name Get-SIUpdaterRest -ErrorAction SilentlyContinue)) { return $null }; $Rest = Get-SIUpdaterRest }
+        $r = Invoke-SIDeadIdentityCleanup -Rest $Rest -SubscriptionId $SubscriptionId -ResourceGroup $ResourceGroup
+        $quiet = (-not @($r.Removed).Count -and -not @($r.Problems).Count -and -not @($r.Held).Count -and -not @($r.Soft).Count -and -not @($r.Lines | Where-Object { $_ -match 'nothing removed|exists \(its own read' }).Count)
+        if (-not $quiet) { foreach ($l in @($r.Lines)) { Write-UpdLog $l } }
+        if (Get-Command -Name Add-SIUpdaterFailure -ErrorAction SilentlyContinue) { foreach ($p in @($r.Problems) + @($r.Soft)) { Add-SIUpdaterFailure -Step 'settings' -Text $p } }
+        $r
+    } catch { Write-UpdLog ('WARNING: identities: not checked ({0}) -- the next update checks again' -f $_.Exception.Message); $null }
+}
 function Wait-SIUpdaterImageCheckEnded {
     <# A NIGHTLY update waits for an image check that runs now to end (two runs never change the install at once; the image
        check steps aside at the update's own slot, so this is seconds -- or a swap it is finishing). Bounded by -MaxMinutes.

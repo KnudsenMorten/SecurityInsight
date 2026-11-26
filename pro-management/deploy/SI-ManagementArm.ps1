@@ -215,6 +215,10 @@ function Merge-SIManagementContainerAppUpdate {
         if ($Sticky) { $ing.stickySessions = [ordered]@{ affinity = 'sticky' } }
         $cfg.ingress = $ing
     }
+    # SI #1414 (framework SEC-PATCH-PIPELINE-1 point 6): an existing app reaches what a new one gets -- Single revision mode,
+    # so only its newest revision answers (an app found in Multiple / Labels mode is moved; one already Single: nothing)
+    $mode = [string](Get-SIManagementProp $App @('properties', 'configuration', 'activeRevisionsMode'))
+    if ($mode -and $mode -ne 'Single') { $cfg.activeRevisionsMode = 'Single' }
     if ($cfg.Count) { $props.configuration = $cfg }
 
     if ($Image -or @($SetEnv | Where-Object { $_ }).Count -or @($RemoveEnv | Where-Object { $_ }).Count) {

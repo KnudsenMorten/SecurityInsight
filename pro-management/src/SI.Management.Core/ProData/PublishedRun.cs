@@ -55,10 +55,13 @@ IF OBJECT_ID(N'cfg.FlowRun') IS NOT NULL
     SELECT TOP (1) @running = CASE WHEN r.State = N'Running' THEN 1 ELSE 0 END FROM cfg.FlowRun AS r WHERE r.FlowId = N'daily' ORDER BY r.StartedUtc DESC;
 IF OBJECT_ID(N'sidata.PublishedRun') IS NULL OR OBJECT_ID(N'sidata.vPublishedCollection') IS NULL
     SELECT TOP (0) CAST(NULL AS nvarchar(16)) AS Name, CAST(NULL AS datetime2(3)) AS ShownTime, CAST(NULL AS datetime2(0)) AS At,
-           CONVERT(bit, 0) AS [Partial], CAST(NULL AS nvarchar(400)) AS Note, CONVERT(bit, 0) AS Running, CAST(NULL AS datetime2(3)) AS CiFindingsTime;
+           CONVERT(bit, 0) AS [Partial], CAST(NULL AS nvarchar(400)) AS Note, CONVERT(bit, 0) AS Running, CAST(NULL AS datetime2(3)) AS CiFindingsTime,
+           CAST(NULL AS datetime2(0)) AS ShownCompletedTime;
 ELSE
     SELECT x.Name, (SELECT TOP (1) pc.CollectionTime FROM sidata.vPublishedCollection AS pc WHERE pc.Kind = N'Detailed') AS ShownTime,
-           x.PublishedAt AS At, x.[Partial], x.Note, @running AS Running, x.CiFindingsTime
+           x.PublishedAt AS At, x.[Partial], x.Note, @running AS Running, x.CiFindingsTime,
+           -- #1396: when the shown collection became Complete (its own LoadedAt -- a later republish of it never resets it)
+           (SELECT TOP (1) pc.LoadedAt FROM sidata.vPublishedCollection AS pc WHERE pc.Kind = N'Detailed') AS ShownCompletedTime
     FROM (SELECT pr.Name, pr.PublishedAt, pr.[Partial], pr.Note, pr.CiFindingsTime
           -- review S2: as of when the findings per CI are, when they are NOT the published run's -- the STORED column
           -- sidata.PublishedRun.CiFindingTime. A database the update has not given the column yet answers NULL instead of
@@ -78,7 +81,8 @@ public sealed record PublishedRunState(
     DateTime? RefusedAt,          // the newest run that ended and did NOT publish (null = none since the published one)
     string RefusedWhy,
     bool Partial,
-    DateTime? CiFindingsTime = null)  // review S2: the findings per CI are NOT the shown run's -- they are as of this time (UTC)
+    DateTime? CiFindingsTime = null,  // review S2: the findings per CI are NOT the shown run's -- they are as of this time (UTC)
+    DateTime? ShownCompletedTime = null)  // #1396: when the shown collection became Complete (UTC; null = not known: its collection time counts)
 {
     public static readonly PublishedRunState None = new(null, null, false, null, "", false);
 
@@ -99,6 +103,6 @@ public sealed record PublishedRunState(
         // the newest whole run that did not publish counts only when it ended AFTER the run that is shown was published
         if (refused is not null && T(refused, "At") is { } ra && (published is null || ra > published)) { refusedAt = ra; why = S(refused, "Note"); }
         return new PublishedRunState(T(rows[0], "ShownTime"), published, B(rows[0], "Running"), refusedAt, why, cur is not null && B(cur, "Partial"),
-                                     cur is null ? null : T(cur, "CiFindingsTime"));
+                                     cur is null ? null : T(cur, "CiFindingsTime"), T(rows[0], "ShownCompletedTime"));
     }
 }

@@ -889,14 +889,21 @@ function New-SIUpdaterWebAppCopyBody {
         references, resources, probes, scale, volumes; no revision suffix). Throws when the app has a system-assigned
         identity (its grants would not move), no user-assigned identity, or a secret that did not come back.
     #>
-    param([Parameter(Mandatory)]$App, [object[]]$Secrets = @())
+    # -LiveIdentities: Read-SILiveIdentities -- an identity of the resource group that no longer exists is not carried
+    # (a deleted one makes Azure refuse the whole PUT); not given / not read = every identity, as before. -Log: one line per dropped one.
+    param([Parameter(Mandatory)]$App, [object[]]$Secrets = @(), $LiveIdentities = $null, [scriptblock]$Log)
     $copy = ConvertTo-Json -InputObject $App -Depth 60 | ConvertFrom-Json
     $p = $copy.properties
     if (-not $p) { throw 'its properties could not be read' }
     $idType = if ($copy.identity) { "$($copy.identity.type)" } else { '' }
     if ($idType -match '(?i)SystemAssigned') { throw 'it has a system-assigned identity, whose grants would not move with it' }
     $uai = [ordered]@{}
-    if ($copy.identity -and $copy.identity.userAssignedIdentities) { foreach ($n in @($copy.identity.userAssignedIdentities.PSObject.Properties.Name)) { $uai[$n] = @{} } }
+    $uaKeys = @(if ($copy.identity -and $copy.identity.userAssignedIdentities) { @($copy.identity.userAssignedIdentities.PSObject.Properties.Name) })
+    if ($LiveIdentities -and (Get-Command -Name Select-SILiveIdentityKeys -ErrorAction SilentlyContinue)) {
+        $sel = Select-SILiveIdentityKeys -Keys $uaKeys -Live $LiveIdentities -Name ([string]$copy.name) -Kind 'app'; $uaKeys = @($sel.Keep)
+        if ($Log) { foreach ($l in @($sel.Lines)) { & $Log $l } }
+    }
+    foreach ($n in $uaKeys) { $uai[$n] = @{} }
     if (-not $uai.Count) { throw 'it has no user-assigned identity' }
     $envId = if ("$($p.environmentId)".Trim()) { [string]$p.environmentId } else { [string]$p.managedEnvironmentId }
     if (-not "$envId".Trim()) { throw 'its Container Apps environment could not be read' }
@@ -916,6 +923,8 @@ function New-SIUpdaterWebAppCopyBody {
             foreach ($n in 'fqdn', 'customDomains') { if ($cfg.ingress.PSObject.Properties[$n]) { $cfg.ingress.PSObject.Properties.Remove($n) } }
             if ($cfg.ingress.PSObject.Properties['traffic']) { $cfg.ingress.traffic = @([ordered]@{ latestRevision = $true; weight = 100 }) }
         }
+        # framework SEC-PATCH-PIPELINE-1 point 6: the new app is made in Single revision mode whatever the old one ran (only its newest revision answers)
+        if ($cfg.PSObject.Properties['activeRevisionsMode']) { $cfg.activeRevisionsMode = 'Single' } else { $cfg | Add-Member -NotePropertyName activeRevisionsMode -NotePropertyValue 'Single' }
     }
     $tpl = $p.template
     if ($tpl -and $tpl.PSObject.Properties['revisionSuffix']) { $tpl.PSObject.Properties.Remove('revisionSuffix') }
@@ -1286,7 +1295,10 @@ function Invoke-SIUpdaterWebAppMove {
             $body = $null
             try {
                 $listed = & $Arm 'POST' ((& $pathOf $OldName) + '/listSecrets') $null $false
-                $body = New-SIUpdaterWebAppCopyBody -App $old -Secrets @(if ($listed) { @($listed.value) })
+                # only the identities that still exist (read once; a test's -Arm seam reads none)
+                $live = $null
+                if (-not $PSBoundParameters.ContainsKey('Arm') -and (Get-Command -Name Read-SILiveIdentities -ErrorAction SilentlyContinue) -and (Get-Command -Name Get-SIUpdaterRest -ErrorAction SilentlyContinue)) { try { $live = Read-SILiveIdentities -Rest (Get-SIUpdaterRest) -SubscriptionId $SubscriptionId -ResourceGroup $ResourceGroup } catch { $live = $null } }
+                $body = New-SIUpdaterWebAppCopyBody -App $old -Secrets @(if ($listed) { @($listed.value) }) -LiveIdentities $live -Log $Log
             } catch { return (& $out 'create-failed' ("{0}: {1} was not made -- {2}; {0} keeps serving, the next update tries again" -f $OldName, $NewName, $_.Exception.Message) ([string]$_.Exception.Message)) }
             & $Log ("{0}: making {1} beside it (the same image, identity and settings) -- {0} keeps serving" -f $OldName, $NewName)
             $fqdn = ''; $why = 'not read yet'; $ready = $false

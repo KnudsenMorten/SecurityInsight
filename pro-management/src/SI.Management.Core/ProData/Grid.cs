@@ -109,6 +109,12 @@ public sealed record GridRequest
     public IReadOnlyList<string> Selected { get; init; } = Array.Empty<string>();
     /// #1189: the search and the "contains" filters read every finding's text (slower) instead of the index-served search.
     public bool SearchAnywhere { get; init; }
+    /// #1400 the moment a relative date filter ("30d") is counted from (null = now): an export fixes it ONCE, so every chunk
+    /// of it reads the same window (<see cref="Pinned"/>).
+    public DateTime? Now { get; init; }
+
+    /// #1400 this request with its relative dates fixed to now -- the request every chunk of one export reads.
+    public GridRequest Pinned() => Now is null ? this with { Now = DateTime.UtcNow } : this;
 
     /// #1189: the address parameter that asks for <see cref="SearchAnywhere"/> ("qa=1").
     public const string AnywhereKey = "qa";
@@ -227,7 +233,7 @@ public static partial class GridSql
                     if (lo is not null || hi is not null) filters.Add(new(col.Key, col.Filter, Array.Empty<string>(), lo, hi, null));
                     break;
                 case GridFilter.Dates:
-                    var (from, before) = Dates(raw, DateTime.UtcNow);
+                    var (from, before) = Dates(raw, r.Now ?? DateTime.UtcNow);
                     if (from is not null || before is not null) filters.Add(new(col.Key, col.Filter, Array.Empty<string>(), null, null, raw.Trim(), from, before));
                     break;
             }
@@ -351,7 +357,24 @@ OPTION (RECOMPILE);
         return new SqlQuery(text, p);
     }
 
-    private static string With(GridSpec s) => s.Ctes.Trim().Length == 0 ? $"WITH g AS (\n{s.Source}\n)" : $"WITH {s.Ctes.Trim()},\ng AS (\n{s.Source}\n)";
+    /// <summary>
+    /// #1400 review: the REAL row count of an export's request when its first chunk is read off the index
+    /// (<see cref="UsesKeyset"/>: that page carries the STORED total) -- the generic statement for one row, whose
+    /// COUNT_BIG(*) OVER () counts every matching row; null when the chunk's own statement counts them already.
+    /// </summary>
+    public static SqlQuery? ExportCount(GridSpec s, GridState st, IReadOnlyDictionary<string, object?> sourceParams) =>
+        UsesKeyset(s, st, sourceParams) ? Page(s with { Keyset = null }, st with { Page = 1, Size = 1 }, sourceParams) : null;
+
+    /// #1400 the state of one export chunk: the request's sort, filters, search and selection, with the chunk as its page.
+    /// Its size is the export's own (at most <see cref="ProDataFilters.ExportChunk"/>), never one a person picks for a page.
+    /// The order ends with the key (<see cref="OrderBy"/>), so the chunks neither overlap nor leave a row out.
+    public static GridState Chunk(GridState st, int chunk, int size)
+    {
+        var n = Math.Clamp(size, 1, ProDataFilters.ExportChunk);
+        return st with { Page = Math.Clamp(chunk, 1, int.MaxValue / n), Size = n };
+    }
+
+    private static string With(GridSpec s) =>s.Ctes.Trim().Length == 0 ? $"WITH g AS (\n{s.Source}\n)" : $"WITH {s.Ctes.Trim()},\ng AS (\n{s.Source}\n)";
 
     /// One page (or, with <paramref name="export"/>, every row up to <paramref name="max"/>) of the grid.
     public static SqlQuery Page(GridSpec s, GridState st, IReadOnlyDictionary<string, object?> sourceParams, bool export = false, int max = ProDataFilters.MaxExport)

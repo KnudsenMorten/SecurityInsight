@@ -223,6 +223,57 @@ function Find-SIDeviceInfo {
     return $null
 }
 
+function Get-SIIdentityEgLookupKeys {
+    <#
+        PURE. #1398 Every key Find-SIIdentityEgHit can look THIS part's identities up by (lower case) -- the identity EG read
+        asks only for the nodes that can answer one of them (Get-DiscoveryFromIdentityExposureGraph -Keys).
+    #>
+    param([AllowNull()][AllowEmptyCollection()][object[]]$Assets = @())
+    $keys = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
+    foreach ($a in @($Assets)) {
+        if ($null -eq $a) { continue }
+        foreach ($f in 'ENTRA_UserId', 'ENTRA_SPObjectId', 'ENTRA_UPN', 'ENTRA_DisplayName', 'Name') {   # the fields Find-SIIdentityEgHit tries (a test keeps them in step)
+            $v = $null
+            if ($a -is [System.Collections.IDictionary]) { if ($a.Contains($f)) { $v = $a[$f] } } elseif ($a.PSObject.Properties[$f]) { $v = $a.$f }
+            $s = [string]$v
+            if ($s) { [void]$keys.Add($s.ToLowerInvariant()) }
+        }
+    }
+    [string[]]@($keys)
+}
+
+function Get-SIAzureEgLookupKeys {
+    <# PURE. #1398 The keys THIS part's Azure assets are looked up by in the Azure EG node map: their short names (lower case). #>
+    param([AllowNull()][AllowEmptyCollection()][object[]]$Assets = @())
+    $keys = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
+    foreach ($a in @($Assets)) {
+        if ($null -eq $a) { continue }
+        $n = if ($a -is [System.Collections.IDictionary]) { if ($a.Contains('Name')) { $a['Name'] } } else { $a.Name }
+        if ($n) { [void]$keys.Add(([string]$n).ToLowerInvariant()) }
+    }
+    [string[]]@($keys)
+}
+
+function Get-SIAzureEgFields {
+    <#
+        PURE. The metadata fields an Azure EG node hit gives (Get-AzureExposureGraphResourceNodes): EG_NodeLabel when the node
+        has properties at all, and each of the four rawData fields it HAS. #642 matched by the resource's short NAME (a name
+        only one node has): its values enrich, but its node id is never handed on -- a node id is a strong identifier, and
+        same-named resources in several subscriptions all took the first one's id, which fused them into one asset.
+    #>
+    param($Hit)
+    $out = [ordered]@{}
+    if ($null -eq $Hit -or -not $Hit.HasRawData) { return $out }
+    $rawData = $Hit.RawData
+    $out['EG_NodeLabel'] = $Hit.NodeLabel
+    if ($null -eq $rawData) { return $out }
+    if ($rawData.PSObject.Properties['exposureScore'])           { $out['EG_ExposureScore'] = [double]$rawData.exposureScore }
+    if ($rawData.PSObject.Properties['criticality'])             { $out['EG_Criticality']   = [string]$rawData.criticality }
+    if ($rawData.PSObject.Properties['businessApplicationName']) { $out['EG_BusinessApp']   = [string]$rawData.businessApplicationName }
+    if ($rawData.PSObject.Properties['handlesSensitiveData'])    { $out['EG_HandlesSensitiveData'] = [bool]$rawData.handlesSensitiveData }
+    $out
+}
+
 function Find-SIIdentityEgHit {
     <#
         PURE. #642 The Exposure Graph enrichment of one identity asset from the identity EG map (Get-DiscoveryFromIdentityExposureGraph):
@@ -313,13 +364,14 @@ function Invoke-SICollect {
     if ($RunContext.StorageContext.Mode -ne 'Mock') {
         # discovery moved from v2.2/engine/discovery/ to v2.2/engine/asset-profiling/discovery/
         $discoveryDir = Join-Path (Split-Path -Parent $PSScriptRoot) 'discovery'
+        # #1398: only the nodes THIS part's assets can match (their lookup keys) -- never the whole node table per part
         if ($RunContext.Engine -eq 'identity') {
             . (Join-Path $discoveryDir 'Get-DiscoveryFromIdentityExposureGraph.ps1')
-            try   { $identityEgMap = Get-DiscoveryFromIdentityExposureGraph } catch { Write-Warning ('Identity EG enrichment failed -- continuing master-only: {0}' -f $_.Exception.Message) }
+            try   { $identityEgMap = Get-DiscoveryFromIdentityExposureGraph -Keys (Get-SIIdentityEgLookupKeys -Assets @($assets)) } catch { Write-Warning ('Identity EG enrichment failed -- continuing master-only: {0}' -f $_.Exception.Message) }
         }
         elseif ($RunContext.Engine -eq 'azure') {
             . (Join-Path $discoveryDir 'Get-DiscoveryFromAzureExposureGraph.ps1')
-            try   { $azureEgMap = Get-AzureExposureGraphResourceNodes } catch { Write-Warning ('Azure EG enrichment failed -- continuing master-only: {0}' -f $_.Exception.Message) }
+            try   { $azureEgMap = Get-AzureExposureGraphResourceNodes -Names (Get-SIAzureEgLookupKeys -Assets @($assets)) } catch { Write-Warning ('Azure EG enrichment failed -- continuing master-only: {0}' -f $_.Exception.Message) }
         }
     }
 
@@ -776,20 +828,10 @@ function Invoke-SICollect {
             # Resource short name match (EG NodeName == AZ_Name typically)
             $key = if ($a.Name) { ([string]$a.Name).ToLowerInvariant() } else { $null }
             if ($key -and $azureEgMap.ContainsKey($key)) {
-                $egHit = $azureEgMap[$key]
-                # Parse nodeProperties for the few high-value fields EG inferred
-                $rawData = $null
-                try { $props = ConvertFrom-Json $egHit.NodePropertiesJson -ErrorAction Stop; $rawData = if ($props.rawData) { $props.rawData } else { $props } } catch { }
-                if ($rawData) {
-                    # #642 matched by the resource's short NAME (a name only one node has): its values enrich, but its node id
-                    # is never handed on -- a node id is a strong identifier, and same-named resources in several
-                    # subscriptions all took the first one's id, which fused them into one asset
-                    $metadata['EG_NodeLabel']            = $egHit.NodeLabel
-                    if ($rawData.PSObject.Properties['exposureScore'])         { $metadata['EG_ExposureScore'] = [double]$rawData.exposureScore }
-                    if ($rawData.PSObject.Properties['criticality'])           { $metadata['EG_Criticality']   = [string]$rawData.criticality }
-                    if ($rawData.PSObject.Properties['businessApplicationName']) { $metadata['EG_BusinessApp']  = [string]$rawData.businessApplicationName }
-                    if ($rawData.PSObject.Properties['handlesSensitiveData'])  { $metadata['EG_HandlesSensitiveData'] = [bool]$rawData.handlesSensitiveData }
-                }
+                # the few high-value fields EG inferred (Get-SIAzureEgFields) -- #1398: read in Kusto, never the node's whole
+                # properties text
+                $egFields = Get-SIAzureEgFields -Hit $azureEgMap[$key]
+                foreach ($k in $egFields.Keys) { $metadata[$k] = $egFields[$k] }
                 $egEnriched++
             }
         }

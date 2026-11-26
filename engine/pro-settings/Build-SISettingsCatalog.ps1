@@ -131,6 +131,8 @@ $ranges = @{ SI_Pro_DataRetentionDays = @{ min = 1 }; SI_PatchCycle_CatchUpDays 
             SI_Pro_DataQuality_FillDropPoints = @{ min = 1; max = 100 }; SI_Pro_DataQuality_TierShiftPercent = @{ min = 1; max = 100 }
             # a source without a good collection for this many days: delivery waits (0 = never)
             SI_Pro_SourceDropout_HoldDeliveryDays = @{ min = 0; max = 365 }; SI_Pro_Pipeline_FirstRunRestarts = @{ min = 0 }
+            # #1396: warn when the newest complete data is older than this many hours (0 = off; at most a year)
+            SI_Pro_StaleDataWarnHours = @{ min = 0; max = 8760 }
             # a collection that completes with far fewer assets: keep the last good one until confirmed, or take it at once
             SI_Pro_SourceDropout_AssetDropAction = @{ type = 'enum'; values = @('confirm', 'accept') }; SI_Pro_LifecycleStaleOpenRepair = @{ type = 'enum'; values = @('off', 'count', 'apply') }
             # #1318: the view values worked out as Risk Analysis stores each finding (default on; shadow = troubleshooting)

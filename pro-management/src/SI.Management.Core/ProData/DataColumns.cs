@@ -97,6 +97,8 @@ public static partial class DataColumnKeys
     public const string CvssVector = "fc.cvssvector";
     public const string ExploitTypes = "fc.exploittypes";
     public const string ExposedDevices = "fc.exposeddevices";
+    /// #1403 false when the source listed more affected software than SI keeps per device and CVE (256): never cut silently
+    public const string SoftwareComplete = "fc.softwarecomplete";
     public const string AffectedPath = "fc.affectedpath";
     public const string StatusCause = "fc.statuscause";
     public const string UserImpact = "fc.userimpact";
@@ -154,6 +156,7 @@ public static partial class DataColumnKeys
         new(CvssVector, "CVSS vector", ["si_cvss_vector"]),
         new(ExploitTypes, "Exploit types", ["si_exploit_types"]),
         new(ExposedDevices, "Exposed devices", ["si_exposed_devices"]),
+        new(SoftwareComplete, "Affected software complete", ["si_affected_software_complete"]),
         new(AffectedPath, "Affected path", ["si_affected_path"]),
         new(StatusCause, "Status cause", ["si_status_cause"]),
         new(UserImpact, "User impact", ["si_user_impact", "UserImpact"]),
@@ -326,6 +329,35 @@ public static partial class DataColumnKeys
         string.IsNullOrEmpty(label) || !IsRawName(label) ? label
         : IdentifierWords.TryGetValue(label, out var iw) ? iw
         : RawWords.TryGetValue(label, out var w) ? w : FieldWords(label);
+
+    /// <summary>
+    /// #1403 (review of 3.1.51): the titles of ONE grid / export, each unique and independent of the columns' order. Two raw
+    /// names can read the same words (EgNodeId and ExposureGraphNodeId are both "Exposure Graph node id"): EVERY column whose
+    /// title another column of the export also reads carries its raw key in brackets ("Exposure Graph node id (EgNodeId)",
+    /// "Exposure Graph node id (ExposureGraphNodeId)") -- never two columns under one header, and a column's header never
+    /// depends on which other column came first. A title no other column reads is kept exactly.
+    /// </summary>
+    public static IReadOnlyList<string> UniqueTitles(IEnumerable<(string Key, string Title)> columns)
+    {
+        var list = columns.Select(c => (c.Key, Title: c.Title ?? "")).ToList();
+        var clash = list.GroupBy(c => c.Title.Trim(), StringComparer.OrdinalIgnoreCase).Where(g => g.Count() > 1).Select(g => g.Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        // a column whose title IS its own raw key (key "Exempted", title "Exempted") keeps it: its key in brackets would say nothing more
+        string Raw(string key) => IdTypeOf(key) ?? FieldOf(key) ?? key;
+        var named = list.Select(c => clash.Contains(c.Title.Trim()) && !string.Equals(Raw(c.Key), c.Title.Trim(), StringComparison.OrdinalIgnoreCase)
+            ? c.Title + " (" + Raw(c.Key) + ")" : c.Title).ToList();
+        // the same raw key twice (a column listed twice): numbered in order, still unique
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var out_ = new List<string>();
+        foreach (var n in named)
+        {
+            var t = n;
+            for (var i = 2; !seen.Add(t.Trim()); i++) t = n + " " + i.ToString(CultureInfo.InvariantCulture);
+            out_.Add(t);
+        }
+        return out_;
+    }
+    /// #1403 the unique titles of a grid's columns (<see cref="UniqueTitles(IEnumerable{ValueTuple{string, string}})"/>).
+    public static IReadOnlyList<string> UniqueTitles(IEnumerable<GridColumn> columns) => UniqueTitles(columns.Select(c => (c.Key, c.Label)));
 
     /// A raw field name as a title: no space, and a lower-to-upper hump or an underscore.
     public static bool IsRawName(string label) =>

@@ -148,19 +148,59 @@ OUTER APPLY (SELECT TOP (1) a.Tier FROM sidata.AssetIdentifier AS ai JOIN sidata
 '@
 }
 
-function Get-SICloseLoopMailEventsSql {
-    <# The window's state changes (not 'Seen'), newest first, with the item they belong to. #>
+function Get-SICloseLoopMailSeverityRankSql {
+    <# PURE. #1399 ConvertTo-SICloseLoopSeverity in T-SQL, as the rank the mail sorts by (0 Very High .. 4 Low, 5 Other). #>
+    param([string]$Expr = 'i.Severity')
+    # every whitespace character goes, as the PowerShell rule's [\s_-]+ does (space, tab, line breaks, vertical tab, form feed, no-break space)
+    $s = "LOWER(ISNULL($Expr, N''))"
+    foreach ($ch in @('N'' ''', 'NCHAR(9)', 'NCHAR(10)', 'NCHAR(11)', 'NCHAR(12)', 'NCHAR(13)', 'NCHAR(160)', 'N''_''', 'N''-''')) { $s = "REPLACE($s, $ch, N'')" }
+    "CASE WHEN $s LIKE N'veryhigh%' OR $s LIKE N'crit%' THEN 0 WHEN $s LIKE N'mediumhigh%' THEN 2 WHEN $s LIKE N'high%' THEN 1 WHEN $s LIKE N'med%' OR $s LIKE N'moderate%' THEN 3 WHEN $s LIKE N'low%' THEN 4 ELSE 5 END"
+}
+
+function Get-SICloseLoopMailEventCountsSql {
+    <#
+        #1399 THE WINDOW'S STATE CHANGES, COUNTED IN SQL (a re-key day writes ~1M of them): per action x stored severity x tier,
+        and for a close the reason's head (what precedes its first colon -- Test-SICloseLoopIsFix reads only that).
+    #>
     param([switch]$WithTier)
     $tier = if ($WithTier) { 'COALESCE(t1.Tier, t2.Tier)' } else { 'CAST(NULL AS tinyint)' }
     $apply = if ($WithTier) { Get-SICloseLoopTierApplySql } else { '' }
     @"
-SELECT e.EventId, e.[At], e.Action, e.Reason, i.Cve, i.AssetName, i.CorrelationId, i.Severity, i.FirstSeen, i.State, $tier AS Tier
-FROM vuln.VulnerabilityEvent AS e
-JOIN vuln.VulnerabilityItem AS i ON i.SysId = e.SysId
-$apply
-WHERE e.[At] >= CONVERT(datetime2(0), @Since, 126) AND e.[At] < CONVERT(datetime2(0), @Until, 126)
-  AND e.Action IN (N'Open', N'Close', N'EngineerClose', N'Reopen')
-ORDER BY e.[At] DESC, e.EventId DESC;
+SELECT x.Action, x.Severity, x.Tier, x.ReasonHead, COUNT_BIG(*) AS Items
+FROM (
+    SELECT e.Action, ISNULL(i.Severity, N'') AS Severity, $tier AS Tier,
+           CASE WHEN e.Action = N'Close' THEN LTRIM(RTRIM(CASE WHEN CHARINDEX(N':', ISNULL(e.Reason, N'')) > 0 THEN LEFT(e.Reason, CHARINDEX(N':', e.Reason) - 1) ELSE ISNULL(e.Reason, N'') END)) ELSE N'' END AS ReasonHead
+    FROM vuln.VulnerabilityEvent AS e
+    JOIN vuln.VulnerabilityItem AS i ON i.SysId = e.SysId
+    $apply
+    WHERE e.[At] >= CONVERT(datetime2(0), @Since, 126) AND e.[At] < CONVERT(datetime2(0), @Until, 126)
+      AND e.Action IN (N'Open', N'Close', N'EngineerClose', N'Reopen')
+) AS x
+GROUP BY x.Action, x.Severity, x.Tier, x.ReasonHead;
+"@
+}
+
+function Get-SICloseLoopMailTopEventsSql {
+    <#
+        #1399 the examples the mail lists -- TOP (@Top) of the opened (-Kind opened) or the closed (-Kind closed) state changes, in
+        the mail's own order: most severe first, then tier (Tier 0..3, Unknown last), then newest first.
+    #>
+    param([switch]$WithTier, [Parameter(Mandatory)][ValidateSet('opened', 'closed')][string]$Kind)
+    $tier = if ($WithTier) { 'COALESCE(t1.Tier, t2.Tier)' } else { 'CAST(NULL AS tinyint)' }
+    $apply = if ($WithTier) { Get-SICloseLoopTierApplySql } else { '' }
+    $actions = if ($Kind -eq 'opened') { "N'Open'" } else { "N'Close', N'EngineerClose'" }
+    @"
+SELECT TOP (CONVERT(int, @Top)) x.EventId, x.[At], x.Action, x.Reason, x.Cve, x.AssetName, x.CorrelationId, x.Severity, x.FirstSeen, x.State, x.Tier
+FROM (
+    SELECT e.EventId, e.[At], e.Action, e.Reason, i.Cve, i.AssetName, i.CorrelationId, i.Severity, i.FirstSeen, i.State, $tier AS Tier,
+           $(Get-SICloseLoopMailSeverityRankSql -Expr 'i.Severity') AS SevRank
+    FROM vuln.VulnerabilityEvent AS e
+    JOIN vuln.VulnerabilityItem AS i ON i.SysId = e.SysId
+    $apply
+    WHERE e.[At] >= CONVERT(datetime2(0), @Since, 126) AND e.[At] < CONVERT(datetime2(0), @Until, 126)
+      AND e.Action IN ($actions)
+) AS x
+ORDER BY x.SevRank, CASE WHEN x.Tier BETWEEN 0 AND 3 THEN x.Tier ELSE 9 END, x.[At] DESC, x.EventId DESC;
 "@
 }
 
@@ -211,7 +251,7 @@ function Read-SICloseLoopMailData {
         Throws -- the run fails -- when the close-loop tables are not in the database: a mail that says "nothing
         changed" about a database it could not read would be a lie.
     #>
-    param([Parameter(Mandatory)][scriptblock]$Invoke, [Parameter(Mandatory)][datetime]$Since, [Parameter(Mandatory)][datetime]$Until)
+    param([Parameter(Mandatory)][scriptblock]$Invoke, [Parameter(Mandatory)][datetime]$Since, [Parameter(Mandatory)][datetime]$Until, [int]$Top = 15)
     $probeRaw = (& $Invoke (Get-SICloseLoopMailProbeSql) @{} 'reader')
     $probe = @($probeRaw | Where-Object { $null -ne $_ }) | Select-Object -First 1
     if (-not $probe -or [int](Get-SICloseLoopValue $probe 'HasVuln') -ne 1) {
@@ -221,8 +261,13 @@ function Read-SICloseLoopMailData {
     $hasLife = ([int](Get-SICloseLoopValue $probe 'HasLifecycle') -eq 1)
     $hasCfg  = ([int](Get-SICloseLoopValue $probe 'HasSettings') -eq 1)
     $win = @{ Since = (Format-SICloseLoopSqlTime -Time $Since); Until = (Format-SICloseLoopSqlTime -Time $Until) }
-    $evRaw = (& $Invoke (Get-SICloseLoopMailEventsSql -WithTier:$hasTier) $win 'reader')
-    $events = @($evRaw | Where-Object { $null -ne $_ })
+    # #1399 (owner 2026-11-26: "memory issues must not be a problem in any step"): the window's changes are COUNTED in SQL and only
+    # the examples the mail lists are read (TOP -Top of each) -- never every event of the day (a re-key day writes ~1M)
+    # (a seam answers its rows as ONE array: assigned, then walked)
+    $cRaw = (& $Invoke (Get-SICloseLoopMailEventCountsSql -WithTier:$hasTier) $win 'reader'); $evCounts = @($cRaw | Where-Object { $null -ne $_ })
+    $topWin = @{ Since = $win.Since; Until = $win.Until; Top = [string][Math]::Max(0, $Top) }
+    $oRaw = (& $Invoke (Get-SICloseLoopMailTopEventsSql -WithTier:$hasTier -Kind opened) $topWin 'reader'); $topOpened = @($oRaw | Where-Object { $null -ne $_ })
+    $xRaw = (& $Invoke (Get-SICloseLoopMailTopEventsSql -WithTier:$hasTier -Kind closed) $topWin 'reader'); $topClosed = @($xRaw | Where-Object { $null -ne $_ })
     $openRaw = (& $Invoke (Get-SICloseLoopMailOpenSql -WithTier:$hasTier) @{} 'reader')
     $open = @($openRaw | Where-Object { $null -ne $_ })
     $life = @()
@@ -237,7 +282,7 @@ function Read-SICloseLoopMailData {
             try { $web = [string](ConvertFrom-Json -InputObject ([string]$j)) } catch { $web = '' }
         }
     }
-    [pscustomobject]@{ Events = $events; Open = $open; Lifecycle = $life; WebBaseUrl = "$web".Trim().TrimEnd('/')
+    [pscustomobject]@{ EventCounts = $evCounts; TopOpened = $topOpened; TopClosed = $topClosed; Open = $open; Lifecycle = $life; WebBaseUrl = "$web".Trim().TrimEnd('/')
                        HasTier = $hasTier; HasLifecycle = $hasLife }
 }
 
@@ -305,7 +350,12 @@ function Get-SICloseLoopMailReport {
         [Parameter(Mandatory)][datetime]$Since,
         [Parameter(Mandatory)][datetime]$Until,
         [int]$Top = 15,
-        [bool]$HasTier = $true
+        [bool]$HasTier = $true,
+        # #1399 the window COUNTED in SQL (Get-SICloseLoopMailEventCountsSql: Action, Severity, Tier, ReasonHead, Items) and the
+        # examples read as TOP -Top (Get-SICloseLoopMailTopEventsSql) -- the same report as from every event (-Events)
+        [AllowNull()][object[]]$EventCounts = $null,
+        [AllowEmptyCollection()][object[]]$TopOpened = @(),
+        [AllowEmptyCollection()][object[]]$TopClosed = @()
     )
     $sev = $script:SICloseLoopSeverities; $tiers = $script:SICloseLoopTiers
     $bySev = [ordered]@{ Opened = (New-SICloseLoopCounter $sev); Closed = (New-SICloseLoopCounter $sev); Reopened = (New-SICloseLoopCounter $sev) }
@@ -313,6 +363,37 @@ function Get-SICloseLoopMailReport {
     $opened = New-Object System.Collections.Generic.List[object]
     $closed = New-Object System.Collections.Generic.List[object]
     $sevRank = @{ 'Very High' = 0; 'High' = 1; 'Medium-High' = 2; 'Medium' = 3; 'Low' = 4; 'Other' = 5 }
+    $counted = ($null -ne $EventCounts)
+    $nOpened = 0L; $nClosed = 0L; $nFixed = 0L
+    if ($counted) {
+        foreach ($c in @($EventCounts)) {
+            if ($null -eq $c) { continue }
+            $action = "$(Get-SICloseLoopValue $c 'Action')".Trim()
+            $kind = switch ($action) { 'Open' { 'Opened' } 'Reopen' { 'Reopened' } 'Close' { 'Closed' } 'EngineerClose' { 'Closed' } default { '' } }
+            if (-not $kind) { continue }
+            $n = [long](Get-SICloseLoopValue $c 'Items')
+            $s = ConvertTo-SICloseLoopSeverity (Get-SICloseLoopValue $c 'Severity')
+            $t = ConvertTo-SICloseLoopTier (Get-SICloseLoopValue $c 'Tier')
+            $bySev[$kind][$s] += $n; $bySev[$kind]['Total'] += $n
+            $byTier[$kind][$t] += $n; $byTier[$kind]['Total'] += $n
+            if ($kind -eq 'Opened') { $nOpened += $n }
+            elseif ($kind -eq 'Closed') { $nClosed += $n; if (Test-SICloseLoopIsFix -Action $action -Reason ([string](Get-SICloseLoopValue $c 'ReasonHead'))) { $nFixed += $n } }
+        }
+        foreach ($pair in @(@($TopOpened, 'Opened'), @($TopClosed, 'Closed'))) {
+            foreach ($e in @($pair[0])) {
+                if ($null -eq $e) { continue }
+                $action = "$(Get-SICloseLoopValue $e 'Action')".Trim()
+                $s = ConvertTo-SICloseLoopSeverity (Get-SICloseLoopValue $e 'Severity')
+                $reason = [string](Get-SICloseLoopValue $e 'Reason')
+                $item = [pscustomobject]@{
+                    At = (Get-SICloseLoopValue $e 'At'); Severity = $s; SeverityRank = $sevRank[$s]; Tier = (ConvertTo-SICloseLoopTier (Get-SICloseLoopValue $e 'Tier')); Cve = [string](Get-SICloseLoopValue $e 'Cve')
+                    AssetName = [string](Get-SICloseLoopValue $e 'AssetName'); Action = $action; Reason = $reason; IsFix = $false
+                }
+                if ($pair[1] -eq 'Opened') { $opened.Add($item) } else { $item.IsFix = (Test-SICloseLoopIsFix -Action $action -Reason $reason); $closed.Add($item) }
+            }
+        }
+        $Events = @()
+    }
 
     foreach ($e in @($Events)) {
         if ($null -eq $e) { continue }
@@ -352,14 +433,15 @@ function Get-SICloseLoopMailReport {
     $topOpened = @(& $order $opened.ToArray() | Select-Object -First $Top)
     $topClosed = @(& $order $closed.ToArray() | Select-Object -First $Top)
     $nothing = (($bySev.Opened.Total + $bySev.Closed.Total + $bySev.Reopened.Total) -eq 0)
+    if (-not $counted) { $nOpened = [long]$opened.Count; $nClosed = [long]$closed.Count; $nFixed = [long]@($closed | Where-Object { $_.IsFix }).Count }
     [pscustomobject]@{
         Since = $Since; Until = $Until
         Opened = [int]$bySev.Opened.Total; Closed = [int]$bySev.Closed.Total; Reopened = [int]$bySev.Reopened.Total
-        Fixed = @($closed | Where-Object { $_.IsFix }).Count
+        Fixed = [int]$nFixed
         OpenNow = [long]$matrix['Total']['Total']; NothingChanged = $nothing
         BySeverity = $bySev; ByTier = $byTier; OpenMatrix = $matrix
-        NewlyOpened = $topOpened; NewlyOpenedTotal = $opened.Count
-        ClosedItems = $topClosed; ClosedTotal = $closed.Count
+        NewlyOpened = $topOpened; NewlyOpenedTotal = [int]$nOpened
+        ClosedItems = $topClosed; ClosedTotal = [int]$nClosed
         Lifecycle = @($Lifecycle | Where-Object { $null -ne $_ }); HasTier = $HasTier
     }
 }
@@ -632,8 +714,8 @@ function Invoke-SICloseLoopMailCore {
     & $Log 'INFO' ("database  : {0}/{1}" -f $s.Server, $s.Database)
     & $Log 'INFO' ("window    : {0:u} .. {1:u}" -f $since, $until)
     $invoke = & $NewInvoke $s.Server $s.Database
-    $data = Read-SICloseLoopMailData -Invoke $invoke -Since $since -Until $until
-    $report = Get-SICloseLoopMailReport -Events $data.Events -Open $data.Open -Lifecycle $data.Lifecycle `
+    $data = Read-SICloseLoopMailData -Invoke $invoke -Since $since -Until $until -Top $Top
+    $report = Get-SICloseLoopMailReport -EventCounts @($data.EventCounts) -TopOpened @($data.TopOpened) -TopClosed @($data.TopClosed) -Open $data.Open -Lifecycle $data.Lifecycle `
                 -Since $since -Until $until -Top $Top -HasTier ([bool]$data.HasTier)
     $web = if ($s.WebBaseUrl) { $s.WebBaseUrl } else { $data.WebBaseUrl }
     $tag = Get-SICloseLoopTenantTag -Globals $Globals

@@ -215,8 +215,38 @@ public sealed class IndexModel(ISummaryReportStore store, ILogger<IndexModel> lo
     protected override async Task LoadForExportAsync(CancellationToken ct)
     {
         if (!await PrepareAsync(ct)) return;
-        ExportRows = await store.RowsAsync(State.Latest!.CollectionTime, Filter, 0, SI.Management.Core.ProData.ProDataFilters.MaxExport, true, ct);
+        // #1400 (owner 2026-11-26: "SI never fewer rows than the source"): EVERY row the filters keep -- no 50,000 cut --, tier by
+        // tier in the page's order, a chunk at a time ("memory issues must not be a problem in any step")
+        var at = State.Latest!.CollectionTime;
+        var heads = await store.HeadsAsync(at, Filter, ct);
+        // #1400 completeness: the rows the tiers counted when the export began
+        ExportExpected = heads.Sum(h => h.Recommendations);
+        ExportRows = Array.Empty<SummaryRowView>();
+        var numbers = new Dictionary<int, int>();
+        ExportNumbers = numbers;
+        var tier = 0;
+        var skip = 0;
+        var no = 0;
+        ExportChunks = async (_, t) =>
+        {
+            while (tier < heads.Count)
+            {
+                var rows = await store.RowsAsync(at, Filter with { Tier = heads[tier].TierGroup, Tiers = null }, skip, SI.Management.Core.ProData.ProDataFilters.ExportChunk, true, t);
+                if (rows.Count == 0) { tier++; skip = 0; continue; }
+                skip += rows.Count;
+                // the # column: the row's place in the whole export (as the one-read export numbered it)
+                numbers.Clear();
+                foreach (var r in rows) numbers.TryAdd(r.RowNo, ++no);
+                return rows.Cast<object>().ToList();
+            }
+            return Array.Empty<object>();
+        };
     }
+
+    /// #1400 the export's chunk reader and the # of the chunk's rows (<see cref="LoadForExportAsync"/>).
+    private Func<int, CancellationToken, Task<IReadOnlyList<object>>>? ExportChunks { get; set; }
+    private Dictionary<int, int>? ExportNumbers { get; set; }
+    private long? ExportExpected { get; set; }
 
     /// The workbook's column name as a column key (letters and digits).
     public static string KeyOf(string column) => new(column.Where(char.IsAsciiLetterOrDigit).ToArray());
@@ -275,6 +305,7 @@ public sealed class IndexModel(ISummaryReportStore store, ILogger<IndexModel> lo
         var t = new SI.Management.Web.Columns.DataTable
         {
             Id = id, View = View, Title = title, Rows = rows.Cast<object>().ToList(), Columns = Columns(numbers),
+            Chunks = id == "summary" ? ExportChunks : null, ExpectedRows = id == "summary" && ExportChunks is not null ? ExportExpected : null, KeyOf = o => R(o).TierGroup.ToString(CultureInfo.InvariantCulture) + "|" + R(o).RowNo.ToString(CultureInfo.InvariantCulture),
             Findings = SI.Management.Core.ProData.RowFindingKey.Issue, CollectionId = "",
             RefOf = o => new SI.Management.Web.Columns.RowRef(null, null, R(o).ConfigurationId),
             Marker = "class=\"findings summary-table\" data-summary-table=\"" + (id.StartsWith("tier-", StringComparison.Ordinal) ? id[5..] : id) + "\"",
@@ -304,7 +335,7 @@ public sealed class IndexModel(ISummaryReportStore store, ILogger<IndexModel> lo
     protected override IReadOnlyList<SI.Management.Web.Columns.DataTable> BuildTables()
     {
         if (ExportRows is { } all)
-            return new[] { Table("summary", "Summary", all, all.Select((r, i) => (r.RowNo, i + 1)).GroupBy(x => x.RowNo).ToDictionary(g => g.Key, g => g.First().Item2)) };
+            return new[] { Table("summary", "Summary", all, (IReadOnlyDictionary<int, int>?)ExportNumbers ?? all.Select((r, i) => (r.RowNo, i + 1)).GroupBy(x => x.RowNo).ToDictionary(g => g.Key, g => g.First().Item2)) };
         var first = Filter.Tier is not null ? (PageNo - 1) * Size : 0;
         return Heads.Select(h =>
         {

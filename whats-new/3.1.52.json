@@ -1,0 +1,16 @@
+{
+  "version": "3.1.52",
+  "date": "2026-11-26",
+  "type": "feature",
+  "summary": "Large installations finish their runs, a warning shows when data is old, and the 3.1.51 data corrections.",
+  "new": [
+    { "title": "Old data is flagged", "text": "When an installation's newest data is older than 36 hours, a warning shows the age and the last run's result: on every page for Admins, on Home and the wall board for readers." }
+  ],
+  "fixes": [
+    { "title": "Large installations finish their runs", "text": "The Detailed CVE report, profiling and reading recommendations no longer run out of memory at large installations; a failed recommendations refresh is reported. A yes/no property stored as \"False\" now reads as no, so some identity properties change once." },
+    { "title": "Updates finish and clean up", "text": "An update in a long database step is no longer stopped as having no sign of life. It removes references to deleted managed identities, so new jobs can be created again, and afterwards only the current web app version answers." },
+    { "title": "Data corrections", "text": "Azure resources moved between resource groups are no longer retired; any retired come back by themselves. Software update tasks update once. Scope rules also match long product lists, so some rules match more findings once." },
+    { "title": "Exports include every row", "text": "Exports include every row, with no 50,000-row limit. An export whose data changed while it ran is refused, never cut short." },
+    { "title": "Smaller fixes", "text": "The statistics refresh is no longer re-created on each update; the privileged-identity tier no longer says complete when Log Analytics was unreadable; export column titles name their field; capped software lists hold tasks open, with ServiceNow field u_si_software_lists_complete." }
+  ]
+}

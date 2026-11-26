@@ -27,6 +27,15 @@ public interface IProDataQueries
     Task<QueryResult<IReadOnlyList<CollectionInfo>>> CollectionsAsync(int top, CancellationToken ct);
     Task<QueryResult<FindingPage>> FindingsAsync(FindingFilter filter, CancellationToken ct);
     Task<QueryResult<IReadOnlyList<FindingRow>>> ExportAsync(FindingFilter filter, int max, CancellationToken ct);
+    /// #1400 ONE CHUNK of every finding the filter keeps (rows <paramref name="skip"/> + 1 .. + <paramref name="take"/> in the
+    /// view's order, then the finding id): an export reads every chunk, never one capped read. Every reader implements it
+    /// itself (no fallback over the capped <see cref="ExportAsync"/>).
+    Task<QueryResult<IReadOnlyList<FindingRow>>> ExportChunkAsync(FindingFilter filter, long skip, int take, CancellationToken ct) =>
+        throw new NotSupportedException(GetType().Name + " reads no export chunks: implement ExportChunkAsync (an export never falls back to a capped read)");
+    /// #1400 how many findings the export's chunks read in all (<see cref="ProDataSql.FindingsExportCount(FindingFilter, IReadOnlyCollection{string}?)"/>);
+    /// with <paramref name="ids"/>: how many of those ticked findings the filter keeps.
+    Task<long> ExportCountAsync(FindingFilter filter, IReadOnlyCollection<string>? ids, CancellationToken ct) =>
+        throw new NotSupportedException(GetType().Name + " counts no export: implement ExportCountAsync");
     Task<QueryResult<IReadOnlyList<PivotCell>>> PivotAsync(FindingFilter filter, CancellationToken ct);
     Task<QueryResult<FindingDetail?>> FindingAsync(string? collectionId, string findingId, CancellationToken ct);
     Task<QueryResult<IReadOnlyList<TrendCell>>> TrendAsync(TrendRequest request, CancellationToken ct);
@@ -197,6 +206,20 @@ public sealed class ProDataQueries : IProDataQueries
         using var keep = FindingSource.KeepStored();
         var (rows, text) = await Run(ProDataSql.FindingsExport(filter, max), ct).ConfigureAwait(false);
         return R<IReadOnlyList<FindingRow>>(rows.Select(MapFinding).ToList(), text);
+    }
+
+    public async Task<QueryResult<IReadOnlyList<FindingRow>>> ExportChunkAsync(FindingFilter filter, long skip, int take, CancellationToken ct)
+    {
+        using var keep = FindingSource.KeepStored();
+        var (rows, text) = await Run(ProDataSql.FindingsExportChunk(filter, skip, take), ct).ConfigureAwait(false);
+        return R<IReadOnlyList<FindingRow>>(rows.Select(MapFinding).ToList(), text);
+    }
+
+    public async Task<long> ExportCountAsync(FindingFilter filter, IReadOnlyCollection<string>? ids, CancellationToken ct)
+    {
+        using var keep = FindingSource.KeepStored();
+        var (rows, _) = await Run(ProDataSql.FindingsExportCount(filter, ids), ct).ConfigureAwait(false);
+        return rows.Count > 0 ? L(rows[0], "N") : 0;
     }
 
     /// The pivot of the filtered view. Read once per data version when a cache is given (<see cref="ViewsCache"/>): the key

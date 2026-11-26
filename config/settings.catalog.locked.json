@@ -403,7 +403,10 @@
         "SI_Guard_JobRunThrottledStuck_Enabled",
         "SI_Guard_JobRunThrottledStuck_Mail",
         "SI_Throttle_StuckHours",
-        "SI_Throttle_StuckRuns"
+        "SI_Throttle_StuckRuns",
+        "SI_Guard_DataPublishedStale_Enabled",
+        "SI_Guard_DataPublishedStale_Mail",
+        "SI_Pro_StaleDataWarnHours"
       ]
     },
     {
@@ -7703,6 +7706,66 @@
       }
     },
     {
+      "name": "SI_Guard_DataPublishedStale_Enabled",
+      "label": "Data getting old: no complete run",
+      "group": "Guards (safety checks)",
+      "type": "bool",
+      "engines": [],
+      "edition": "community",
+      "secret": false,
+      "advanced": false,
+      "default": null,
+      "defaultText": "Off",
+      "description": "Data getting old: no complete run (data.published.stale). Off: no event on the Guards page and no report to Invardia when the newest complete data is older than the warning limit. The warning on the Home page and at the top of the pages follows the limit alone.",
+      "purpose": "The safety check that protects the data the web app and its reports show: No new data has been published for longer than the warning limit.",
+      "effect": "Off: no event on the Guards page and no report to Invardia when the newest complete data is older than the warning limit. The warning on the Home page and at the top of the pages follows the limit alone. On: one warning a day on the Guards page while the data stays older than the limit.",
+      "whenToChange": "Off by default: the warning on the Home page and at the top of the pages already says it. Turn it on when you also want one event a day on the Guards page; it only warns and nothing is held or stopped by it.",
+      "card": "Other checks",
+      "needs": "SI_Guards_Enabled",
+      "info": {
+        "what": "The safety check that protects the data the web app and its reports show: No new data has been published for longer than the warning limit.",
+        "whenOn": "one warning a day on the Guards page while the data stays older than the limit.",
+        "whenOff": "no event on the Guards page and no report to Invardia when the newest complete data is older than the warning limit. The warning on the Home page and at the top of the pages follows the limit alone.",
+        "risk": "Turning this check off removes a protection: when its condition happens, nothing holds or stops the step and no event is raised. Reversible at once: switch it back on; it applies from the next run.",
+        "requires": "Works only while \"All guards (safety checks)\" is on.",
+        "default": "Off",
+        "recommended": "Keep the default (off) unless you want this check to hold or stop the step. Change it when: Off by default: the warning on the Home page and at the top of the pages already says it. Turn it on when you also want one event a day on the Guards page; it only warns and nothing is held or stopped by it.",
+        "docUrl": "https://invardia.com/docs/si/settings/SI_Guard_DataPublishedStale_Enabled/",
+        "confirmWhen": "off",
+        "confirm": "no event on the Guards page and no report to Invardia when the newest complete data is older than the warning limit. The warning on the Home page and at the top of the pages follows the limit alone. Turning this check off removes a protection: when its condition happens, nothing holds or stops the step and no event is raised. Reversible at once: switch it back on; it applies from the next run."
+      }
+    },
+    {
+      "name": "SI_Guard_DataPublishedStale_Mail",
+      "label": "Data getting old: no complete run: mail",
+      "group": "Guards (safety checks)",
+      "type": "bool",
+      "engines": [],
+      "edition": "community",
+      "secret": false,
+      "advanced": false,
+      "default": null,
+      "defaultText": "On (follows the check: nothing is mailed while the check is off)",
+      "description": "Its mail: this check never mails (it is a warning only).",
+      "purpose": "This safety check never sends a mail: it is a warning only, shown on the Guards page, on the Home page and at the top of the pages for Admins. This switch changes nothing and is not shown on the Settings page.",
+      "effect": "Off: the event is still shown on the Guards page and kept in run health and the audit trail, but no mail is sent for it. The install-wide switch \"Mail when a safety check stops a step\" still applies to every check.",
+      "whenToChange": "Never: this check sends no mail either way.",
+      "card": "Other checks",
+      "needs": "SI_Guard_DataPublishedStale_Enabled",
+      "info": {
+        "what": "This safety check never sends a mail: it is a warning only, shown on the Guards page, on the Home page and at the top of the pages for Admins. This switch changes nothing and is not shown on the Settings page.",
+        "whenOn": "(follows the check: nothing is mailed while the check is off)",
+        "whenOff": "the event is still shown on the Guards page and kept in run health and the audit trail, but no mail is sent for it. The install-wide switch \"Mail when a safety check stops a step\" still applies to every check.",
+        "risk": "Low: no data is changed and the check still works; only its mail stops, so a trip is seen only on the Guards page, in run health and in the audit trail. Reversible at once.",
+        "requires": "Works only while \"Data getting old: no complete run\" is on.",
+        "default": "On (follows the check: nothing is mailed while the check is off)",
+        "recommended": "Keep the default. Change it when: Never: this check sends no mail either way.",
+        "docUrl": "https://invardia.com/docs/si/settings/SI_Guard_DataPublishedStale_Mail/",
+        "confirmWhen": "off",
+        "confirm": "the event is still shown on the Guards page and kept in run health and the audit trail, but no mail is sent for it. The install-wide switch \"Mail when a safety check stops a step\" still applies to every check. Low: no data is changed and the check still works; only its mail stops, so a trip is seen only on the Guards page, in run health and in the audit trail. Reversible at once."
+      }
+    },
+    {
       "name": "SI_Guard_DatasyncAssetKindDropped_Enabled",
       "label": "Data sync: findings an asset kind filter cannot show",
       "group": "Guards (safety checks)",
@@ -12319,6 +12382,35 @@
         "default": "7 days",
         "recommended": "Keep the default. Change it when: Raise it when a source is known to be down for longer and the mails should keep going out meanwhile.",
         "docUrl": "https://invardia.com/docs/si/settings/SI_Pro_SourceDropout_HoldDeliveryDays/"
+      }
+    },
+    {
+      "name": "SI_Pro_StaleDataWarnHours",
+      "label": "Warn when the newest complete data is older than (hours)",
+      "group": "Guards (safety checks)",
+      "type": "int",
+      "engines": [],
+      "edition": "community",
+      "secret": false,
+      "advanced": true,
+      "default": null,
+      "defaultText": "36",
+      "description": "Data getting old: when no new data has been published for this many hours (counted from when the shown data was complete), a warning on the Home page for everyone and at the top of every page for Admins (and one warning a day on the Guards page when the check above is switched on -- off by default). 0 = off. Nothing is ever held or stopped by it.",
+      "purpose": "When no new data has been published for this many hours (counted from when the shown data was complete), SecurityInsight warns: on the Home page for everyone and at the top of every page for Admins (and once a day on the Guards page when that check is switched on).",
+      "effect": "Lower warns sooner, higher later. 0 turns the warning off. It is a warning only: nothing is held or stopped, and the pages keep showing the newest complete data.",
+      "whenToChange": "Raise it when your pipeline runs less often than once a day; lower it if you need to know sooner.",
+      "unit": "hours",
+      "max": 8760,
+      "min": 0,
+      "card": "Other checks",
+      "info": {
+        "what": "When no new data has been published for this many hours (counted from when the shown data was complete), SecurityInsight warns: on the Home page for everyone and at the top of every page for Admins (and once a day on the Guards page when that check is switched on).",
+        "whenChanged": "Lower warns sooner, higher later. 0 turns the warning off. It is a warning only: nothing is held or stopped, and the pages keep showing the newest complete data.",
+        "risk": "Higher, or 0: data that is getting old is said later, or not at all. Lower: the warning comes sooner, also after one slow run. It is a warning only: nothing is held, stopped or mailed by it. Reversible at once.",
+        "requires": "Nothing else.",
+        "default": "36",
+        "recommended": "Keep the default. Change it when: Raise it when your pipeline runs less often than once a day; lower it if you need to know sooner.",
+        "docUrl": "https://invardia.com/docs/si/settings/SI_Pro_StaleDataWarnHours/"
       }
     },
     {

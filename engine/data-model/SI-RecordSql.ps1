@@ -221,6 +221,7 @@ WHERE RecordKey IS NOT NULL GROUP BY RecordKey;
 DECLARE @changed TABLE (RecordKey NVARCHAR(450) PRIMARY KEY);
 DECLARE @older TABLE (RecordKey NVARCHAR(450) PRIMARY KEY);
 DECLARE @stale TABLE (RecordKey NVARCHAR(450) PRIMARY KEY);
+DECLARE @ins TABLE (Act NVARCHAR(10), RecordKey NVARCHAR(450));
 BEGIN TRANSACTION;
 {WRITELOCK}INSERT @older SELECT s.RecordKey FROM @s s JOIN sidata.CiRecord t ON t.RecordKey = s.RecordKey
 WHERE s.CollectionTime < t.CollectionTime;
@@ -239,7 +240,15 @@ ON t.RecordKey = s.RecordKey
 WHEN MATCHED AND {NOTOLDER} THEN UPDATE SET Provider = s.Provider, RecordType = s.RecordType, Class = s.Class, Name = s.Name, SourceLastSeen = s.SourceLastSeen,
     CollectionTime = s.CollectionTime, Complete = s.Complete, ContentHash = s.Hash, DocJson = s.DocJson
 WHEN NOT MATCHED THEN INSERT (RecordKey, Provider, RecordType, Class, Name, SourceLastSeen, CollectionTime, Complete, ContentHash, DocJson)
-    VALUES (s.RecordKey, s.Provider, s.RecordType, s.Class, s.Name, s.SourceLastSeen, s.CollectionTime, s.Complete, s.Hash, s.DocJson);
+    VALUES (s.RecordKey, s.Provider, s.RecordType, s.Class, s.Name, s.SourceLastSeen, s.CollectionTime, s.Complete, s.Hash, s.DocJson)
+OUTPUT $action, inserted.RecordKey INTO @ins (Act, RecordKey);
+-- #1403 when a record was FIRST seen (its first collection): the deletion proof tells a resource MOVED to another resource
+-- group / subscription (a new id first seen after the delete) from a same-named one that was always there
+IF COL_LENGTH('sidata.CiRecord', 'FirstSeen') IS NOT NULL AND EXISTS (SELECT 1 FROM @ins WHERE Act = N'INSERT')
+BEGIN
+    DECLARE @insj NVARCHAR(MAX) = (SELECT RecordKey AS k FROM @ins WHERE Act = N'INSERT' FOR JSON PATH);
+    EXEC sp_executesql N'UPDATE r SET FirstSeen = r.CollectionTime FROM sidata.CiRecord AS r JOIN OPENJSON(@j) WITH (k NVARCHAR(450)) AS x ON x.k = r.RecordKey WHERE r.FirstSeen IS NULL;', N'@j NVARCHAR(MAX)', @j = @insj;
+END
 DELETE ri FROM sidata.RecordIdentifier ri WHERE ri.RecordKey IN (SELECT RecordKey FROM @changed);
 INSERT sidata.RecordIdentifier (RecordKey, IdType, IdValue, SeenAt)
 SELECT DISTINCT x.RecordKey, x.IdType, x.IdValue, x.SeenAt FROM OPENJSON(@i) WITH (RecordKey NVARCHAR(450), IdType NVARCHAR(40), IdValue NVARCHAR(400), SeenAt DATETIME2(3)) x

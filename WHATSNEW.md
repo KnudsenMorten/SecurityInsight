@@ -1,5 +1,21 @@
 # What's new in SecurityInsight
 
+## 3.1.52 · 2026-11-26 · Feature update
+
+Large installations finish their runs, a warning shows when data is old, and the 3.1.51 data corrections.
+
+### New features
+
+- **Old data is flagged** - When an installation's newest data is older than 36 hours, a warning shows the age and the last run's result: on every page for Admins, on Home and the wall board for readers.
+
+### Fixes
+
+- **Large installations finish their runs** - The Detailed CVE report, profiling and reading recommendations no longer run out of memory at large installations; a failed recommendations refresh is reported. A yes/no property stored as "False" now reads as no, so some identity properties change once.
+- **Updates finish and clean up** - An update in a long database step is no longer stopped as having no sign of life. It removes references to deleted managed identities, so new jobs can be created again, and afterwards only the current web app version answers.
+- **Data corrections** - Azure resources moved between resource groups are no longer retired; any retired come back by themselves. Software update tasks update once. Scope rules also match long product lists, so some rules match more findings once.
+- **Exports include every row** - Exports include every row, with no 50,000-row limit. An export whose data changed while it ran is refused, never cut short.
+- **Smaller fixes** - The statistics refresh is no longer re-created on each update; the privileged-identity tier no longer says complete when Log Analytics was unreadable; export column titles name their field; capped software lists hold tasks open, with ServiceNow field u_si_software_lists_complete.
+
 ## 3.1.51 · 2026-11-25 · Feature update
 
 Job buttons work again, deleted assets retire at once, exploited findings are due in 14 days, and tiles and columns say what they show.

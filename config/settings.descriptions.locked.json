@@ -5189,6 +5189,36 @@
       "group": "Guards (safety checks)",
       "needs": "SI_Guard_JobRunThrottledStuck_Enabled"
     },
+    "SI_Guard_DataPublishedStale_Enabled": {
+      "label": "Data getting old: no complete run",
+      "purpose": "The safety check that protects the data the web app and its reports show: No new data has been published for longer than the warning limit.",
+      "defaultText": "Off",
+      "effect": "Off: no event on the Guards page and no report to Invardia when the newest complete data is older than the warning limit. The warning on the Home page and at the top of the pages follows the limit alone. On: one warning a day on the Guards page while the data stays older than the limit.",
+      "whenToChange": "Off by default: the warning on the Home page and at the top of the pages already says it. Turn it on when you also want one event a day on the Guards page; it only warns and nothing is held or stopped by it.",
+      "advanced": false,
+      "group": "Guards (safety checks)",
+      "needs": "SI_Guards_Enabled"
+    },
+    "SI_Guard_DataPublishedStale_Mail": {
+      "label": "Data getting old: no complete run: mail",
+      "purpose": "This safety check never sends a mail: it is a warning only, shown on the Guards page, on the Home page and at the top of the pages for Admins. This switch changes nothing and is not shown on the Settings page.",
+      "defaultText": "On (follows the check: nothing is mailed while the check is off)",
+      "effect": "Off: the event is still shown on the Guards page and kept in run health and the audit trail, but no mail is sent for it. The install-wide switch \"Mail when a safety check stops a step\" still applies to every check.",
+      "whenToChange": "Never: this check sends no mail either way.",
+      "advanced": false,
+      "group": "Guards (safety checks)",
+      "needs": "SI_Guard_DataPublishedStale_Enabled"
+    },
+    "SI_Pro_StaleDataWarnHours": {
+      "label": "Warn when the newest complete data is older than (hours)",
+      "purpose": "When no new data has been published for this many hours (counted from when the shown data was complete), SecurityInsight warns: on the Home page for everyone and at the top of every page for Admins (and once a day on the Guards page when that check is switched on).",
+      "defaultText": "36",
+      "effect": "Lower warns sooner, higher later. 0 turns the warning off. It is a warning only: nothing is held or stopped, and the pages keep showing the newest complete data.",
+      "whenToChange": "Raise it when your pipeline runs less often than once a day; lower it if you need to know sooner.",
+      "unit": "hours",
+      "advanced": true,
+      "group": "Guards (safety checks)"
+    },
     "SI_Telemetry_Endpoint": {
       "label": "Invardia support link address",
       "purpose": "The https address the Invardia support link sends its reports to.",
@@ -5923,7 +5953,10 @@
               "SI_Guard_JobRunThrottledStuck_Enabled",
               "SI_Guard_JobRunThrottledStuck_Mail",
               "SI_Throttle_StuckHours",
-              "SI_Throttle_StuckRuns"
+              "SI_Throttle_StuckRuns",
+              "SI_Guard_DataPublishedStale_Enabled",
+              "SI_Guard_DataPublishedStale_Mail",
+              "SI_Pro_StaleDataWarnHours"
             ]
     },
     {

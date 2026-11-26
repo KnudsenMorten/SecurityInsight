@@ -137,7 +137,7 @@ Describe 'Get-SIDeviceInfoByName -- a failed chunk gets a last try at the end of
 Describe 'Azure Exposure Graph access edges -- retried, a failure said as unknown' {
     It 'a failed read is said as unknown (not "none") and returns no map' {
         $w = $null
-        $m = Get-AzureExposureGraphAccessEdges -WarningVariable w -WarningAction SilentlyContinue -Ask { param($q) [pscustomobject]@{ Ok = $false; Rows = @(); Error = 'HTTP 502 Bad Gateway' } }
+        $m = Get-AzureExposureGraphAccessEdges -Keys @('vault-a') -WarningVariable w -WarningAction SilentlyContinue -Ask { param($q) [pscustomobject]@{ Ok = $false; Rows = @(); Error = 'HTTP 502 Bad Gateway' } }
         $m.Count | Should -Be 0
         (@($w) -join ' ') | Should -Match 'not known this run'
     }

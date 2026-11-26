@@ -7999,6 +7999,20 @@
       "description": "A public exploit exists."
     },
     {
+      "name": "si_affected_software_complete",
+      "classes": "finding",
+      "type": "bool",
+      "group": "finding",
+      "level": "finding",
+      "join": "none",
+      "resolution": {
+        "policy": "computed"
+      },
+      "defaultVisible": false,
+      "pii": false,
+      "description": "Whether the affected software lists of the finding (product, version, vendor, software) are complete: false when the source listed more than SecurityInsight keeps per device and CVE (256), never cut silently."
+    },
+    {
       "name": "si_exploit_verified",
       "classes": "finding",
       "type": "bool",

@@ -475,6 +475,8 @@ function Get-SITelemetryOptionalFields { @('wave', 'releaseMode', 'components', 
                                           'BuildPool',
                                           # framework 8.4: the run records kept unsent (the outbox) -- behind its own switch (on: Invardia deployed it 2026-11-05)
                                           'UplinkBacklog',
+                                          # #1395 LAST-RUN-1: the last finished pipeline run (total + each step) -- behind its own switch
+                                          'LastRun',
                                           # #1264 (framework DOCS-FRESH): the docs' live version stamped at build time (Invardia 1.0.1085)
                                           'docsVersion',
                                           # #1266 TRANSIENT-RETRY-1 (Invardia 1.0.1093): a validator without it never costs the failure itself
@@ -673,7 +675,7 @@ function Send-SITelemetryRecordWithFallback {
     foreach ($n in $opt) { $Record.PSObject.Properties.Remove($n) }
     $r2 = & $Transport $Record $Context.Endpoint $Context.AccessCode $TimeoutSec
     if ("$($r2.Status)" -ne 'ok') { return [pscustomobject]@{ Result = $r2; Record = $Record; Held = $false } }
-    if (@($opt | Where-Object { $_ -notin @('wave', 'releaseMode', 'components', 'evidence', 'Collections', 'runProgress', 'Pipeline', 'Jobs', 'Sources', 'Database', 'Update', 'Mail', 'Warnings', 'Security', 'Published', 'DataOut', 'supportSqlAccess', 'build', 'setupSteps', 'UplinkBacklog', 'docsVersion', 'Retry', 'SignedRequests') }).Count) {
+    if (@($opt | Where-Object { $_ -notin @('wave', 'releaseMode', 'components', 'evidence', 'Collections', 'runProgress', 'Pipeline', 'Jobs', 'Sources', 'Database', 'Update', 'Mail', 'Warnings', 'Security', 'Published', 'LastRun', 'DataOut', 'supportSqlAccess', 'build', 'setupSteps', 'UplinkBacklog', 'docsVersion', 'Retry', 'SignedRequests') }).Count) {
         if (-not $global:SI_UplinkCausesWarned) { $global:SI_UplinkCausesWarned = $true; Write-SIUplinkDiag ("Invardia did not take the Invardia support link's report with the report causes / capability fields ({0}) -- it was sent without them" -f (ConvertTo-AitUplinkRedacted -Text $first)) }
     }
     if (-not $hadRelease) { return [pscustomobject]@{ Result = $r2; Record = $Record; Held = $false } }

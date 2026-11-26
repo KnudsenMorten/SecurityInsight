@@ -456,7 +456,9 @@ function Get-SICollectRunReport {
           every part done, the records published   success, StepsOk = every step (Get-SICollectRunStepsOk)
           the records not all published            error, FailedStep 'records'
     #>
-    param([Parameter(Mandatory)][string]$Engine, [Parameter(Mandatory)][string]$RecordsState, [int]$FailedParts = 0, [string]$RunId = '', $StartedAt)
+    # -Recommendations (#1399): the run's recommendations phase, @{ Refreshed; Reason } (container $publishRunRecommendations); not
+    # refreshed = success-partial, failed step 'recommendations', and it is not among StepsOk (the job's ok never closes it)
+    param([Parameter(Mandatory)][string]$Engine, [Parameter(Mandatory)][string]$RecordsState, [int]$FailedParts = 0, [string]$RunId = '', $StartedAt, $Recommendations = $null)
     $start = if ($StartedAt) { ([datetime]$StartedAt).ToUniversalTime() } else { [datetime]::UtcNow }
     $ctx = [pscustomobject]@{ RunId = $RunId; Engine = $Engine; ShardIndex = 0; ShardCount = 1; CollectionTime = $start; StartedAt = $start }
     if ($RecordsState -eq 'failed') {
@@ -464,6 +466,11 @@ function Get-SICollectRunReport {
         return [pscustomobject]@{ RunContext = $ctx; ExitReason = 'error'; Message = ('the records of this {0} collection were not all published -- it is not complete and stays on its last good collection' -f $Engine) }
     }
     if ($RecordsState -ne 'published' -or $FailedParts -gt 0) { return $null }
+    if ($null -ne $Recommendations -and -not [bool]$Recommendations.Refreshed) {
+        $ctx | Add-Member -NotePropertyName StepsOk -NotePropertyValue ([string[]]@(Get-SICollectRunStepsOk -Engine $Engine | Where-Object { $_ -ne 'recommendations' }))
+        $ctx | Add-Member -NotePropertyName FailedStep -NotePropertyValue 'recommendations'
+        return [pscustomobject]@{ RunContext = $ctx; ExitReason = 'success-partial'; Message = ('recommendations not refreshed this run: {0}' -f [string]$Recommendations.Reason) }
+    }
     $ctx | Add-Member -NotePropertyName StepsOk -NotePropertyValue (Get-SICollectRunStepsOk -Engine $Engine)
     [pscustomobject]@{ RunContext = $ctx; ExitReason = 'success'; Message = '' }
 }

@@ -387,6 +387,15 @@
                 {
                     <div class="notice @licUsage.Tone" role="status" data-licence-banner="@licUsage.State">@licUsage.Message</div>
                 }
+                @* #1396 DATA GETTING OLD (owner 2026-11-26 "fix it"): the data the pages show is older than SI_Pro_StaleDataWarnHours --
+                   a WARNING at the top of every page for an Admin (the newest run's result and failed step, the way to the runs),
+                   and on Home for a reader and the Wallboard screen, worded for them. A warning only (Collection/StaleDataWarning.cs). *@
+                @if (User.Identity?.IsAuthenticated == true && !magic && SI.Management.Web.Collection.StaleDataWarning.Shown(isAdmin, isReader, User.IsInRole(Roles.Wallboard), current)
+                     && Context.RequestServices.GetService(typeof(SI.Management.Web.Collection.IStaleDataNotices)) is SI.Management.Web.Collection.IStaleDataNotices staleSource
+                     && await staleSource.CurrentAsync(Context.RequestAborted) is { } stale)
+                {
+                    <partial name="_StaleDataNotice" model="(stale, isAdmin)" />
+                }
                 @if (blocking.Total > 0 && (current == "/Wallboard" || current == "/Management/Index"))
                 {
                     <div class="notice attn" role="status" data-blocking-line>

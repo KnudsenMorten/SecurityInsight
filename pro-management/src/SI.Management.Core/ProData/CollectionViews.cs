@@ -161,6 +161,15 @@ public interface ICollectionViews
     Task<QueryResult<GridPage>> GridAsync(GridQuery query, CancellationToken ct);
     /// Every matching row (bounded by <see cref="ProDataFilters.MaxExport"/>), never cached.
     Task<QueryResult<GridPage>> ExportAsync(GridQuery query, CancellationToken ct);
+    /// <summary>
+    /// #1400 (owner 2026-11-26: "memory issues must not be a problem in any step"; "SI never fewer rows than the source"): ONE
+    /// CHUNK of every matching row -- rows (chunk - 1) * size + 1 .. chunk * size in the grid's own order (its sort, then its
+    /// key). An export reads EVERY row this way, a chunk at a time, and writes each chunk on before it reads the next: no row
+    /// cap, never every row in memory. Every reader implements it itself: a fallback over <see cref="ExportAsync"/> would
+    /// inherit its row cap and cut an export silently, so there is none.
+    /// </summary>
+    Task<QueryResult<GridPage>> ExportChunkAsync(GridQuery query, int chunk, int size, CancellationToken ct) =>
+        throw new NotSupportedException(GetType().Name + " reads no export chunks: implement ExportChunkAsync (an export never falls back to a capped read)");
     /// #1372 every row of a small list a page offers as its choices (the task reports' dimension values): read like an export,
     /// but a caching reader keeps it like any grid of its spec (long for an immutable one, briefly otherwise).
     Task<QueryResult<GridPage>> ChoicesAsync(GridQuery query, CancellationToken ct) => ExportAsync(query, ct);
@@ -282,16 +291,25 @@ public sealed class CollectionViews : ICollectionViews
 
     public Task<QueryResult<GridPage>> GridAsync(GridQuery query, CancellationToken ct) => Grid(query, export: false, ct);
     public Task<QueryResult<GridPage>> ExportAsync(GridQuery query, CancellationToken ct) => Grid(query, export: true, ct);
+    /// #1400 one chunk of every matching row: the grid's own page statement with the chunk as its page (never cached).
+    public Task<QueryResult<GridPage>> ExportChunkAsync(GridQuery query, int chunk, int size, CancellationToken ct) => Grid(query, export: false, ct, (chunk, size));
 
-    private async Task<QueryResult<GridPage>> Grid(GridQuery query, bool export, CancellationToken ct)
+    private async Task<QueryResult<GridPage>> Grid(GridQuery query, bool export, CancellationToken ct, (int Chunk, int Size)? part = null)
     {
         var st = GridSql.Normalize(query.Spec, query.Request);
+        if (part is { } pt) st = GridSql.Chunk(st, pt.Chunk, pt.Size);
         var sp = new Dictionary<string, object?>(query.SourceParameters, StringComparer.Ordinal);
         if (query.Spec.SourceParameters.Contains("Source") && !sp.ContainsKey("Source")) sp["Source"] = _vulnSource;
         // #1332 the findings list (the raw findings grid) reads today's stored rows until its history plan is as fast
         using var keep = query.Spec.Name == CollectionViewSql.Rows.Name ? FindingSource.KeepStored() : null;
         var (rows, text) = await Run(GridSql.Page(query.Spec, st, sp, export), ct).ConfigureAwait(false);
         var total = rows.Count > 0 ? L(rows[0], "TotalRows") : 0;
+        // #1400 review: an export's first chunk off the index carries the stored total -- its count is read for real
+        if (part is { Chunk: 1 } && GridSql.ExportCount(query.Spec, st, sp) is { } count)
+        {
+            var (counted, _) = await Run(count, ct).ConfigureAwait(false);
+            total = counted.Count > 0 ? L(counted[0], "TotalRows") : 0;
+        }
         var data = rows.Select(r => (IReadOnlyDictionary<string, object?>)query.Spec.Columns.ToDictionary(c => c.Key, c => r.TryGetValue(c.Key, out var v) ? v : null, StringComparer.OrdinalIgnoreCase)).ToList();
         return R(new GridPage(data, total, st), text);
     }

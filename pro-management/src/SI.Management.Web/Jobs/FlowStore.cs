@@ -31,6 +31,9 @@ public interface IFlowStore
     /// #576: the running steps' progress records (cfg.StepProgress, written by the engines as they run). None by default:
     /// a store without them shows each running step as "Running", as before.
     Task<IReadOnlyList<StepProgress>> ProgressAsync(CancellationToken ct) => Task.FromResult<IReadOnlyList<StepProgress>>(Array.Empty<StepProgress>());
+    /// #1396: the newest run of the WHOLE pipeline (Scope 'pipeline' or 'from-step') -- never one job or stage a
+    /// person ran on its own. A store without the distinction answers the newest run.
+    Task<FlowRun?> LastPipelineRunAsync(CancellationToken ct) => LastRunAsync(ct);
 }
 
 public sealed class SqlFlowStore : IFlowStore
@@ -148,9 +151,24 @@ EXEC cfg.FlowRunCancelSet @FlowRunId = @FlowRunId, @By = @By, @Why = @Why;
         // SELECT *: a database whose schema was not applied again has no Attempts / RetryReason / Stage -- they stay null
         s.Long("Attempts") is { } at ? (int)at : null, s.Str("RetryReason"), s.Str("Stage"));
 
-    public async Task<FlowRun?> LastRunAsync(CancellationToken ct)
+    /// #1396: the newest WHOLE-pipeline run -- Scope 'pipeline' or 'from-step' (Re-run from here: SI-JobFlow.ps1 stores it so);
+    /// never one stage or step a person ran. A database whose schema has no Scope column yet: every run is the pipeline.
+    public const string LastPipelineRunSql = """
+IF OBJECT_ID(N'cfg.FlowRun') IS NOT NULL
+BEGIN
+    DECLARE @q nvarchar(max) = N'SELECT TOP (1) * FROM cfg.FlowRun WHERE FlowId = N''daily'''
+        + CASE WHEN COL_LENGTH(N'cfg.FlowRun', N'Scope') IS NOT NULL THEN N' AND (Scope IS NULL OR Scope IN (N''pipeline'', N''from-step''))' ELSE N'' END
+        + N' ORDER BY StartedUtc DESC;';
+    EXEC sp_executesql @q;
+END
+""";
+
+    public Task<FlowRun?> LastRunAsync(CancellationToken ct) => RunAsync(LastRunSql, ct);
+    public Task<FlowRun?> LastPipelineRunAsync(CancellationToken ct) => RunAsync(LastPipelineRunSql, ct);
+
+    private async Task<FlowRun?> RunAsync(string runSql, CancellationToken ct)
     {
-        var r = (await _sql.QueryAsync(LastRunSql, None, ct)).FirstOrDefault();
+        var r = (await _sql.QueryAsync(runSql, None, ct)).FirstOrDefault();
         if (r?.Str("FlowRunId") is not { Length: > 0 } id) return null;
         var steps = (await _sql.QueryAsync(StepsSql, new Dictionary<string, object?> { ["FlowRunId"] = id }, ct)).Select(Step).ToList();
         return new FlowRun(id, r.Str("Trg") ?? "", r.Str("FromStep"), r.Str("State") ?? "", Utc(r, "StartedUtc") ?? DateTimeOffset.MinValue, Utc(r, "EndedUtc"),

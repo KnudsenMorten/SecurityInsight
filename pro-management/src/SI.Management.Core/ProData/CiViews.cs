@@ -83,6 +83,10 @@ public interface ICiViews
     /// One page of a grid over sidata.Ci (<see cref="CiColumnCatalog.Spec"/>) or sidata.CiRecord (<see cref="CiSql.RecordSpec"/>);
     /// with <paramref name="export"/> every matching row up to <see cref="ProDataFilters.MaxExport"/>.
     Task<QueryResult<GridPage>> GridAsync(GridSpec spec, GridRequest request, bool export, CancellationToken ct);
+    /// #1400 ONE CHUNK of every matching row (rows (chunk - 1) * size + 1 .. chunk * size in the grid's order): an export reads
+    /// every row this way, never one capped read of all. Every reader implements it itself (no fallback over a capped read).
+    Task<QueryResult<GridPage>> GridChunkAsync(GridSpec spec, GridRequest request, int chunk, int size, CancellationToken ct) =>
+        throw new NotSupportedException(GetType().Name + " reads no export chunks: implement GridChunkAsync (an export never falls back to a capped read)");
     /// The values the CI filters offer (Class, Lifecycle).
     Task<QueryResult<IReadOnlyList<CiFacet>>> CiFacetsAsync(CancellationToken ct);
     /// How the CI grid reads sidata.Ci now, and the version its cached filter values belong to (<see cref="CiDataState"/>).
@@ -706,6 +710,21 @@ public sealed class CiViews : ICiViews
         }
         if (state.Version.Length > 0) lock (_facetLock) { _facets[life.Key] = (state.Version, value); }
         return value;
+    }
+
+    /// #1400 one chunk of every matching row: the grid's own page statement with the chunk as its page, read live, never kept.
+    public async Task<QueryResult<GridPage>> GridChunkAsync(GridSpec spec, GridRequest request, int chunk, int size, CancellationToken ct)
+    {
+        var st = GridSql.Chunk(GridSql.Normalize(spec, request), chunk, size);
+        var sp = new Dictionary<string, object?>();
+        var page = await ReadGrid(spec, st, GridSql.Page(spec, st, sp), ct).ConfigureAwait(false);
+        // #1400 review: a first chunk off the index carries the stored total -- the export's count is read for real
+        if (chunk == 1 && GridSql.ExportCount(spec, st, sp) is { } count)
+        {
+            var c = await Run(count, ct).ConfigureAwait(false);
+            page = page with { Data = page.Data with { Total = c.Rows.Count > 0 ? ProDataQueries.L(c.Rows[0], "TotalRows") : 0 } };
+        }
+        return page;
     }
 
     public Task<QueryResult<GridPage>> GridAsync(GridSpec spec, GridRequest request, bool export, CancellationToken ct)

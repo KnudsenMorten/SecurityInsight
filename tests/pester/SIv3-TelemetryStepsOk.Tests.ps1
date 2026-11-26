@@ -139,7 +139,7 @@ Describe 'SIv3-TelemetryStepsOk: the execution that published a collection''s re
 Describe 'SIv3-TelemetryStepsOk: the wiring' {
     It 'the engine run: a producer or a part does not send the job''s ok; the stages it finished are its StepsOk' {
         $t = [IO.File]::ReadAllText((Join-Path $script:SIRoot 'engine\asset-profiling\Invoke-SIEngineRun.ps1'))
-        $t | Should -Match ([regex]::Escape("SuppressJobOk    = (`$Phase -in @('discover', 'parts'))"))
+        $t | Should -Match ([regex]::Escape("SuppressJobOk    = (`$Phase -in @('discover', 'parts', 'recommendations'))"))
         $t | Should -Match ([regex]::Escape("-NotePropertyName 'StepsOk' -NotePropertyValue ([string[]]@(`$stages | Where-Object { `$runContext.StageResults.ContainsKey(`$_) }"))
     }
     It 'the container: the execution that published the records sends the one report' {

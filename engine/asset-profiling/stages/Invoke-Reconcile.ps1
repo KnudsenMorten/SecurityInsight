@@ -32,6 +32,31 @@
     Untested in tenant.
 #>
 
+function Get-SICmdbRecordMatchKeys {
+    <#
+        PURE. #1398 The keys THIS part's rows look CMDB CIs up by: the ARM id, the Entra object id (PrimaryEntityId) and the
+        FQDN (the identity match, lower case as the index keys them) and the CI id a rule stamped (cmdbId, the rule match).
+    #>
+    param([AllowNull()][AllowEmptyCollection()][object[]]$Records = @())
+    $k = [pscustomobject]@{
+        Arm     = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
+        Entra   = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
+        Fqdn    = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
+        RuleIds = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    }
+    foreach ($r in @($Records)) {
+        if ($null -eq $r) { continue }
+        $rid = if ($r.PSObject.Properties['cmdbId']) { [string]$r.cmdbId } else { '' }
+        if ($rid) { [void]$k.RuleIds.Add($rid.ToLowerInvariant()) }
+        $armId = [string]$r.AZ_ResourceId
+        if (-not $armId -and $r.PSObject.Properties['Metadata'] -and $null -ne $r.Metadata) { $armId = [string]$r.Metadata.AZ_ResourceId }
+        if ($armId) { [void]$k.Arm.Add($armId.ToLower()) }
+        $entId = [string]$r.PrimaryEntityId; if ($entId) { [void]$k.Entra.Add($entId.ToLower()) }
+        $fqdn = [string]$r.Fqdn; if ($fqdn) { [void]$k.Fqdn.Add($fqdn.ToLower()) }
+    }
+    $k
+}
+
 function Invoke-SIReconcile {
     [CmdletBinding()]
     param(
@@ -97,9 +122,35 @@ function Invoke-SIReconcile {
                                     -ReplicaIndex ([int]$RunContext.ShardIndex))
     Write-SIInfo ("{0} records read from staging" -f $records.Count)
 
-    $cis      = @(Get-SICmdbCIs      -Context $RunContext.StorageContext)
+    # #1398 (owner 2026-10-21: "memory issues must not be a problem in any step. env must work in millions of assets env"):
+    # the CIs are READ A PAGE AT A TIME and only those THIS part's rows can match are kept -- by ARM id, Entra object id or
+    # FQDN (the identity match), or by the CI id a rule stamped (the rule match) -- never the whole CI table per part. What
+    # is kept is what each look-up below finds: the LAST CI of an ARM id / object id / FQDN (as the index kept it), the FIRST
+    # CI of an id (as the rule loop found it). The gap count needs every CI's id once (counted, not kept).
+    $ciKeys = Get-SICmdbRecordMatchKeys -Records $records
+    $byArmId  = @{}
+    $byEntra  = @{}
+    $byFqdn   = @{}
+    $byCiId   = @{}
+    $ciIdCount = New-Object 'System.Collections.Generic.Dictionary[string,long]' ([StringComparer]::Ordinal)
+    $ciTotal = @{ N = 0L }
+    $ciOk = Read-SICmdbCIPages -Context $RunContext.StorageContext -OnPage {
+        param($page)
+        foreach ($c in @($page)) {
+            if ($null -eq $c) { continue }
+            $ciTotal.N++
+            $cidl = ([string]$c.id).ToLower()
+            $prev = 0L; if ($ciIdCount.TryGetValue($cidl, [ref]$prev)) { $ciIdCount[$cidl] = $prev + 1 } else { $ciIdCount[$cidl] = 1L }
+            if ($c.azure_resource_id) { $k = ([string]$c.azure_resource_id).ToLower(); if ($ciKeys.Arm.Contains($k)) { $byArmId[$k] = $c } }
+            if ($c.entra_object_id)   { $k = ([string]$c.entra_object_id).ToLower();   if ($ciKeys.Entra.Contains($k)) { $byEntra[$k] = $c } }
+            if ($c.fqdn)              { $k = ([string]$c.fqdn).ToLower();              if ($ciKeys.Fqdn.Contains($k)) { $byFqdn[$k] = $c } }
+            $idk = ([string]$c.id).ToLowerInvariant()
+            if ($ciKeys.RuleIds.Contains($idk) -and -not $byCiId.ContainsKey($idk)) { $byCiId[$idk] = $c }
+        }
+    }
+    if (-not $ciOk) { $ciTotal.N = 0L; $byArmId = @{}; $byEntra = @{}; $byFqdn = @{}; $byCiId = @{}; $ciIdCount.Clear() }
     $services = @(Get-SICmdbServices -Context $RunContext.StorageContext)
-    Write-SIInfo ("CMDB cache: {0} services, {1} CIs" -f $services.Count, $cis.Count)
+    Write-SIInfo ("CMDB cache: {0} services, {1} CIs" -f $services.Count, $ciTotal.N)
     # #891 part 3: a cache that could not be read TO THE END is INCOMPLETE, never "complete with fewer rows": every row is
     # tagged stale-cache and the gap report is suppressed (the same handling as a cache too old to trust) -- a warning,
     # and no row is called a CMDB orphan because its CI was on a page that was not read
@@ -108,15 +159,7 @@ function Invoke-SIReconcile {
         $age = @{ HoursOld = $age.HoursOld; State = 'critical'; LastSync = $age.LastSync }
     }
 
-    # Build CI lookup indexes for priority-3 (identity match)
-    $byArmId  = @{}
-    $byEntra  = @{}
-    $byFqdn   = @{}
-    foreach ($c in $cis) {
-        if ($c.azure_resource_id) { $byArmId[([string]$c.azure_resource_id).ToLower()] = $c }
-        if ($c.entra_object_id)   { $byEntra[([string]$c.entra_object_id).ToLower()]   = $c }
-        if ($c.fqdn)              { $byFqdn[([string]$c.fqdn).ToLower()]               = $c }
-    }
+    # CI lookup indexes for priority-3 (identity match): built above, from the pages, for this part's keys (#1398)
     # services lookup by id -- Stage Profile stamps cmdbId from rule
     # matches (rules-custom/<engine>/AssetProfileBy*.yaml set.cmdbId). Reconcile
     # then folds the FULL service record (all CSV columns surfaced by Refresh-
@@ -166,9 +209,9 @@ function Invoke-SIReconcile {
             $CmdbMatchRule  = if ($ruleMatchSource) { $ruleMatchSource } else { 'rule-cmdbid' }
             # Try to also locate a CI by cmdbId so MatchedCi-derived columns fill
             # too (LastSeenInCmdb, cmdbCriticality, etc).
-            foreach ($c in $cis) {
-                if ([string]$c.id -eq $rulecmdbId) { $matchedCi = $c; [void]$matchedCiIds.Add(([string]$c.id).ToLower()); break }
-            }
+            # (#1398: the first CI of that id, kept from the pages above -- the CI this loop over the whole table found)
+            $c = $byCiId[$rulecmdbId.ToLowerInvariant()]
+            if ($c) { $matchedCi = $c; [void]$matchedCiIds.Add(([string]$c.id).ToLower()) }
             $stats.rulePhase++
         } else {
             # ---- Phase 2: identity-match gap mapping ----
@@ -308,32 +351,19 @@ function Invoke-SIReconcile {
                            -Records $records | Out-Null
     }
 
-    # Reverse direction: gap rows (CMDB CIs nothing discovered)
-    $gapRows = New-Object System.Collections.ArrayList
+    # Reverse direction: gap rows (CMDB CIs nothing discovered) -- #1398: COUNTED (every CI whose id no row of this part
+    # matched), never built as a list of the whole CI table per part. The rows were never posted anywhere (the gap-row LA
+    # ingest was not shipped) and nothing read the list.
+    $gapCount = 0L
     if ($age.State -ne 'critical') {
-        foreach ($c in $cis) {
-            $cid = ([string]$c.id).ToLower()
-            if (-not $matchedCiIds.Contains($cid)) {
-                [void]$gapRows.Add([pscustomobject]@{
-                    CollectionTime  = $RunContext.CollectionTime
-                    cmdbId          = [string]$c.id
-                    cmdbName        = [string]$c.name
-                    cmdbCriticality = [string]$c.criticality
-                    ExpectedEngine  = if ($c.azure_resource_id) { 'azure' } elseif ($c.entra_object_id) { 'identity' } else { 'endpoint' }
-                    LastSeenInCmdb  = [string]$c.last_seen
-                    Reason          = 'never-seen-in-discovery'
-                })
-            }
-        }
+        $gapCount = $ciTotal.N
+        foreach ($mid in $matchedCiIds) { $mc = 0L; if ($ciIdCount.TryGetValue($mid, [ref]$mc)) { $gapCount -= $mc } }
     }
-    Write-SIInfo ("gap rows: {0}" -f $gapRows.Count)
-
-    # NOTE: gap-row LA ingest not yet shipped (Reconciliation_Gap_CL table
-    # creation lands in ). returns the rows in
-    # StageResult so a custom launcher can dispatch them manually.
+    $ciIdCount = $null
+    Write-SIInfo ("gap rows: {0}" -f $gapCount)
 
     Write-SIInfo ('phase summary: rule={0} identity={1} orphan={2} stale-cache={3} gap-cis={4}' -f `
-        $stats.rulePhase, $stats.identityPhase, $stats.orphan, $stats.staleCache, $gapRows.Count)
+        $stats.rulePhase, $stats.identityPhase, $stats.orphan, $stats.staleCache, $gapCount)
 
     return [pscustomobject]@{
         Stage          = 'Reconcile'
@@ -343,10 +373,9 @@ function Invoke-SIReconcile {
         IdentityPhase  = $stats.identityPhase
         OrphanCount    = $stats.orphan
         StaleCacheRows = $stats.staleCache
-        GapRowCount    = $gapRows.Count
-        GapRows        = $gapRows.ToArray()
+        GapRowCount    = $gapCount
         CacheState     = $age.State
         CacheHoursOld  = $age.HoursOld
-        Summary        = ('rule={0} identity={1} orphan={2} gap={3} cache={4}' -f $stats.rulePhase, $stats.identityPhase, $stats.orphan, $gapRows.Count, $age.State)
+        Summary        = ('rule={0} identity={1} orphan={2} gap={3} cache={4}' -f $stats.rulePhase, $stats.identityPhase, $stats.orphan, $gapCount, $age.State)
     }
 }

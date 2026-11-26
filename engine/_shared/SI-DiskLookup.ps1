@@ -175,3 +175,89 @@ function Remove-SIDiskLookup {
     param($Lookup)
     try { if ($Lookup -is [System.IDisposable]) { $Lookup.Dispose() } } catch { }
 }
+
+# #1399 DISK BUCKETS (owner 2026-11-26: "memory issues must not be a problem in any step. env must work in millions of assets
+# env"). A read that must be GROUPED before it can be worked out (rows that belong together arrive anywhere in the read) is
+# spread over -Count files by a key the caller computes (Get-SIDiskBucketIndex), and each file is then worked out on its own:
+# memory is one bucket, never the read. An entry is PowerShell's own serialization (type faithful, as SI-DiskLookup above),
+# gzip-compressed; a bucket file is created on its first entry and removed when it is closed. Every size uses it.
+#   New-SIDiskBuckets -Name <what> -Count <n>        a new, empty set
+#   Add-SIDiskBucketRows -Buckets $b -Bucket <i> -Rows <list>   one entry (the rows serialized together)
+#   Read-SIDiskBucketRows -Buckets $b -Bucket <i>    every row of the bucket, in the order written
+#   Close-SIDiskBucket / Remove-SIDiskBuckets        a bucket's file / every file goes
+if (-not ('System.IO.Compression.GZipStream' -as [type])) { Add-Type -AssemblyName System.IO.Compression }
+
+function New-SIDiskBuckets {
+    param([Parameter(Mandatory)][string]$Name, [Parameter(Mandatory)][int]$Count, [string]$Directory = '')
+    if ($Count -lt 1) { $Count = 1 }
+    if (-not $Directory) { $Directory = [IO.Path]::GetTempPath() }
+    $stem = 'si-buckets-{0}-{1}' -f ($Name -replace '[^A-Za-z0-9-]', ''), [guid]::NewGuid().ToString('N')
+    [pscustomobject]@{ Name = $Name; Count = $Count; Directory = $Directory; Stem = $stem
+                       Streams = (New-Object 'System.IO.FileStream[]' $Count); Rows = (New-Object 'long[]' $Count); Entries = 0L }
+}
+
+function Get-SIDiskBucketIndex {
+    <# The bucket of a key (case-insensitive; -Salt spreads one bucket again over a new set). Stable within the process. #>
+    param([AllowNull()][AllowEmptyString()][string]$Key, [Parameter(Mandatory)][int]$Count, [string]$Salt = '')
+    if ($Count -le 1) { return 0 }
+    $h = [StringComparer]::OrdinalIgnoreCase.GetHashCode($Salt + [string]$Key)
+    [int](($h -band 0x7FFFFFFF) % $Count)
+}
+
+function Add-SIDiskBucketRows {
+    param([Parameter(Mandatory)]$Buckets, [Parameter(Mandatory)][int]$Bucket, [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Rows)
+    if (@($Rows).Count -eq 0) { return }
+    $fs = $Buckets.Streams[$Bucket]
+    if ($null -eq $fs) {
+        $p = [IO.Path]::Combine($Buckets.Directory, ('{0}-{1}.bin' -f $Buckets.Stem, $Bucket))
+        $fs = New-Object System.IO.FileStream($p, [IO.FileMode]::Create, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None, 65536, [IO.FileOptions]::DeleteOnClose)
+        $Buckets.Streams[$Bucket] = $fs
+    }
+    $text = [System.Management.Automation.PSSerializer]::Serialize([object[]]@($Rows), 20)
+    $raw = (New-Object System.Text.UTF8Encoding($false)).GetBytes($text)
+    $ms = New-Object System.IO.MemoryStream
+    $gz = New-Object System.IO.Compression.GZipStream($ms, [System.IO.Compression.CompressionMode]::Compress, $true)
+    $gz.Write($raw, 0, $raw.Length); $gz.Dispose()
+    $bytes = $ms.ToArray(); $ms.Dispose()
+    [void]$fs.Seek(0, [IO.SeekOrigin]::End)
+    $len = [BitConverter]::GetBytes([int]$bytes.Length)
+    $fs.Write($len, 0, 4); $fs.Write($bytes, 0, $bytes.Length)
+    $Buckets.Rows[$Bucket] += @($Rows).Count
+    $Buckets.Entries++
+}
+
+function Read-SIDiskBucketRows {
+    <# Every row of one bucket, in the order written (an empty bucket: none). #>
+    param([Parameter(Mandatory)]$Buckets, [Parameter(Mandatory)][int]$Bucket)
+    $out = New-Object System.Collections.Generic.List[object]
+    $fs = $Buckets.Streams[$Bucket]
+    if ($null -eq $fs) { return , $out.ToArray() }
+    $enc = New-Object System.Text.UTF8Encoding($false)
+    [void]$fs.Seek(0, [IO.SeekOrigin]::Begin)
+    $lb = New-Object byte[] 4
+    while ($fs.Read($lb, 0, 4) -eq 4) {
+        $n = [BitConverter]::ToInt32($lb, 0)
+        $b = New-Object byte[] $n; $o = 0
+        while ($o -lt $n) { $k = $fs.Read($b, $o, $n - $o); if ($k -le 0) { throw ('disk bucket {0}/{1}: the file ends inside an entry' -f $Buckets.Name, $Bucket) }; $o += $k }
+        $gz = New-Object System.IO.Compression.GZipStream((New-Object System.IO.MemoryStream(, $b)), [System.IO.Compression.CompressionMode]::Decompress)
+        $sr = New-Object System.IO.StreamReader($gz, $enc)
+        $text = $sr.ReadToEnd(); $sr.Dispose()
+        foreach ($r in @([System.Management.Automation.PSSerializer]::Deserialize($text))) { $out.Add($r) }
+    }
+    [void]$fs.Seek(0, [IO.SeekOrigin]::End)
+    , $out.ToArray()
+}
+
+function Close-SIDiskBucket {
+    <# One bucket's file goes (its rows were worked out). Never throws. #>
+    param([Parameter(Mandatory)]$Buckets, [Parameter(Mandatory)][int]$Bucket)
+    try { $fs = $Buckets.Streams[$Bucket]; if ($null -ne $fs) { $fs.Dispose() } } catch { }
+    $Buckets.Streams[$Bucket] = $null
+}
+
+function Remove-SIDiskBuckets {
+    <# Every bucket file goes. Never throws. #>
+    param($Buckets)
+    if ($null -eq $Buckets) { return }
+    for ($i = 0; $i -lt $Buckets.Count; $i++) { Close-SIDiskBucket -Buckets $Buckets -Bucket $i }
+}

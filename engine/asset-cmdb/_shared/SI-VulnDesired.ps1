@@ -25,6 +25,7 @@ if (-not (Get-Command -Name 'Get-SIDisabledAssetPolicy' -ErrorAction SilentlyCon
 # 2026-11-16 the per-finding work compiled (SI-VulnFast.ps1): ConvertTo-SIVulnKeySpaceRows, ConvertTo-SIVulnDesired,
 # Resolve-SIVulnDesiredAlias and Select-SIVulnDisabledDesired call its helper; without it they run their PowerShell bodies
 if (-not (Get-Command -Name 'Get-SIVulnFastType' -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot 'SI-VulnFast.ps1') }
+if (-not (Get-Command -Name 'Get-SIDataFullListSql' -ErrorAction SilentlyContinue)) { . ([System.IO.Path]::Combine($PSScriptRoot, '..', '..', '_shared', 'data-sql', 'SI-FullListSql.ps1')) }
 
 # =====================================================================================================================
 #  EVERY SECURITY RECOMMENDATION IS A VULNERABILITY (operator ruling 2026-10-06, verbatim: "any security recommendation
@@ -259,8 +260,16 @@ function Get-SIVulnSnapshotTypedPageSql {
           # #850: every row of one page of CI keys (@KeyList: a JSON array of sidata.Finding.AssetKey) instead of @After / @Take;
           # the row's AssetKey comes back as SI_PageKey
           [switch]$ByKeys)
+    $full = ''
     $sc = foreach ($sf in @($ScopeFields)) {
         $col = $script:SIVulnScopeTypedColumns[$sf]; if (-not $col) { throw ("no typed column holds the scope field '{0}'" -f $sf) }
+        if ($sf -eq 'si_affected_product') {
+            # #1403 a product list that fills its column (NVARCHAR(4000)) is read in full from the finding's document -- a
+            # product-scoped rule never stops matching because the list is long (the document read only for those rows)
+            $full = "`r`nOUTER APPLY (SELECT fz.DetailJson FROM sidata.Finding AS fz WHERE DATALENGTH(f.$col) >= 8000 AND fz.CollectionId = f.CollectionId AND fz.FindingId = f.FindingId) AS fj"
+            ', {0} AS [@{1}]' -f (Get-SIDataFullListSql -Column "f.$col" -Bytes 8000 -Keys 'si_affected_product' -Json 'fj.DetailJson'), $sf
+            continue
+        }
         ', f.{0} AS [@{1}]' -f $col, $sf
     }
     $head = if ($ByKeys) { 'f.FindingId, f.AssetKey AS [SI_PageKey]' } else { 'TOP (CONVERT(int, @Take)) f.FindingId' }
@@ -271,7 +280,7 @@ SELECT $head, f.RaRowAssetId AS [AssetId], f.ConfigurationId AS [ConfigurationId
        f.RaRowCriticalityTier AS [CriticalityTier], f.SecurityDomain AS [SecurityDomain], f.RaRowSiComponent AS [si_component],
        f.RaScopeSubCi AS [si_servicenow_subci], f.RaScopeOsFamily AS [si_os_family], f.RaScopePatchCycle AS [si_patch_cycle],
        f.ReportName AS [AssetDetectedInReportName]$($sc -join '')
-FROM sidata.Finding AS f
+FROM sidata.Finding AS f$full
 WHERE f.CollectionId = @CollectionId AND $cond AND f.CarriedFrom IS NULL
 ORDER BY f.FindingId;
 "@

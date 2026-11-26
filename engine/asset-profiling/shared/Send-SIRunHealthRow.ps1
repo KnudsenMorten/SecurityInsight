@@ -413,7 +413,8 @@ function Send-SIRunHealthRow {
         $row = [pscustomobject]@{
             CollectionTime    = ConvertTo-SIRunHealthUtc $RunContext.CollectionTime
             RunId             = [string]$RunContext.RunId
-            Engine            = [string]$RunContext.Engine
+            # #1399 a phase with its own name (the run's Defender recommendations: 'azure-recommendations') is its own record
+            Engine            = $(if ($RunContext.PSObject.Properties['HealthEngine'] -and [string]$RunContext.HealthEngine) { [string]$RunContext.HealthEngine } else { [string]$RunContext.Engine })
             ShardIndex        = [long]$RunContext.ShardIndex
             ShardCount        = [long]$RunContext.ShardCount
             Phase             = $Phase
@@ -641,7 +642,8 @@ function Send-SIRunHealthRow {
         # a good daily run, or start their count again after a failed one, while they are Testing after a release. Only the
         # engine's own END record (never a pipeline step record or a dry run), only with the Pro database the run has open.
         # Independent of telemetry; never throws.
-        if ($Phase -eq 'End' -and -not [bool]$global:WhatIfMode -and -not ([string]$RunContext.Engine).StartsWith('flow', [System.StringComparison]::OrdinalIgnoreCase)) {
+        # (#1399 never for the run's recommendations phase: the Azure collection's own END counts the day's run, once)
+        if ($Phase -eq 'End' -and -not [bool]$global:WhatIfMode -and -not ([string]$RunContext.Engine).StartsWith('flow', [System.StringComparison]::OrdinalIgnoreCase) -and -not ($RunContext.PSObject.Properties['HealthEngine'] -and [string]$RunContext.HealthEngine)) {
             try {
                 if (Get-Command -Name Invoke-SIReleaseScopeRunEnd -ErrorAction SilentlyContinue) { $null = Invoke-SIReleaseScopeRunEnd -RunContext $RunContext -ExitReason $ExitReason }
             } catch { }
@@ -649,7 +651,7 @@ function Send-SIRunHealthRow {
         # #532 -- the ONE throttling alert: only when this job has not succeeded for a long stretch because of throttling
         # (SI_Throttle_StuckHours / SI_Throttle_StuckRuns). Once per episode; never throws; never for a flow record (the
         # engine of the step reports its own) and never for a dry run.
-        if ($Phase -eq 'End' -and $ExitReason -eq 'throttled' -and -not [bool]$global:WhatIfMode -and [int]$RunContext.ShardIndex -eq 0 -and
+        if ($Phase -eq 'End' -and $ExitReason -eq 'throttled' -and -not [bool]$global:WhatIfMode -and [int]$RunContext.ShardIndex -eq 0 -and -not ($RunContext.PSObject.Properties['HealthEngine'] -and [string]$RunContext.HealthEngine) -and
             -not ([string]$RunContext.Engine).StartsWith('flow', [System.StringComparison]::OrdinalIgnoreCase)) {
             try {
                 if (Get-Command -Name Invoke-SIThrottleStuckCheck -ErrorAction SilentlyContinue) {

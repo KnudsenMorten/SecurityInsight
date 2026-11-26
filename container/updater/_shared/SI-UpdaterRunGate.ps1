@@ -466,7 +466,9 @@ function Register-SIUpdaterExecutionBeat {
         Invoke-SIUpdaterLockBeat (every log line, at most once a minute). -Beat { param($Holder, $What) } is the test seam.
         Never throws; $true when taken.
     #>
-    param($Store, [Parameter(Mandatory)][string]$Holder, [scriptblock]$Beat)
+    # -Busy (#1406 review): the OTHER executions of the updater job Azure still runs -- a row one of them holds is never taken
+    # over (a QUIET update keeps its sign of life), even when its beat is 15 minutes old
+    param($Store, [Parameter(Mandatory)][string]$Holder, [scriptblock]$Beat, [string[]]$Busy = @())
     if (-not $Beat -and -not (Get-Command -Name Enter-SIExecutionLock -ErrorAction SilentlyContinue)) { return $false }
     $lockStore = if ($Beat) { $null } elseif ($Store -and $Store.Invoke) { New-SIExecutionLockStore -Invoke $Store.Invoke } else { $null }
     if (-not $Beat -and -not $lockStore) { return $false }
@@ -474,17 +476,49 @@ function Register-SIUpdaterExecutionBeat {
     # its database statements runs (setup\_shared\SI-UpdateSqlBeat.ps1), on a connection of its own
     $global:SI_UpdaterExecBeat = [pscustomobject]@{ Store = $lockStore; Holder = $Holder; Beat = $Beat; LastUtc = [datetime]::MinValue; Beats = 0
                                                     Server = $(if ($Store -and $Store.PSObject.Properties['Server']) { [string]$Store.Server } else { '' })
-                                                    Database = $(if ($Store -and $Store.PSObject.Properties['Database']) { [string]$Store.Database } else { '' }) }
+                                                    Database = $(if ($Store -and $Store.PSObject.Properties['Database']) { [string]$Store.Database } else { '' })
+                                                    Busy = @($Busy | Where-Object { "$_".Trim() }) }
     $ok = $false
-    try { $ok = if ($Beat) { [bool](& $Beat $Holder 'start') } else { [bool](Enter-SIExecutionLock -Store $lockStore -Lock 'updater' -Holder $Holder -What 'an update of SecurityInsight: start') } } catch { $ok = $false }
+    try { $ok = if ($Beat) { [bool](& $Beat $Holder 'start') } elseif (-not (Test-SIUpdaterRowFreeOfRunning -Store $lockStore -Lock 'updater' -Holder $Holder)) { $false } else { [bool](Enter-SIExecutionLock -Store $lockStore -Lock 'updater' -Holder $Holder -What 'an update of SecurityInsight: start') } } catch { $ok = $false }
     if ($ok) { $global:SI_UpdaterExecBeat.LastUtc = [datetime]::UtcNow; $global:SI_UpdaterExecBeat.Beats = 1 }
     $ok
+}
+
+function Test-SIUpdaterRowFreeOfRunning {
+    <#
+        #1406 (review): $false when the lock row -Lock is held by ANOTHER execution that Azure still runs (the registration's
+        Busy names, read before the update registered). No list, or the rows cannot be read: $true (the lock rule only).
+        Never throws.
+    #>
+    param($Store, [string]$Lock, [string]$Holder)
+    $x = $global:SI_UpdaterExecBeat
+    $busy = @(); if ($x -and $x.PSObject.Properties['Busy']) { $busy = @($x.Busy | Where-Object { "$_".Trim() }) }
+    if (-not $Store -or -not $busy.Count -or -not (Get-Command -Name Read-SIExecutionLocks -ErrorAction SilentlyContinue)) { return $true }
+    try {
+        $row = @((Read-SIExecutionLocks -Store $Store).Rows | Where-Object { $_.LockName -eq $Lock })[0]
+        if (-not $row -or -not "$($row.Holder)".Trim() -or [string]$row.Holder -eq $Holder) { return $true }
+        foreach ($n in $busy) { if (Test-SIExecutionHolder -Holder ([string]$row.Holder) -Name ([string]$n)) { return $false } }
+        $true
+    } catch { $true }
+}
+
+function Get-SIUpdaterBusyExecutions {
+    <# PURE. #1406 (review): the names of the updater job's executions Azure still runs, except -Self (ARM shape in). #>
+    param([object[]]$Executions = @(), [string]$Self = '')
+    @($Executions | Where-Object { $_ -and [string]$_.name -ne $Self -and (Test-SIExecutionRunning $_) } | ForEach-Object { [string]$_.name })
 }
 
 function Unregister-SIUpdaterExecutionBeat {
     <# The update's own sign of life released at the end of the run (only when this run holds it). Never throws.
        #1357: FIRST the end mark of this run (Set-SIExecutionLockEnded, row 'updater-ended'), THEN the row let go -- so there is
        no moment where a still-running (stopping) execution names no row and reads "never reported that it was working". #>
+    # #1406: the release script's run beat (setup\_shared\SI-UpdateSqlBeat.ps1) ends first -- nothing beats after the end mark
+    # (its functions may be gone with the release script's scope: the record carries its own stop event)
+    # (review: the wait is 45 s -- a beat in the middle of its own statements ends first; a beat that is still later never
+    # writes after the end mark: its statement checks the mark, setup\_shared\SI-UpdateSqlBeat.ps1)
+    $rb = $global:SI_UpdateRunBeat; $global:SI_UpdateRunBeat = $null
+    if ($rb -and $rb.PSObject.Properties['Stop'] -and $rb.Stop) { try { [void]$rb.Stop.Set(); [void]$rb.Async.AsyncWaitHandle.WaitOne(45000) } catch { } }
+    if ($rb -and $rb.PSObject.Properties['RunRow'] -and $rb.RunRow -and $rb.RunRow.Store) { try { Exit-SIExecutionLock -Store $rb.RunRow.Store -Lock 'updater-run' -Holder ([string]$rb.RunRow.Holder) } catch { } }
     $x = $global:SI_UpdaterExecBeat
     $global:SI_UpdaterExecBeat = $null
     if ($x -and $x.Store -and $x.Holder) {
@@ -534,7 +568,7 @@ function Invoke-SIUpdaterLockBeat {
         try { $xok = if ($x.Beat) { [bool](& $x.Beat $x.Holder $What) } else { [bool](Update-SIExecutionLockBeat -Store $x.Store -Lock 'updater' -Holder $x.Holder -What (Get-SIUpdaterLockWhat -What $What)) } } catch { $xok = $false }
         if ($xok) { $x.LastUtc = $now; $x.Beats++ }
         # lost it (another update took a stale row): take it again when it is free
-        elseif (-not $x.Beat -and $x.Store) { try { if (Enter-SIExecutionLock -Store $x.Store -Lock 'updater' -Holder $x.Holder -What (Get-SIUpdaterLockWhat -What $What)) { $x.LastUtc = $now; $x.Beats++ } } catch { } }
+        elseif (-not $x.Beat -and $x.Store) { try { if ((Test-SIUpdaterRowFreeOfRunning -Store $x.Store -Lock 'updater' -Holder $x.Holder) -and (Enter-SIExecutionLock -Store $x.Store -Lock 'updater' -Holder $x.Holder -What (Get-SIUpdaterLockWhat -What $What))) { $x.LastUtc = $now; $x.Beats++ } } catch { } }
     }
     $b = $global:SI_UpdaterLockBeat
     if (-not $b -or -not $b.Holder) { return $false }

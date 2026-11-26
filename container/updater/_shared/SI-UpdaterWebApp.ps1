@@ -49,6 +49,99 @@ function Get-SIUpdaterAppPrebuilds {
     }
 }
 
+function Get-SIUpdaterHealthWaits {
+    <# PURE. The pauses between the /healthz asks after a web app roll, backing off: 5, 10, 20, 30, 30 ... s until they add
+       up to -GraceSeconds (the grace period a revision switch-over gets). #>
+    param([int]$GraceSeconds = 300)
+    $out = New-Object System.Collections.Generic.List[int]
+    $sum = 0; $w = 5
+    while ($sum -lt $GraceSeconds) { $p = [Math]::Min($w, $GraceSeconds - $sum); $out.Add($p); $sum += $p; $w = [Math]::Min(30, $w * 2) }
+    $out.ToArray()
+}
+
+function Invoke-SIUpdaterHealthProbe {
+    <# One GET of a /healthz address: the HTTP status, 0 = no answer (a timeout, a closed connection). Tests mock it. #>
+    param([Parameter(Mandatory)][string]$Url)
+    try { [int](Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec 30).StatusCode }
+    catch { $s = 0; try { if ($_.Exception.Response) { $s = [int]$_.Exception.Response.StatusCode } } catch { $s = 0 }; $s }
+}
+
+function Test-SIUpdaterRevisionServing {
+    <#
+        PURE. Does the web app SERVE -Revision now: the app's latest READY revision is it, the revision runs (Running /
+        RunningAtMaxScale) and is Healthy, and all traffic (100 %) goes to it? An app read without a traffic list routes
+        everything to its latest revision. Returns @{ Ok; Failed ($true = it can never become ready: its provisioning
+        Failed); Why }.
+    #>
+    param($App, $Rev, [Parameter(Mandatory)][string]$Revision)
+    $o = { param($ok, $f, $w) [pscustomobject]@{ Ok = $ok; Failed = $f; Why = $w } }
+    $p = { param($x, [string[]]$Path) $v = $x; foreach ($k in $Path) { if ($null -eq $v -or -not $v.PSObject.Properties[$k]) { return $null }; $v = $v.$k }; $v }
+    if (-not $App -or -not $Rev) { return (& $o $false $false 'the app or its new revision could not be read') }
+    if ("$(& $p $Rev @('properties', 'provisioningState'))" -eq 'Failed') { return (& $o $false $true ("revision {0} failed" -f $Revision)) }
+    $ready = [string](& $p $App @('properties', 'latestReadyRevisionName'))
+    if ($ready -ne $Revision) { return (& $o $false $false ('the latest ready revision is {0}, not {1} yet' -f $(if ($ready) { $ready } else { 'none' }), $Revision)) }
+    $run = [string](& $p $Rev @('properties', 'runningState')); $hs = [string](& $p $Rev @('properties', 'healthState'))
+    if ($run -notin 'Running', 'RunningAtMaxScale') { return (& $o $false $false ('revision {0} is {1}, not running yet' -f $Revision, $(if ($run) { $run } else { 'not running' }))) }
+    if ($hs -ne 'Healthy') { return (& $o $false $false ('revision {0} is {1}' -f $Revision, $(if ($hs) { $hs } else { 'not healthy yet' }))) }
+    $latest = [string](& $p $App @('properties', 'latestRevisionName'))
+    $traffic = @(& $p $App @('properties', 'configuration', 'ingress', 'traffic') | Where-Object { $null -ne $_ })
+    if ($traffic.Count) {
+        $w = 0
+        foreach ($t in $traffic) {
+            $name = [string](& $p $t @('revisionName')); $isLatest = "$(& $p $t @('latestRevision'))" -match '^(?i)true$'
+            if ($name -eq $Revision -or (-not $name -and $isLatest -and $latest -eq $Revision)) { $w += [int](0 + (& $p $t @('weight'))) }
+        }
+        if ($w -lt 100) { return (& $o $false $false ('revision {0} has {1} % of the traffic, not all of it yet' -f $Revision, $w)) }
+    }
+    & $o $true $false ''
+}
+
+function Wait-SIUpdaterWebHealthy {
+    <#
+        After a web app roll: the NEW revision must serve and answer. A revision switch-over takes minutes (live 2026-11-23:
+        the new revision listened at once, the old one shut down two minutes later and the new one answered requests five
+        minutes after it started -- four quick /healthz asks in between failed a healthy revision and rolled it back).
+        So, with -Revision: wait until it is the app's latest READY revision, Running / RunningAtMaxScale, Healthy, with all
+        traffic (Test-SIUpdaterRevisionServing); only then ask -Fqdn's /healthz -- a grace period of -GraceSeconds in all,
+        backing off between the asks (Get-SIUpdaterHealthWaits). Ok on the first 200. Not Ok -- the caller rolls back -- when
+        the revision FAILED (at once), or when after the grace period it does not serve or never answered 200. Without
+        -Revision (the sign-in front's roll, whose read-back checked the revision already) only the asks. A read that failed
+        is "not yet". Returns @{ Ok; Why; Asks }.
+    #>
+    param([Parameter(Mandatory)][string]$App, [string]$ResourceGroup = '', [string]$SubscriptionId = '', [string]$Revision = '',
+          [string]$Fqdn = '', [int]$GraceSeconds = 300, [int]$PollSeconds = 10)
+    $waits = @(Get-SIUpdaterHealthWaits -GraceSeconds $GraceSeconds)
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    $why = 'not checked yet'; $asks = 0
+    for ($i = 0; $i -le $waits.Count; $i++) {
+        if ($i -gt 0) {
+            if ($sw.Elapsed.TotalSeconds -ge $GraceSeconds) { break }
+            if ($PollSeconds -gt 0) { Start-Sleep -Seconds $waits[$i - 1] }
+        }
+        $serving = $true
+        if ($Revision) {
+            $s = $null
+            try {
+                $a = Get-SIUpdaterContainerApp -App $App -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId
+                $r = Invoke-SIUpdaterArm -Path (Get-SIUpdaterRgPath -SubscriptionId $SubscriptionId -ResourceGroup $ResourceGroup -Provider ('Microsoft.App/containerApps/{0}/revisions/{1}' -f $App, $Revision))
+                $s = Test-SIUpdaterRevisionServing -App $a -Rev $r -Revision $Revision
+            } catch { $s = [pscustomobject]@{ Ok = $false; Failed = $false; Why = ('the last read failed: {0}' -f $_.Exception.Message) } }
+            if ($s.Failed) { return [pscustomobject]@{ Ok = $false; Why = $s.Why; Asks = $asks } }
+            $serving = [bool]$s.Ok
+            if (-not $serving) { $why = $s.Why }
+        }
+        if (-not $serving) { continue }
+        if (-not $Fqdn) { return [pscustomobject]@{ Ok = $true; Why = ''; Asks = $asks } }
+        $hc = Invoke-SIUpdaterHealthProbe -Url ("https://$Fqdn/healthz"); $asks++
+        if ($hc -eq 200) { return [pscustomobject]@{ Ok = $true; Why = ''; Asks = $asks } }
+        $why = if ($hc -gt 0) { '/healthz answered HTTP {0}' -f $hc } else { '/healthz gave no answer' }
+    }
+    $mins = [Math]::Round($GraceSeconds / 60.0, 1)
+    $text = if ($asks) { '/healthz did not answer 200 within {0} min (asked {1} times; last: {2})' -f $mins, $asks, $why }
+            else { 'the new revision did not serve within {0} min ({1})' -f $mins, $why }
+    [pscustomobject]@{ Ok = $false; Why = $text; Asks = $asks }
+}
+
 function Invoke-SIUpdaterSigninFrontRoll {
     <#
         CR7 (framework 12.11g): the shared sign-in front of a web app that ALREADY runs behind it is kept on the front this
@@ -63,7 +156,7 @@ function Invoke-SIUpdaterSigninFrontRoll {
     #>
     param([Parameter(Mandatory)][string]$SIRoot, [Parameter(Mandatory)][string]$ResourceGroup, [Parameter(Mandatory)][string]$AcrName,
           [Parameter(Mandatory)][string]$SubscriptionId, [Parameter(Mandatory)][string]$LoginServer,
-          [string]$WebApp = 'ca-si-management', [int]$TimeoutMinutes = 10, [int]$PollSeconds = 10)
+          [string]$WebApp = 'ca-si-management', [int]$TimeoutMinutes = 10, [int]$PollSeconds = 10, [int]$HealthGraceSeconds = 300)
     $none = [pscustomobject]@{ Code = 0; Text = '' }
     $planFile = [IO.Path]::Combine($SIRoot, 'pro-management', 'deploy', 'SI-SigninFrontPlan.ps1')
     if (-not $WebApp -or -not (Test-Path -LiteralPath $planFile)) { return $none }
@@ -107,13 +200,9 @@ function Invoke-SIUpdaterSigninFrontRoll {
         if (-not $rb.Ok) { throw ('not ready after {0} min ({1})' -f $TimeoutMinutes, $rb.Why) }
         $fqdn = ''; try { $fqdn = [string]$now.properties.configuration.ingress.fqdn } catch { }
         if ($fqdn) {
-            $hc = 0
-            foreach ($i in 1..4) {
-                try { $hc = [int](Invoke-WebRequest -Uri "https://$fqdn/healthz" -UseBasicParsing -TimeoutSec 60).StatusCode } catch { $hc = 0 }
-                if ($hc -eq 200) { break }
-                if ($i -lt 4 -and $PollSeconds -gt 0) { Start-Sleep -Seconds ([Math]::Min(15, $PollSeconds)) }
-            }
-            if ($hc -ne 200) { throw '/healthz did not answer 200 (asked four times)' }
+            # the read-back above checked the revision; /healthz is given the switch-over's grace period (Wait-SIUpdaterWebHealthy)
+            $h = Wait-SIUpdaterWebHealthy -App $WebApp -Fqdn $fqdn -GraceSeconds $HealthGraceSeconds -PollSeconds $PollSeconds
+            if (-not $h.Ok) { throw $h.Why }
         }
     } catch { $why = $_.Exception.Message }
     if (-not $why) { return [pscustomobject]@{ Code = 0; Text = ('{0}: sign-in front runs {1} (healthy)' -f $WebApp, $tag) } }
@@ -175,7 +264,7 @@ function Invoke-SIUpdaterSigninFrontAdopt {
     #>
     param([Parameter(Mandatory)][string]$SIRoot, [Parameter(Mandatory)][string]$ResourceGroup, [Parameter(Mandatory)][string]$AcrName,
           [Parameter(Mandatory)][string]$SubscriptionId, [Parameter(Mandatory)][string]$LoginServer,
-          [string]$WebApp = 'ca-si-management', [int]$TimeoutMinutes = 10, [int]$PollSeconds = 10, [scriptblock]$Graph)
+          [string]$WebApp = 'ca-si-management', [int]$TimeoutMinutes = 10, [int]$PollSeconds = 10, [scriptblock]$Graph, [int]$HealthGraceSeconds = 300)
     $none = [pscustomobject]@{ Code = 0; Text = ''; Action = '' }
     $planFile = [IO.Path]::Combine($SIRoot, 'pro-management', 'deploy', 'SI-SigninFrontPlan.ps1')
     $credFile = [IO.Path]::Combine($SIRoot, 'pro-management', 'deploy', 'SI-ManagementSignInCredential.ps1')
@@ -259,13 +348,9 @@ function Invoke-SIUpdaterSigninFrontAdopt {
         if (-not $rb.Ok) { throw ('not ready after {0} min ({1})' -f $TimeoutMinutes, $rb.Why) }
         $fqdn = ''; try { $fqdn = [string]$now.properties.configuration.ingress.fqdn } catch { }
         if ($fqdn) {
-            $hc = 0
-            foreach ($i in 1..4) {
-                try { $hc = [int](Invoke-WebRequest -Uri "https://$fqdn/healthz" -UseBasicParsing -TimeoutSec 60).StatusCode } catch { $hc = 0 }
-                if ($hc -eq 200) { break }
-                if ($i -lt 4 -and $PollSeconds -gt 0) { Start-Sleep -Seconds ([Math]::Min(15, $PollSeconds)) }
-            }
-            if ($hc -ne 200) { throw '/healthz did not answer 200 (asked four times)' }
+            # the read-back above checked the revision; /healthz is given the switch-over's grace period (Wait-SIUpdaterWebHealthy)
+            $h = Wait-SIUpdaterWebHealthy -App $WebApp -Fqdn $fqdn -GraceSeconds $HealthGraceSeconds -PollSeconds $PollSeconds
+            if (-not $h.Ok) { throw $h.Why }
             $probe = Invoke-SIUpdaterAnonymousProbe -Url ("https://$fqdn/")
             if (-not (Test-SIUpdaterAnonymousRefused -Probe $probe)) { throw ('a request without a sign-in was answered with HTTP {0}, not sent to the sign-in' -f $probe.Status) }
         }
@@ -440,6 +525,8 @@ function Invoke-SIUpdaterAppRoll {
     param([Parameter(Mandatory)][string]$SIRoot, [Parameter(Mandatory)][string]$ResourceGroup, [Parameter(Mandatory)][string]$AcrName,
           [Parameter(Mandatory)][string]$SubscriptionId, [Parameter(Mandatory)][string]$LoginServer, [Parameter(Mandatory)][string]$Tag,
           [string]$WebApp = 'ca-si-management', [string]$McpApp = 'ca-si-mcp', [int]$TimeoutMinutes = 10, [int]$PollSeconds = 10,
+          # the grace period the web app's /healthz gets after its revision switch-over (Wait-SIUpdaterWebHealthy)
+          [int]$HealthGraceSeconds = 300,
           # SEC-LANE-1 (the short image-only path, SI-UpdaterImageOnly.ps1): the IMAGES only -- the web app, the MCP server and
           # the sign-in front a front-ed web app runs get their new revision; nothing of the sign-in (the front's adoption,
           # the consent check, the enterprise application's assignment setting) is looked at or changed
@@ -471,7 +558,7 @@ function Invoke-SIUpdaterAppRoll {
             try { Invoke-SIUpdaterAcrBuild -SIRoot $SIRoot -AcrName $AcrName -SubscriptionId $SubscriptionId -Image ('{0}:{1}' -f $p.Repo, $appTag) -File $p.File -LoginServer $LoginServer }
             catch { return [pscustomobject]@{ Code = 1; Text = ("{0}: the image build failed -- nothing changed: {1}" -f $p.App, $_.Exception.Message) } }
         }
-        $todo.Add([pscustomobject]@{ App = $p.App; Health = $p.Health; Prev = $prev; New = $new; Tag = $appTag; Ok = $false; State = ''; Error = ''; Fqdn = '' })
+        $todo.Add([pscustomobject]@{ App = $p.App; Health = $p.Health; Prev = $prev; New = $new; Tag = $appTag; Ok = $false; State = ''; Error = ''; Fqdn = ''; Rev = '' })
     }
     # 2. every app updated at once, then waited for together
     foreach ($t in $todo) {
@@ -495,7 +582,7 @@ function Invoke-SIUpdaterAppRoll {
                 $t.State = '{0}/{1}/{2}' -f $r.properties.provisioningState, $r.properties.healthState, $r.properties.runningState
                 if ("$($r.properties.provisioningState)" -eq 'Failed') { $t.Error = ("revision {0} failed" -f $rev); continue }
                 $t.Ok = ([string]$a.properties.latestReadyRevisionName -eq $rev) -and ("$($r.properties.healthState)" -eq 'Healthy') -and ([string]$r.properties.template.containers[0].image -eq $t.New)
-                if ($t.Ok) { try { $t.Fqdn = [string]$a.properties.configuration.ingress.fqdn } catch { } }
+                if ($t.Ok) { $t.Rev = $rev; try { $t.Fqdn = [string]$a.properties.configuration.ingress.fqdn } catch { } }
             } catch {
                 # ONE read that failed (the new revision not readable yet, a server error) is "not yet", never "the update
                 # failed": it is read again until the deadline, which then says what the last read answered
@@ -509,14 +596,12 @@ function Invoke-SIUpdaterAppRoll {
     foreach ($t in $todo) {
         if (-not $t.Ok -and -not $t.Error) { $t.Error = ("not healthy after {0} min ({1})" -f $TimeoutMinutes, $t.State) }
         if ($t.Ok -and $t.Health -and $t.Fqdn) {
-            # asked up to four times: a revision that was healthy a second ago can still be taking its first request
-            $hc = 0
-            foreach ($hcTry in 1..4) {
-                try { $hc = [int](Invoke-WebRequest -Uri "https://$($t.Fqdn)/healthz" -UseBasicParsing -TimeoutSec 60).StatusCode } catch { $hc = 0 }
-                if ($hc -eq 200) { break }
-                if ($hcTry -lt 4 -and $PollSeconds -gt 0) { Start-Sleep -Seconds ([Math]::Min(15, $PollSeconds)) }
-            }
-            if ($hc -ne 200) { $t.Ok = $false; $t.Error = '/healthz did not answer 200 (asked four times)' }
+            # the revision switch-over takes minutes (live 2026-11-23: the old revision still shutting down, the first asks
+            # timed out, a healthy revision was rolled back): wait until the NEW revision is the latest ready one, running,
+            # healthy, with all traffic, then ask /healthz with a grace period, backing off -- a revision that really fails
+            # (provisioning failed, never serving, never 200 in the grace period) is still rolled back below
+            $h = Wait-SIUpdaterWebHealthy -App $t.App -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId -Revision $t.Rev -Fqdn $t.Fqdn -GraceSeconds $HealthGraceSeconds -PollSeconds $PollSeconds
+            if (-not $h.Ok) { $t.Ok = $false; $t.Error = $h.Why }
         }
         if ($t.Ok) { $done.Add(("{0} runs {1} (healthy)" -f $t.App, $t.Tag)) }
     }

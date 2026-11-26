@@ -128,10 +128,15 @@ public sealed class DepartmentPeopleResolver(IDirectoryNames directory, Departme
 public static class MailOnlyMatch
 {
     /// Next to a mail-only person or advisor on the Admin's lists.
-    public const string AdminNote = "matched by this address only for an account of your own directory -- for a guest (B2B), record this person's object id or use a sign-in link";
+    /// #995b: SecurityInsight looks such an address up in the directory itself (at the Admin's save and in the background)
+    /// and stores the object id when exactly one account has it -- the note stays only while that has not happened.
+    public const string AdminNote = "kept by e-mail address only: matched only for an account of your own directory until SecurityInsight finds exactly one account with this address in the directory (it looks it up by itself) -- for a guest it cannot find, record the object id or use a sign-in link";
+
+    /// #1370: next to a Security domain / category owner or approver whose object id SecurityInsight has not found (yet).
+    public const string RosterNote = "kept by e-mail address only: decides only when signed in with an account of your own directory until SecurityInsight finds exactly one account with this address in the directory (it looks it up by itself) -- a guest it cannot find does not decide";
 
     /// On the no-access page, to a guest whose sign-in name is not matched.
-    public const string GuestNote = "You signed in as a guest of this organisation. A department or an advisor entry that names you by e-mail address only does not match a guest account: ask an Admin to record your object id on the department, or to send you a sign-in link.";
+    public const string GuestNote = "You signed in as a guest of this organisation. A guest is matched by its account, never by the e-mail address it signs in with. SecurityInsight finds your account by the address an Admin entered on the department when exactly one account in this directory has it -- usually within a few hours. If you still have no access then, ask an Admin to record your object id on the department, or to send you a sign-in link.";
 
     /// Whether this signed-in person is a guest or an external account (a sign-in name the directory did not issue).
     public static bool IsGuest(ClaimsPrincipal user) =>

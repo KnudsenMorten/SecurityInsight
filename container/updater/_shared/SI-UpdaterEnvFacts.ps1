@@ -160,7 +160,7 @@ function Invoke-SIUpdaterEnvFactsStep {
     param($Store, [Parameter(Mandatory)][string]$SubscriptionId, [Parameter(Mandatory)][string]$ResourceGroup, [scriptblock]$Arm, [datetime]$NowUtc = [datetime]::UtcNow)
     $res = { param($ok, $line) [pscustomobject]@{ Ok = [bool]$ok; Line = [string]$line } }
     try {
-        if (-not $Store -or -not $Store.Invoke) { return (& $res $true 'environment report facts: no Pro database on this install -- nothing to record') }
+        if (-not $Store -or -not $Store.Invoke) { return (& $res $true 'System Documentation facts: no Pro database on this install -- nothing to record') }
         if (-not $Arm) {
             $Arm = { param([string]$Path, [string]$ApiVersion, [switch]$List) if ($List) { @(Invoke-SIUpdaterArm -Path $Path -ApiVersion $ApiVersion -List) } else { Invoke-SIUpdaterArm -Path $Path -ApiVersion $ApiVersion -AllowNotFound } }
         }
@@ -170,8 +170,8 @@ function Invoke-SIUpdaterEnvFactsStep {
         $back = [string](Get-SIUpdaterEnvFactsProp $row @('ReadUtc'))
         $want = $f.readUtc.TrimEnd('Z')
         if (-not $back -or -not $back.StartsWith($want.Substring(0, 16))) {
-            return (& $res $false ('WARNING: environment report facts: written, but the row does not read back ({0}) -- the next update writes it again' -f $(if ($back) { 'read ' + $back } else { 'no row: the release''s schema has no cfg.EnvironmentFacts yet' })))
+            return (& $res $false ('WARNING: System Documentation facts: written, but the row does not read back ({0}) -- the next update writes it again' -f $(if ($back) { 'read ' + $back } else { 'no row: the release''s schema has no cfg.EnvironmentFacts yet' })))
         }
-        & $res $true ('environment report facts recorded: {0} resource(s), {1} role assignment(s) at the resource group{2} (read back)' -f @($f.resources).Count, @($f.roles).Count, $(if ($f.error) { ' -- ' + $f.error } else { '' }))
-    } catch { & $res $false ('WARNING: environment report facts: not recorded ({0}) -- the next update tries again' -f ([string]$_.Exception.Message -replace '\s+', ' ')) }
+        & $res $true ('System Documentation facts recorded: {0} resource(s), {1} role assignment(s) at the resource group{2} (read back)' -f @($f.resources).Count, @($f.roles).Count, $(if ($f.error) { ' -- ' + $f.error } else { '' }))
+    } catch { & $res $false ('WARNING: System Documentation facts: not recorded ({0}) -- the next update tries again' -f ([string]$_.Exception.Message -replace '\s+', ' ')) }
 }

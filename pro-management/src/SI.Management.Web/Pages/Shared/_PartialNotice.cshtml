@@ -9,11 +9,11 @@
     var perReport = mark.PerReport && reports.Count > 0;
     var line = perReport ? Model.Line() : default;
 }
-@* owner 2026-11-19 ("get rid of it", asked many times): a per-report mark shows NO notice on the pages -- the collection
-   picker still says "older data" and Run health > Reports lists every report of the run. A whole-collection partial
-   mark (the run did not finish at all) still shows. *@
-@if (perReport) { return; }
-<div class="notice warn" role="status" data-partial-collection="@mark.CollectionId"><span class="badge warn">@mark.Badge</span>
+@* owner 2026-11-19 ("get rid of it", asked many times): a per-report mark shows no warning box and no "older data" badge.
+   #1323 (owner 2026-11-23): a report held at its last complete result IS marked, quietly, on the pages that show its rows
+   (PartialNotice.For: only where the report feeds the page) -- "... last complete result from [date]", the date in the
+   viewer's own format. A whole-collection partial mark (the run did not finish at all) still shows as a warning. *@
+@Html.Raw(perReport ? "<div class=\"notice\" role=\"status\" data-held-reports=\"" + System.Net.WebUtility.HtmlEncode(mark.CollectionId) + "\">" : "<div class=\"notice warn\" role=\"status\" data-partial-collection=\"" + System.Net.WebUtility.HtmlEncode(mark.CollectionId) + "\">")@if (!perReport) {<span class="badge warn">@mark.Badge</span>}
 @if (!perReport)
 {
     <text>@mark.Text</text>
@@ -30,7 +30,7 @@ else
         <ul data-partial-reports>
             @foreach (var r in reports)
             {
-                if (r.FromUtc is { } f) { <li>@r.DisplayName (data from @Fmt.Time(f, "date"))</li> }
+                if (r.FromUtc is { } f) { <li data-held-report="@r.ReportName">@r.DisplayName (last complete result from @Fmt.Time(f, "date"))</li> }
                 else { <li>@r.DisplayName (only what this run found)</li> }
             }
         </ul>
@@ -53,4 +53,4 @@ else
         </details>
     }
 }
-</div>
+@Html.Raw("</div>")

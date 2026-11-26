@@ -278,16 +278,26 @@ ORDER BY f.FindingId;
 }
 
 function New-SIVulnSnapshotAccumulator {
-    <# The state Add-SIVulnSnapshotRows fills and Complete-SIVulnSnapshot turns into the KQL-shaped rows. #>
-    param([Parameter(Mandatory)][string]$EditionMajor, [string[]]$ScopeFields = @())
-    [pscustomobject]@{
+    <# The state Add-SIVulnSnapshotRows fills and Complete-SIVulnSnapshot turns into the KQL-shaped rows.
+       #1320 -Fold: 'ps' (the PowerShell fold), 'compiled' (the compiled helper over the same state, PowerShell where it declines
+       a page) or 'shadow' (both: the PowerShell result is used, the compiled one -- .Twin -- compared with it). Not given: from
+       SI_VulnLoop_ChangedSet (on = compiled, shadow = shadow, off = ps). #>
+    param([Parameter(Mandatory)][string]$EditionMajor, [string[]]$ScopeFields = @(), [ValidateSet('', 'ps', 'compiled', 'shadow')][string]$Fold = '')
+    if (-not $Fold) {
+        $Fold = 'ps'
+        if (Get-Command -Name Get-SIVulnChangedSetMode -ErrorAction SilentlyContinue) { switch (Get-SIVulnChangedSetMode) { 'on' { $Fold = 'compiled' } 'shadow' { $Fold = 'shadow' } } }
+    }
+    $acc = [pscustomobject]@{
         Edition = $EditionMajor; Scope = (Get-SIVulnSnapshotScopeColumns -ScopeFields $ScopeFields)
         Groups  = New-Object 'System.Collections.Generic.Dictionary[string,object]' ([StringComparer]::Ordinal)
         Order   = New-Object System.Collections.Generic.List[string]
         Assets  = New-Object 'System.Collections.Generic.Dictionary[string,object]' ([StringComparer]::Ordinal)
         AssetOrder = New-Object System.Collections.Generic.List[string]
         Rows    = 0L
+        Fold    = $Fold; Twin = $null; FoldDeclined = 0L
     }
+    if ($Fold -eq 'shadow') { $acc.Twin = New-SIVulnSnapshotAccumulator -EditionMajor $EditionMajor -ScopeFields $ScopeFields -Fold 'compiled' }
+    $acc
 }
 
 function Add-SIVulnSnapshotRows {
@@ -298,6 +308,15 @@ function Add-SIVulnSnapshotRows {
         AssetDetectedInReportName, ReportName and the scope fields' columns) -- folded in as the KQL summarize folded them.
     #>
     param([Parameter(Mandatory)]$Acc, [AllowEmptyCollection()][object[]]$Rows = @())
+    # #1320 the compiled fold over the same state (SI-VulnFast.ps1); a page it declines is folded below, as before
+    $fold = if ($Acc.PSObject.Properties['Fold']) { [string]$Acc.Fold } else { 'ps' }
+    if ($fold -eq 'shadow' -and $null -ne $Acc.Twin) { Add-SIVulnSnapshotRows -Acc $Acc.Twin -Rows $Rows }
+    elseif ($fold -eq 'compiled' -and (Get-Command -Name Invoke-SIVulnFoldRows -ErrorAction SilentlyContinue)) {
+        $fn = Invoke-SIVulnFoldRows -Acc $Acc -Rows $Rows
+        if ($fn -ge 0) { $Acc.Rows += $fn; return }
+        $Acc.FoldDeclined++
+        if (Get-Command -Name Get-SIVulnChangedSetTally -ErrorAction SilentlyContinue) { (Get-SIVulnChangedSetTally).FoldRefused++ }
+    }
     $inv = [Globalization.CultureInfo]::InvariantCulture
     $get = { param($r, $n) if ($r -is [System.Collections.IDictionary]) { if ($r.Contains($n)) { $v = $r[$n] } else { $v = $null } } else { $p = $r.PSObject.Properties[$n]; $v = if ($p) { $p.Value } else { $null } }; if ($null -eq $v -or $v -is [System.DBNull]) { '' } else { [string]$v } }
     $num = { param([string]$s) $d = 0.0; if ($s.Trim() -and [double]::TryParse($s.Trim(), [Globalization.NumberStyles]::Float, $inv, [ref]$d)) { $d } else { $null } }
@@ -368,6 +387,14 @@ function Complete-SIVulnSnapshot {
         Assets = one per AssetId with its lowest Tier. The accumulator is emptied as it is read.
     #>
     param([Parameter(Mandatory)]$Acc, [Parameter(Mandatory)][datetime]$SnapshotTime)
+    # #1320 the compiled fold (SI-VulnFast.ps1): the same rows and assets; shadow: both, compared, this body's used
+    $fold = if ($Acc.PSObject.Properties['Fold']) { [string]$Acc.Fold } else { 'ps' }
+    if ($fold -eq 'compiled' -and (Get-Command -Name Complete-SIVulnFoldCompiled -ErrorAction SilentlyContinue)) {
+        $fc = Complete-SIVulnFoldCompiled -Acc $Acc -SnapshotTime $SnapshotTime
+        if ($null -ne $fc) { return $fc }
+    }
+    $twin = $null
+    if ($fold -eq 'shadow' -and $null -ne $Acc.Twin) { $twin = Complete-SIVulnSnapshot -Acc $Acc.Twin -SnapshotTime $SnapshotTime }
     $t = [datetime]::SpecifyKind($SnapshotTime, [DateTimeKind]::Utc)
     $rows = New-Object System.Collections.Generic.List[object]
     # #850: ConvertTo-SIVulnSnapshotSet is pure and its inputs repeat on nearly every finding (the same domain, report,
@@ -395,7 +422,9 @@ function Complete-SIVulnSnapshot {
     }
     $assets = @(foreach ($a in $Acc.AssetOrder) { $Acc.Assets[$a] })
     $Acc.Groups.Clear(); $Acc.Order.Clear(); $Acc.Assets.Clear(); $Acc.AssetOrder.Clear()
-    [pscustomobject]@{ Rows = $rows.ToArray(); Assets = $assets }
+    $res = [pscustomobject]@{ Rows = $rows.ToArray(); Assets = $assets }
+    if ($null -ne $twin -and (Get-Command -Name Compare-SIVulnFoldRows -ErrorAction SilentlyContinue)) { $null = Compare-SIVulnFoldRows -Old $res -New $twin }
+    $res
 }
 
 function Read-SIVulnSnapshotSql {

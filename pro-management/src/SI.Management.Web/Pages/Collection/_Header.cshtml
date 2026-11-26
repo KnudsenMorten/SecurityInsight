@@ -1,4 +1,4 @@
-@* Title, what the view shows, the collection picker and the page's notices -- the top of every collection view. *@
+@* Title, what the view shows, the collection picker and the page's notices -- the top of every collection view (#1386: one line). *@
 @model SI.Management.Web.Pages.Collection.CollectionPageModel
 @inject SI.Management.Web.Collection.IPartialCollections PartialMarks
 @inject SI.Management.Web.Collection.ISourceNotes SourceNotes
@@ -15,32 +15,58 @@
     var srcOf = Model.Current is { } srcCur && (await SourceNotes.ByCollectionAsync(default)).TryGetValue(srcCur.CollectionId, out var srcList) ? srcList : null;
     var srcNewest = Model.Current is not null && Model.Collections.Count > 0 && Model.Collections[0].CollectionId == Model.Current.CollectionId;
     var srcShow = srcOf is null ? new List<SI.Management.Web.Collection.SourceNote>() : srcOf.Where(n => !(srcNewest && srcNow.Any(x => x.Source == n.Source))).ToList();
+    var scope = Model.Current is not null ? await Model.ScopeAsync(ViewContext.HttpContext.RequestAborted) : null;
+    var countGrid = Model.Grid;
+    var older = SI.Management.Web.Pages.Collection.ViewHead.IsOlder(Model.Current, Model.Collections);
+    // #1386 what this header showed, for the layout's run line and the grid's count heading (the body renders before the layout)
+    if (Model.Current is not null) { ViewContext.HttpContext.Items[SI.Management.Web.Pages.Collection.ViewHead.RunShownKey] = true; }
+    if (countGrid is not null) { ViewContext.HttpContext.Items[SI.Management.Web.Pages.Collection.ViewHead.CountedGridKey] = countGrid; }
 }
-<h1>@Model.Heading</h1>
-@* #636 the tight frame: title + view picker, one filter line, then the table -- a page that opts in keeps its explanation one click away *@
+@* #1386 (owner 2026-11-25, "One line"): the title with "About this page" beside it -- the page's explanation, the "What you're
+   looking at" statement and "What these words mean" inside it, every word kept -- then ONE line: the grid's row count and
+   the collection picker, which shows the collection's date (the one place a view shows it). ViewHead.cs. *@
+<div class="view-head" data-view-head>
+    <h1>@Model.Heading</h1>
+    <details class="about" data-about><summary>About this page</summary><p class="lede">@Model.Lede</p>@if (scope is not null) { <partial name="~/Pages/Shared/_ViewScope.cshtml" model="scope" view-data='new ViewDataDictionary(ViewData) { ["ViewScopeInAbout"] = true }' /> }</details>
+</div>
+@* #636 the view picker (Security recommendations > Summary / Detailed) *@
 @if (Model.Picker is { } picker) { <partial name="~/Pages/Shared/_ViewPicker.cshtml" model="picker" /> }
-@if (Model.CompactFrame) { <details class="about" data-about><summary>About this page</summary><p class="lede">@Model.Lede</p></details> }
-else { <p class="lede">@Model.Lede</p> }
-@* owner 2026-10-19: what the view shows, from its real state -- the run, the lifecycle, the defaults, the filters as chips *@
-@if (Model.Current is not null) { <partial name="~/Pages/Shared/_ViewScope.cshtml" model="await Model.ScopeAsync(ViewContext.HttpContext.RequestAborted)" /> }
+@if (countGrid is not null || Model.Collections.Count > 0 || Model.Current is not null)
+{
+    <div class="view-line" data-view-line>
+        @if (countGrid is not null) { <strong data-view-count>@SI.Management.Web.Pages.Collection.ViewHead.Count(countGrid.Total, Model.RowNoun)</strong> }
+        @if (Model.Collections.Count > 0)
+        {
+            if (countGrid is not null) { <span class="vs-sep" aria-hidden="true">·</span> }
+            <form method="get" action="@Model.PagePath" class="picker" data-autosubmit aria-label="Collection">
+                @foreach (var (k, v) in Model.ExtraState()) { <input type="hidden" name="@k" value="@v" /> }
+                <label for="pick-c">data from <span class="sr-only">the collection</span></label>
+                <select id="pick-c" name="c">
+                    @foreach (var c in Model.Collections)
+                    {
+                        <option data-utc value="@c.CollectionId" selected="@(c.CollectionId == Model.Current?.CollectionId)">@Fmt.When(c.CollectionTime)@(c.Rows is { } n ? " · " + Fmt.Int(n) + " rows" : "")@(c == Model.Collections[0] ? " · newest" : "")@(marks.TryGetValue(c.CollectionId, out var pm) && !pm.PerReport && pm.ShowsOn(Model.PagePath) ? " · " + pm.Badge : "")</option>
+                    }
+                </select>
+                <noscript><button type="submit">Open</button></noscript>
+            </form>
+        }
+        else if (Model.Current is { } only)
+        {
+            if (countGrid is not null) { <span class="vs-sep" aria-hidden="true">·</span> }
+            <span data-view-run>data from @Fmt.Time(only.CollectionTime)</span>
+        }
+        @if (older)
+        {
+            @* a collection older than the newest is never mistaken for the current state *@
+            <span class="badge warn" data-older-collection>@SI.Management.Web.Pages.Collection.ViewHead.OlderMark</span>
+            <a href="@Model.Link(("c", Model.Collections[0].CollectionId))" data-open-newest>@SI.Management.Web.Pages.Collection.ViewHead.OpenNewest</a>
+        }
+    </div>
+}
+@* the person's filters stay in sight, as removable chips (the rest of the statement is in About) *@
+@if (scope is not null) { <partial name="~/Pages/Shared/_ViewScopeChips.cshtml" model="scope" /> }
 @* #855 the grid's CI lifecycle: Active (the default) | Not seen | Retired | All -- only where the grid counts it *@
 @if (Model.LifecycleChoiceModel is { } lifeChoice) { <partial name="~/Pages/Shared/_LifecycleChoice.cshtml" model="lifeChoice" /> }
-@if (Model.Collections.Count > 0)
-{
-    <form method="get" action="@Model.PagePath" class="picker" data-autosubmit aria-label="Collection">
-        @foreach (var (k, v) in Model.ExtraState()) { <input type="hidden" name="@k" value="@v" /> }
-        <div>
-            <label for="pick-c">Collection</label>
-            <select id="pick-c" name="c">
-                @foreach (var c in Model.Collections)
-                {
-                    <option data-utc value="@c.CollectionId" selected="@(c.CollectionId == Model.Current?.CollectionId)">@Fmt.When(c.CollectionTime)@(c.Rows is { } n ? " · " + Fmt.Int(n) + " rows" : "")@(c == Model.Collections[0] ? " · newest" : "")@(marks.TryGetValue(c.CollectionId, out var pm) && !pm.PerReport && pm.ShowsOn(Model.PagePath) ? " · " + pm.Badge : "")</option>
-                }
-            </select>
-        </div>
-        <noscript><button type="submit">Open</button></noscript>
-    </form>
-}
 @if (Model.Error is not null)
 {
     @* #284: a failed or timed-out read says so in the page, with the reference that finds it in the log *@

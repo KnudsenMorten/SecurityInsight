@@ -405,7 +405,7 @@ Describe 'wiring: the installer, every update and the updater record' {
         $invPath = Join-Path $script:SIRoot 'container\updater\_shared\SI-UpdaterInvardia.ps1'
         if (-not (Test-Path -LiteralPath $invPath)) { Set-ItResult -Skipped -Because 'the Invardia update path is not in this payload'; return }
         $inv = [IO.File]::ReadAllText($invPath)
-        $inv | Should -Match 'if \(-not \$roll -or \$roll\.Held\)'
+        $inv | Should -Match 'if \(-not \$imgCheck -and \(-not \$roll -or \$roll\.Held\)\)'   # 3cb9c4b9d: a 30-minute image check is no daily run
         $inv | Should -Match 'Invoke-SIUpdaterSizingPass -SIRoot \$SIRoot'
         $u = [IO.File]::ReadAllText((Join-Path $script:SIRoot 'container\updater\Start-SIUpdater.ps1'))
         [regex]::Match($u, '(?s)function Invoke-SIUpdaterSizingPass \{.*?\n\}').Value | Should -Match 'Save-SIUpdaterSqlTierRow -Store \$Store'

@@ -119,6 +119,42 @@ public sealed class Roster
     public IReadOnlyList<(string Domain, string? Category)> OwnedBy(string user) => Rows
         .Where(r => r.Role == DomainRoles.Owner && Eq(r.Principal, user))
         .Select(r => (r.Domain, r.IsCategory ? r.Category : null)).Distinct().OrderBy(x => x.Domain).ThenBy(x => x.Item2 ?? "").ToList();
+
+    // ---- #1370: a SIGNED-IN person against the rows -- a row with an object id matches that object id only; a row without
+    // one, the sign-in name the directory issued for one of its own members (never a guest's, #995)
+
+    private IEnumerable<DomainRoleRow> CategoryRows(string domain, string? category)
+    {
+        var c = DomainRoles.NormalizeCategory(category);
+        return c is null ? Enumerable.Empty<DomainRoleRow>() : Rows.Where(r => r.Role == DomainRoles.Owner && r.IsCategory && Eq(r.Domain, domain) && Eq(r.Category, c));
+    }
+
+    /// Everyone who may decide (category owners + domain owners + the domain's approvers) includes this person.
+    public bool IsDecider(RosterWho who, string domain, string? category) =>
+        CategoryRows(domain, category).Concat(DomainLevel(domain, DomainRoles.Owner)).Concat(DomainLevel(domain, DomainRoles.Approver)).Any(who.Is);
+    /// The reviewers (category owners + domain owners) include this person.
+    public bool IsReviewer(RosterWho who, string domain, string? category) =>
+        CategoryRows(domain, category).Concat(DomainLevel(domain, DomainRoles.Owner)).Any(who.Is);
+    public bool IsAnyOwner(RosterWho who) => Rows.Any(r => r.Role == DomainRoles.Owner && who.Is(r));
+    public IReadOnlyList<(string Domain, string? Category)> OwnedBy(RosterWho who) => Rows
+        .Where(r => r.Role == DomainRoles.Owner && who.Is(r))
+        .Select(r => (r.Domain, r.IsCategory ? r.Category : null)).Distinct().OrderBy(x => x.Domain).ThenBy(x => x.Item2 ?? "").ToList();
+}
+
+/// <summary>
+/// #1370: a signed-in person as the security owners' roster matches them -- their own object id (a row the directory lookup
+/// gave an object id matches it ONLY), and the sign-in name the directory issued for one of its OWN members (a row without
+/// an object id; a guest's name, chosen by its home tenant, never counts -- #995).
+/// </summary>
+public sealed record RosterWho(string? MemberName, string? ObjectId)
+{
+    public static RosterWho Of(ClaimsPrincipal user) => user.Identity?.IsAuthenticated == true
+        ? new(user.DirectoryMemberName(), AccessClaims.ObjectId(user)?.Trim().ToLowerInvariant())
+        : new(null, null);
+
+    public bool Is(DomainRoleRow r) => r.ObjectId is { Length: > 0 } oid
+        ? ObjectId is { Length: > 0 } me && string.Equals(oid, me, StringComparison.OrdinalIgnoreCase)
+        : MemberName is { Length: > 0 } n && string.Equals(r.Principal, n.Trim(), StringComparison.OrdinalIgnoreCase);
 }
 
 /// <summary>
@@ -280,7 +316,7 @@ public sealed class ExemptionWorkflow
     /// #283: "listed" = one of <see cref="Roster.Deciders"/> for the node -- a Category Owner of the category, a Domain
     /// Owner of the domain (or '*'), or a holder of the older approver role.
     public static bool CanDecide(ClaimsPrincipal user, Roster roster, string domain, string? category, IAccessScope? access = null) =>
-        (access ?? DefaultAccess).CanListed(user, AccessAction.Approve, DomainTarget(domain), roster.IsDecider(RosterName(user), domain, category)).Allowed;
+        (access ?? DefaultAccess).CanListed(user, AccessAction.Approve, DomainTarget(domain), roster.IsDecider(RosterWho.Of(user), domain, category)).Allowed;
     /// A domain-level decision (no category): the domain's owners and approvers.
     public static bool CanDecide(ClaimsPrincipal user, Roster roster, string domain, IAccessScope? access = null) => CanDecide(user, roster, domain, (string?)null, access);
     /// #995: the name a roster entry (an owner / approver, stored by sign-in name) is matched against -- the sign-in name
@@ -289,7 +325,7 @@ public sealed class ExemptionWorkflow
     /// The review counterpart of <see cref="CanDecide(ClaimsPrincipal, Roster, string, IAccessScope?)"/>: the owners of
     /// the exemption's category or domain. Same seam.
     public static bool CanReview(ClaimsPrincipal user, Roster roster, string domainKey, string? category, IAccessScope? access = null) =>
-        (access ?? DefaultAccess).CanListed(user, AccessAction.Review, DomainTarget(domainKey), roster.IsReviewer(RosterName(user), domainKey, category)).Allowed;
+        (access ?? DefaultAccess).CanListed(user, AccessAction.Review, DomainTarget(domainKey), roster.IsReviewer(RosterWho.Of(user), domainKey, category)).Allowed;
     public static bool CanReview(ClaimsPrincipal user, Roster roster, string domainKey, IAccessScope? access = null) => CanReview(user, roster, domainKey, (string?)null, access);
 
     private static readonly IAccessScope DefaultAccess = new AccessScopeService();

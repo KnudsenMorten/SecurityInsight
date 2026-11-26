@@ -87,11 +87,13 @@ else
                     {
                         @* owner 2026-10-20: each value in its band's words and colour (ProtectionBands), never a fixed green *@
                         var pbl = ProtectionBands.Of(p.Lifecycle); var pbt = ProtectionBands.Of(p.Technical);
-                        var raLife = await AcceptedLifecycle.ReadAsync(ViewContext.HttpContext.RequestServices, ViewContext.HttpContext.RequestAborted);
-                        <div class="exec-score band-@pbl.Tone" data-band="@pbl.Tone">@Fmt.Pct(p.Lifecycle, 1) &middot; @pbl.Name</div>
-                        <div class="ps-explain" data-lifecycle-line>@raLife.Line</div>
+                        @* #1382: the plain words of the score tiles (ExecWords) and the (i) with the full calculation, as on the Executive overview *@
+                        var (_, raLife, raModel) = await ExecutiveFigures.ProtectionWordsAsync(ViewContext.HttpContext.RequestServices, ViewContext.HttpContext.RequestAborted);
+                        <div class="exec-score band-@pbl.Tone" data-band="@pbl.Tone">@Fmt.Pct(p.Lifecycle, 1) &middot; @pbl.Name <partial name="_ProtectionScoreInfo" model="@(ProtectionScoreInfo.For(raLife, raModel) with { Inline = true })" /></div>
+                        <div class="ps-explain" data-lifecycle-line>@ExecWords.LifecycleLine(raLife, raModel)</div>
                         <div class="exec-also" data-exec-band><span class="exec-cap ps-cap">@SI.Management.Web.RiskExec.ExecutiveFigures.ActualName:</span> <strong class="exec-also-score band-@pbt.Tone" data-band="@pbt.Tone">@Fmt.Pct(p.Technical, 1) &middot; @pbt.Name</strong></div>
-                        <div class="exec-legend">higher is better &middot; the share of active assets with no open Very High / High finding, tier-weighted &middot; @Fmt.Int(p.NoDate) of @Fmt.Int(p.Findings) counted findings without a date count as open</div>
+                        <div class="ps-explain" data-actual-line>@ExecWords.ActualLine(raModel)</div>
+                        <div class="exec-legend">Out of 100 &middot; higher is better &middot; @Fmt.Int(p.NoDate) of @Fmt.Int(p.Findings) counted findings have no start date and always count</div>
                     }
                     else
                     {

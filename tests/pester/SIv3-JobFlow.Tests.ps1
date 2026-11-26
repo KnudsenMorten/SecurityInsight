@@ -951,7 +951,7 @@ Describe '#277 live (ring 1 2026-10-05): a flow wake-up during a flow run is NOT
         $d = Get-SIExecutionGuardDecision -Engine 'flow' -Job 'caj-si-flow' -Other $script:Running[0] -Self 'caj-si-flow-29853040'
         $d.Action | Should -Be 'FlowBusy'
         $d.Housekeeping | Should -BeTrue -Because '#1063 (3.0.30): a flow wake-up during a run does the paced housekeeping'
-        $d.Message | Should -Be '[flow] the flow is still running (execution caj-si-flow-29852960, started 2026-10-05T01:00:00Z); this wake-up starts nothing -- it only does the paced housekeeping.'
+        $d.Message | Should -Be '[flow] the flow is still running (execution caj-si-flow-29852960, started 2026-10-05T01:00:00Z); this wake-up starts nothing -- it removes old collections'' rows, paced by the database''s load and giving way to the data sync and a data out.'
         (Get-SIExecutionGuardDecision -Engine 'endpoint' -Job 'caj-si-endpoint' -Other $script:Running[0] -Self 'x').Action | Should -Be 'Skip'
         (Get-SIExecutionGuardDecision -Engine 'flow' -Job 'caj-si-flow' -Other $null -Self 'x').Action | Should -Be 'Run'
         # the data out's busy start still ends at once (no housekeeping there)
@@ -971,7 +971,7 @@ Describe '#277 live (ring 1 2026-10-05): a flow wake-up during a flow run is NOT
         $script:Rows.Count | Should -Be 0
         $r.Warnings.Count | Should -Be 0
         $r.Lines.Count | Should -Be 1
-        $r.Lines[0] | Should -Match '^\[flow\] the flow is still running \(execution caj-si-flow-29852960, started .+\); this wake-up starts nothing -- it only does the paced housekeeping\.$'
+        $r.Lines[0] | Should -Match '^\[flow\] the flow is still running \(execution caj-si-flow-29852960, started .+\); this wake-up starts nothing -- it removes old collections'' rows, paced by the database''s load and giving way to the data sync and a data out\.$'
         # the data out's busy start still ends at once, and is never housekeeping-only
         $ex = @($script:Running | ForEach-Object { [pscustomobject]@{ name = ($_.name -replace 'flow', 'data-out'); properties = $_.properties } })
         $o = Invoke-GuardBlock -Engine 'data-out' -Job 'caj-si-data-out' -Self 'caj-si-data-out-29853040' -Executions $ex

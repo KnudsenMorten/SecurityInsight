@@ -1,5 +1,144 @@
 # What's new in SecurityInsight
 
+## 3.1.51 · 2026-11-25 · Feature update
+
+Job buttons work again, deleted assets retire at once, exploited findings are due in 14 days, and tiles and columns say what they show.
+
+### New features
+
+- **Deleted assets retire at once** - An asset deleted in Entra ID, Azure or Intune retires at once and its findings close as deleted, never as fixed. Intune needs one new read-only permission that Invardia grants.
+- **Pages load their newest scripts** - After an update every page loads its newest scripts; a page that cannot load shows a Reload link.
+- **Exploited findings due in 14 days** - A finding whose exploit is verified, or that is in an exploit kit, is due within 14 days, whatever its severity.
+
+### Fixes
+
+- **Job buttons work again** - Buttons that run a job (one step, Refresh, Run now, Update now, Apply settings, Test mail, Send now) work again. A cancelled run no longer reports its last step as failed.
+- **Tiles and columns in plain words** - The executive tiles say what they count, with the formula and an (i). Column titles are in words, exports included: scripts reading old header names need updating.
+- **New days-to-fix defaults** - Medium findings 60 days, low findings 90 days, so some may show as overdue sooner. Your own values and Defender for Cloud due dates are kept.
+- **One task per product and version** - A vulnerability naming several products gives one task per product and version, each with its own paths.
+- **Smaller fixes** - Sign-in methods per user fill in again at every installation. Asset profiling builds its rows 5-7 times faster. Views are compact, with resizable columns and full text.
+
+## 3.1.50 · 2026-11-25 · Feature update
+
+The job buttons go through a queue, Remediations pages answer faster, and profiling rules are grouped by kind.
+
+### New features
+
+- **Profiling rules grouped by kind** - Configuration > Profiling rules lists the rules in collapsible groups, one per kind of condition.
+- **Tasks follow Defender's remediation type** - A Defender recommendation's task follows Defender's own remediation type.
+
+### Fixes
+
+- **The job buttons go through the queue** - Run now, Stop, schedule changes, template release and mail send-now go to the installation through a queue.
+- **Faster Remediations pages** - Task report values are kept ready and statistics are refreshed after each data sync, so the first click answers quickly.
+- **One finding per recommendation and CI** - Defender for Cloud and the Exposure Graph reporting the same recommendation on one CI give one finding.
+- **Domain and category owners recognised** - Owners named by e-mail address are looked up once and stored, so they can decide their requests.
+
+## 3.1.49 · 2026-11-25 · Feature update
+
+Duplicate recommendations are merged into one finding, and each task sent to ServiceNow carries its full context.
+
+### New features
+
+- **Full task context to ServiceNow and SQL** - Each remediation task carries what to do first, paths, the recommended update, CVE ids, risk, due date, the asset and a link to its page. Add the new columns from the connector page's table definition.
+- **Duplicates not merged are shown** - Operations > Data quality shows duplicates not merged, and the run log warns with examples.
+
+### Fixes
+
+- **Duplicate recommendations are merged** - An 'Update <software>' recommendation for software whose CVEs are already on the asset becomes evidence on those CVE findings ('Also reported by').
+- **A merged recommendation closes as 'Linked'** - It is sent to ServiceNow and the SQL hand-off as closed 'Linked' to the CVE finding, never as fixed and never dropped.
+- **The job buttons work again** - Run now, Stop, schedule changes, template release and mail send-now go to the installation through a queue.
+- **Support access answers each request in turn** - A support session's close no longer cancels another session's waiting request.
+- **Guests are recognised again at sign-in** - Guests kept by e-mail address are looked up once and stored, with no object id to enter by hand.
+
+## 3.1.47 · 2026-11-25 · Feature update
+
+Each remediation task has its own page.
+
+### New features
+
+- **A page for every remediation task** - Each remediation task has its own page: what to do, the application, its version and every path, the asset, the dates, and every finding behind the task, with export.
+
+### Fixes
+
+- **Signed requests show local times** - The signed requests page shows its times like every other page.
+
+## 3.1.46 · 2026-11-25 · Feature update
+
+The protection score now gives credit for every fix, and its formula is shown next to it.
+
+### New features
+
+- **The protection score gives credit for every fix** - Each asset has a health of 0-100: Very High -25, High -10, Medium and Low together at most -20. Tiers count with fixed shares: Tier 0 40 %, Tier 1 30 %, Tier 2 20 %, Tier 3 10 %.
+- **The formula next to every protection score** - The formula, with your own settings, is shown next to every protection score on the Executive overview, the Executive report and the wall board.
+
+### Fixes
+
+- **Application columns right after the task** - On Remediation tasks, Application, Application version, Paths and Detected paths sit right after the task, also in saved layouts.
+- **Support access closes when it should** - A request to close support access always goes through, also when several requests wait at once.
+- **The update shows its progress** - A long refresh of the pages' data during an update says how far it has come, and a finished update is no longer reported as stopped.
+- **Summary groups keep one spelling** - A value spelled two ways (User and user) is one group, so the history check no longer reports false differences.
+
+## 3.1.45 · 2026-11-24 · Feature update
+
+Security recommendations Summary and Detailed can show only the risks past their accepted time to fix.
+
+### New features
+
+- **Actual Risks or Within Accepted Lifecycle** - Security recommendations Summary and Detailed have a choice above the table: Actual Risks (the default, every open finding) or Within Accepted Lifecycle (only findings past their accepted time to fix). The wall board's table uses the same choice.
+
+### Fixes
+
+None in this version.
+
+## 3.1.44.2 · 2026-11-24 · Fix-only
+
+The finding history writes only what changed; bundled applications get their own tasks; disabled service principals are handled like disabled users.
+
+### New features
+
+None in this version.
+
+### Fixes
+
+- **Finding history writes only what changed** - A finding that did not change keeps its state, so each run records only new, changed and closed findings.
+- **Bundled applications get their own tasks** - A library bundled in several applications is one task per application, named after its install folder, with full paths and the application version.
+- **Disabled service principals handled like disabled users** - A disabled service principal no longer counts as a vulnerable asset, even with high privileges.
+
+## 3.1.44.1 · 2026-11-24 · Fix-only
+
+The vulnerability close-loop step runs again, and security image updates arrive within 15 minutes.
+
+### New features
+
+None in this version.
+
+### Fixes
+
+- **Vulnerability close-loop runs again** - The close-loop step reaches its database again; a check now makes sure every step can load what it needs.
+- **Security image updates within 15 minutes** - Every installation checks for newer security images every 15 minutes and applies them without stopping a run.
+- **Release checks run first** - The quick release checks and the ring check run before the tests, so a problem is found in seconds.
+
+## 3.1.44 · 2026-11-24 · Feature update
+
+Large installations finish their runs much sooner: results are prepared as they arrive, only what changed is worked out again, and every run checks itself.
+
+### New features
+
+- **Only what changed is worked out again** - Findings are stored ready to show, and the data sync and the vulnerability connector work on what changed. Every run also checks a rotating seventh of the assets in full.
+- **Finding history** - Each run is kept as finding states and checked every run. Pages and connectors read it only when that run was verified.
+- **Totals from what changed** - Key figures and summary groups are worked out from what changed and compared with a full build every run.
+- **Faster data sync and vulnerability report** - The data sync starts per report and loads in checked batches; the vulnerability report asks Defender in parallel within its limits.
+- **Faster on large installations** - Old collections leave the database in one step, and the largest tables get columnstore indexes built when the installation is not busy.
+
+### Fixes
+
+- **One unreadable report no longer holds the run** - A report that could not be read because of a passing service problem shows its last complete result, marked with its date.
+- **Parallel loading no longer blocks itself** - Risk Analysis workers loading findings at the same time no longer wait on each other.
+- **Time limits on Azure reads** - Each Azure read has a time limit and a progress line each minute; a read that gives up is marked unknown, never empty.
+- **Smaller fixes** - Mail can be set up through the update; the database load and a size recommendation go to support as numbers only.
+- **First run after the update builds in full** - The first run after this update builds everything once in full; the runs after it are the faster ones.
+
 ## 3.1.43.5 · 2026-11-23 · Fix-only
 
 The Azure collection no longer waits silently on Defender for Cloud.
@@ -272,7 +411,7 @@ None in this version.
 ### Fixes
 
 - **Exactly the rights each part needs** - Unused rights are removed, rare ones are given only on demand, and the needed ones are set up and read back.
-- **The web app reads no Azure details** - The environment report's facts come from the update, so the web app needs no read right on your resources.
+- **The web app reads no Azure details** - The System Documentation's facts come from the update, so the web app needs no read right on your resources.
 - **Settings change only through the update** - A value set on the update job is applied, read back and recorded by the update itself.
 
 ## 3.1.26.1 · 2026-11-15 · Security

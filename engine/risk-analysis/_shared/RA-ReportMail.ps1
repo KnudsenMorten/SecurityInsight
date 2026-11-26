@@ -85,7 +85,8 @@ function ConvertTo-RAReportMailProtectionHtml {
     }
     $gr = Get-RAReportMailValue $Protection 'Grace'; $gv = @(@($(if ($gr -is [System.Collections.IDictionary]) { $gr.Values } elseif ($null -ne $gr) { $gr.PSObject.Properties | ForEach-Object { $_.Value } })) | Sort-Object -Unique)
     $gw = $(if ($gv.Count -eq 1) { [string]::Format($inv, '{0} days', $gv[0]) } else { 'per asset type (your settings)' })
-    [void]$c.Append([string]::Format($inv, '<p style="{0}font-size:12px;line-height:1.5;color:{1};margin:4px 0 14px 0;">Higher is better {2} the share of active assets with no open Very High / High finding, tier-weighted {2} accepted lifecycle: {3} (per your settings) {2} {4:N0} of {5:N0} counted findings had no usable date and count as open.</p>', $L.Font, $L.Muted, $dot, $gw, [long]$Protection.NoDate, [long]$Protection.Findings))
+    [void]$c.Append([string]::Format($inv, '<p style="{0}font-size:12px;line-height:1.5;color:{1};margin:4px 0 14px 0;">Higher is better {2} {6} {2} accepted lifecycle: {3} (per your settings) {2} {4:N0} of {5:N0} counted findings had no usable date and count as open.</p>', $L.Font, $L.Muted, $dot, $gw, [long]$Protection.NoDate, [long]$Protection.Findings,
+        [System.Net.WebUtility]::HtmlEncode($(if (Get-Command -Name Get-SIProtectionModelWords -ErrorAction SilentlyContinue) { Get-SIProtectionModelWords -Points (Get-RAReportMailValue $Protection 'Points') -Shares (Get-RAReportMailValue $Protection 'Shares') -MinorCap (Get-RAReportMailValue $Protection 'MinorCap') } else { 'the tier-share weighted health of the active assets' }))))
     @{ Summary = $sum; Types = $c.ToString() }
 }
 

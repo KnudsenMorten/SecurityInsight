@@ -67,6 +67,13 @@ public sealed record AcceptedLifecycle(bool Readable, IReadOnlyList<(string Type
         ? "An open " + SeverityWords + " finding counts as a risk only after its accepted time to fix -- like monthly patching: " + PerType + "." + OtherWords
         : "A finding counts as a risk only after its accepted time to fix -- like monthly patching. The accepted time to fix could not be read from the settings, so it is not shown here.";
 
+    /// #1355 (owner 2026-11-24: "Keep score text + new line"): the line beside the TABLE choice -- the wall board's table toggle and
+    /// Security recommendations > Summary / Detailed. The table counts every severity past its accepted time to fix, so it names
+    /// none; the rest is <see cref="Line"/>'s, identical. The score tile keeps <see cref="Line"/>.
+    public string TableLine => Readable && Grace.Count > 0
+        ? "An open finding counts as a risk only after its accepted time to fix -- like monthly patching: " + PerType + "." + OtherWords
+        : Line;
+
     /// The accepted lifecycle from the settings in force. Never throws: a store that cannot be read gives <see cref="Unknown"/>.
     public static async Task<AcceptedLifecycle> ReadAsync(IServiceProvider services, CancellationToken ct)
     {

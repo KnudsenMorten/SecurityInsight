@@ -113,6 +113,10 @@ public sealed class DomainRolesModel : PageModel
     private async Task<IActionResult> SetAsync(bool add, CancellationToken ct)
     {
         var r = await _flow.SetRoleAsync(User, add, Domain ?? "", Category, Role ?? "", Principal ?? "", ct);
+        // #1370: a person added by address gets its object id from the directory now (exactly one account; never a guess)
+        if (add && r.Status == WriteStatus.Saved && HttpContext?.RequestServices.GetService(typeof(SI.Management.Web.Departments.GuestObjectIdResolver)) is SI.Management.Web.Departments.GuestObjectIdResolver ids
+            && await ids.AfterRosterSaveAsync(ct) is { Length: > 0 } words)
+            r = r with { Message = r.Message + " -- " + words };
         TempData["toast"] = r.Message;
         TempData["toastKind"] = r.Status switch { WriteStatus.Saved => "ok", WriteStatus.Stale => "warn", _ => "error" };
         return Redirect("/Admin/DomainRoles");

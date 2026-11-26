@@ -19,11 +19,11 @@
         works on an install of any version.
       * THE RUN: plan -> create the job (tagged as a one-time job) -> start it once -> wait (bounded) -> read the result ->
         ALWAYS (finally) remove the job and read back that it is gone. PASS needs the execution Succeeded, which the job
-        reaches only after the user and its role were READ BACK in every database. Run twice: one read per database, no
-        statement.
-      * What it does NOT do: add the Support app to the admin group (that is given from outside the network, before the
-        close), touch the install's own jobs, the SQL server, its firewall or its administrator, or sign in to the database
-        from the machine it runs on.
+        reaches only after the user and its READ-ONLY role si_support_read were READ BACK in every database. Run twice: one
+        read per database, no statement.
+      * What it does NOT do (framework SECAUDIT-1a, #1374): give the Support app db_owner or add it to the admin group --
+        admin comes only just in time, through the signed support grant procedures; touch the install's own jobs, the SQL
+        server, its firewall or its administrator, or sign in to the database from the machine it runs on.
 
     Seams (the caller hands them in; tests pass fakes):
       -Arm   { param([string]$Method, [string]$Path, $Body) }   ARM; $null = not found on a GET; throws otherwise
@@ -39,16 +39,18 @@ function Get-SISupportSqlJobTag { [ordered]@{ Name = 'si-one-time-job'; Value = 
 
 function Get-SISupportSqlJobFunctionNames {
     <# PURE. The functions the job carries, word for word, in load order. Nothing else runs inside. #>
-    @('ConvertTo-SISqlSidFromClientId', 'Get-SISupportAppDatabaseCheckSql', 'ConvertFrom-SISupportAppDatabaseAnswer',
-      'Get-SISupportAppDatabaseAccessSql', 'Get-SISupportAppRightHint', 'Invoke-SISupportAppDatabaseAccess')
+    # #1374 SECAUDIT-1a: the READ-ONLY user only (si_support_read) -- the job never carries a db_owner statement
+    @('ConvertTo-SISqlSidFromClientId', 'ConvertFrom-SISupportAppReadRoleAnswer', 'Get-SISupportAppReadOnlyAccessSql',
+      'Get-SISupportAppRightHint', 'Invoke-SISupportAppReadOnlyAccess')
 }
 
 function Get-SISupportSqlJobScript {
     <#
         PURE (reads only the functions loaded in this process). The PowerShell the one-time job runs: the grant functions
         word for word, a token from the container's managed-identity endpoint for the identity SI_SUPPORTSQL_MI_CLIENT_ID,
-        the SQL client of PowerShell 7, ONE call of Invoke-SISupportAppDatabaseAccess -Apply over SI_SUPPORTSQL_DATABASES,
-        and ONE result line "[supportsql] RESULT {json}". Exit 0 only when every database READ BACK its user with db_owner.
+        the SQL client of PowerShell 7, ONE call of Invoke-SISupportAppReadOnlyAccess -Apply over SI_SUPPORTSQL_DATABASES,
+        and ONE result line "[supportsql] RESULT {json}". Exit 0 only when every database READ BACK its user in the
+        read-only role si_support_read. NEVER db_owner (framework SECAUDIT-1a, #1374): admin comes only just in time.
     #>
     $l = New-Object System.Collections.Generic.List[string]
     $l.Add('$ErrorActionPreference = ''Stop''')
@@ -75,10 +77,10 @@ $rows = @()
 $ok = $false
 try {
     if (-not $server -or -not $app -or -not $mi -or -not $dbs.Count) { throw 'the job was not told the server, the databases, the Support app or the identity' }
-    $rows = @(Invoke-SISupportAppDatabaseAccess -Sql $sql -Databases $dbs -ClientId $app -UserName $user -Apply)
+    $rows = @(Invoke-SISupportAppReadOnlyAccess -Sql $sql -Databases $dbs -ClientId $app -UserName $user -Apply)
     $ok = ($rows.Count -eq $dbs.Count) -and -not @($rows | Where-Object { $_.State -notin 'present', 'granted' }).Count
     $state = if (-not $ok) { 'failed' } elseif (@($rows | Where-Object { $_.State -eq 'granted' }).Count) { 'granted' } else { 'unchanged' }
-    Write-Output ('[supportsql] RESULT ' + ([ordered]@{ state = $state; databases = @($rows | ForEach-Object { [ordered]@{ database = $_.Database; state = $_.State; detail = $_.Detail } }) } | ConvertTo-Json -Depth 5 -Compress))
+    Write-Output ('[supportsql] RESULT ' + ([ordered]@{ state = $state; databases = @($rows | ForEach-Object { [ordered]@{ database = $_.Database; state = $_.State; owner = [bool]$_.Owner; detail = $_.Detail } }) } | ConvertTo-Json -Depth 5 -Compress))
 } catch {
     Write-Output ('[supportsql] RESULT ' + ([ordered]@{ state = 'failed'; reason = [string]$_.Exception.Message } | ConvertTo-Json -Compress))
 }
@@ -157,7 +159,7 @@ function Get-SISupportSqlJobPlan {
     $gid = if ($Shape.EntraAdmin -and [string]$Shape.EntraAdmin.Type -eq 'Group') { [string]$Shape.EntraAdmin.Sid } else { '' }
     if ($Shape.SqlServerId -and -not $gid) { $p.Problems.Add('the database server''s administrator is not a group -- the in-network identity has no way to be an administrator (setup\Set-SISqlAdminGroup.ps1 first)') }
     $pna = [string](Get-SIPnProp $Shape.SqlServer @('properties', 'publicNetworkAccess'))
-    if ($pna -ne 'Disabled') { $p.Lines.Add(('note: the database server''s public network access is {0} -- this job is for a PRIVATE database; with public access, setup\Grant-SISupportAppDatabase.ps1 does the same from outside' -f $(if ($pna) { $pna } else { 'not set (Enabled)' }))) }
+    if ($pna -ne 'Disabled') { $p.Lines.Add(('note: the database server''s public network access is {0} -- this job is for a PRIVATE database; with public access, setup\Grant-SISupportAccess.ps1 does the same from outside' -f $(if ($pna) { $pna } else { 'not set (Enabled)' }))) }
     # 2. the databases: every user database on the server (it is SecurityInsight's own server)
     if ($Shape.SqlServerId) {
         $dbs = @(Get-SIPnArmList -Arm $Arm -Path ('{0}/databases?api-version={1}' -f $Shape.SqlServerId, $script:SISsjSqlApi) | ForEach-Object { [string](Get-SIPnProp $_ @('name')) } | Where-Object { $_ -and $_ -ne 'master' } | Sort-Object -Unique)
@@ -214,7 +216,7 @@ function Get-SISupportSqlJobPlan {
 function Get-SISupportSqlJobOptions {
     <# PURE. What can be done when the plan stops (printed). #>
     @('make the install''s in-network SQL identity (Invardia support: setup\Set-SIPrivateNetworking.ps1 -Apply -Steps sql-identity), then run this again',
-      'or run setup\Grant-SISupportAppDatabase.ps1 -Apply from a machine INSIDE the install''s network (it reaches the private endpoint)',
+      'or run setup\Grant-SISupportAccess.ps1 -AppId <id> -Level <level> from a machine INSIDE the install''s network (it reaches the private endpoint)',
       'the public endpoint is NOT opened for this -- a private install stays private')
 }
 

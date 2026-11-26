@@ -406,7 +406,13 @@ function Get-SIDataOutNextPage {
                         $c.Phase = 'open'
                     }
                     'finding_summary' { $c.Phase = 'summary-build' }
-                    { $_ -in 'remediation_task', 'remediation_task_finding' } { $c.Phase = 'task'; $c['TaskCollection'] = '' }
+                    { $_ -in 'remediation_task', 'remediation_task_finding' } {
+                        $c.Phase = 'task'; $c['TaskCollection'] = ''
+                        # #1367 the task's context columns are read once the database has them (asked once per output)
+                        $cx = $null; try { $cx = & $c.Invoke "SELECT CASE WHEN COL_LENGTH('sidata.RemediationTask', 'ContextHash') IS NULL THEN 0 ELSE 1 END" @{} 'scalar' } catch { $cx = $null }
+                        $cxi = 0; [void][int]::TryParse([string]$cx, [ref]$cxi)
+                        $c['TaskContext'] = ($cxi -eq 1)
+                    }
                     default { throw "unknown output grain '$($c.Grain)'" }
                 }
                 continue
@@ -427,7 +433,7 @@ function Get-SIDataOutNextPage {
                 # #1277 the remediation tasks (or their links) of the newest collection whose tasks are built -- the collection
                 # chosen on the first page and kept for every later one (a build that lands meanwhile is the next run's)
                 $links = ($c.Grain -eq 'remediation_task_finding')
-                $a = & $c.Invoke (Get-SIDataOutTaskPageSql -Links:$links) @{ Take = $take; CollectionId = [string]$c.TaskCollection; AfterId = [string]$c.After; AfterKey = [string]$c.AfterKey } 'reader'
+                $a = & $c.Invoke (Get-SIDataOutTaskPageSql -Links:$links -Context:([bool]($c.ContainsKey('TaskContext') -and $c.TaskContext))) @{ Take = $take; CollectionId = [string]$c.TaskCollection; AfterId = [string]$c.After; AfterKey = [string]$c.AfterKey } 'reader'
                 $rows = @(@($a) | ForEach-Object { $_ } | Where-Object { $_ -is [System.Collections.IDictionary] }); $a = $null
                 if ($rows.Count -eq 0) { $c.Phase = 'done'; continue }
                 $items = @(foreach ($r in $rows) { ConvertFrom-SIDataOutTaskRow -Row $r -Links:$links })
@@ -765,9 +771,17 @@ function Add-SIDataOutSummaryStage {
     $c = $Cursor
     $rows = New-Object System.Collections.Generic.List[object]
     $firstInPage = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
+    # #1336 the bulk load (SI-DataBulkLoad.ps1): the page's rows in measured batches, each counted and hashed back; else the
+    # chunks of 1,000 as before
+    $bulk = (Get-Command -Name Write-SIDataLoadRows -ErrorAction SilentlyContinue) -and (Test-SIDataBulkSeam $c.Stage) -and (Get-SIDataBulkLoadMode) -ne 'off'
     $flush = {
         if ($rows.Count -eq 0) { return }
-        [void](& $c.Stage (Get-SIDataOutSummaryAddSql) @{ StageId = $c.StageId; rows = (ConvertTo-Json -InputObject $rows.ToArray() -Compress -Depth 6) } 'nonquery')
+        $arr = $rows.ToArray()
+        $chunked = { [void](& $c.Stage (Get-SIDataOutSummaryAddSql) @{ StageId = $c.StageId; rows = (ConvertTo-Json -InputObject $arr -Compress -Depth 6) } 'nonquery') }
+        if ($bulk) {
+            $txt = [string[]]@(foreach ($x in $arr) { ConvertTo-Json -InputObject $x -Compress -Depth 6 })
+            $null = Write-SIDataLoadRows -Invoke $c.Stage -Sql ((Get-SIDataOutSummaryAddSql) + "SELECT @@ROWCOUNT;`n") -Items $txt -Params @{ StageId = $c.StageId } -JsonParam 'rows' -What 'the summary staged for data out' -Log $c['Log'] -Fallback { & $chunked; 0L }
+        } else { & $chunked }
         $rows.Clear()
     }
     foreach ($it in $Items) {
@@ -782,7 +796,7 @@ function Add-SIDataOutSummaryStage {
         $c.Seq++
         $rows.Add([ordered]@{ q = $c.Seq; g = $k; c = (Get-SIDataOutItemKey -Grain 'ci_finding' -Item $it); n = [string](Get-SIItemValue $it 'si_asset_name')
                               s = (ConvertTo-SINumberOrNull (Get-SIItemValue $it 'si_risk_score')); w = (ConvertTo-SINumberOrNull (Get-SIItemValue $it 'si_weighted_risk_score')); a = $attr })
-        if ($rows.Count -ge 1000) { & $flush }
+        if (-not $bulk -and $rows.Count -ge 1000) { & $flush }
     }
     & $flush
 }
@@ -833,7 +847,9 @@ function Get-SIDataOutTaskPageSql {
         id as hex) [and @AfterKey, the finding key]. Every row says its CollectionId and TaskHex (the cursor's place). A
         database without the task tables answers none.
     #>
-    param([switch]$Links)
+    # -Context (#1367, the database has the task's context columns -- the cursor asks once): the task's context for a ticket and
+    # the "More info" link (Get-SIDataOutTaskWebBaseSql, read once per page) -- the SQL hand-off views' own values
+    param([switch]$Links, [switch]$Context)
     $head = @'
 SET NOCOUNT ON;
 IF OBJECT_ID('sidata.RemediationTask') IS NULL OR OBJECT_ID('sidata.RemediationTaskFinding') IS NULL OR COL_LENGTH('sidata.Collection', 'RemediationTasksAt') IS NULL
@@ -844,6 +860,37 @@ DECLARE @a BINARY(32) = CASE WHEN NULLIF(@AfterId, N'') IS NULL THEN NULL ELSE C
 '@
     # the source run of the rows (u_source_run): the collection they were built from, the SAME text the hand-off views give
     $head += ('DECLARE @run NVARCHAR(32) = (SELECT {0} FROM sidata.Collection AS c WHERE c.CollectionId = @c);' -f (Get-SIDataOutTaskSourceRunSql)) + "`n"
+    if ($Context) {
+        $head += ("DECLARE @web NVARCHAR(4000) = NULL;`nIF OBJECT_ID('cfg.Setting') IS NOT NULL SET @web = {0};" -f (Get-SIDataOutTaskWebBaseSql)) + "`n"
+        if (-not $Links) {
+            return $head + @'
+SELECT TOP (CONVERT(int, @Take)) t.CollectionId, CONVERT(varchar(64), t.TaskId, 2) AS TaskHex, t.OwnerKey, t.CiId, t.AssetKey, t.AssetName, t.CmdbId, t.Tier,
+       t.TaskName, t.Kind, t.Product, t.Vendor, t.Version, t.Application, t.ApplicationPaths, t.Findings, t.Cves, t.HighestSeverity, t.MaxRiskScore,
+       t.CiOwner, t.CiDepartment, t.State, t.ClosedWhy, t.ClosedAt, t.FirstSeen, t.LastSeen, t.ChangedAt, t.InThisCollection,
+       CONVERT(varchar(64), {HASH}, 2) AS RowHashHex, @run AS SourceRun,
+       t.WhatToDo, t.ApplicationVersion, t.DetectedPaths, t.RecommendedUpdate, t.RemediationSteps, t.CveList, t.HighestRiskRating, t.MaxWeightedRisk, t.SecurityDomain,
+       t.Channel, t.ExploitAvailable, t.EndOfSupport, t.EndOfSupportDate, t.DueDate, t.FirstDetected, t.WithinAcceptedLifecycle, t.AssetType, t.AssetOs, t.AssetIp,
+       t.AssetEnvironment, t.InternetExposed, t.AlsoReportedBy, LOWER(CONVERT(varchar(64), t.ContextHash, 2)) AS ContextHashHex, {MOREINFO} AS MoreInfo
+FROM sidata.RemediationTask AS t
+CROSS APPLY (SELECT @web AS Web) AS wb
+WHERE t.CollectionId = @c AND (@a IS NULL OR t.TaskId > @a)
+ORDER BY t.TaskId;
+'@.Replace('{HASH}', (Get-SIDataOutTaskHashSql)).Replace('{MOREINFO}', (Get-SIDataOutTaskMoreInfoSql))
+        }
+        return $head + @'
+SELECT TOP (CONVERT(int, @Take)) l.CollectionId, CONVERT(varchar(64), l.TaskId, 2) AS TaskHex, l.FindingKey, l.OwnerKey, t.CiId, t.AssetName, l.Cve, l.Title,
+       l.Severity, l.Version, l.InThisCollection, t.ChangedAt, CONVERT(varchar(64), {HASH}, 2) AS RowHashHex, @run AS SourceRun,
+       lf.Cvss, l.RiskScore, l.RiskRating, l.WeightedRisk, lf.HasExploit, lf.SourceFirstDetected, COALESCE(lf.FixDueDate, dst.DueAt) AS FixDueDate, {MOREINFO} AS MoreInfo
+FROM sidata.RemediationTaskFinding AS l
+JOIN sidata.RemediationTask AS t ON t.CollectionId = l.CollectionId AND t.TaskId = l.TaskId
+LEFT JOIN sidata.Finding AS lf ON lf.CollectionId = l.CollectionId AND lf.FindingId = l.FindingId
+-- #1388 the due date: the provider's own where it is set ("Provider's date wins if set"), the finding model's for the rest
+LEFT JOIN sidata.CiFindingState AS dst ON dst.OwnerKey = l.OwnerKey AND dst.FindingKey = l.FindingKey
+CROSS APPLY (SELECT @web AS Web) AS wb
+WHERE l.CollectionId = @c AND (@a IS NULL OR l.TaskId > @a OR (l.TaskId = @a AND l.FindingKey > @AfterKey))
+ORDER BY l.TaskId, l.FindingKey;
+'@.Replace('{HASH}', (Get-SIDataOutTaskHashSql -Links)).Replace('{MOREINFO}', (Get-SIDataOutTaskMoreInfoSql -Alias 'l'))
+    }
     if (-not $Links) {
         return $head + @'
 SELECT TOP (CONVERT(int, @Take)) t.CollectionId, CONVERT(varchar(64), t.TaskId, 2) AS TaskHex, t.OwnerKey, t.CiId, t.AssetKey, t.AssetName, t.CmdbId, t.Tier,
@@ -893,6 +940,28 @@ function Get-SIDataOutTaskSourceRunSql {
         on the SQL hand-off views, at most 28 characters (si- + up to 10 digits + - + 14 digits), never a value of one push only.
     #>
     "CONCAT(N'si-', c.CollectionId, N'-', CONVERT(nchar(8), c.CollectionTime, 112), REPLACE(CONVERT(nchar(8), c.CollectionTime, 108), N':', N''))"
+}
+
+function Get-SIDataOutTaskWebBaseSql {
+    <#
+        PURE. #1367 The SQL of the install's web address (a scalar subquery over cfg.Setting): SIWeb_PublicBaseUrl, the web app's
+        setting every mail's links use (scope engine:management-web), as text without a trailing '/', and only when it is an
+        https address -- else NULL (no link). The SQL hand-off views state the same text (sql\si-data-schema.sql @SIRemWeb).
+    #>
+    "(SELECT TOP (1) CASE WHEN wu.U LIKE N'https://_%' THEN wu.U END FROM cfg.Setting AS ws CROSS APPLY (SELECT LTRIM(RTRIM(CASE WHEN ISJSON(N'[' + ws.ValueJson + N']') = 1 THEN JSON_VALUE(N'[' + ws.ValueJson + N']', '`$[0]') ELSE ws.ValueJson END)) AS U0) AS w0 CROSS APPLY (SELECT CASE WHEN RIGHT(w0.U0, 1) = N'/' THEN LEFT(w0.U0, LEN(w0.U0) - 1) ELSE w0.U0 END AS U) AS wu WHERE ws.Name = N'SIWeb_PublicBaseUrl' AND ws.Scope = N'engine:management-web')"
+}
+
+function Get-SIDataOutTaskMoreInfoSql {
+    <#
+        PURE. #1367 "More info" (owner 2026-11-25: "maybe a more info link, which takes the person directly to si task page for
+        the task, where he can find more context"): the task's own page, <web address>/Remediations/Task?id=<task id> (wb.Web:
+        the web address; -Alias: the row holding TaskId). No collection in the link: the page shows the newest collection whose
+        tasks are built, and a task's id is the same in every collection -- an old ticket's link keeps opening the task while
+        SecurityInsight keeps it (closed tasks: SI_Pro_FindingStateRetentionDays). It opens the web app's own sign-in; the
+        person needs reader access there. The SQL hand-off views state the same text.
+    #>
+    param([string]$Alias = 't')
+    "CASE WHEN wb.Web IS NOT NULL THEN CONCAT(wb.Web, N'/Remediations/Task?id=', LOWER(CONVERT(nvarchar(64), $Alias.TaskId, 2))) END"
 }
 
 function Get-SIDataOutTaskOutOfScopeHash {
@@ -1137,6 +1206,12 @@ function ConvertFrom-SIDataOutTaskRow {
         $h['severity'] = (& $g 'Severity'); $h['version'] = (& $g 'Version'); $h['in_collection'] = [bool](& $g 'InThisCollection')
         # when its task last changed (the link view's u_changed_at)
         $h['changed_at'] = (& $g 'ChangedAt')
+        # #1367 the finding's own context (a row read with -Context): its CVSS, risk, exploit, dates, and the task's page
+        if ($Row.Contains('MoreInfo')) {
+            foreach ($p in @(@('cvss', 'Cvss'), @('risk_score', 'RiskScore'), @('risk_rating', 'RiskRating'), @('weighted_risk', 'WeightedRisk'), @('first_detected', 'SourceFirstDetected'),
+                             @('due_date', 'FixDueDate'), @('more_info', 'MoreInfo'))) { $h[$p[0]] = (& $g $p[1]) }
+            $h['exploit_available'] = (ConvertTo-SIDataOutYesNo (& $g 'HasExploit'))
+        }
         return [pscustomobject]$h
     }
     foreach ($p in @(@('si_cmdb_id', 'CmdbId'), @('si_tier', 'Tier'), @('asset_key', 'AssetKey'), @('task_name', 'TaskName'), @('task_kind', 'Kind'), @('product', 'Product'),
@@ -1145,7 +1220,26 @@ function ConvertFrom-SIDataOutTaskRow {
                      @('state', 'State'), @('closed_why', 'ClosedWhy'), @('closed_at', 'ClosedAt'), @('first_seen', 'FirstSeen'), @('last_seen', 'LastSeen'),
                      @('changed_at', 'ChangedAt'))) { $h[$p[0]] = (& $g $p[1]) }
     $h['in_collection'] = [bool](& $g 'InThisCollection')
+    # #1367 the task's context for a ticket (a row read with -Context): the columns the task build prepared, as the views give them
+    if ($Row.Contains('MoreInfo')) {
+        foreach ($p in @(@('what_to_do', 'WhatToDo'), @('application_version', 'ApplicationVersion'), @('detected_paths', 'DetectedPaths'), @('recommended_update', 'RecommendedUpdate'),
+                         @('remediation', 'RemediationSteps'), @('cve_ids', 'CveList'), @('risk_rating', 'HighestRiskRating'), @('weighted_risk', 'MaxWeightedRisk'),
+                         @('security_domain', 'SecurityDomain'), @('tool', 'Channel'), @('end_of_support', 'EndOfSupport'), @('end_of_support_date', 'EndOfSupportDate'),
+                         @('due_date', 'DueDate'), @('first_detected', 'FirstDetected'), @('within_accepted_lifecycle', 'WithinAcceptedLifecycle'), @('asset_type', 'AssetType'),
+                         @('os', 'AssetOs'), @('ip_address', 'AssetIp'), @('environment', 'AssetEnvironment'), @('also_reported_by', 'AlsoReportedBy'), @('more_info', 'MoreInfo'),
+                         @('context_hash', 'ContextHashHex'))) { $h[$p[0]] = (& $g $p[1]) }
+        $h['exploit_available'] = (ConvertTo-SIDataOutYesNo (& $g 'ExploitAvailable'))
+        $h['internet_exposed'] = (ConvertTo-SIDataOutYesNo (& $g 'InternetExposed'))
+    }
     [pscustomobject]$h
+}
+
+function ConvertTo-SIDataOutYesNo {
+    <# PURE. A stored yes / no (BIT) as the outputs say it: 'yes', 'no', or $null when not known (the views' CASE ... WHEN 1 / 0). #>
+    param($Value)
+    if ($null -eq $Value -or $Value -is [System.DBNull]) { return $null }
+    if ([bool]$Value) { return 'yes' }
+    'no'
 }
 
 function ConvertFrom-SIDataOutJson {
@@ -2774,6 +2868,12 @@ function Invoke-SIDataOutSnowContract {
     $sn = Open-SIDataOutSnowSession -Entry $e -Header $W.Header -Soft ([string[]]@(Get-SIOutputSoftColumns -Map $W.Map)) -Store $W.Store -SnowConnect $SnowConnect -Here $PSScriptRoot -RunId $W.RunId -Mode $mode `
             -RequestToken $(if ($W.Resync) { $req.Token } else { '' }) -Prelude $prelude -NoBatch:$wantTest
     $W.Target = [string]$sn.Table; $W.Snow = $sn; $W.BatchId = [string]$sn.BatchId
+    # #1367 a column on by default that the task tables do not have yet is not sent -- so it is not compared either: a task whose
+    # only change is a value ServiceNow cannot receive is not sent again (no update of every task because this release added
+    # columns); once the ServiceNow team adds the column, each task goes once with it
+    if ($W.Grain -in 'remediation_task', 'remediation_task_finding' -and $sn -and $sn.ContainsKey('SoftMissing') -and @($sn.SoftMissing).Count) {
+        $W.Volatile = [string[]]@(@($W.Volatile) + @($sn.SoftMissing) | Select-Object -Unique)
+    }
     if ($W.Resync) { & $W.Log 'INFO' ('{0}: a full resync was asked for ({1}) -- every record in scope is sent as new' -f $W.Label, $req.Token) }
     $first = $null
     if ($wantTest -and -not $sn.StatusOk) { & $W.Log 'WARN' ('{0}: a test batch was asked for, but it needs the staging status table -- not sent' -f $W.Label) }

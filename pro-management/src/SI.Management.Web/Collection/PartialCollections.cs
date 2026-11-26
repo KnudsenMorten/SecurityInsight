@@ -62,10 +62,11 @@ public sealed record PartialNotice(PartialMark Mark, IReadOnlyList<CarriedReport
 
     /// <summary>
     /// The one customer line (owner 2026-10-19), in words around the date -- the view renders the date in the viewer's own
-    /// format. Every report from the same day: "1 report shows data from [date] (this run could not finish it): Admin
-    /// sign-ins to lower-tier devices." None with an earlier result: "1 report could not be finished in this run and shows
-    /// only what it found: ...". Mixed: Lead "2 reports could not be finished in this run:" and <see cref="Items"/> = true
-    /// (each report then says its own date, or "only what this run found").
+    /// format. Every report from the same day: "1 report shows its last complete result from [date] (this run could not
+    /// finish it): Admin sign-ins to lower-tier devices." (#1323, owner 2026-11-23: the words "last complete result from
+    /// [date]"). None with an earlier result: "1 report could not be finished in this run and shows only what it found:
+    /// ...". Mixed: Lead "2 reports could not be finished in this run:" and <see cref="Items"/> = true (each report then
+    /// says "last complete result from [date]", or "only what this run found").
     /// </summary>
     public (string Lead, DateTime? Date, string Tail, bool Items) Line()
     {
@@ -74,7 +75,7 @@ public sealed record PartialNotice(PartialMark Mark, IReadOnlyList<CarriedReport
         var names = string.Join(", ", Reports.Select(r => r.DisplayName)) + ".";
         var days = Reports.Select(r => r.FromUtc?.Date).Distinct().ToList();
         if (days.Count == 1 && Reports[0].FromUtc is { } from)
-            return (count + (n == 1 ? " shows" : " show") + " data from", from, "(this run could not finish " + (n == 1 ? "it" : "them") + "): " + names, false);
+            return (count + (n == 1 ? " shows its" : " show their") + " last complete result from", from, "(this run could not finish " + (n == 1 ? "it" : "them") + "): " + names, false);
         if (days.Count == 1)
             return (count + " could not be finished in this run and " + (n == 1 ? "shows" : "show") + " only what it found: " + names, null, "", false);
         return (count + " could not be finished in this run:", null, "", true);

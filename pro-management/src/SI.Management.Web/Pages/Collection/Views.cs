@@ -127,10 +127,18 @@ public sealed class RowsModel(ICollectionViews views, ILogger<RowsModel> log) : 
     public bool RiskPartsPending => Current is not null && Current.RiskPartsAt is null
         && (DisplayColumns.Count > 0 ? DisplayColumns : Plan is null ? Array.Empty<GridColumn>() : Visible(Plan.Spec)).Any(d =>CollectionViewSql.RiskPartColumns.Any(p => !p.Hidden && string.Equals(p.Key, d.Key, StringComparison.OrdinalIgnoreCase)));
 
+    /// #1355 the wall board's choice: "Actual Risks" (no parameter, the default) | "Within Accepted Lifecycle" (?risk=lifecycle).
+    [BindProperty(SupportsGet = true)] public string? Risk { get; set; }
+    /// The choice above the grid (null = this collection does not offer it).
+    public AcceptedLifecycleChoice? RiskChoice { get; private set; }
+    /// The grid shows only the findings the "Within Accepted Lifecycle" view counts (offered and chosen).
+    public bool WithinAcceptedLifecycle { get; private set; }
+
     public override IEnumerable<(string Key, string Value)> ExtraState()
     {
         if (CurrentView is { } v) yield return ("view", v.Id);
         if (!string.IsNullOrWhiteSpace(Fix)) yield return ("fix", Fix!);
+        if (WithinAcceptedLifecycle) yield return (AcceptedLifecycleChoice.Parameter, AcceptedLifecycleChoice.LifecycleCode);
     }
 
     public override ViewPicker? Picker => new(PagePath, Current?.CollectionId, NamedViews.Visible(PagePath, Hidden), CurrentView, FacetLinks());
@@ -177,6 +185,14 @@ public sealed class RowsModel(ICollectionViews views, ILogger<RowsModel> log) : 
                 throw new InvalidOperationException("the rows of one fix are not narrowed to that fix (CollectionViewSql.RowsOfFix)");
             plan = plan with { Spec = CollectionViewSql.RowsOfFix, Parameters = p, Scope = plan.Scope + "|fix" };
         }
+        // #1355 "Within Accepted Lifecycle": the stored findings the wall board's view counts (one indexed EXISTS) -- offered only
+        // for a collection that has them; the export follows (the same plan)
+        var offered = await AcceptedLifecycleChoice.OfferedAsync(HttpContext, Current!.CollectionId, null, AcceptedLifecycleChoice.Asked(Risk), Queries, Log, ct);
+        WithinAcceptedLifecycle = offered == true;
+        if (WithinAcceptedLifecycle) plan = plan with { Spec = CollectionViewSql.WithinAcceptedLifecycle(plan.Spec), Scope = plan.Scope + "|risk=lifecycle" };
+        if (!forExport && offered is not null && HttpContext is not null)
+            RiskChoice = AcceptedLifecycleChoice.Of(WithinAcceptedLifecycle, (await SI.Management.Web.RiskExec.AcceptedLifecycle.ReadAsync(HttpContext.RequestServices, ct)).TableLine,
+                v => Link((AcceptedLifecycleChoice.Parameter, v)));
         return plan;
     }
 

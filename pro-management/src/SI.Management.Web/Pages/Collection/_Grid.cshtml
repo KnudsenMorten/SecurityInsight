@@ -68,7 +68,8 @@
     var exports = Model.Exports.ForGrid(gid + "-s", "#" + gid + "-strip");
 }
 <section class="card" aria-labelledby="@gid-h">
-    <h2 id="@gid-h">@Fmt.Int(g.Total) @(g.Total == 1 ? GridToolbar.Singular(noun) : GridToolbar.Plural(noun))</h2>
+    @* #1386: the header's one line already says the count -- the heading stays, for screen readers and aria-describedby *@
+    <h2 id="@gid-h" class="@(ReferenceEquals(ViewContext.HttpContext.Items[SI.Management.Web.Pages.Collection.ViewHead.CountedGridKey], g) ? "sr-only" : null)">@Fmt.Int(g.Total) @(g.Total == 1 ? GridToolbar.Singular(noun) : GridToolbar.Plural(noun))</h2>
 
     @if (opening is not null)
     {
@@ -247,7 +248,7 @@
                     <th class="sel"><input type="checkbox" data-select-all aria-label="Select every row on this page" /></th>
                     @foreach (var c in cols)
                     {
-                        <th scope="col" aria-sort="@AriaSort(c)" class="@(c.Type == GridType.Number ? "num" : "")" data-col="@c.Key">
+                        <th scope="col" aria-sort="@AriaSort(c)" class="@(c.Type == GridType.Number ? "num" : "")" data-col="@c.Key" data-col-kind="@(c.Lines || c.Filter == GridFilter.Tokens ? "list" : null)">
                             @if (c.Sortable) { <a href="@SortLink(c)" data-sort="@c.Key">@c.Label@(st.Sort == c.Key ? (st.Desc ? " ▼" : " ▲") : "")</a> } else { @c.Label }
                         </th>
                     }
@@ -272,7 +273,7 @@
                             if (SI.Management.Web.Columns.GridLayout.IsExtra(c))
                             {
                                 @* #589 an extra column: the CI, its identifiers, a source property, the finding context -- links kept *@
-                                <td class="wrap" data-col="@c.Key" data-extra title="@(text.Length > SI.Management.Web.Columns.DataCellHtml.MaxShown ? text : null)">@SI.Management.Web.Columns.DataCellHtml.Render(text)</td>
+                                <td class="wrap" data-col="@c.Key" data-extra>@SI.Management.Web.Columns.DataCellHtml.Render(text)</td>
                                 continue;
                             }
                             var title = Model.CellTitle(c, row);
@@ -284,8 +285,20 @@
                                     @* a time: shown in the viewer's own zone (#313) *@
                                     if (href is not null) { <a href="@href">@Fmt.Time(when)</a> } else { @Fmt.Time(when) }
                                 }
+                                else if (c.Lines && href is null && SI.Management.Web.Columns.CellLines.Split(text) is { Count: > 0 } items)
+                                {
+                                    @* owner 2026-11-24 ("detected paths is cut off"): a list column -- every item in full, one per line *@
+                                    if (items.Count <= SI.Management.Web.Columns.CellLines.ShownOpen)
+                                    {
+                                        <span class="cell-lines">@foreach (var it in items) { <span class="cell-line">@it</span> }</span>
+                                    }
+                                    else
+                                    {
+                                        <details class="cell-lines"><summary>@items.Count paths</summary>@foreach (var it in items) { <span class="cell-line">@it</span> }</details>
+                                    }
+                                }
                                 else if (text.Length > 0 && Model.CellTone(c.Key, row) is { } tone) { <span class="badge @tone" data-tone="@tone">@text</span> }
-                                else if (href is not null) { <a href="@href">@text</a> } else { @(text.Length > 160 ? text[..160] + "…" : text) }
+                                else if (href is not null) { <a href="@href">@text</a> } else { @* #1386: the whole text -- the cell shows two lines (grid-cells.js), the rest on hover and one click away *@ @text }
                             </td>
                         }
                     <text>@Html.Raw("</tr>")</text>

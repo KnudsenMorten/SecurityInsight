@@ -35,8 +35,8 @@ public sealed record AssetTasksView
     public long First => Total == 0 ? 0 : (long)(Page - 1) * Size + 1;
     public long Last => (long)(Page - 1) * Size + Rows.Count;
 
-    /// A task's own findings (Task findings, filtered to the task).
-    public string TaskHref(string taskId) => Link(RemediationTaskPageModel.TaskFindingsPage, ("f.TaskId", taskId));
+    /// A task's own page (owner 2026-11-25: "a landing page for each remeidation task with all relevant info").
+    public string TaskHref(string taskId) => Link(RemediationTaskPageModel.TaskPage, ("id", taskId));
 
     public string Link(string path, params (string Key, string? Value)[] extra)
     {

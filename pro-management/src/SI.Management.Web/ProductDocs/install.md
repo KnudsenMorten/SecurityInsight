@@ -25,9 +25,27 @@ ends as a warning with the exact command for the person who can.
 | Community | None. The install says it installs the Community edition. |
 | Pro | None at install. The install deploys the whole environment and runs nothing until its licence is approved; the updater requests it from Invardia, bound to your tenant, and SecurityInsight starts by itself. |
 
+### Microsoft licences for the data
+
+SecurityInsight reads what your Microsoft licences provide. A source your licences do not include returns no data, and
+SecurityInsight says so per source and report; it is never shown as a clean estate.
+
+| Microsoft licence | What SecurityInsight reads or uses with it |
+|---|---|
+| Defender for Endpoint Plan 2, or Defender Vulnerability Management | Devices, vulnerabilities and security recommendations |
+| Defender Exposure Management | The Exposure Graph and the attack-path reports |
+| Defender for Identity | Active Directory data |
+| Microsoft Entra ID P1 | The last sign-in of users; Conditional Access, which decides who may sign in to SecurityInsight |
+| Microsoft Entra ID P2 | Eligible (PIM) role assignments, and identity risk: risky users and risk detections |
+| Microsoft Entra Workload ID Premium | Risky service principals; Conditional Access for an application such as the Invardia Support app |
+| Microsoft Intune | Intune-managed devices; the compliant-device option of Conditional Access |
+| Defender for Cloud, Defender CSPM plan | The cloud attack paths a recommendation is part of (the recommendations themselves come with the free foundational plan) |
+
+The reads from Defender XDR (advanced hunting) need at least one of these Defender products in your tenant.
+
 **Cost (estimate, list prices).** The two databases run on the Standard tier (S3 for the SecurityInsight database, S1
-for the identity ledger) whatever the tenant's size, plus the web app (it scales to zero), the Container Apps jobs and
-Log Analytics ingestion, which grows with the number of assets.
+for the identity ledger) whatever the tenant's size, plus the web app (one replica always on), the Container Apps jobs
+and Log Analytics ingestion, which grows with the number of assets.
 
 ## 1. Answer the wizard
 
@@ -126,8 +144,9 @@ Then it installs, one step at a time:
 ### The SQL admin group after the install
 
 The database server's Entra administrator is a role-assignable group. The person installing is a member only for the
-length of the install. After it, the group holds only the Invardia Support app when you chose support, and is otherwise
-empty. Nothing routine needs it: every update applies its schema and grants through the updater's own database user and
+length of the install. After it, the group holds the database setup job's identity (and, on a private network install,
+the identity of SecurityInsight's one-time support jobs). The Invardia Support app is never a standing member: it has its
+own read-only database user, and more only just in time. Nothing routine needs the group: every update applies its schema and grants through the updater's own database user and
 the signed grant procedure. Your own administrators reach the database just in time, for example through Privileged
 Identity Management for Groups. See [SQL access](sql-access).
 

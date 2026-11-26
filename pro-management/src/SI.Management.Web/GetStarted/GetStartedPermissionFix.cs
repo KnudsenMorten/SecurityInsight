@@ -109,6 +109,7 @@ public static class GetStartedPermissionFix
             "UserAuthenticationMethod.Read.All" => "users' sign-in methods (MFA registration)",
             "DeviceManagementManagedDevices.Read.All" => "Intune devices: serial numbers and MAC addresses for the full asset details",
             "DeviceManagementConfiguration.Read.All" => "Intune: the compliance policies a device does not meet and its update ring",
+            "DeviceManagementApps.Read.All" => "Intune audit events: the proof that a managed device was deleted, so its asset retires at once (Intune deletion proof)",
             "AccessReview.Read.All" => "access reviews: when a privileged role, group or application was last reviewed",
             "SecurityAlert.Read.All" => "security alerts: the open alerts of each device (how many, the highest severity, the newest one)",
             "AdvancedHunting.Read.All" => "advanced hunting in Microsoft Defender XDR",

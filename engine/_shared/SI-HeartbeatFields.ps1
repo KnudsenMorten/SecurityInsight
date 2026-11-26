@@ -32,6 +32,9 @@
                 + #1210 (Invardia SQL-STATS-PROOF, its check PERF-01) EXACTLY three keys after the six: statsAsync, statsStalePct,
                 statsRefreshedUtc -- ONE catalog read of the data database (Get-SIHeartbeatDatabaseStatsSql) and cfg.InstallState
                 'StatisticsRefresh' (written by the pipeline's statistics refresh); a failed read leaves the three out
+                + #1306 (behind DatabaseSendLoad, ON since Invardia accepted them 2026-11-23) two keys after those: tables [<= 15] { name,
+                rows, reservedMb } and topQueries24h [<= 10] { queryHash, executions, durationMs, logicalReads } -- ONE read
+                (Get-SIHeartbeatDatabaseLoadSql), never a query's text; a part that is not read is left out on its own
       Update    { installed, available, lastUpdaterRunUtc, lastUpdaterResult, nextUpdateUtc }
                 lastUpdaterResult succeeded | failed | nothing-to-do -- cfg.InstallState 'UpdateState' + the updater's timer
       Mail      { mailJob, lastSentUtc, lastFailedUtc, lastErrorCode, restriction, queued }
@@ -101,6 +104,8 @@ if (-not (Get-Command -Name Get-SIJobFlowDue -ErrorAction SilentlyContinue)) { .
 if (-not (Get-Command -Name ConvertTo-SIUplinkBacklog -ErrorAction SilentlyContinue)) { . ([System.IO.Path]::Combine($PSScriptRoot, 'SI-UplinkOutbox.ps1')) }
 # framework SEC-LANE-1: Update.runningImages -- the images the install RUNS (the rule and the registry reader)
 if (-not (Get-Command -Name Get-SIRunningImages -ErrorAction SilentlyContinue)) { . ([System.IO.Path]::Combine($PSScriptRoot, 'SI-ImageOnlyRelease.ps1')) }
+# #1335: Database.tierAdvice -- the measured tier recommendation (the rule and its wire check)
+if (-not (Get-Command -Name Get-SIDatabaseTierAdvice -ErrorAction SilentlyContinue)) { . ([System.IO.Path]::Combine($PSScriptRoot, 'SI-DatabaseTierAdvice.ps1')) }
 
 $script:SIHeartbeatFields = @{
     # the fields in the order they go on the record (Published: 2026-10-26, agreed with Invardia -- what customers see)
@@ -280,6 +285,45 @@ $script:SIHeartbeatFields = @{
     DatabaseStatsStalePct = 20
     DatabaseStatsStaleRows = 500
     DatabaseStatsState    = 'StatisticsRefresh'
+    # #1372 (owner 2026-11-25; measured at internal: the catalog read of every statistic took 17 s while the database's disk
+    # was saturated): the read's answer is KEPT in cfg.InstallState 'StatisticsStaleRead' and sent again until a statistics
+    # refresh was recorded after it, or it is DatabaseStatsReadEveryHours old -- the share moves only with a run's writes and a
+    # refresh, so 2 reads an hour become a few a day. Same keys, same values' meaning.
+    DatabaseStatsReadState      = 'StatisticsStaleRead'
+    DatabaseStatsReadEveryHours = 6
+    # #1306 / #1316 (SCALE-2; Invardia 2026-11-22, SUP-2026-00668: "which tables grow and which queries read is not visible
+    # without a person in the database"): Database carries TWO more keys, after the six and the statistics keys, each only
+    # when its part of ONE read of the database answered (Get-SIHeartbeatDatabaseLoadSql):
+    #   tables         [<= DatabaseLoadTables] { name ('schema.table'), rows, reservedMb } -- the largest user tables by reserved
+    #                  space (sys.dm_db_partition_stats), largest first
+    #   topQueries24h  [<= DatabaseLoadQueries] { queryHash ('0x' + 16 hex), executions, durationMs, logicalReads } -- the
+    #                  queries of the last 24 hours with the most logical reads (Query Store; the plan cache when it is off),
+    #                  totals per query hash. NEVER the query text (it can carry customer values) -- the hash only.
+    # A part that fails (a missing right, a lock that does not come within 5 s) is left out, said once; never the rest of
+    # Database, never the heartbeat. The identity is the heartbeat's own (the engine role, VIEW DATABASE PERFORMANCE STATE
+    # from #881) -- no new right. Invardia's wire contract is CLOSED (an unknown key drops the whole Database section), so:
+    # >>> THE SWITCH: DatabaseSendLoad -- ON since Invardia accepted the two keys (deploy 4f12c7d0, 2026-11-23; soft keys: a bad
+    #     entry nulls only that key). REMOVE-ME: the switch goes once every install carries the release that sends them.
+    DatabaseLoadFields      = @('tables', 'topQueries24h')
+    DatabaseSendLoad        = $true
+    DatabaseLoadTables      = 15
+    # ONLY SI's own schemas are read (every schema SI creates: sql\si-data-schema.sql sidata + snowstage, si-pro-settings.sql
+    # cfg, si-vulnerability-target.sql vuln, si-cmdbsync-schema.sql cmdbsync, si-identity-schema.sql si, the sign-in front's
+    # store signin). A table a customer or consultant made in the database (dbo.AcmeExport_2026) never sends its name.
+    DatabaseLoadSchemas     = @('sidata', 'cfg', 'vuln', 'cmdbsync', 'snowstage', 'si', 'signin')
+    DatabaseLoadQueries     = 10
+    DatabaseLoadHours       = 24
+    DatabaseLoadTableFields = @('name', 'rows', 'reservedMb')
+    DatabaseLoadQueryFields = @('queryHash', 'executions', 'durationMs', 'logicalReads')
+    # #1335 (SCALE-3): Database carries ONE more key, the LAST, tierAdvice { recommended, capacityNow, capacityNeeded, p95LoadPct,
+    # minutesAtLimit24h, busyMinutes24h, boundBy, change } (engine\_shared\SI-DatabaseTierAdvice.ps1): the tier that keeps the run's
+    # read-bound phases below the limit, measured from the database's own load of the last 24 hours (ONE metrics read, every
+    # TierAdviceEveryHours hours) and the largest table above. A RECOMMENDATION ONLY: SecurityInsight never changes a tier; the
+    # change is the owner's cost decision through Invardia. Accepted by Invardia (its wire contract is closed):
+    # >>> THE SWITCH: DatabaseSendTierAdvice -- ON since Invardia accepted the key (ee2e9fab, 2026-11-23). $false = left out.
+    DatabaseTierAdviceField = 'tierAdvice'
+    DatabaseSendTierAdvice  = $true
+    TierAdviceEveryHours    = 6
     # framework SEC-LANE-1 (Invardia's contract 2e20fb60, SOFT: a bad value drops this key alone): Update carries ONE more key
     # after its agreed five, runningImages -- one entry per SI component (each job, the web app, the MCP server, the sign-in
     # front, the updater) { component, repo, digest, dotnet, readUtc } (engine\_shared\SI-ImageOnlyRelease.ps1): the images
@@ -529,8 +573,34 @@ function Test-SIHeartbeatField {
         'Database' {
             # the agreed six, then -- #1210 -- the statistics keys present, in their agreed order
             $dbNames = @($c.Fields.Database)
-            if ($Value -and -not ($Value -is [string]) -and -not ($Value -is [System.Collections.IDictionary])) { foreach ($sn in @($c.DatabaseStatsFields)) { if ($Value.PSObject.Properties[$sn]) { $dbNames += $sn } } }
+            if ($Value -and -not ($Value -is [string]) -and -not ($Value -is [System.Collections.IDictionary])) { foreach ($sn in @($c.DatabaseStatsFields) + @($c.DatabaseLoadFields) + @($c.DatabaseTierAdviceField)) { if ($Value.PSObject.Properties[$sn]) { $dbNames += $sn } } }
             $w = & $exact $Value $dbNames 'Database'; if ($w) { return $w }
+            # #1306: the load keys -- each an array of exact entries, never a text
+            if ($Value.PSObject.Properties['tables']) {
+                $w = & $array $Value.tables $c.DatabaseLoadTables 'Database.tables'; if ($w) { return $w }
+                $seenT = @{}
+                foreach ($t in @($Value.tables)) {
+                    $w = & $exact $t $c.DatabaseLoadTableFields 'a Database.tables entry'; if ($w) { return $w }
+                    if (-not ($t.name -is [string] -and $t.name -cmatch '^[A-Za-z_][A-Za-z0-9_]{0,127}\.[A-Za-z_][A-Za-z0-9_]{0,127}$')) { return ("Database.tables.name '{0}' is not a table name" -f $t.name) }
+                    if ($seenT.ContainsKey($t.name)) { return ('table {0} appears more than once' -f $t.name) }; $seenT[$t.name] = 1
+                    foreach ($n in 'rows', 'reservedMb') { if ($null -eq $t.$n -or -not (& $isInt $t.$n)) { return "Database.tables.$n is not a whole number >= 0" } }
+                }
+            }
+            if ($Value.PSObject.Properties['topQueries24h']) {
+                $w = & $array $Value.topQueries24h $c.DatabaseLoadQueries 'Database.topQueries24h'; if ($w) { return $w }
+                $seenQ = @{}
+                foreach ($q in @($Value.topQueries24h)) {
+                    $w = & $exact $q $c.DatabaseLoadQueryFields 'a Database.topQueries24h entry'; if ($w) { return $w }
+                    if (-not ($q.queryHash -is [string] -and $q.queryHash -cmatch '^0x[0-9A-F]{16}$')) { return 'Database.topQueries24h.queryHash is not a query hash' }
+                    if ($seenQ.ContainsKey($q.queryHash)) { return ('query {0} appears more than once' -f $q.queryHash) }; $seenQ[$q.queryHash] = 1
+                    foreach ($n in 'executions', 'durationMs', 'logicalReads') { if ($null -eq $q.$n -or -not (& $isInt $q.$n)) { return "Database.topQueries24h.$n is not a whole number >= 0" } }
+                }
+            }
+            # #1335: the tier recommendation -- exactly its agreed shape (SI-DatabaseTierAdvice.ps1)
+            if ($Value.PSObject.Properties[$c.DatabaseTierAdviceField]) {
+                if (-not (Get-Command -Name Test-SIDbTierAdvice -ErrorAction SilentlyContinue)) { return 'Database.tierAdvice cannot be checked here' }
+                $w = Test-SIDbTierAdvice -Value $Value.($c.DatabaseTierAdviceField); if ($w) { return ('Database.' + $w) }
+            }
             if ($Value.PSObject.Properties['statsAsync'] -and -not ($Value.statsAsync -is [bool])) { return 'Database.statsAsync is not true / false' }
             if ($Value.PSObject.Properties['statsStalePct'] -and -not ((& $isNum $Value.statsStalePct) -and $null -ne $Value.statsStalePct -and $Value.statsStalePct -le 100)) { return 'Database.statsStalePct is not a number 0-100' }
             if ($Value.PSObject.Properties['statsRefreshedUtc'] -and -not (& $isTime $Value.statsRefreshedUtc)) { return 'Database.statsRefreshedUtc is not ISO-8601 UTC' }
@@ -723,7 +793,7 @@ IF OBJECT_ID(N'cfg.JobFlow') IS NOT NULL
     INSERT @r (K, Name, Txt) SELECT TOP (1) N'def', Mode, DefinitionJson FROM cfg.JobFlow WHERE FlowId = N'daily';
 IF OBJECT_ID(N'cfg.InstallState') IS NOT NULL
     INSERT @r (K, Name, T1, Txt) SELECT N'state', Name, UpdatedAt, Value FROM cfg.InstallState
-    WHERE Name IN (N'UpdateState', N'UpdateSignal', N'SecretHandover', N'MailRestriction', N'MailRestrictionAttestation', N'MailLastSent', N'MailLastFailed', N'CollectionHeld', N'OutsidePipeline', N'Housekeeping', N'StatisticsRefresh');
+    WHERE Name IN (N'UpdateState', N'UpdateSignal', N'SecretHandover', N'MailRestriction', N'MailRestrictionAttestation', N'MailLastSent', N'MailLastFailed', N'CollectionHeld', N'OutsidePipeline', N'Housekeeping', N'StatisticsRefresh', N'StatisticsStaleRead');
 IF OBJECT_ID(N'cfg.ServiceNowCheck') IS NOT NULL
     INSERT @r (K, Name, T1, Txt, T2)
     SELECT N'snow', c.[Output], c.CheckedAt, c.Outcome,
@@ -1560,6 +1630,52 @@ function Get-SIHeartbeatStatsRefreshedUtc {
     if ($t) { $t } else { $null }
 }
 
+function Get-SIHeartbeatStoredStatsRows {
+    <# PURE. #1372 the kept answer of the statistics read (cfg.InstallState 'StatisticsStaleRead' in the settings read: Value =
+       {"async":0|1,"total":N,"stale":N}, T1 = when it was read) as the row Get-SIHeartbeatDatabaseStatsSql answers -- or $null
+       when there is none, it is not whole, it is DatabaseStatsReadEveryHours old or more, or a statistics refresh was recorded
+       after it (the share has moved): then the catalog is read again. #>
+    param([object[]]$Rows, [Parameter(Mandatory)][datetime]$NowUtc)
+    $c = $script:SIHeartbeatFields
+    $st = @(Get-SIHeartbeatRowsOf $Rows 'state')
+    $kept = @($st | Where-Object { [string](Get-SIHeartbeatRowValue $_ 'Name') -eq [string]$c.DatabaseStatsReadState })[0]
+    if ($null -eq $kept) { return $null }
+    $at = ConvertTo-SIHeartbeatUtc (Get-SIHeartbeatRowValue $kept 'T1')
+    if (-not $at) { return $null }
+    $atT = ([datetime]::Parse($at, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]'AdjustToUniversal, AssumeUniversal'))
+    if (($NowUtc.ToUniversalTime() - $atT).TotalHours -ge [double]$c.DatabaseStatsReadEveryHours) { return $null }
+    $ref = Get-SIHeartbeatStatsRefreshedUtc -Rows $Rows
+    if ($ref) { $refT = [datetime]::Parse($ref, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]'AdjustToUniversal, AssumeUniversal'); if ($refT -ge $atT) { return $null } }
+    try { $j = ConvertFrom-Json ([string](Get-SIHeartbeatRowValue $kept 'Txt')) } catch { return $null }
+    if ($null -eq $j -or $null -eq $j.async -or $null -eq $j.total -or $null -eq $j.stale) { return $null }
+    , @([pscustomobject]@{ Async = [bool]([int]$j.async -eq 1); Total = [long]$j.total; Stale = [long]$j.stale })
+}
+
+function Get-SIHeartbeatStatsKeepSql {
+    <# #1372 the ONE statement that keeps the statistics read's answer (cfg.InstallState 'StatisticsStaleRead'): @Value = its
+       short JSON. A database without the table: nothing. #>
+@'
+IF OBJECT_ID(N'cfg.InstallState') IS NOT NULL
+BEGIN
+    IF EXISTS (SELECT 1 FROM cfg.InstallState WITH (UPDLOCK, HOLDLOCK) WHERE Name = N'StatisticsStaleRead')
+        UPDATE cfg.InstallState SET Value = LEFT(@Value, 400), UpdatedAt = SYSUTCDATETIME(), UpdatedBy = @By WHERE Name = N'StatisticsStaleRead';
+    ELSE
+        INSERT cfg.InstallState (Name, Value, [Version], UpdatedBy) VALUES (N'StatisticsStaleRead', LEFT(@Value, 400), NULL, @By);
+END
+'@
+}
+
+function ConvertTo-SIHeartbeatStatsKeepValue {
+    <# PURE. #1372 the row of Get-SIHeartbeatDatabaseStatsSql -> the kept JSON, or '' when it is not whole. #>
+    param([object[]]$Rows)
+    $r = @(@($Rows) | Where-Object { $null -ne $_ })[0]
+    if ($null -eq $r) { return '' }
+    $a = Get-SIHeartbeatRowValue $r 'Async'; $t = ConvertTo-SIHeartbeatInt (Get-SIHeartbeatRowValue $r 'Total'); $s = ConvertTo-SIHeartbeatInt (Get-SIHeartbeatRowValue $r 'Stale')
+    if ($null -eq $a -or $a -is [DBNull] -or $null -eq $t -or $null -eq $s) { return '' }
+    $ab = if ($a -is [bool]) { $a } else { "$a" -in @('1', 'True', 'true') }
+    [string]::Format([Globalization.CultureInfo]::InvariantCulture, '{{"async":{0},"total":{1},"stale":{2}}}', $(if ($ab) { 1 } else { 0 }), $t, $s)
+}
+
 function Add-SIHeartbeatDatabaseStats {
     <# PURE. #1210 Database with the three statistics keys after its agreed six: -Stats (ConvertFrom-SIHeartbeatDatabaseStats)
        and -RefreshedUtc. -Stats $null = Database as it is (the read failed: no key added). #>
@@ -1570,6 +1686,130 @@ function Add-SIHeartbeatDatabaseStats {
     $o['statsAsync'] = [bool]$Stats['statsAsync']
     $o['statsStalePct'] = [double]$Stats['statsStalePct']
     $o['statsRefreshedUtc'] = $(if ($RefreshedUtc) { $RefreshedUtc } else { $null })
+    [pscustomobject]$o
+}
+
+function Get-SIHeartbeatDatabaseLoadSql {
+    <#
+        #1306 ONE read of the database's load (ONE result set, a K per row): K 'table' = one of the DatabaseLoadTables largest
+        tables of SI's own schemas (DatabaseLoadSchemas -- never a table someone else made) by reserved space (Name, N1 rows, N2 reserved MB -- sys.dm_db_partition_stats); K 'query' = one of the
+        DatabaseLoadQueries query hashes with the most logical reads in the last DatabaseLoadHours hours (Hash, N1 executions,
+        N2 total duration ms, N3 total logical reads -- Query Store when it is on, else the plan cache of THIS database);
+        K 'denied' = a part that could not be read (Name = 'tables' | 'queries', N1 = the SQL error number). The query TEXT is
+        never selected (it can carry customer values): only sys.query_store_query.query_hash / sys.dm_exec_query_stats.
+        query_hash. A lock that does not come within 5 seconds = that part is denied. Reads only; no product table.
+    #>
+    $c = $script:SIHeartbeatFields
+    $nt = [int]$c.DatabaseLoadTables; $nq = [int]$c.DatabaseLoadQueries; $h = [int]$c.DatabaseLoadHours
+    # SI's own schemas only (DatabaseLoadSchemas, constants -- each also refused unless it is a plain lower-case name)
+    $schemas = (@($c.DatabaseLoadSchemas) | ForEach-Object {
+        if ("$_" -notmatch '^[a-z][a-z0-9_]{0,63}$') { throw "not a schema name: $_" }
+        "N'$_'" }) -join ', '
+@"
+SET NOCOUNT ON;
+SET LOCK_TIMEOUT 5000;
+DECLARE @r TABLE (K nvarchar(10) NOT NULL, Name nvarchar(300) NULL, Hash varchar(18) NULL, N1 bigint NULL, N2 bigint NULL, N3 bigint NULL);
+BEGIN TRY
+    INSERT @r (K, Name, N1, N2)
+    SELECT TOP ($nt) N'table', s.name + N'.' + t.name,
+           SUM(CASE WHEN ps.index_id IN (0, 1) THEN ps.row_count ELSE 0 END),
+           SUM(ps.reserved_page_count) * 8 / 1024
+    FROM sys.dm_db_partition_stats AS ps
+    JOIN sys.tables AS t ON t.object_id = ps.object_id AND t.is_ms_shipped = 0
+    JOIN sys.schemas AS s ON s.schema_id = t.schema_id AND s.name IN ($schemas)
+    GROUP BY s.name, t.name
+    ORDER BY SUM(ps.reserved_page_count) DESC, s.name, t.name;
+END TRY
+BEGIN CATCH
+    INSERT @r (K, Name, N1) VALUES (N'denied', N'tables', ERROR_NUMBER());
+END CATCH;
+BEGIN TRY
+    IF EXISTS (SELECT 1 FROM sys.database_query_store_options WHERE actual_state IN (1, 2))
+        INSERT @r (K, Hash, N1, N2, N3)
+        SELECT TOP ($nq) N'query', CONVERT(varchar(18), q.query_hash, 1),
+               SUM(rs.count_executions),
+               CONVERT(bigint, SUM(rs.avg_duration * rs.count_executions) / 1000.0),
+               CONVERT(bigint, SUM(rs.avg_logical_io_reads * rs.count_executions))
+        FROM sys.query_store_runtime_stats AS rs
+        JOIN sys.query_store_runtime_stats_interval AS i ON i.runtime_stats_interval_id = rs.runtime_stats_interval_id
+        JOIN sys.query_store_plan AS p ON p.plan_id = rs.plan_id
+        JOIN sys.query_store_query AS q ON q.query_id = p.query_id
+        WHERE i.end_time > DATEADD(hour, -$h, SYSDATETIMEOFFSET())
+        GROUP BY q.query_hash
+        ORDER BY SUM(rs.avg_logical_io_reads * rs.count_executions) DESC, q.query_hash;
+    ELSE
+        INSERT @r (K, Hash, N1, N2, N3)
+        SELECT TOP ($nq) N'query', CONVERT(varchar(18), qs.query_hash, 1),
+               SUM(qs.execution_count), SUM(qs.total_elapsed_time) / 1000, SUM(qs.total_logical_reads)
+        FROM sys.dm_exec_query_stats AS qs
+        CROSS APPLY (SELECT CONVERT(int, pa.value) AS DbId FROM sys.dm_exec_plan_attributes(qs.plan_handle) AS pa WHERE pa.attribute = N'dbid') AS d
+        WHERE d.DbId = DB_ID() AND qs.last_execution_time > DATEADD(hour, -$h, GETDATE())
+        GROUP BY qs.query_hash
+        ORDER BY SUM(qs.total_logical_reads) DESC, qs.query_hash;
+END TRY
+BEGIN CATCH
+    INSERT @r (K, Name, N1) VALUES (N'denied', N'queries', ERROR_NUMBER());
+END CATCH;
+SELECT K, Name, Hash, N1, N2, N3 FROM @r;
+"@
+}
+
+function ConvertFrom-SIHeartbeatDatabaseLoad {
+    <#
+        PURE. #1306 the rows of Get-SIHeartbeatDatabaseLoadSql -> @{ Tables (the wire entries, or $null = not read); Queries
+        (the same); Denied (the parts not read, 'tables (error 300)' ...) }. An empty part that WAS read is an empty array
+        (a database with no plan of the last day says so) -- never mistaken for "not read". A row that is not whole is dropped
+        on its own. Only the hash of a query is kept: no column of the read carries text but the table name.
+    #>
+    param([object[]]$Rows)
+    $c = $script:SIHeartbeatFields
+    $rows = @(@($Rows) | Where-Object { $null -ne $_ })
+    $tables = New-Object System.Collections.Generic.List[object]; $queries = New-Object System.Collections.Generic.List[object]
+    $denied = New-Object System.Collections.Generic.List[string]; $seenT = @{}; $seenQ = @{}
+    $tablesDenied = $false; $queriesDenied = $false; $whole = $true
+    foreach ($r in $rows) {
+        $k = [string](Get-SIHeartbeatRowValue $r 'K')
+        # a row without a known kind = the answer is not whole: nothing of it is sent (never a part that looks read)
+        if ($k -notin @('denied', 'table', 'query')) { $tablesDenied = $true; $queriesDenied = $true; $whole = $false; continue }
+        switch ($k) {
+            'denied' {
+                $part = [string](Get-SIHeartbeatRowValue $r 'Name'); $num = ConvertTo-SIHeartbeatInt (Get-SIHeartbeatRowValue $r 'N1')
+                if ($part -eq 'tables') { $tablesDenied = $true } elseif ($part -eq 'queries') { $queriesDenied = $true } else { continue }
+                $denied.Add(('{0} (SQL error {1})' -f $part, $(if ($null -ne $num) { $num } else { '?' })))
+            }
+            'table' {
+                $n = [string](Get-SIHeartbeatRowValue $r 'Name')
+                $rc = ConvertTo-SIHeartbeatInt (Get-SIHeartbeatRowValue $r 'N1'); $mb = ConvertTo-SIHeartbeatInt (Get-SIHeartbeatRowValue $r 'N2')
+                if (-not ($n -cmatch '^[A-Za-z_][A-Za-z0-9_]{0,127}\.[A-Za-z_][A-Za-z0-9_]{0,127}$') -or $null -eq $rc -or $null -eq $mb -or $seenT.ContainsKey($n)) { continue }
+                $seenT[$n] = 1
+                if ($tables.Count -lt [int]$c.DatabaseLoadTables) { $tables.Add((New-SIHeartbeatOrdered -Names $c.DatabaseLoadTableFields -Values @{ name = $n; rows = $rc; reservedMb = $mb })) }
+            }
+            'query' {
+                $hv = ([string](Get-SIHeartbeatRowValue $r 'Hash')).Trim()
+                if ($hv -match '^0[xX][0-9A-Fa-f]{16}$') { $hv = '0x' + $hv.Substring(2).ToUpperInvariant() } else { continue }
+                $ex = ConvertTo-SIHeartbeatInt (Get-SIHeartbeatRowValue $r 'N1'); $du = ConvertTo-SIHeartbeatInt (Get-SIHeartbeatRowValue $r 'N2'); $lr = ConvertTo-SIHeartbeatInt (Get-SIHeartbeatRowValue $r 'N3')
+                if ($null -eq $ex -or $null -eq $du -or $null -eq $lr -or $seenQ.ContainsKey($hv)) { continue }
+                $seenQ[$hv] = 1
+                if ($queries.Count -lt [int]$c.DatabaseLoadQueries) { $queries.Add((New-SIHeartbeatOrdered -Names $c.DatabaseLoadQueryFields -Values @{ queryHash = $hv; executions = $ex; durationMs = $du; logicalReads = $lr })) }
+            }
+        }
+    }
+    # plain statements (a $( ) around an array would unroll it -- an empty part must stay an empty ARRAY, not $null)
+    $out = [pscustomobject]@{ Tables = $null; Queries = $null; Denied = $denied.ToArray(); Whole = $whole }
+    if (-not $tablesDenied) { $out.Tables = [object[]]$tables.ToArray() }
+    if (-not $queriesDenied) { $out.Queries = [object[]]$queries.ToArray() }
+    $out
+}
+
+function Add-SIHeartbeatDatabaseLoad {
+    <# PURE. #1306 Database with tables / topQueries24h after its keys so far (the six, and the statistics keys when there):
+       each only when -Load read it (Tables / Queries not $null). -Load $null = Database as it is. #>
+    param([Parameter(Mandatory)]$Database, $Load)
+    if ($null -eq $Load -or ($null -eq $Load.Tables -and $null -eq $Load.Queries)) { return $Database }
+    $o = [ordered]@{}
+    foreach ($p in @($Database.PSObject.Properties)) { if ($p.Name -notin @($script:SIHeartbeatFields.DatabaseLoadFields)) { $o[$p.Name] = $p.Value } }
+    if ($null -ne $Load.Tables) { $o['tables'] = [object[]]@($Load.Tables) }
+    if ($null -ne $Load.Queries) { $o['topQueries24h'] = [object[]]@($Load.Queries) }
     [pscustomobject]$o
 }
 
@@ -2411,6 +2651,9 @@ function New-SIHeartbeatFields {
           # #1210: the row of Get-SIHeartbeatDatabaseStatsSql (the test seam -- default: ONE read through -DataInvoke, the
           # database SI writes its data to and refreshes the statistics of; never in a test session)
           [object[]]$DatabaseStatsRows,
+          # #1306: the rows of Get-SIHeartbeatDatabaseLoadSql (the test seam -- default: ONE read through -DataInvoke, only
+          # while DatabaseSendLoad is on; never in a test session)
+          [object[]]$DatabaseLoadRows,
           # framework SEC-LANE-1: the Update.runningImages entries (the test seam -- default: Get-SIHeartbeatRunningImages,
           # never in a test session)
           [object[]]$RunningImages)
@@ -2498,9 +2741,60 @@ function New-SIHeartbeatFields {
                 if ($null -eq $d) { return (Get-SIHeartbeatDatabase -Db $null -Space $space) }
                 $tier = ''; try { $tier = [string]$d.sku.tier } catch { }
                 $names = if ($tier -in @('Basic', 'Standard', 'Premium')) { 'log_write_percent,dtu_consumption_percent' } else { 'log_write_percent,cpu_percent' }
+                # #1335 the database as ARM answered it, for the tier recommendation below
+                $tick.DbArm = $d; $tick.DbId = $id
                 $m = $null
                 try { $m = & $Arm ('{0}/providers/Microsoft.Insights/metrics?api-version={1}&metricnames={2}&timespan=PT1H&interval=PT1M&aggregation=Maximum' -f $id, $c.ArmMetricsApi, $names) } catch { $m = $null }
                 Get-SIHeartbeatDatabase -Db $d -Metrics $m -Space $space }
+        # Database's six + #1210's statistics keys (the load keys of #1306 follow in the Database build below)
+        $dbStats = {
+                $dbv = & $dbCore
+                # #1210 (SQL-STATS-PROOF): the three statistics keys after the agreed six -- ONE read of the database; a read
+                # that fails (or a value that does not pass) leaves the three out and is said once, never the rest of Database
+                if ($null -eq $dbv -or -not $c.DatabaseSendStats) { return $dbv }
+                try {
+                    $sr = $DatabaseStatsRows
+                    # #1372: the kept answer while no refresh came after it and it is younger than DatabaseStatsReadEveryHours
+                    if ($null -eq $sr -and $null -ne $CfgRows) { $sr = Get-SIHeartbeatStoredStatsRows -Rows @($CfgRows) -NowUtc $NowUtc }
+                    if ($null -eq $sr -and -not $testSession -and $DataInvoke) {
+                        $sr = @(& $DataInvoke (Get-SIHeartbeatDatabaseStatsSql) @{} 'rows' | ForEach-Object { $_ } | Where-Object { $null -ne $_ })
+                        # kept for the next heartbeats (best effort: a write that fails only means the next one reads again)
+                        $kv = ConvertTo-SIHeartbeatStatsKeepValue -Rows @($sr)
+                        if ($kv -and $CfgInvoke) { try { $null = & $CfgInvoke (Get-SIHeartbeatStatsKeepSql) ([ordered]@{ Value = $kv; By = 'caj-si-heartbeat' }) 'nonquery' } catch { } }
+                    }
+                    if ($null -eq $sr) { return $dbv }
+                    # the refresh time comes from the settings read: not read = not known -- the three are left out (a null
+                    # statsRefreshedUtc would read as "never refreshed")
+                    if ($null -eq $CfgRows) { $problems.Add('the settings database was not read -- Database goes without the statistics'); return $dbv }
+                    $st = ConvertFrom-SIHeartbeatDatabaseStats -Rows @($sr)
+                    if ($null -eq $st) { $problems.Add('the database''s statistics were not answered whole -- Database goes without them'); return $dbv }
+                    $dx = Add-SIHeartbeatDatabaseStats -Database $dbv -Stats $st -RefreshedUtc (Get-SIHeartbeatStatsRefreshedUtc -Rows @($CfgRows))
+                    $why = Test-SIHeartbeatField -Name 'Database' -Value $dx
+                    if ($why) { $problems.Add(('the database''s statistics were left out: {0}' -f $why)); return $dbv }
+                    return $dx
+                } catch { $problems.Add(('the database''s statistics could not be read ({0}) -- Database goes without them' -f $_.Exception.Message)); return $dbv }
+        }
+        # #1335 Database's last key: the tier recommendation (behind DatabaseSendTierAdvice; every TierAdviceEveryHours hours) --
+        # ONE metrics read of the last 24 hours, in its own try: a problem never costs the rest of Database
+        $dbAdvice = {
+            param($dbv)
+            if ($null -eq $dbv -or -not $c.DatabaseSendTierAdvice -or -not $Arm -or $null -eq $tick.DbArm) { return $dbv }
+            if (([int]$NowUtc.Hour % [Math]::Max(1, [int]$c.TierAdviceEveryHours)) -ne 0) { return $dbv }
+            try {
+                if (-not (Get-Command -Name Get-SIDatabaseTierAdvice -ErrorAction SilentlyContinue)) { . ([System.IO.Path]::Combine($PSScriptRoot, 'SI-DatabaseTierAdvice.ps1')) }
+                $mt = & $Arm (Get-SIDbTierAdviceMetricsPath -Id ([string]$tick.DbId) -Api $c.ArmMetricsApi)
+                $largest = $null; if ($dbv.PSObject.Properties['tables'] -and @($dbv.tables).Count) { $largest = (@($dbv.tables | ForEach-Object { [long]$_.rows }) | Measure-Object -Maximum).Maximum }
+                $sk = $tick.DbArm.sku
+                $adv = Get-SIDatabaseTierAdvice -Minutes (ConvertFrom-SIDbTierMetrics -Metrics $mt) -ServiceObjective ([string]$sk.name) -Edition ([string]$sk.tier) -Capacity $sk.capacity -LargestTableRows $largest
+                if ($null -eq $adv) { return $dbv }
+                $o = [ordered]@{}; foreach ($p in @($dbv.PSObject.Properties)) { if ($p.Name -ne $c.DatabaseTierAdviceField) { $o[$p.Name] = $p.Value } }
+                $o[$c.DatabaseTierAdviceField] = $adv
+                $dx = [pscustomobject]$o
+                $why = Test-SIHeartbeatField -Name 'Database' -Value $dx
+                if ($why) { $problems.Add(('the database tier recommendation was left out: {0}' -f $why)); return $dbv }
+                return $dx
+            } catch { $problems.Add(('the database tier recommendation could not be made ({0}) -- Database goes without it' -f $_.Exception.Message)); return $dbv }
+        }
         $build = [ordered]@{
             Pipeline = {
                 if ($null -eq $CfgRows) { return $null }
@@ -2548,24 +2842,23 @@ function New-SIHeartbeatFields {
             Jobs     = { if ($null -ne $CfgRows -or $null -ne $armJobs) { Get-SIHeartbeatJobs -Rows @($CfgRows) -ArmJobs @($armJobs) -Executions $execs } }
             Sources  = { if ($null -ne $sources) { ConvertTo-SIHeartbeatSourcesWire -Sources @($sources) } }
             Database = {
-                $dbv = & $dbCore
-                # #1210 (SQL-STATS-PROOF): the three statistics keys after the agreed six -- ONE read of the database; a read
-                # that fails (or a value that does not pass) leaves the three out and is said once, never the rest of Database
-                if ($null -eq $dbv -or -not $c.DatabaseSendStats) { return $dbv }
+                $dbs = & $dbStats
+                $dbs0 = $dbs
+                # #1306: the load keys (tables, topQueries24h) after the others -- ONE read of the database, each part left
+                # out on its own when it is not read (a missing right, a lock), said once; never the rest of Database
+                if ($null -eq $dbs -or -not $c.DatabaseSendLoad) { return (& $dbAdvice $dbs) }
                 try {
-                    $sr = $DatabaseStatsRows
-                    if ($null -eq $sr -and -not $testSession -and $DataInvoke) { $sr = @(& $DataInvoke (Get-SIHeartbeatDatabaseStatsSql) @{} 'rows' | ForEach-Object { $_ } | Where-Object { $null -ne $_ }) }
-                    if ($null -eq $sr) { return $dbv }
-                    # the refresh time comes from the settings read: not read = not known -- the three are left out (a null
-                    # statsRefreshedUtc would read as "never refreshed")
-                    if ($null -eq $CfgRows) { $problems.Add('the settings database was not read -- Database goes without the statistics'); return $dbv }
-                    $st = ConvertFrom-SIHeartbeatDatabaseStats -Rows @($sr)
-                    if ($null -eq $st) { $problems.Add('the database''s statistics were not answered whole -- Database goes without them'); return $dbv }
-                    $dx = Add-SIHeartbeatDatabaseStats -Database $dbv -Stats $st -RefreshedUtc (Get-SIHeartbeatStatsRefreshedUtc -Rows @($CfgRows))
+                    $lr = $DatabaseLoadRows
+                    if ($null -eq $lr -and -not $testSession -and $DataInvoke) { $lr = @(& $DataInvoke (Get-SIHeartbeatDatabaseLoadSql) @{} 'rows' | ForEach-Object { $_ } | Where-Object { $null -ne $_ }) }
+                    if ($null -eq $lr) { return (& $dbAdvice $dbs) }
+                    $ld = ConvertFrom-SIHeartbeatDatabaseLoad -Rows @($lr)
+                    if (-not $ld.Whole) { $problems.Add('the database''s load could not be read (the answer was not whole) -- Database goes without it'); return $dbs }
+                    if (@($ld.Denied).Count) { $problems.Add(('the database''s load was read in part -- not read: {0} (the heartbeat''s identity needs VIEW DATABASE PERFORMANCE STATE); Database goes without that part' -f (@($ld.Denied) -join ', '))) }
+                    $dx = Add-SIHeartbeatDatabaseLoad -Database $dbs -Load $ld
                     $why = Test-SIHeartbeatField -Name 'Database' -Value $dx
-                    if ($why) { $problems.Add(('the database''s statistics were left out: {0}' -f $why)); return $dbv }
-                    return $dx
-                } catch { $problems.Add(('the database''s statistics could not be read ({0}) -- Database goes without them' -f $_.Exception.Message)); return $dbv }
+                    if ($why) { $problems.Add(('the database''s load was left out: {0}' -f $why)); return (& $dbAdvice $dbs) }
+                    return (& $dbAdvice $dx)
+                } catch { $problems.Add(('the database''s load could not be read ({0}) -- Database goes without it' -f $_.Exception.Message)); return (& $dbAdvice $dbs0) }
             }
             Update   = {
                 $inst = if ($hasInstalled) { $Installed } elseif (Get-Command -Name Get-SITelemetryReleaseVersion -ErrorAction SilentlyContinue) { Get-SITelemetryReleaseVersion } else { '' }

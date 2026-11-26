@@ -149,11 +149,11 @@ function Add-SIEntraContextPart {
     param([string]$Provider = 'entra', [Parameter(Mandatory)][string]$RecordType, [AllowNull()][AllowEmptyString()][string]$Id, [Parameter(Mandatory)][string]$Part, $Object)
     if ($null -eq $Object -or [string]::IsNullOrWhiteSpace($Id)) { return $false }
     $cap = $global:SIRecordCaptureState
-    if ($null -eq $cap -or -not (Get-Command -Name Add-SIRecordPart -ErrorAction SilentlyContinue)) { return $false }
+    if ($null -eq $cap -or -not (Test-Path -Path 'function:Add-SIRecordPart')) { return $false }
     $key = $Id.Trim().ToLowerInvariant()
     # #721: held or streamed (the discover phase streams its records; their ids are remembered)
     $capId = ('{0}|{1}|{2}' -f $Provider, $RecordType, $key)
-    if (Get-Command -Name Test-SIRecordCaptured -ErrorAction SilentlyContinue) { if (-not (Test-SIRecordCaptured -Id $capId -State $cap)) { return $false } }
+    if (Test-Path -Path 'function:Test-SIRecordCaptured') { if (-not (Test-SIRecordCaptured -Id $capId -State $cap)) { return $false } }
     elseif (-not $cap.Records.ContainsKey($capId)) { return $false }
     try { Add-SIRecordPart -Provider $Provider -RecordType $RecordType -Key $key -Part $Part -Object $Object; return $true } catch { return $false }
 }

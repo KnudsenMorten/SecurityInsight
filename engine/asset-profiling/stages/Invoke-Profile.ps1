@@ -218,7 +218,7 @@ function Invoke-SIProfile {
             # 🔴 [regex]::IsMatch, NEVER -match: this loop's rule-match list is a variable named $matches, which -match overwrites
             # with its capture hashtable -- measured 2026-10-02, the staging write then failed on every azure run.
             if ([regex]::IsMatch($_azId, '/providers/microsoft\.(compute/virtualmachines|hybridcompute/machines)/[^/]+$', 'IgnoreCase')) {
-                if (-not (Get-Command Get-SIEndpointDeviceForAzureResource -ErrorAction SilentlyContinue)) {
+                if (-not (Test-Path -Path 'function:Get-SIEndpointDeviceForAzureResource')) {
                     . (Join-Path $sharedRoot 'shared\EndpointAzureCorrelationCache.ps1')
                 }
                 try {

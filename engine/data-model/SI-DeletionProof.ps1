@@ -13,8 +13,11 @@
     Merely MISSING from a list keeps today's window: a source outage or a permission gap never retires an asset (absence is
     never remediation). A read that is not complete decides nothing -- what it did return is still proof.
 
-    A per-install switch per source, OFF by default (SI_DeletionProof_Entra / _Azure / _Intune). Off, nothing here runs a
-    read and the CI build is exactly as before. On:
+    A per-install switch per source (SI_DeletionProof_Entra / _Azure / _Intune), ON by default since #1390 (owner 2026-11-25:
+    "All ON"; the shipped default in launcher\_lib\SecurityInsight.shared-defaults.ps1 -- an install's stored value wins). An
+    unset switch reads as off here (Get-SIDeletionProofChoice). Off, nothing here runs a read and the CI build is exactly as
+    before. A source the identity may not read yet (401 / 403 -- Intune before DeviceManagementApps.Read.All is granted)
+    decides nothing and is said ONCE per run as information, never a warning or a failed step. On:
       1. CANDIDATES  the records of that source missing from their feed's newest COMPLETE collection (sidata.CiRecord; only
                      those can be proven deleted -- a record the source still lists is never touched)
       2. PROOF       the source's own deletion signal, matched to the candidates by their own id
@@ -79,6 +82,24 @@ function Get-SIDeletionProofLabel {
     $k = ([string]$Source).Trim().ToLowerInvariant()
     if ($script:SIDeletionProofSources.Contains($k)) { return [string]$script:SIDeletionProofSources[$k].Label }
     [string]$Source
+}
+
+function Test-SIDeletionProofRefused {
+    <# PURE. A read's error says the identity may not read (HTTP 401 / 403, a refusal) -- not an outage. #>
+    param([AllowEmptyString()][string]$Text)
+    if (-not $Text) { return $false }
+    [bool]($Text -match '(?i)\bHTTP 40[13]\b|\b40[13]\b.*(Forbidden|Unauthori[sz]ed)|Authorization_RequestDenied|Insufficient privileges|\bForbidden\b')
+}
+
+function Get-SIDeletionProofRight {
+    <# PURE. The read-only permission a source's deletion read needs, in words. #>
+    param([string]$Source)
+    switch (([string]$Source).Trim().ToLowerInvariant()) {
+        'entra'  { 'Microsoft Graph Directory.Read.All' }
+        'azure'  { 'Reader (Azure Resource Graph)' }
+        'intune' { 'Microsoft Graph DeviceManagementApps.Read.All' }
+        default  { 'its read permission' }
+    }
 }
 
 function Get-SIDeletionProofCloseReason {
@@ -237,8 +258,9 @@ function Read-SIIntuneDeletionProof {
     <#
         Intune: the managed device DELETED in Intune's audit events (/deviceManagement/auditEvents, activityOperationType
         Delete on a ManagedDevice resource, a successful one) since -SinceDays days. Returns @{ Ok; Devices (managed device id
-        -> @{ DeletedAt; Evidence }); Error }. Intune's audit events need DeviceManagementApps.Read.All -- an identity without
-        it answers 403: the read is not complete and decides nothing (said once per run by the caller).
+        -> @{ DeletedAt; Evidence }); Error }. Intune's audit events need DeviceManagementApps.Read.All (granted by setup and
+        the update since #1390) -- an identity without it answers 403: the read is not complete and decides nothing (said once
+        per run, as information, by the caller).
         -Fetch: test seam { param($Url, $OnPage) } -> @{ Complete; Error }.
     #>
     param([scriptblock]$Fetch, [int]$SinceDays = 30, [datetime]$Now = [datetime]::UtcNow)
@@ -389,7 +411,7 @@ function Invoke-SIDeletionProof {
     param([Parameter(Mandatory)][scriptblock]$Sql, $Choice, [int]$LookbackDays = 30, [hashtable]$Readers, [scriptblock]$Log, [switch]$DryRun)
     if (-not $Log) { $Log = { param($l, $m) if ($l -eq 'WARN') { Write-Warning $m } else { Write-Host ('[' + $l + '] ' + $m) } } }
     if ($null -eq $Choice) { $Choice = Get-SIDeletionProofChoice }
-    $res = [ordered]@{ Index = @{}; Added = 0; Removed = 0; Proven = [ordered]@{}; Issues = New-Object System.Collections.Generic.List[string] }
+    $res = [ordered]@{ Index = @{}; Added = 0; Removed = 0; Proven = [ordered]@{}; Issues = New-Object System.Collections.Generic.List[string]; NotPermitted = New-Object System.Collections.Generic.List[string] }
     $onJson = ConvertTo-Json -InputObject @([string[]]@($Choice.On)) -Compress
     if (-not $onJson.TrimStart().StartsWith('[')) { $onJson = '[' + $onJson + ']' }
     $rows = @()
@@ -427,7 +449,15 @@ function Invoke-SIDeletionProof {
                 if ($null -eq $read) { continue }
                 if (-not $read.Ok) {
                     # ABSENCE IS NEVER REMEDIATION: a read that is not complete adds only what it did return (each a proof)
-                    $res.Issues.Add(('{0}: the deletion read was not complete ({1}) -- only the deletions it returned count this run; nothing is retired for a deletion it could not read' -f $label, [string]$read.Error))
+                    if (Test-SIDeletionProofRefused ([string]$read.Error)) {
+                        # #1390 (owner 2026-11-25): the identity may not read this source's deletions yet (Intune: Graph
+                        # DeviceManagementApps.Read.All, granted by setup / the update) -- it decides nothing, said ONCE per
+                        # run as information: never a warning per run, never a failed step
+                        $res.NotPermitted.Add($k)
+                        & $Log 'INFO' ('CIs: deletion proof -- {0}: not permitted to read its deletions yet ({1}); nothing is decided by a {0} deletion this run -- the asset waits the not-seen grace period. The engine identity needs the read-only permission {2} (granted by setup and the update).' -f $label, [string]$read.Error, (Get-SIDeletionProofRight $k))
+                    } else {
+                        $res.Issues.Add(('{0}: the deletion read was not complete ({1}) -- only the deletions it returned count this run; nothing is retired for a deletion it could not read' -f $label, [string]$read.Error))
+                    }
                 }
                 $proof[$k] = $read
             }

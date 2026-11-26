@@ -39,7 +39,7 @@
                 <span class="badge">@Fmt.Int(cat.Rules.Count(r => r.Origin == RuleOrigin.Yours)) yours</span>
             </h2>
             <div class="table-wrap">
-                <table data-sortable data-rules-table>
+                <table data-sortable data-rules-table data-rules-by-kind>
                     <thead>
                         <tr>
                             <th scope="col">Rule</th>
@@ -54,8 +54,19 @@
                             <th scope="col">Changed by</th>
                         </tr>
                     </thead>
-                    <tbody>
-                        @foreach (var r in cat.Rules)
+                    @* #1351: one section per condition kind, collapsed; a rule with several kinds is under each of them *@
+                    @{ var gi = 0; }
+                    @foreach (var g in IndexModel.ByKind(cat.Rules))
+                    {
+                        var sid = "rule-kind-" + (++gi);
+                    <tbody class="kind-head" data-kind-head="@g.Kind">
+                        <tr data-sort-fixed>
+                            @* the open / close is the checkbox + CSS (app.css): it works with no script; rule-kinds.js adds the search *@
+                            <th scope="rowgroup" colspan="10"><label class="kind-toggle"><input type="checkbox" class="kind-open" aria-controls="@sid" data-kind-toggle /><span class="kind-arrow" aria-hidden="true"></span> <span class="kind-name">@g.Kind</span> <span class="badge" data-kind-count data-total="@Fmt.Raw(g.Rules.Count)">@Fmt.Int(g.Rules.Count)</span></label></th>
+                        </tr>
+                    </tbody>
+                    <tbody id="@sid" data-kind-rows="@g.Kind">
+                        @foreach (var r in g.Rules)
                         {
                             <tr data-rule="@r.Key">
                                 <td class="wrap"><a href="/Rules/Edit?key=@Uri.EscapeDataString(r.Key)">@r.Id</a></td>
@@ -71,6 +82,7 @@
                             </tr>
                         }
                     </tbody>
+                    }
                 </table>
             </div>
         </section>

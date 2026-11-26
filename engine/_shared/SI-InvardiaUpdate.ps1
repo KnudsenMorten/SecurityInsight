@@ -1137,8 +1137,12 @@ function New-SIInvardiaRingReleaseRequest {
           # -Tag: '' only (2026-10-28, as PIM: the stable zip v<version>; a ring name never belongs in it)
           [Parameter(Mandatory)][string]$Version, [ValidateSet('')][string]$Tag = '', [string]$BaseUrl, [string]$AccessToken,
           [ValidateSet('', 'true', 'false')][string]$EngineChanged = '', [AllowEmptyString()][string]$ChangedScopes = '',
-          [AllowNull()]$TestGate = $null, [switch]$ImageOnly, [AllowNull()]$ImageDiff = $null)
+          [AllowNull()]$TestGate = $null, [switch]$ImageOnly, [AllowNull()]$ImageDiff = $null,
+          # #1324 (framework DIGEST-PROOF-1): the rings 2/3 image patch of an older build is proven by the NEWER patch rings 0/1
+          # proved -- { version; imageDiff } of that patch (ConvertTo-SIRingProvenBy); with -ImageOnly only
+          [AllowNull()]$ProvenBy = $null)
     if ("$Version".Trim() -notmatch '^\d{1,12}(\.\d{1,12}){1,5}$') { throw "not a release version: '$Version'" }
+    if ($null -ne $ProvenBy -and -not $ImageOnly) { throw 'provenBy goes with an image-only ring call only' }
     # SI #1207 (framework PRO-COMMUNITY-SAME): a Community version goes to rings 0-3, the same rings as Pro
     if ($AccessToken -and $null -eq $TestGate) { throw ("refused: the ring {0} call carries no testGate -- a ring call is sent only with the green quick-gate run on exactly the release commit (RING-GATE-PROOF)" -f $Ring) }
     $base = Get-SIInvardiaUpdateBaseUrl -BaseUrl $BaseUrl
@@ -1150,6 +1154,7 @@ function New-SIInvardiaRingReleaseRequest {
     if ($ImageOnly) {
         $b['imageOnly'] = $true
         $b['imageDiff'] = ConvertTo-SIRingImageDiff -ImageDiff $ImageDiff
+        if ($null -ne $ProvenBy) { $b['provenBy'] = ConvertTo-SIRingProvenBy -ProvenBy $ProvenBy -Version $Version }
     }
     $h = [ordered]@{ Accept = 'application/json' }
     if ($AccessToken) { $h['Authorization'] = 'Bearer ' + $AccessToken }
@@ -1187,6 +1192,69 @@ function ConvertTo-SIRingImageDiff {
     if ($files.Count -gt 300) { throw ("imageDiff: {0} files (Invardia takes at most 300)" -f $files.Count) }
     if ($lines -gt 20000) { throw ("imageDiff: {0} lines (Invardia takes at most 20,000)" -f $lines) }
     [ordered]@{ fromVersion = $from; files = @($files.ToArray()) }
+}
+
+function New-SIInvardiaRingCheckRequest {
+    <#
+        PURE (framework RELEASE-DRYRUN-1, #1327). The DRY RUN of a ring call: POST <base>/api/releases/securityinsight/<kind>/rings/
+        <ring>/check with the EXACT body New-SIInvardiaRingReleaseRequest builds for the same arguments (version, testGate,
+        imageOnly, imageDiff, provenBy, ...). Invardia answers { outcome, problems[], imageOnly, standing, proof } and changes
+        NOTHING (no ring release, no question, no mail). Takes every argument of New-SIInvardiaRingReleaseRequest.
+    #>
+    param([Parameter(Mandatory)][hashtable]$RingArgs)
+    $q = New-SIInvardiaRingReleaseRequest @RingArgs
+    [pscustomobject]@{ Method = 'POST'; Uri = ($q.Uri + '/check'); ContentType = $q.ContentType; Headers = $q.Headers; Body = $q.Body }
+}
+
+function Get-SIInvardiaRingCheckVerdict {
+    <#
+        PURE (framework RELEASE-DRYRUN-1 point 2). The dry run's answer (-Response @{ Status; Body }) -> may the ring call go?
+          releases / standing-approves / standing-waits-for-proof  = go (the last: Invardia approves once the proof is in)
+          owner-asked = go ONLY when the call does not mean a standing-yes release (-Standing: an image-only call does) --
+                        a standing-yes release that would ask the owner is a STOP
+          refused, an unknown outcome, no 200 answer = STOP
+        -Ring 0 / 1 (#1327: EVERY ring call is dry-run first): the one expected outcome is releases (rings 0 / 1 release at
+        once at Invardia) -- anything else is a STOP; -Ring 2 / 3 or not given: the rule above.
+        @{ Ok; Outcome; Problems; Line; Expected } -- Line names the outcome (and the problems), for the log.
+    #>
+    param($Response, [switch]$Standing, [ValidateRange(-1, 3)][int]$Ring = -1)
+    $st = 0; try { $st = [int]$Response.Status } catch { }
+    $j = $null; try { if ("$($Response.Body)".Trim()) { $j = "$($Response.Body)" | ConvertFrom-Json -ErrorAction Stop } } catch { }
+    $outcome = if ($j -and $j.PSObject.Properties['outcome']) { "$($j.outcome)".Trim() } else { '' }
+    $probs = @(if ($j -and $j.PSObject.Properties['problems']) { @($j.problems) | Where-Object { $null -ne $_ } | ForEach-Object { if ($_ -is [string]) { $_ } elseif ($_.PSObject.Properties['message']) { "$($_.message)" } else { ($_ | ConvertTo-Json -Compress -Depth 4) } } } )
+    $pt = if ($probs.Count) { ' -- problems: ' + ($probs -join '; ') } else { '' }
+    $expected = if ($Ring -ge 0 -and $Ring -le 1) { 'releases' } elseif ($Standing) { 'releases / standing-approves / standing-waits-for-proof' } else { 'releases / standing-approves / standing-waits-for-proof / owner-asked' }
+    if ($st -ne 200 -or -not $outcome) {
+        $why = if ($st -eq 0) { 'no answer' } else { "HTTP $st" }
+        return [pscustomobject]@{ Ok = $false; Outcome = $(if ($outcome) { $outcome } else { 'none' }); Problems = $probs; Expected = $expected; Line = ('the dry run (/check) did not answer an outcome ({0}{1}) -- nothing was sent' -f $why, $(if ("$($Response.Body)".Trim()) { ': ' + (Hide-SIInvardiaSecret ("$($Response.Body)".Substring(0, [Math]::Min(300, "$($Response.Body)".Length)))) } else { '' })) }
+    }
+    $go = $outcome -in 'releases', 'standing-approves', 'standing-waits-for-proof'
+    if ($outcome -eq 'owner-asked' -and -not $Standing) { $go = $true }
+    # #1327: a ring 0 / 1 call releases at once -- any other answer means the real call would not do what this tool expects
+    if ($Ring -ge 0 -and $Ring -le 1) { $go = ($outcome -eq 'releases') }
+    $line = if ($go) { 'the dry run (/check): {0}{1}' -f $outcome, $pt }
+            elseif ($Ring -ge 0 -and $Ring -le 1) { 'the dry run (/check): {0} -- a ring {1} call is expected to answer releases{2}; nothing was sent' -f $outcome, $Ring, $pt }
+            elseif ($outcome -eq 'owner-asked') { 'the dry run (/check): owner-asked -- an image-only call goes under the standing yes and never asks (SECURITY-NO-ASK-1){0}; nothing was sent' -f $pt }
+            else { 'the dry run (/check): {0}{1}; nothing was sent' -f $outcome, $pt }
+    [pscustomobject]@{ Ok = $go; Outcome = $outcome; Problems = $probs; Line = $line; Expected = $expected }
+}
+
+function ConvertTo-SIRingProvenBy {
+    <#
+        PURE (#1324, framework DIGEST-PROOF-1). The "provenBy" of an image-only ring call -- from an object, a hashtable or JSON
+        text -- as Invardia takes it: [ordered]@{ version = <the proving patch rings 0/1 run>; imageDiff = <its own diff,
+        ConvertTo-SIRingImageDiff: fromVersion = the release it was built on> }. THROWS when the version is not a release
+        version, equals the version being released (a patch cannot prove itself), or the diff is refused.
+    #>
+    param([AllowNull()]$ProvenBy, [string]$Version = '')
+    $p = $ProvenBy
+    if ($p -is [string]) { try { $p = $p | ConvertFrom-Json -ErrorAction Stop } catch { throw 'provenBy is not JSON' } }
+    if ($null -eq $p) { throw 'provenBy is empty' }
+    $g = { param($o, $k) if ($null -eq $o) { $null } elseif ($o -is [System.Collections.IDictionary]) { $o[$k] } elseif ($o.PSObject.Properties[$k]) { $o.$k } else { $null } }
+    $v = "$(& $g $p 'version')".Trim()
+    if ($v -notmatch '^\d{1,12}(\.\d{1,12}){1,5}$') { throw "provenBy: version is not a release version: '$v'" }
+    if ("$Version".Trim() -and $v -eq "$Version".Trim()) { throw "provenBy: $v cannot prove itself" }
+    [ordered]@{ version = $v; imageDiff = (ConvertTo-SIRingImageDiff -ImageDiff (& $g $p 'imageDiff')) }
 }
 
 function New-SIInvardiaCommunityRegisterRequest {
@@ -1235,13 +1303,48 @@ function Get-SIInvardiaNotApproved {
     if (-not $hit) { return $no }
     $why = Hide-SIInvardiaSecret $why
     if ($why.Length -gt 300) { $why = $why.Substring(0, 297) + '...' }
-    [pscustomobject]@{ NotApproved = $true; Reason = $why }
+    # framework SECURITY-NO-ASK-1 (2026-11-23): an image-only call's 409 carries "standing", "ownerAsked" and its own text, and
+    # a refused image-only claim names the task it became on SI's board (dedupe imageclaim:...)
+    $g = { param($n) if ($j -and -not ($j -is [string]) -and $j.PSObject.Properties[$n]) { $j.$n } else { $null } }
+    $standing = & $g 'standing'
+    $oa = & $g 'ownerAsked'
+    $text = ''; foreach ($n in 'hint', 'note', 'text', 'message') { $v = & $g $n; if ($v -and "$v".Trim() -and "$v".Trim() -ne $why) { $text = Hide-SIInvardiaSecret "$v".Trim(); break } }
+    $task = ''; foreach ($n in 'taskId', 'task', 'dedupe', 'dedupeKey') { $v = & $g $n; if ($v) { $task = if ($v -is [string]) { "$v".Trim() } elseif ($v.PSObject.Properties['taskId']) { "$($v.taskId)".Trim() } elseif ($v.PSObject.Properties['dedupe']) { "$($v.dedupe)".Trim() } else { ($v | ConvertTo-Json -Compress -Depth 3) }; break } }
+    [pscustomobject]@{ NotApproved = $true; Reason = $why
+        Standing = $(if ($null -eq $standing) { '' } elseif ($standing -is [string] -or $standing -is [bool]) { "$standing" } else { ($standing | ConvertTo-Json -Compress -Depth 3) })
+        OwnerAsked = $(if ($null -eq $oa) { $null } else { [bool]("$oa" -match '^(?i)true$') }); Text = $text; Task = (Hide-SIInvardiaSecret $task) }
 }
 
 function Format-SIInvardiaNotApproved {
-    <# PURE. The plain words for a 409 notApproved: what happened, Invardia's reason, who decides. #>
+    <# PURE. The plain words for a 409 notApproved of a CODE release to rings 2 / 3: what happened, Invardia's reason, who
+       decides. An IMAGE-ONLY call never gets these words (framework SECURITY-NO-ASK-1): Format-SIInvardiaImageOnlyNotApproved. #>
     param([Parameter(Mandatory)][string]$What, [AllowEmptyString()][string]$Reason)
     ("{0}: NOT APPROVED -- Invardia refused it (409 notApproved). A release to ring 2 or 3, or a pre-release wave, needs the owner's APPROVED on this version first (Invardia's back office: Updates > the release). Invardia's reason: {1}. Nothing was released; rings 0 and 1 are not affected." -f $What, $(if ("$Reason".Trim()) { "$Reason".Trim() } else { 'none given' }))
+}
+
+function Format-SIInvardiaImageOnlyNotApproved {
+    <#
+        PURE. Framework SECURITY-NO-ASK-1 (owner 2026-11-23: security updates never ask; they go to rings 0-3 under the standing
+        yes). An image-only ring call's 409 notApproved in Invardia's OWN fields -- standing, ownerAsked, its text -- and never a
+        line that sends anyone for an approval:
+          * ownerAsked false (or not said): Invardia approves under the standing yes once the proof is in -- wait (expected)
+          * ownerAsked true: the image-only claim was refused; Invardia put it on SecurityInsight's task board (dedupe
+            imageclaim:<version>) -- the line points to that task
+        -NotApproved: Get-SIInvardiaNotApproved's answer.
+    #>
+    param([Parameter(Mandatory)][string]$What, [Parameter(Mandatory)]$NotApproved, [string]$Version = '')
+    $na = $NotApproved
+    $f = @()
+    if ("$($na.Standing)".Trim()) { $f += ('standing: {0}' -f "$($na.Standing)".Trim()) }
+    $f += ('ownerAsked: {0}' -f $(if ($null -eq $na.OwnerAsked) { 'not said' } else { "$([bool]$na.OwnerAsked)".ToLowerInvariant() }))
+    if ("$($na.Text)".Trim()) { $f += ('Invardia: "{0}"' -f "$($na.Text)".Trim()) }
+    if ("$($na.Reason)".Trim()) { $f += ('reason: {0}' -f "$($na.Reason)".Trim()) }
+    $fields = $f -join '; '
+    if ($na.OwnerAsked -eq $true) {
+        $task = if ("$($na.Task)".Trim()) { "$($na.Task)".Trim() } else { 'imageclaim:' + $(if ($Version) { $Version } else { '<version>' }) }
+        return ('{0}: the image-only claim was REFUSED (409 notApproved; {1}) -- it is a task on SecurityInsight''s board at Invardia ({2}): fix the claim there; nothing was released' -f $What, $fields, $task)
+    }
+    ('{0}: 409 notApproved under the standing yes (image-only; {1}) -- Invardia approves by itself once the proof is in' -f $What, $fields)
 }
 
 function Get-SIInvardiaHealthHold {
@@ -1276,7 +1379,9 @@ function Format-SIInvardiaHealthHold {
 }
 function Get-SIInvardiaReleaseCallOutcome {
     <# PURE. A register / ring-release answer in words. Returns @{ Ok; Status; Reason; NotApproved }. #>
-    param([Parameter(Mandatory)]$Response, [Parameter(Mandatory)][string]$What)
+    # -ImageOnly (framework SECURITY-NO-ASK-1): the call was image-only -- a 409 notApproved is said in Invardia's own fields
+    # (Format-SIInvardiaImageOnlyNotApproved), never as a release that needs an approval; -Version names its task (imageclaim:<v>)
+    param([Parameter(Mandatory)]$Response, [Parameter(Mandatory)][string]$What, [switch]$ImageOnly, [string]$Version = '')
     $code = [int]$Response.Status
     $j = $null; try { $j = "$($Response.Body)" | ConvertFrom-Json -ErrorAction Stop } catch { }
     $why = ''; if ($j -and -not ($j -is [string])) { foreach ($n in 'reason', 'error', 'message') { if ($j.PSObject.Properties[$n] -and "$($j.$n)".Trim()) { $why = "$($j.$n)".Trim(); break } } }
@@ -1284,7 +1389,10 @@ function Get-SIInvardiaReleaseCallOutcome {
     $tail = if ($why) { ": $why" } else { '' }
     # CR3: a 409 "notApproved" is said plainly -- never as "Invardia holds it already"
     $na = Get-SIInvardiaNotApproved -Response $Response
-    if ($na.NotApproved) { return (& $o $false (Format-SIInvardiaNotApproved -What $What -Reason $na.Reason) $true) }
+    if ($na.NotApproved) {
+        if ($ImageOnly) { $r = & $o $false (Format-SIInvardiaImageOnlyNotApproved -What $What -NotApproved $na -Version $Version) $true; $r | Add-Member -NotePropertyName ClaimRefused -NotePropertyValue ($na.OwnerAsked -eq $true) -Force; return $r }
+        return (& $o $false (Format-SIInvardiaNotApproved -What $What -Reason $na.Reason) $true)
+    }
     # CR2: a 409 "healthHold" is said plainly too -- never as "Invardia holds it already"
     $hh = Get-SIInvardiaHealthHold -Response $Response
     if ($hh.HealthHold) { return (& $o $false (Format-SIInvardiaHealthHold -What $What -Reason $hh.Reason -Holding $hh.Holding)) }

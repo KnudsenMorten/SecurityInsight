@@ -158,6 +158,8 @@ public sealed class ProDataQueries : IProDataQueries
 
     public async Task<QueryResult<FindingPage>> FindingsAsync(FindingFilter filter, CancellationToken ct)
     {
+        // #1332 the findings list (the findings browser) reads today's stored rows until its history plan is as fast
+        using var keep = FindingSource.KeepStored();
         var f = ProDataFilters.Normalize(filter);
         // #812: the default view reads the stored order and totals; while they are not written it says so (never the live read)
         if (ProDataSql.StoredPage(f))
@@ -191,6 +193,8 @@ public sealed class ProDataQueries : IProDataQueries
 
     public async Task<QueryResult<IReadOnlyList<FindingRow>>> ExportAsync(FindingFilter filter, int max, CancellationToken ct)
     {
+        // #1332 the findings export reads today's stored rows (unmeasured on the history, the findings list's join order)
+        using var keep = FindingSource.KeepStored();
         var (rows, text) = await Run(ProDataSql.FindingsExport(filter, max), ct).ConfigureAwait(false);
         return R<IReadOnlyList<FindingRow>>(rows.Select(MapFinding).ToList(), text);
     }

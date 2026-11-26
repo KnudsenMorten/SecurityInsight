@@ -195,9 +195,11 @@ function Select-SISupportGrantJobIdentity {
 function Get-SISupportGrantEventTriggerConfig {
     <# PURE. The eventTriggerConfig of caj-si-support-grant: one execution at a time, the azure-queue rule on si-support-requests
        in -StorageAccount, signed in as -IdentityResourceId. Exactly what Bootstrap's create arguments translate to. #>
-    param([Parameter(Mandatory)][string]$StorageAccount, [Parameter(Mandatory)][string]$IdentityResourceId)
+    # #1252: -Queue -- the same trigger for the job request job (its queue si-job-requests; the rule named as its queue)
+    param([Parameter(Mandatory)][string]$StorageAccount, [Parameter(Mandatory)][string]$IdentityResourceId, [string]$Queue = '')
     $c = $script:SISupportGrantUpdate
-    $rule = [ordered]@{ name = $c.RuleName; type = 'azure-queue'; metadata = [ordered]@{ queueName = $c.Queue; accountName = $StorageAccount.Trim(); queueLength = '1' }; identity = $IdentityResourceId.Trim() }
+    $qn = if ("$Queue".Trim()) { "$Queue".Trim() } else { $c.Queue }; $rn = if ("$Queue".Trim()) { "$Queue".Trim() } else { $c.RuleName }
+    $rule = [ordered]@{ name = $rn; type = 'azure-queue'; metadata = [ordered]@{ queueName = $qn; accountName = $StorageAccount.Trim(); queueLength = '1' }; identity = $IdentityResourceId.Trim() }
     [ordered]@{ parallelism = 1; replicaCompletionCount = 1
                 scale = [ordered]@{ minExecutions = 0; maxExecutions = [int]$c.MaxExecutions; pollingInterval = [int]$c.PollingInterval; rules = @($rule) } }
 }
@@ -210,8 +212,9 @@ function Get-SISupportGrantTriggerState {
           convert  not yet (manual, another rule, no identity on the rule, another account)
           cannot   it cannot be: no storage account (-StorageAccount, else the job's SI_STORAGE_ACCOUNT), or no engine identity
     #>
-    param([Parameter(Mandatory)]$Job, [AllowEmptyString()][string]$StorageAccount = '')
+    param([Parameter(Mandatory)]$Job, [AllowEmptyString()][string]$StorageAccount = '', [string]$Queue = '')
     $c = $script:SISupportGrantUpdate
+    $qn = if ("$Queue".Trim()) { "$Queue".Trim() } else { $c.Queue }
     $acct = "$StorageAccount".Trim(); if (-not $acct) { $acct = Get-SISupportGrantJobEnvValue -Job $Job -Name 'SI_STORAGE_ACCOUNT' }
     $id = Select-SISupportGrantJobIdentity -Job $Job
     $out = { param($s, $w) [pscustomobject]@{ State = $s; Account = $acct; Identity = $id; Why = $w } }
@@ -222,11 +225,11 @@ function Get-SISupportGrantTriggerState {
     if ($tt -ne 'Event') { return (& $out 'convert' ('its trigger is {0}' -f $(if ($tt) { $tt } else { 'not known' }))) }
     $ok = @(@(Get-SISupportGrantProp $cfg @('eventTriggerConfig', 'scale', 'rules')) | Where-Object {
         $_ -and [string](Get-SISupportGrantProp $_ @('type')) -eq 'azure-queue' -and
-        [string](Get-SISupportGrantProp $_ @('metadata', 'queueName')) -eq $c.Queue -and
+        [string](Get-SISupportGrantProp $_ @('metadata', 'queueName')) -eq $qn -and
         [string](Get-SISupportGrantProp $_ @('metadata', 'accountName')) -ieq $acct -and
         [string](Get-SISupportGrantProp $_ @('identity')) -ieq $id }).Count
     if ($ok) { return (& $out 'event' '') }
-    & $out 'convert' ('its queue rule is not on {0} in {1} signed in as the engine identity' -f $c.Queue, $acct)
+    & $out 'convert' ('its queue rule is not on {0} in {1} signed in as the engine identity' -f $qn, $acct)
 }
 
 function Get-SISupportGrantTriggerPatch {
@@ -235,12 +238,12 @@ function Get-SISupportGrantTriggerPatch {
         body carries ONLY the trigger (triggerType, its run limit and retry limit as the job has them, eventTriggerConfig --
         whose rules array is replaced whole); the secrets, the template, the identity and the registry are not sent and stay.
     #>
-    param([Parameter(Mandatory)]$Job, [Parameter(Mandatory)][string]$StorageAccount, [Parameter(Mandatory)][string]$IdentityResourceId)
+    param([Parameter(Mandatory)]$Job, [Parameter(Mandatory)][string]$StorageAccount, [Parameter(Mandatory)][string]$IdentityResourceId, [string]$Queue = '')
     $cfg = Get-SISupportGrantProp $Job @('properties', 'configuration')
     $c = [ordered]@{ triggerType = 'Event' }
     $to = Get-SISupportGrantProp $cfg @('replicaTimeout'); if ($to) { $c.replicaTimeout = [int]$to }
     $rl = Get-SISupportGrantProp $cfg @('replicaRetryLimit'); if ($null -ne $rl) { $c.replicaRetryLimit = [int]$rl }
-    $c.eventTriggerConfig = Get-SISupportGrantEventTriggerConfig -StorageAccount $StorageAccount -IdentityResourceId $IdentityResourceId
+    $c.eventTriggerConfig = Get-SISupportGrantEventTriggerConfig -StorageAccount $StorageAccount -IdentityResourceId $IdentityResourceId -Queue $Queue
     [ordered]@{ properties = [ordered]@{ configuration = $c } }
 }
 

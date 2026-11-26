@@ -1,0 +1,34 @@
+{
+  "version": "3.1.46",
+  "date": "2026-11-25",
+  "type": "feature",
+  "summary": "The protection score now gives credit for every fix, and its formula is shown next to it.",
+  "new": [
+    {
+      "title": "The protection score gives credit for every fix",
+      "text": "Each asset has a health of 0-100: Very High -25, High -10, Medium and Low together at most -20. Tiers count with fixed shares: Tier 0 40 %, Tier 1 30 %, Tier 2 20 %, Tier 3 10 %."
+    },
+    {
+      "title": "The formula next to every protection score",
+      "text": "The formula, with your own settings, is shown next to every protection score on the Executive overview, the Executive report and the wall board."
+    }
+  ],
+  "fixes": [
+    {
+      "title": "Application columns right after the task",
+      "text": "On Remediation tasks, Application, Application version, Paths and Detected paths sit right after the task, also in saved layouts."
+    },
+    {
+      "title": "Support access closes when it should",
+      "text": "A request to close support access always goes through, also when several requests wait at once."
+    },
+    {
+      "title": "The update shows its progress",
+      "text": "A long refresh of the pages' data during an update says how far it has come, and a finished update is no longer reported as stopped."
+    },
+    {
+      "title": "Summary groups keep one spelling",
+      "text": "A value spelled two ways (User and user) is one group, so the history check no longer reports false differences."
+    }
+  ]
+}

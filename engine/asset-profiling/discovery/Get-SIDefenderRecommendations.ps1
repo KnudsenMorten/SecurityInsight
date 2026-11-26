@@ -153,7 +153,7 @@ function Get-SIDefenderRecommendationParent {
     $rid = [string]$ResourceId
     $i = $rid.IndexOf('/securityentitydata/', [StringComparison]::OrdinalIgnoreCase)
     if ($i -lt 0) {
-        if ($null -ne $Scope -and (Get-Command -Name Resolve-SIAzurePlacement -ErrorAction SilentlyContinue)) {
+        if ($null -ne $Scope -and (Test-Path -Path 'function:Resolve-SIAzurePlacement')) {
             $pl = Resolve-SIAzurePlacement -Id $rid -Type '' -Object $null -Scope $Scope -KnownParents $ChildParents
             if ($pl.Action -eq 'child' -and $pl.ParentId) {
                 # the parent as the id spells it when it is a prefix of the child's (the path parent), else as found
@@ -476,7 +476,7 @@ function ConvertTo-SIDefenderRecommendationRows {
         $src = $g.First.PSObject.Copy()
         $src | Add-Member -NotePropertyName _EntityKind -NotePropertyValue $g.Kind -Force
         $ptype = ''
-        if ($g.Kind -eq 'AzureChildResource' -and (Get-Command -Name Get-SIArmIdInfo -ErrorAction SilentlyContinue)) { $pi = Get-SIArmIdInfo $g.Parent; if ($pi) { $ptype = [string]$pi.Type } }
+        if ($g.Kind -eq 'AzureChildResource' -and (Test-Path -Path 'function:Get-SIArmIdInfo')) { $pi = Get-SIArmIdInfo $g.Parent; if ($pi) { $ptype = [string]$pi.Type } }
         $src | Add-Member -NotePropertyName _ParentType -NotePropertyValue $ptype -Force
         $src.Severity = $g.SevText
         if ($g.Cvss -ge 0) { $src.MaxCvssScore = $g.Cvss.ToString([System.Globalization.CultureInfo]::InvariantCulture) }

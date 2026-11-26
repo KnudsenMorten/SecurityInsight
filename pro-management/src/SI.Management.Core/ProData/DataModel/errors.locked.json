@@ -770,6 +770,56 @@
     "since": null
   },
   {
+    "code": "si-ra-0916",
+    "title": "A report kept its last complete result: a part of its data could not be read",
+    "causeClass": "held-last-good",
+    "appliesTo": {
+      "capabilities": [],
+      "licences": []
+    },
+    "customerText": "A part of the data one report reads could not be read this run (Microsoft did not answer those queries in time). SecurityInsight kept the report's last complete result and closed nothing in it; every other report of the run is current. The next run reads the report again.",
+    "internalNote": "#1323 / #901: a held report, kind unreadable-slices (data-model/hold-kinds.locked.json) -- query slices of the report could not be read (Add-RABucketLoss, e.g. 'not split further -- splitting did not reduce the failure'), and nothing else was wrong with it (Add-RAUnreadableSliceHolds, RA-SilentSource.ps1). The run publishes only when the data sync carried the report FROM a last complete result (sidata.CollectionHeldOnly); with no earlier complete result the run is refused as before. Information only: nothing of the report closes. Held 3 Detailed runs in a row = si-ra-0917.",
+    "whoActs": "nobody",
+    "priority": "P4",
+    "opensTicket": false,
+    "action": "none",
+    "fixedIn": null,
+    "waitForFix": false,
+    "steps": [
+      {
+        "who": "nobody",
+        "text": "Nothing to do. The next run reads the report again."
+      }
+    ],
+    "lesson": "A query that did not answer is never an empty result.",
+    "since": null
+  },
+  {
+    "code": "si-ra-0917",
+    "title": "A report has kept its last complete result for 3 Detailed runs in a row: a part of its data still cannot be read",
+    "causeClass": "held-too-long",
+    "appliesTo": {
+      "capabilities": [],
+      "licences": []
+    },
+    "customerText": "A part of the data one report reads could not be read for three Detailed runs in a row. The report still shows its last complete result and nothing in it was closed. SecurityInsight support has been told and is looking into it.",
+    "internalNote": "#1323 / #902 (4): si-ra-0916 for the same report escalateAfterDetailedRuns (3) Detailed runs in a row (sidata.RaReportStatus.HeldRuns). The data is still the last complete result; nothing closes. Read the run's lost-slice lines for the report ('[sub-bucket] ... not split further', the recovery budget) -- the slice answers too large or too slow (#1321 / #1250).",
+    "whoActs": "support",
+    "priority": "P2",
+    "opensTicket": true,
+    "action": "support",
+    "fixedIn": null,
+    "waitForFix": false,
+    "steps": [
+      {
+        "who": "support",
+        "text": "Read the Risk Analysis log of the report for the slices that could not be read (their size, time and depth) and the answers the source gave."
+      }
+    ],
+    "lesson": null,
+    "since": null
+  },
+  {
     "code": "si-cmdb-0701",
     "title": "No endpoints to send to the CMDB: the tenant has no active devices",
     "causeClass": "no-data-source",

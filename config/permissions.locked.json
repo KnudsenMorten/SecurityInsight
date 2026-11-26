@@ -1,5 +1,5 @@
 {
-  "_": "THE ONE LIST of what each SecurityInsight engine's own identity must hold, read by the engines' permission self-check at run start (engine/_shared/SI-PermissionCheck.ps1), recorded on the run-health END record (PermissionGaps) and shown in Get Started > Permissions. The application permissions are the same as the grant plans in container/_shared/SI-ContainerConfig.ps1 (collection: SIContainerIdentityAppRoles, asset tagging: SIAssetTaggingIdentityAppRoles) -- tests/pester/SIv3-PermissionCheck.Tests.ps1 fails when they drift apart. 'when' = only while that setting is on (asset tagging writes only when SI_Pro_AssetTagging_Apply is on). 'azure' items are Azure actions checked at the collection scope with ONE read of the caller's own permissions. 'database' items are roles in the Pro database (Pro installs only; absent on Community). 'engines' says which identity each container engine (SI_ENGINE) runs as and which areas it checks; an engine not listed uses 'default'.",
+  "_": "THE ONE LIST of what each SecurityInsight engine's own identity must hold, read by the engines' permission self-check at run start (engine/_shared/SI-PermissionCheck.ps1), recorded on the run-health END record (PermissionGaps) and shown in Get Started > Permissions. The application permissions are the same as the grant plans in container/_shared/SI-ContainerConfig.ps1 (collection: SIContainerIdentityAppRoles, asset tagging: SIAssetTaggingIdentityAppRoles) -- tests/pester/SIv3-PermissionCheck.Tests.ps1 fails when they drift apart. 'when' = only while that setting is on (asset tagging writes only when SI_Pro_AssetTagging_Apply is on). 'grantedBy': 'support' (SI #1390) = a role an existing install gets through the Invardia Support step named in 'supportStep' (setup grants it to a new install): while it is missing the run-start check says ONE information line naming that step -- never a warning, never a permission gap on the run-health record / heartbeat; once present it is checked as any other. 'azure' items are Azure actions checked at the collection scope with ONE read of the caller's own permissions. 'database' items are roles in the Pro database (Pro installs only; absent on Community). 'engines' says which identity each container engine (SI_ENGINE) runs as and which areas it checks; an engine not listed uses 'default'.",
   "version": 1,
   "identities": {
     "collection": {
@@ -16,7 +16,7 @@
             "PrivilegedAccess.Read.AzureADGroup", "IdentityRiskyUser.Read.All", "IdentityRiskEvent.Read.All",
             "IdentityRiskyServicePrincipal.Read.All", "ThreatHunting.Read.All", "UserAuthenticationMethod.Read.All", "DeviceManagementManagedDevices.Read.All", "DeviceManagementConfiguration.Read.All", "AccessReview.Read.All", "SecurityAlert.Read.All", "SecurityEvents.Read.All"
           ],
-          "conditionalRoles": []
+          "conditionalRoles": [ { "role": "DeviceManagementApps.Read.All", "when": "SI_DeletionProof_Intune", "grantedBy": "support", "supportStep": "Grant-SIIdentity.ps1 -Only DeviceManagementApps.Read.All -Apply" } ]
         },
         {
           "resource": "Microsoft Threat Protection",

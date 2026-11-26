@@ -144,6 +144,7 @@ Describe 'Graph sources: the security level asks exactly what it always asked; f
         Mock Get-SIInheritedRolesForPrincipal { [pscustomobject]@{ Permanent = @(); Eligible = @() } }
         Mock Get-SIEntraPasswordlessByUser { @{} }   # #549 the sign-in methods read: no Graph call here (SIv3-PasswordlessOnly)
         Mock Get-SISPAppRoleAssignments { @('User.Read.All') }
+        Mock Get-SISPAppRoleAssignmentsMany { @{} }   # #1383 the batched read answers nothing here: each principal falls back to its own read (above)
         Mock Get-SISPOauth2Grants { @() }
         # the tenant-wide delegated-grant read and the applications read are their own requests (SIv3-EntraContext); not
         # answered here, the discovery reads the grants per service principal (above) and counts the principal's own owners
@@ -311,6 +312,7 @@ Describe 'GOLDEN: the same source data gives the same SI_*_Profile_CL row at bot
         Mock Get-SIInheritedRolesForPrincipal { [pscustomobject]@{ Permanent = @(); Eligible = @() } }
         Mock Get-SIEntraPasswordlessByUser { @{} }   # #549 the sign-in methods read: no Graph call here (SIv3-PasswordlessOnly)
         Mock Get-SISPAppRoleAssignments { @('User.Read.All') }
+        Mock Get-SISPAppRoleAssignmentsMany { @{} }   # #1383 the batched read answers nothing here: each principal falls back to its own read (above)
         Mock Get-SISPOauth2Grants { @() }
         # the tenant-wide delegated-grant read and the applications read are their own requests (SIv3-EntraContext); not
         # answered here, the discovery reads the grants per service principal (above) and counts the principal's own owners

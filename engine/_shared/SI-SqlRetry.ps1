@@ -238,3 +238,28 @@ function Open-SISqlConnectionRetry {
     }
     $cn
 }
+
+function Open-SISqlConnectionStringRetry {
+    <#
+        The same open-with-retry (Open-SISqlConnectionRetry: its rules and its log line) for a worker on ANOTHER thread that
+        holds a ready connection string and the token handed over with its work (SI-DataSql's connection info, #738) -- used
+        with that string as it is. No token = a connection string that signs in by itself (the tests' local server). The
+        handed token cannot be renewed here, so -Waits is short: a worker beside the run never holds the run's end for long.
+        Returns the open connection; the caller disposes it.
+    #>
+    param([Parameter(Mandatory)][string]$ConnectionString, [AllowEmptyString()][AllowNull()][string]$AccessToken = '',
+          [int[]]$Waits = @(2, 5), [scriptblock]$Sleep, [int]$ConnectTimeoutSec = 0)
+    $cs = $ConnectionString; $tk = [string]$AccessToken
+    $b = New-Object System.Data.SqlClient.SqlConnectionStringBuilder($cs)
+    if ($ConnectTimeoutSec -gt 0) { $b['Connect Timeout'] = $ConnectTimeoutSec; $cs = $b.ConnectionString }
+    $connect = {
+        param($Server, $Database, $Token)
+        $cn = New-Object System.Data.SqlClient.SqlConnection($cs)
+        if ($tk) { $cn.AccessToken = $tk }
+        try { $cn.Open() } catch { $cn.Dispose(); throw }
+        $cn
+    }.GetNewClosure()
+    # the token is the handed one (or none); Open-SISqlConnectionRetry only checks that it is not empty -- -Connect uses $tk
+    $token = { param([bool]$Fresh) if ($tk) { $tk } else { 'signs-in-by-itself' } }.GetNewClosure()
+    Open-SISqlConnectionRetry -Server ([string]$b['Data Source']) -Database ([string]$b['Initial Catalog']) -Token $token -Connect $connect -Waits $Waits -Sleep $Sleep
+}

@@ -168,7 +168,7 @@ function ConvertTo-SISummaryGroupingTokens {
     <#
         PURE. A tokens field's value as its distinct tokens (string[]): a list (an array, a JSON array text, or a text) joined
         with ';', every separator of the field's 'split' turned into ';', split on ';', each trimmed and cut to 'max', empty ones
-        dropped, distinct ignoring case (as SQL groups) -- the first spelling kept. Written to the pipeline one by one (wrap the call in @()). The twin of the SQL CROSS APPLY in
+        dropped, distinct ignoring case (as SQL groups) -- the ordinal-first spelling kept (#1358). Written to the pipeline one by one (wrap the call in @()). The twin of the SQL CROSS APPLY in
         Get-SISummaryGroupingSqlText (and of the data sync's derive of the list columns).
     #>
     param($Field, [AllowNull()]$Value)
@@ -184,12 +184,17 @@ function ConvertTo-SISummaryGroupingTokens {
     } else { $items.Add([string]$Value) }
     $s = $items -join ';'
     foreach ($sep in $Field.Split) { $s = $s.Replace($sep, ';') }
-    $seen = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    # #1358 one token ignoring case, in the order first met, spelled as its ordinal-first spelling (the SQL's MIN under a
+    # binary collation): User;user is the one token User
+    $seen = New-Object 'System.Collections.Generic.Dictionary[string,int]' ([StringComparer]::OrdinalIgnoreCase)
     $out = New-Object System.Collections.Generic.List[string]
     foreach ($p in $s.Split(';')) {
         $v = $p.Trim()
         if ($v.Length -gt $Field.Max) { $v = $v.Substring(0, $Field.Max) }
-        if ($v -and @('{}', '[]', 'null', '@{}') -notcontains $v -and $seen.Add($v)) { $out.Add($v) }
+        if (-not $v -or @('{}', '[]', 'null', '@{}') -contains $v) { continue }
+        $at = 0
+        if ($seen.TryGetValue($v, [ref]$at)) { if ([string]::CompareOrdinal($v, $out[$at]) -lt 0) { $out[$at] = $v } }
+        else { $seen[$v] = $out.Count; $out.Add($v) }
     }
     $out.ToArray()
 }
@@ -253,6 +258,16 @@ function Get-SISummaryGroupingSqlValue {
     throw ("summary groupings: no SQL for kind '{0}'" -f $Field.Kind)
 }
 
+function Get-SISummaryGroupingKeySql {
+    <# PURE. #1358 The stored key of a group: the grouped expression's BINARY-FIRST spelling among the group's findings
+       (MIN under Latin1_General_100_BIN2), so a group whose findings spell a key User and user is stored as User every time,
+       whatever order the plan reads them in. An unused key ('') and a number key stay as they are. The row path's twin:
+       Invoke-SISummaryGrouping keeps the ordinal-first spelling. #>
+    param([Parameter(Mandatory)][string]$Expr, $Field)
+    if ($null -eq $Field -or $Expr -eq "N''" -or $Field.Kind -in 'tierNumber', 'number') { return $Expr }
+    'MIN({0} COLLATE Latin1_General_100_BIN2)' -f $Expr
+}
+
 function Get-SISummaryGroupingRowValues {
     <# PURE. One Detailed row -> @{ field = normalised value } for every field of the plan (the row's first present column wins;
        an attack-path row takes the 'pathRow' column for the tier when it has it -- Get-SIDataRowTiers). #>
@@ -301,12 +316,14 @@ function Invoke-SISummaryGrouping {
         [Parameter(ParameterSetName = 'Rows')][AllowNull()][AllowEmptyCollection()][object[]]$Rows = @(),
         [Parameter(ParameterSetName = 'Pager', Mandatory)]$Pager,
         [Parameter(ParameterSetName = 'Sql', Mandatory)][switch]$AsSql,
+        # #1355: -AsSql over the findings the "Within Accepted Lifecycle" view counts, into the lifecycle tables
+        [Parameter(ParameterSetName = 'Sql')][switch]$Lifecycle,
         $Plan,
         [string[]]$Grouping
     )
     if (-not $Plan) { $Plan = Get-SISummaryGroupingPlan }
     $groupings = @($Plan.Groupings | Where-Object { -not $Grouping -or $Grouping -contains $_.Id })
-    if ($AsSql) { return (Get-SISummaryGroupingSqlText -Plan $Plan -Groupings $groupings) }
+    if ($AsSql) { return (Get-SISummaryGroupingSqlText -Plan $Plan -Groupings $groupings -Lifecycle:$Lifecycle) }
 
     $acc = @{}                                     # "<grouping>|<counted>|k1|k2|k3" -> accumulator (case-insensitive, as SQL groups)
     $order = New-Object System.Collections.Generic.List[string]
@@ -342,6 +359,9 @@ function Invoke-SISummaryGrouping {
                         else { $a.M[$m.Id] = $null }
                     }
                     $acc[$id] = $a; $order.Add($id)
+                } else {
+                    # #1358 the key's one spelling: the ordinal-first of the group's spellings (the SQL's MIN under a binary collation)
+                    for ($ki = 0; $ki -lt 3; $ki++) { if ([string]::CompareOrdinal([string]$k[$ki], [string]$a.K[$ki]) -lt 0) { $a.K[$ki] = [string]$k[$ki] } }
                 }
                 if ($g.LabelField) {
                     $lv = [string]$vals[$g.LabelField]
@@ -426,7 +446,17 @@ function Get-SISummaryGroupingLifecycleSql {
 function Get-SISummaryGroupingSqlText {
     <# The -AsSql statement (see Invoke-SISummaryGrouping). One pass over the collection into #f (the normalised fields), one
        aggregate per grouping into #s, then ONE transaction replaces the stored rows and the state row. #>
-    param([Parameter(Mandatory)]$Plan, [Parameter(Mandatory)][object[]]$Groupings)
+    param([Parameter(Mandatory)]$Plan, [Parameter(Mandatory)][object[]]$Groupings, [switch]$Changes, [switch]$Lifecycle)
+    # -Lifecycle (#1355, Pro; owner 2026-11-24: the security recommendations views' "Within Accepted Lifecycle"): the SAME
+    # statement over the findings the lifecycle view counts (sidata.FindingLifecycleRisk -- written by the key figures from the
+    # wall board's own verdict), into sidata.SummaryGroupLifecycle / SummaryGroupLifecycleState. Those findings carry no
+    # exemption mark (the key figures count none), so the one variant is the counted one; the CI lifecycle is the key figures'
+    # own (active in-scope CIs), never filtered again here.
+    if ($Lifecycle -and $Changes) { throw 'the lifecycle groupings are built in full, never from the changes' }
+    # -Changes (#1334, the finding history; Pro): the SAME statement built FROM THE CHANGES of the collection against @Prev and
+    # COMPARED with the stored rows instead of written -- the groups no changed finding stands in are carried from @Prev's stored
+    # rows, the groups a changed finding (sidata.FindingStateDelta, either side) stands in are computed again from the
+    # collection; it answers [Rows], Differences (-1 = @Prev's rows are not of this definition / not built: not checked), Detail.
     $used = New-Object System.Collections.Generic.List[string]
     $use = { param($n) if ($n -and -not $used.Contains($n)) { $used.Add($n) } }
     & $use $Plan.Exempted
@@ -449,9 +479,12 @@ function Get-SISummaryGroupingSqlText {
             'countDistinct' { if ($cond) { "COUNT(DISTINCT CASE WHEN $cond THEN NULLIF($val, N'') END)" } else { "COUNT(DISTINCT NULLIF($val, N''))" } }
             'max' { if ($cond) { "MAX(CASE WHEN $cond THEN $val END)" } else { "MAX($val)" } }
             'min' { if ($cond) { "MIN(CASE WHEN $cond THEN $val END)" } else { "MIN($val)" } }
-            'sum' { if ($cond) { "SUM(CASE WHEN $cond THEN $val END)" } else { "SUM($val)" } }
+            # an EXACT sum (owner 2026-11-23, #1334 decision 5): decimal(38,10) does not depend on the order SQL adds in, so the
+            # full build and the build from the changes (a carried group + a recomputed one) give the same bits
+            'sum' { if ($cond) { "CONVERT(float, SUM(CONVERT(decimal(38, 10), CASE WHEN $cond THEN $val END)))" } else { "CONVERT(float, SUM(CONVERT(decimal(38, 10), $val)))" } }
         }
     }
+    $akIns = New-Object System.Collections.Generic.List[string]
     $ins = foreach ($g in $Groupings) {
         # a tokens key (#812): each distinct trimmed token of the finding's list, cut to the field's 'max' -- the finding stands
         # under each (ConvertTo-SISummaryGroupingTokens is the row path's twin)
@@ -462,20 +495,37 @@ function Get-SISummaryGroupingSqlText {
             'f.x_' + $kf
         }
         $k = @(foreach ($kf in $g.Keys) { & $keyOf $kf })
+        # #1358 THE KEY'S ONE SPELLING: SQL groups the keys ignoring case (User and user are one group), but a group's key taken
+        # as the grouped column is whichever spelling the plan met first -- the full build and the build from the changes then
+        # stored the same group as User once and user once (a false difference of the history compare). The stored key is the
+        # group's binary-first spelling (Get-SISummaryGroupingKeySql); the grouping, the matching and every count are unchanged.
+        $kSel = @(for ($i = 0; $i -lt 3; $i++) { Get-SISummaryGroupingKeySql -Expr $k[$i] -Field $(if ($g.Keys[$i]) { $Plan.Fields[$g.Keys[$i]] } else { $null }) })
         $grp = @(@('v.Counted') + @($g.Keys | Where-Object { $_ } | ForEach-Object { & $keyOf $_ })) -join ', '
         $lab = if ($g.LabelField) { 'MAX(f.x_{0})' -f $g.LabelField } else { 'NULL' }
         $tok = @($g.Keys | Where-Object { $_ -and $Plan.Fields[$_].Kind -eq 'tokens' })
         $apply = ''
         if ($tok.Count) {
             $tf = $Plan.Fields[$tok[0]]
-            $apply = "`r`nCROSS APPLY (SELECT DISTINCT LEFT(LTRIM(RTRIM(ts.[value])), $($tf.Max)) AS V FROM STRING_SPLIT(f.x_$($tf.Name), N';') AS ts WHERE LTRIM(RTRIM(ts.[value])) <> N'') AS tk"
+            # one token per finding ignoring case (as before), its binary-first spelling (#1358: a list holding User and user)
+            $apply = "`r`nCROSS APPLY (SELECT MIN(t.V COLLATE Latin1_General_100_BIN2) COLLATE DATABASE_DEFAULT AS V FROM (SELECT LEFT(LTRIM(RTRIM(ts.[value])), $($tf.Max)) AS V FROM STRING_SPLIT(f.x_$($tf.Name), N';') AS ts WHERE LTRIM(RTRIM(ts.[value])) <> N'') AS t GROUP BY t.V) AS tk"
+        }
+        $only = ''
+        $wc = "v.Counted = 0 OR f.x_$($Plan.Exempted) = N'0'"
+        if ($Changes) {
+            # the groups a changed finding stands in (either side), with the grouping's own keys
+            $akIns.Add(@"
+INSERT #ak (GroupingId, Key1, Key2, Key3)
+SELECT DISTINCT N'$($g.Id)', $($k -join ', ')
+FROM #fx AS f$apply;
+"@)
+            $wc = "($wc) AND EXISTS (SELECT 1 FROM #ak AS ak WHERE ak.GroupingId = N'$($g.Id)' AND ak.Key1 = $($k[0]) AND ak.Key2 = $($k[1]) AND ak.Key3 = $($k[2]))"
         }
 @"
 INSERT #s (GroupingId, Counted, Key1, Key2, Key3, Label, $($mCols -join ', '))
-SELECT N'$($g.Id)', v.Counted, $($k -join ', '), $lab,
+SELECT N'$($g.Id)', v.Counted, $($kSel -join ', '), $lab,
        $($mExpr -join ', ')
 FROM #f AS f CROSS APPLY (VALUES (CONVERT(bit, 0)), (CONVERT(bit, 1))) AS v(Counted)$apply
-WHERE v.Counted = 0 OR f.x_$($Plan.Exempted) = N'0'
+WHERE $wc
 GROUP BY $grp;
 "@
     }
@@ -515,6 +565,37 @@ FROM #s AS s WHERE s.GroupingId = N'$($g.Id)';
     $list = "GroupingId, Key1, Key2, Key3, Label, $($mCols -join ', '), AttributesJson"
     # #812: the groupings these rows hold -- a page whose grouping is not among them says the collection is being prepared
     $gids = ';' + ((@($Groupings | ForEach-Object { $_.Id })) -join ';') + ';'
+    if ($Changes) { return (Get-SISummaryGroupingChangesTail -Plan $Plan -Def $def -Cols $cols -Sel $sel -MDef $mDef -List $list -Ins $ins -Attr $attr -AkIns $akIns.ToArray() -Gids $gids) }
+    if ($Lifecycle) {
+        $one = @($ins | ForEach-Object { $_.Replace('CROSS APPLY (VALUES (CONVERT(bit, 0)), (CONVERT(bit, 1))) AS v(Counted)', 'CROSS APPLY (VALUES (CONVERT(bit, 0))) AS v(Counted)') })
+        $text = @"
+SET NOCOUNT ON;
+SET XACT_ABORT ON;
+CREATE TABLE #f ($def);
+INSERT #f ($($cols -join ', '))
+SELECT $sel
+FROM sidata.Finding AS f
+JOIN sidata.FindingLifecycleRisk AS lr ON lr.CollectionId = f.CollectionId AND lr.FindingId = f.FindingId
+WHERE f.CollectionId = @CollectionId;
+CREATE TABLE #s (GroupingId VARCHAR(40) COLLATE DATABASE_DEFAULT NOT NULL, Counted BIT NOT NULL, Key1 NVARCHAR(400) COLLATE DATABASE_DEFAULT NOT NULL,
+                 Key2 NVARCHAR(256) COLLATE DATABASE_DEFAULT NOT NULL, Key3 NVARCHAR(256) COLLATE DATABASE_DEFAULT NOT NULL, Label NVARCHAR(1000) NULL, $mDef, AttributesJson NVARCHAR(MAX) NULL);
+$($one -join "`r`n")
+$($attr -join "`r`n")
+DECLARE @groups INT = (SELECT COUNT(*) FROM #s WHERE Counted = 0);
+DECLARE @findings BIGINT = (SELECT COUNT_BIG(*) FROM #f);
+BEGIN TRAN;
+DELETE FROM sidata.SummaryGroupLifecycle WHERE CollectionId = @CollectionId;
+INSERT sidata.SummaryGroupLifecycle (CollectionId, $list)
+SELECT @CollectionId, $list FROM #s WHERE Counted = 0;
+DELETE FROM sidata.SummaryGroupLifecycleState WHERE CollectionId = @CollectionId;
+INSERT sidata.SummaryGroupLifecycleState (CollectionId, BuiltAt, DefinitionHash, Groups, Findings, Groupings) VALUES (@CollectionId, SYSUTCDATETIME(), @Hash, @groups, @findings, N'$($gids)');
+COMMIT;
+SELECT @groups;
+"@
+        # its own working tables (#lf / #ls): this statement runs AFTER the key figures, whose stepped run leaves its #f on a
+        # session it shares -- a #f of an outer scope would be what the statements here bind to (found by the real-SQL test)
+        return ([regex]::Replace([regex]::Replace($text, '#f\b', '#lf'), '#s\b', '#ls'))
+    }
 @"
 SET NOCOUNT ON;
 SET XACT_ABORT ON;
@@ -544,6 +625,77 @@ SELECT @groups;
 "@
 }
 
+function Get-SISummaryGroupingChangesTail {
+    <#
+        PURE. The -Changes statement of Get-SISummaryGroupingSqlText (#1334, Pro): the collection's findings (#f, one read of the
+        narrow columns, as the full build), the CHANGED findings of both sides (#fx: the collection's findings whose state is in
+        its change set, and @Prev's -- read through sidata.FindingAt -- whose state is in it), the groups they stand in (#ak),
+        those groups computed again exactly as the full build computes them, every other group CARRIED from @Prev's stored rows,
+        and the result compared -- every column, byte for byte -- with the collection's stored rows (the full build). Nothing
+        is written. Not checked (-1) when @Prev's or the collection's stored rows are not of this definition and fresh, or the
+        collection's change set is not against @Prev.
+    #>
+    param($Plan, [string]$Def, [string[]]$Cols, [string]$Sel, [string]$MDef, [string]$List, [object[]]$Ins, [object[]]$Attr, [object[]]$AkIns, [string]$Gids)
+    $life = Get-SISummaryGroupingLifecycleSql
+    $mCols = @($Plan.Measures | ForEach-Object { $_.Id })
+    $hcols = @('GroupingId', 'Key1', 'Key2', 'Key3', 'Label') + $mCols + @('AttributesJson')
+    $part = { param($a, $c) 'CASE WHEN {0}.[{1}] IS NULL THEN 0x00 ELSE 0x01 + CAST(DATALENGTH({0}.[{1}]) AS binary(4)) + CAST({0}.[{1}] AS varbinary(max)) END' -f $a, $c }
+    $h = { param($a) "HASHBYTES('SHA2_256', " + ((@($hcols | ForEach-Object { & $part $a $_ })) -join ' + ') + ')' }
+    $gid = $Gids.Replace("'", "''")
+@"
+SET NOCOUNT ON;
+SET XACT_ABORT ON;
+DECLARE @P INT = CONVERT(int, @Prev);
+IF NOT EXISTS (SELECT 1 FROM sidata.SummaryGroupState AS ps JOIN sidata.Collection AS pc ON pc.CollectionId = ps.CollectionId
+               WHERE ps.CollectionId = @P AND ps.DefinitionHash = @Hash AND ps.Groupings = N'$gid' AND ps.BuiltAt >= ISNULL(pc.DerivedAt, ps.BuiltAt) AND ps.BuiltAt >= ISNULL(pc.ContextAt, ps.BuiltAt))
+   OR NOT EXISTS (SELECT 1 FROM sidata.SummaryGroupState AS cs JOIN sidata.Collection AS cc ON cc.CollectionId = cs.CollectionId
+               WHERE cs.CollectionId = @CollectionId AND cs.DefinitionHash = @Hash AND cs.Groupings = N'$gid' AND cs.BuiltAt >= ISNULL(cc.DerivedAt, cs.BuiltAt) AND cs.BuiltAt >= ISNULL(cc.ContextAt, cs.BuiltAt))
+   OR NOT EXISTS (SELECT 1 FROM sidata.HistoryRun AS hr WHERE hr.CollectionId = @CollectionId AND hr.PrevCollectionId = @P AND hr.State IN (N'written', N'verified'))
+BEGIN SELECT CONVERT(bigint, -1) AS [Rows], CONVERT(bigint, -1) AS Differences, CAST(NULL AS nvarchar(1000)) AS Detail; RETURN; END;
+CREATE TABLE #f ($Def);
+INSERT #f ($($Cols -join ', '))
+SELECT $Sel
+FROM sidata.Finding AS f
+WHERE f.CollectionId = @CollectionId$life;
+CREATE TABLE #fx ($Def);
+INSERT #fx ($($Cols -join ', '))
+SELECT $Sel
+FROM sidata.Finding AS f JOIN sidata.FindingStateMember AS hm ON hm.CollectionId = f.CollectionId AND hm.FindingId = f.FindingId
+WHERE f.CollectionId = @CollectionId AND hm.StateId IN (SELECT d.StateId FROM sidata.FindingStateDelta AS d WHERE d.CollectionId = @CollectionId AND d.PrevCollectionId = @P)$life;
+INSERT #fx ($($Cols -join ', '))
+SELECT $Sel
+FROM sidata.FindingAt(@P) AS f JOIN sidata.FindingStateMember AS hm ON hm.CollectionId = @P AND hm.FindingId = f.FindingId
+WHERE hm.StateId IN (SELECT d.StateId FROM sidata.FindingStateDelta AS d WHERE d.CollectionId = @CollectionId AND d.PrevCollectionId = @P)$life;
+CREATE TABLE #ak (GroupingId VARCHAR(40) COLLATE DATABASE_DEFAULT NOT NULL, Key1 NVARCHAR(400) COLLATE DATABASE_DEFAULT NOT NULL,
+                  Key2 NVARCHAR(256) COLLATE DATABASE_DEFAULT NOT NULL, Key3 NVARCHAR(256) COLLATE DATABASE_DEFAULT NOT NULL);
+$($AkIns -join "`r`n")
+CREATE INDEX ix ON #ak (GroupingId, Key1, Key2, Key3);
+CREATE TABLE #s (GroupingId VARCHAR(40) COLLATE DATABASE_DEFAULT NOT NULL, Counted BIT NOT NULL, Key1 NVARCHAR(400) COLLATE DATABASE_DEFAULT NOT NULL,
+                 Key2 NVARCHAR(256) COLLATE DATABASE_DEFAULT NOT NULL, Key3 NVARCHAR(256) COLLATE DATABASE_DEFAULT NOT NULL, Label NVARCHAR(1000) NULL, $MDef, AttributesJson NVARCHAR(MAX) NULL);
+$($Ins -join "`r`n")
+$($Attr -join "`r`n")
+DECLARE @recomputed BIGINT = (SELECT COUNT_BIG(*) FROM #s);
+-- every group no changed finding stands in: carried from @Prev's stored rows as they are
+INSERT #s (GroupingId, Counted, Key1, Key2, Key3, Label, $($mCols -join ', '), AttributesJson)
+SELECT g.GroupingId, CONVERT(bit, 0), g.Key1, g.Key2, g.Key3, g.Label, $((@($mCols | ForEach-Object { 'g.' + $_ })) -join ', '), g.AttributesJson
+FROM sidata.SummaryGroup AS g WHERE g.CollectionId = @P
+  AND NOT EXISTS (SELECT 1 FROM #ak AS ak WHERE ak.GroupingId = g.GroupingId AND ak.Key1 = g.Key1 AND ak.Key2 = g.Key2 AND ak.Key3 = g.Key3);
+INSERT #s (GroupingId, Counted, Key1, Key2, Key3, Label, $($mCols -join ', '), AttributesJson)
+SELECT g.GroupingId, CONVERT(bit, 1), g.Key1, g.Key2, g.Key3, g.Label, $((@($mCols | ForEach-Object { 'g.' + $_ })) -join ', '), g.AttributesJson
+FROM sidata.SummaryGroupCounted AS g WHERE g.CollectionId = @P
+  AND NOT EXISTS (SELECT 1 FROM #ak AS ak WHERE ak.GroupingId = g.GroupingId AND ak.Key1 = g.Key1 AND ak.Key2 = g.Key2 AND ak.Key3 = g.Key3);
+SELECT s.Counted, s.GroupingId, $(& $h 's') AS H INTO #new FROM #s AS s;
+SELECT CONVERT(bit, 0) AS Counted, o.GroupingId, $(& $h 'o') AS H INTO #old FROM sidata.SummaryGroup AS o WHERE o.CollectionId = @CollectionId
+UNION ALL SELECT CONVERT(bit, 1), o.GroupingId, $(& $h 'o') FROM sidata.SummaryGroupCounted AS o WHERE o.CollectionId = @CollectionId;
+SELECT COALESCE(a.Counted, b.Counted) AS Counted, COALESCE(a.GroupingId, b.GroupingId) AS GroupingId INTO #d
+FROM (SELECT Counted, GroupingId, H, COUNT(*) AS N FROM #new GROUP BY Counted, GroupingId, H) AS a
+FULL JOIN (SELECT Counted, GroupingId, H, COUNT(*) AS N FROM #old GROUP BY Counted, GroupingId, H) AS b ON b.Counted = a.Counted AND b.GroupingId = a.GroupingId AND b.H = a.H
+WHERE a.H IS NULL OR b.H IS NULL OR a.N <> b.N;
+SELECT (SELECT COUNT_BIG(*) FROM #new) AS [Rows], (SELECT COUNT_BIG(*) FROM #d) AS Differences,
+       (SELECT STRING_AGG(CONVERT(nvarchar(max), CONCAT(x.GroupingId, N': ', x.N)), N'; ') FROM (SELECT GroupingId, COUNT(*) AS N FROM #d GROUP BY GroupingId) AS x) AS Detail,
+       @recomputed AS Recomputed;
+"@
+}
 # ---------------------------------------------------------------------------------------------------------------------
 #  READING THE RESULT (both editions): one grouping's rows, the most findings first
 # ---------------------------------------------------------------------------------------------------------------------

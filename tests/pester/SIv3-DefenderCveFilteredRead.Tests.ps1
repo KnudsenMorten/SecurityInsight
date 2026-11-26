@@ -135,7 +135,9 @@ Describe 'by default the CVE report''s own query carries the context and no Defe
     }
     It 'the Detailed query counts the exposed devices per CVE over the whole tenant and carries them as si_exposed_devices' {
         $q = $script:Detailed
-        $q | Should -Match '(?s)let _cveExposedDevices = DeviceTvmSoftwareVulnerabilities\s*\|\s*summarize by _expCve = toupper\(tostring\(CveId\)\), _expDevice = tolower\(tostring\(DeviceId\)\)'
+        # (2026-11-23) only the slice's own CVEs are counted -- every device of the tenant for each of them, the same count
+        $q | Should -Match '(?s)let _cveExposedDevices = DeviceTvmSoftwareVulnerabilities\s*\|\s*where toupper\(tostring\(CveId\)\) in \(_sliceCves\)\s*\|\s*summarize by _expCve = toupper\(tostring\(CveId\)\), _expDevice = tolower\(tostring\(DeviceId\)\)'
+        $q | Should -Match ([regex]::Escape('let _sliceCves = union (_Findings | project _sliceCve = toupper(tostring(FindingName))), (DeviceTvmSoftwareVulnerabilities | where tolower(tostring(DeviceId)) in (_sliceTvmDevices) | project _sliceCve = toupper(tostring(CveId)))'))
         # DeviceInfo through a fuzzy union (a tenant without DeviceInfo still runs the report)
         $q | Should -Match '(?s)_cveExposedDevices.*?join kind=leftanti \((union isfuzzy=true \(datatable\(DeviceId:string, Timestamp:datetime\)\[\]\), \()?DeviceInfo.*?isnotempty\(ExclusionReason\).*?\) on _expDevice\s*\|\s*summarize _expDevices = count\(\) by _expCve\s*\|\s*where isnotempty\(_expCve\);' -Because 'an excluded device is not counted, as in the report''s own rows'
         # tenant scope: the count is defined before the bucket filter and never under it

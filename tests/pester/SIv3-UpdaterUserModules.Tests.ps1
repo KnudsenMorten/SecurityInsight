@@ -52,7 +52,7 @@ Describe 'the module batch: re-made as the new user, read back, nothing else' {
         $script:Q | Should -Match ([regex]::Escape("sid = $(ConvertTo-SIMoveSid $script:New)"))
     }
     It 're-makes ONLY an unsigned procedure SecurityInsight makes (its marker), as the new user, and reverts' {
-        $script:Q | Should -Match "INSERT @marks \(M\) SELECT N'si-statistics-refresh v1'"
+        $script:Q | Should -Match "INSERT @marks \(M\) SELECT N'si-statistics-refresh v1' UNION ALL SELECT N'si-statistics-refresh v2'"
         $script:Q | Should -Match 'sys\.crypt_properties WHERE major_id = @id'
         $script:Q | Should -Match "OBJECTPROPERTY\(@id, N'IsProcedure'\) <> 1"
         $script:Q | Should -Match '(?s)EXECUTE AS USER = @new;\s+EXEC \(@t\);\s+REVERT;'

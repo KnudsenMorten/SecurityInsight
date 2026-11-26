@@ -36,7 +36,7 @@ public sealed class PermissionCatalog
                     var res = a.GetProperty("resource").GetString() ?? "API";
                     foreach (var r in a.GetProperty("roles").EnumerateArray()) items.Add(new Item(res, r.GetString() ?? "", null, $"read by the engines through {res}"));
                     if (a.TryGetProperty("conditionalRoles", out var cr))
-                        foreach (var c in cr.EnumerateArray()) items.Add(new Item(res, c.GetProperty("role").GetString() ?? "", c.TryGetProperty("when", out var w) ? w.GetString() : null, $"written through {res} only while its setting is on"));
+                        foreach (var c in cr.EnumerateArray()) items.Add(new Item(res, c.GetProperty("role").GetString() ?? "", c.TryGetProperty("when", out var w) ? w.GetString() : null, (c.GetProperty("role").GetString() ?? "").Contains("Write", StringComparison.OrdinalIgnoreCase) ? $"written through {res} only while its setting is on" : $"read by the engines through {res} only while its setting is on"));
                 }
             if (v.TryGetProperty("azure", out var az))
                 foreach (var a in az.EnumerateArray())

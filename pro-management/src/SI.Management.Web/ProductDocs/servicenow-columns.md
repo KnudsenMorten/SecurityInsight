@@ -298,7 +298,7 @@ your table lacks is left out with one warning per run, and the rest of the row s
 | `u_si_fix_update_kb` | The security update (KB) that fixes a CVE, when known |
 | `u_si_affected_vendor` | The affected software's vendor |
 | `u_si_affected_product` | The affected software |
-| `u_si_security_grouping_parent` | The one fix that resolves the finding, empty when no source names one |
+| `u_si_security_grouping_parent` | The one fix that resolves the finding, empty when no source names one. A finding in several products (one CVE in two products) names every fix, sorted, separated by "; " - the same list every run |
 | `u_si_security_grouping_name` | The name of that fix |
 | `u_si_security_grouping_kind` | The kind of fix: a security update, a software upgrade, a configuration change, a cloud recommendation, an identity rule or review, or an attack path |
 | `u_si_detection_excepted` | Set when an Admin marked the software detection a false positive on this server (see [Exemptions](exemptions#false-positive-on-this-server)) |
@@ -329,6 +329,32 @@ vulnerable item ServiceNow receives.
 | `u_row_hash`, `u_source_run` | always | The row's fingerprint, and the collection the row was built from |
 | `u_action`, `u_si_batch_id`, `u_si_cleared` | | As on the vulnerable items. A reopened task lists `u_close_reason` and `u_closed_at` in `u_si_cleared` |
 
+**The task's context.** So an engineer can act without opening SecurityInsight, every task also carries the columns below.
+Each is sent only when your task staging table has the column: create the ones you want (the connector page's table
+definition lists them with their lengths); a missing one is left out with one warning and never holds the push.
+`u_row_hash` does not cover them, so adding them changes no record. `u_si_context_hash` changes when the context changes;
+compare it too if your transform skips rows whose `u_row_hash` is unchanged.
+
+| Column | Filled | Meaning |
+|---|---|---|
+| `u_what_to_do` | always | What to do, in words. For a library bundled in an application: update the application first (its version and where it is installed), with the library and its CVEs as the reason, for example `Update Azure Monitor Windows Agent (version 1.30.0.0), installed at Program Files\Azure Monitor Agent\...\libcrypto-3-x64.dll. Why: it bundles openssl 3.6.3.0, which has 2 CVEs: CVE-2026-1001, CVE-2026-1002. The fix comes from the vendor of Azure Monitor Windows Agent: update the application, not the library on its own.` |
+| `u_application_version` | when known | The version of the application that bundles the library |
+| `u_detected_paths` | when known | Every path where the product was found on the CI, `;` between, in full |
+| `u_recommended_update`, `u_remediation` | when known | The recommended update and the remediation steps of its findings, each text once |
+| `u_cve_ids` | when known | Every CVE id of the task, `, ` between. The links carry one row per CVE too |
+| `u_risk_rating`, `u_weighted_risk` | when known | The highest risk rating and weighted risk of its findings |
+| `u_security_domain` | when known | The security domain, when all its findings share one |
+| `u_tool` | always | The tool that fits: `Patch tool`, `Software deployment`, `Policy`, `Azure` or `Manual` |
+| `u_exploit_available` | when known | `yes` when an exploit is known for any of its findings, else `no` |
+| `u_end_of_support`, `u_end_of_support_date` | when known | The end of support status of the software, and its earliest date |
+| `u_due_date` | when known | The earliest fix due date of its findings |
+| `u_first_detected` | when known | When the source first detected one of its findings |
+| `u_within_accepted_lifecycle` | when known | `yes` when one of its findings counts in the Within Accepted Lifecycle view, else `no` |
+| `u_asset_type`, `u_os`, `u_ip_address`, `u_environment`, `u_internet_exposed` | when known | The CI's type, operating system, IP address, environment, and whether it is exposed to the internet |
+| `u_also_reported_by` | when known | Another source that reported the same weakness, folded onto this task: `<report>: <title>` |
+| `u_si_more_info` | when the web address is set | The task's own page in SecurityInsight. It opens SecurityInsight's sign-in; the person needs reader access |
+| `u_si_context_hash` | always | The fingerprint of the context columns |
+
 ### Remediation task links (vImportRemediationTaskFinding, task links staging table)
 
 One row per task and finding it resolves. One finding can belong to several tasks.
@@ -345,6 +371,9 @@ One row per task and finding it resolves. One finding can belong to several task
 | `u_in_collection` | always | Whether the finding was seen in the collection the row was built from |
 | `u_source`, `u_row_hash`, `u_source_run`, `u_changed_at` | always | As on the tasks |
 | `u_action`, `u_si_batch_id`, `u_si_cleared` | | As on the tasks |
+| `u_cvss`, `u_risk_score`, `u_risk_rating`, `u_weighted_risk` | when known | The finding's CVSS score, risk score, risk rating and weighted risk (sent when the table has the column) |
+| `u_exploit_available`, `u_first_detected`, `u_due_date` | when known | Whether an exploit is known, when the source first detected it, its fix due date (sent when the table has the column) |
+| `u_si_more_info` | when the web address is set | The page of its task in SecurityInsight (sent when the table has the column) |
 
 Every date is UTC, as on the vulnerable items, and long values are sent whole.
 

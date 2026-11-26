@@ -46,6 +46,9 @@ $settings = Resolve-SIDataSettings -Globals $g
 if (@($settings.Problems).Count) { throw ('data out: ' + (@($settings.Problems) -join '; ')) }
 Write-DoInfo ("database  : {0}/{1}" -f $settings.Server, $settings.Database)
 $invoke = New-SIDataSqlInvoke -Server $settings.Server -Database $settings.Database -AppId $global:SI_SPN_AppId -TenantId $global:SI_SPN_TenantId -CertThumbprint $global:SI_SPN_CertThumbprint -CommandTimeoutSec 0
+# #1332 a reader job: its reads of the findings go to the served views (a collection's history once every compare of it was
+# the same, else its stored rows); its writes never (engine\_shared\data-sql\SI-FindingSource.ps1)
+if (Get-Command -Name New-SIFindingSourceInvoke -ErrorAction SilentlyContinue) { $invoke = New-SIFindingSourceInvoke -Invoke $invoke }
 $log = { param([string]$level, [string]$msg) switch ($level) { 'OK' { Write-DoOk $msg } 'WARN' { Write-DoWarn $msg } default { Write-DoInfo $msg } } }
 
 # run health, as the data sync records its own: START now, END once in the finally (never fails the job)

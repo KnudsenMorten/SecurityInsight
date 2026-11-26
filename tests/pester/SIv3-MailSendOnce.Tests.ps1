@@ -434,7 +434,16 @@ Describe 'THE MAIL QUEUES: a claim before every send' -Skip:(-not $script:ProMai
         $gov = [IO.File]::ReadAllText((Join-Path $script:Root 'engine\pro-data\_shared\SI-GovernanceMail.ps1'))
         $gov | Should -Match "Request-SIMailQueueClaim -Invoke \`$invoke -Table 'cfg\.GovernanceMail' -MailId \`$id -By \`$claimBy"
         $gov | Should -Match "Undo-SIMailQueueClaim -Invoke \`$invoke -Table 'cfg\.GovernanceMail' -MailId \`$id -By \`$claimBy"
-        $gov.IndexOf("Request-SIMailQueueClaim -Invoke `$invoke -Table 'cfg.GovernanceMail'") | Should -BeLessThan $gov.IndexOf('try { & $Send $to $subject')
+        # #1338 (e13824d86): the sender's answer is kept ($false = mail off, NOT sent), so the send line reads 'try { $answer = & $Send';
+        # the claim comes before it, mail off leaves the row before any claim, and a "not sent" answer gives the claim back
+        $iClaim = $gov.IndexOf("Request-SIMailQueueClaim -Invoke `$invoke -Table 'cfg.GovernanceMail'")
+        $iSend = $gov.IndexOf('try { $answer = & $Send $to $subject')
+        $iOff = $gov.IndexOf('if ($MailOff) { $res.OutboxWaiting++; continue }')
+        $iSend | Should -BeGreaterThan 0
+        $iOff | Should -BeGreaterThan 0
+        $iClaim | Should -BeLessThan $iSend
+        $iOff | Should -BeLessThan $iClaim -Because 'mail off: nothing is claimed, sent or marked -- the row stays queued'
+        $gov | Should -Match ([regex]::Escape("if (& `$notSent `$answer) { `$null = Undo-SIMailQueueClaim -Invoke `$invoke -Table 'cfg.GovernanceMail' -MailId `$id -By `$claimBy; `$res.OutboxWaiting++; continue }"))
     }
 }
 

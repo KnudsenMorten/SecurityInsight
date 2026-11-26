@@ -4,7 +4,8 @@
     by tenant from both pro, users for stat purpose"). Invardia stores Counts per environment (= per tenant); PIM sends
     the same three keys with the same definitions, so the two products can be added up and compared.
 
-    THE DEFINITIONS (identical in PIM -- change them in both products or in neither; the one exception is users' AD part):
+    THE DEFINITIONS (identical in PIM -- change them in both products or in neither; the one exception is users' AD part;
+    PIM's users is its enabled MEMBERS, as SI's Entra part):
       users    ENABLED MEMBER users, CLOUD AND ON-PREM AD (owner 2026-10-10: "users include both cloud and ad local",
                "from exposuregraph"), each real person once:
                  Entra part   Entra user objects with accountEnabled = true AND userType = Member (cloud-only AND
@@ -22,6 +23,16 @@
                because SI sees AD through the Exposure Graph.
       guests   GUEST users: Entra user objects with userType = Guest, ENABLED OR NOT (a disabled guest is still a guest
                object in the tenant; the stat is "how many guests does this tenant carry").
+      usersTotal  ALL user objects -- enabled and disabled, members and guests (soft-deleted users are not users): Microsoft
+               Graph GET /users/$count (ConsistencyLevel: eventual), PIM's definition exactly (PIM-TenantSizing.ps1
+               Get-PimTenantObjectCounts -> Invardia's "Users governed" / usersAll). #1387, owner 2026-11-25: "si and pim runs
+               with the same customers, so numbers of fx users should be the same".
+      groups   EVERY group (security, Microsoft 365, distribution; soft-deleted not): GET /groups/$count, as PIM.
+               Both are the counts the IDENTITY COLLECTION already reads before it reads the directory (Invoke-Discover.ps1:
+               Get-SIIdentityDiscoverCount + Get-SIGraphObjectCount groups) and records in the Pro database, cfg.InstallState
+               'TenantSize' (SI-TenantSizeMark.ps1) -- the heartbeat reads that row (Get-SIDirectoryCounts): no Graph call
+               of its own. Left OUT (never 0) when the row, its number or its identityAt is missing, or identityAt is older
+               than 8 days (the window of every other identity count).
       devices  the 7-DAY MAXIMUM of the daily count of unique CORRELATED devices: endpoints and servers (Defender machines
                and Entra devices), ONE per real machine however many sources see it (the correlation object id, so a
                machine seen by Defender and by Entra counts once). IoT and network devices are not devices here. Per UTC
@@ -47,7 +58,9 @@
 
 function Get-SITelemetryCountNamesState {
     <# The value of $script:SITelemetryCountNames, made on first use in the scope that reads it: a function loaded by an outer script and called from an engine's script finds it set (the lists never depend on the caller's scope). #>
-    if ($null -eq $script:SITelemetryCountNames) { $script:SITelemetryCountNames = @('users', 'guests', 'devices', 'sqlUsedMb', 'sqlMaxMb', 'servicePrincipals', 'azureResources', 'servers', 'clientDevices',
+    # #1387 (owner 2026-11-25 via Invardia: "si and pim runs with the same customers, so numbers of fx users should be the
+    # same"): usersTotal / groups -- PIM's definitions, from the identity collection's directory counts (Get-SIDirectoryCounts)
+    if ($null -eq $script:SITelemetryCountNames) { $script:SITelemetryCountNames = @('users', 'guests', 'usersTotal', 'groups', 'devices', 'sqlUsedMb', 'sqlMaxMb', 'servicePrincipals', 'azureResources', 'servers', 'clientDevices',
     # #719 (owner 2026-10-16 via Invardia: "add relevant. i want data") -- the Risk Analysis result and the CI estate, from the
     # Pro database (Get-SIRaTelemetryCounts; each key's definition in data-model/telemetry-counts.locked.json)
     'raReportsTotal', 'raReportsComplete', 'raRowsDetailed', 'cveDevicePairs', 'cveDevices', 'cves', 'cvesCritical', 'cvesHigh',
@@ -64,13 +77,14 @@ function Get-SITelemetryCountNamesState {
 }
 $script:SITelemetryCountNames = $null; $null = Get-SITelemetryCountNamesState
 
-# #719: Invardia refuses the WHOLE record above 40 Counts keys; SI stays at or under 38 (two spare), every value a whole number
-# >= 0. The framework client (AitUplink.ps1, byte-identical to sync/) keeps the first 40 keys by name (it kept 10 before
-# main's 2026-10-13 copy) -- SI still shapes the heartbeat's Counts itself, by priority, at most 38
-# (ConvertTo-SITelemetryCountsWire, called by ConvertTo-SITelemetryWire) -- the safe path.
+# #719: Invardia refuses the WHOLE record above 40 Counts keys (packages/core uplink.ts COUNTS_MAX_KEYS = 40: more than 40
+# is refused, 40 is taken); every value a whole number >= 0. SI kept two spare (38) until #1387 used them for usersTotal /
+# groups: SI now sends at most 40 -- the limit, never above it. The framework client (AitUplink.ps1, byte-identical to sync/)
+# keeps the first 40 keys by name -- SI still shapes the heartbeat's Counts itself, by priority, at most 40
+# (ConvertTo-SITelemetryCountsWire, called by ConvertTo-SITelemetryWire) -- the safe path. A NEW key needs an old one out.
 function Get-SITelemetryCountMaxKeysState {
     <# The value of $script:SITelemetryCountMaxKeys, made on first use in the scope that reads it: a function loaded by an outer script and called from an engine's script finds it set (the lists never depend on the caller's scope). #>
-    if ($null -eq $script:SITelemetryCountMaxKeys) { $script:SITelemetryCountMaxKeys = 38 }
+    if ($null -eq $script:SITelemetryCountMaxKeys) { $script:SITelemetryCountMaxKeys = 40 }
     , $script:SITelemetryCountMaxKeys
 }
 $script:SITelemetryCountMaxKeys = $null; $null = Get-SITelemetryCountMaxKeysState
@@ -201,7 +215,7 @@ function Get-SITelemetryCountMaxKeys { (Get-SITelemetryCountMaxKeysState) }
 function ConvertTo-SITelemetryCountsWire {
     <#
         PURE. The heartbeat's Counts as they go on the wire (#719): only the agreed names, each key ^[a-z][A-Za-z0-9]{0,30}$,
-        each value a whole number >= 0 ([long]), at most 38 keys (the agreed order). $null when nothing is left.
+        each value a whole number >= 0 ([long]), at most 40 keys (the agreed order). $null when nothing is left.
     #>
     param([AllowNull()][System.Collections.IDictionary]$Counts)
     if ($null -eq $Counts -or $Counts.Count -eq 0) { return $null }
@@ -957,9 +971,69 @@ function Get-SISecurityScoreCounts {
     } catch { return [ordered]@{} }
 }
 
+<#
+    THE DIRECTORY COUNTS (#1387): usersTotal / groups, as PIM sends them (the definitions in the header). The identity
+    collection counts the directory with Graph $count before it reads it and records the numbers in cfg.InstallState
+    'TenantSize' ({"users":n,"groups":n,"servicePrincipals":n,...,"identityAt":"<utc>"}, SI-TenantSizeMark.ps1); the
+    heartbeat reads that ONE row -- no Graph call, no new right (the engine role reads cfg.InstallState).
+#>
+function Get-SIDirectoryCountSql {
+    <# READS ONLY. The identity collection's recorded directory counts (one row, column TenantSize; none without the table / row). #>
+    "IF OBJECT_ID(N'cfg.InstallState') IS NULL SELECT CAST(NULL AS NVARCHAR(400)) AS TenantSize WHERE 1 = 0; ELSE SELECT Value AS TenantSize FROM cfg.InstallState WHERE Name = N'TenantSize';"
+}
+
+function ConvertFrom-SIDirectoryCountValue {
+    <#
+        PURE. The recorded TenantSize JSON -> an ordered dictionary with usersTotal (its "users") and groups (its "groups"),
+        each only when it is a whole number >= 0. EMPTY when the value is not JSON, or its identityAt is missing, not a time,
+        older than -MaxAgeDays (8) or more than an hour ahead of -NowUtc -- an old or unknown count is left out, never sent.
+    #>
+    param([AllowNull()][AllowEmptyString()][string]$Value, [datetime]$NowUtc = [datetime]::UtcNow, [int]$MaxAgeDays = 8)
+    $out = [ordered]@{}
+    if ([string]::IsNullOrWhiteSpace($Value)) { return $out }
+    $o = $null
+    try { $o = $Value | ConvertFrom-Json -ErrorAction Stop } catch { return $out }
+    if ($null -eq $o -or $o -is [array] -or $null -eq $o.PSObject) { return $out }
+    # the time as the text that was written (ConvertFrom-Json on pwsh 7 would turn it into a local date)
+    $m = [regex]::Match($Value, '"identityAt"\s*:\s*"([^"]*)"')
+    if (-not $m.Success) { return $out }
+    $at = [datetime]::MinValue
+    if (-not [datetime]::TryParse($m.Groups[1].Value, [Globalization.CultureInfo]::InvariantCulture, ([Globalization.DateTimeStyles]::AdjustToUniversal -bor [Globalization.DateTimeStyles]::AssumeUniversal), [ref]$at)) { return $out }
+    $now = $NowUtc.ToUniversalTime()
+    if ($at -lt $now.AddDays(-$MaxAgeDays) -or $at -gt $now.AddHours(1)) { return $out }
+    foreach ($pair in @(@('users', 'usersTotal'), @('groups', 'groups'))) {
+        $p = $o.PSObject.Properties[$pair[0]]
+        if (-not $p -or $null -eq $p.Value -or $p.Value -is [bool]) { continue }
+        $v = ConvertTo-SITelemetryCount $p.Value
+        if ($null -ne $v) { $out[$pair[1]] = [long]$v }
+    }
+    $out
+}
+
+function Get-SIDirectoryCounts {
+    <#
+        usersTotal / groups of this install (an ordered dictionary, possibly empty). -SqlRows { param($Sql) rows } is the seam
+        (default Invoke-SITelemetrySqlRows). A failed read or no recorded counts leaves both keys out. Never throws.
+    #>
+    param([scriptblock]$SqlRows, [datetime]$NowUtc = [datetime]::UtcNow)
+    if (-not $SqlRows) { $SqlRows = { param($Sql) Invoke-SITelemetrySqlRows -Sql $Sql } }
+    try {
+        $rows = & $SqlRows (Get-SIDirectoryCountSql)
+        foreach ($r in @($rows)) {
+            if ($null -eq $r) { continue }
+            $v = $null
+            if ($r -is [System.Collections.IDictionary]) { if ($r.Contains('TenantSize')) { $v = $r['TenantSize'] } }
+            elseif ($r.PSObject.Properties['TenantSize']) { $v = $r.TenantSize }
+            if ($null -eq $v -or $v -is [System.DBNull]) { continue }
+            return (ConvertFrom-SIDirectoryCountValue -Value ([string]$v) -NowUtc $NowUtc)
+        }
+    } catch { }
+    [ordered]@{}
+}
+
 function Get-SITelemetryHeartbeatCounts {
     <#
-        The Counts of an identified heartbeat: users, guests, devices -- each only when it could be computed. Returns a
+        The Counts of an identified heartbeat: users, guests, usersTotal, groups, devices, ... -- each only when it could be computed. Returns a
         hashtable (possibly empty). -RunQuery as Get-SIDeviceCount; -RunHunting as Get-SIAdOnlyUserCount; -Log
         { param($Line) } gets the one plain line when users carries the Entra part only (default: Write-Host). Never throws.
     #>
@@ -981,6 +1055,8 @@ function Get-SITelemetryHeartbeatCounts {
             foreach ($k in @($ic.Keys)) { $c[$k] = $ic[$k] }
         }
     } catch { }
+    # #1387: usersTotal / groups -- the identity collection's own directory $counts (PIM's definitions), recorded in the Pro database
+    try { $dc = Get-SIDirectoryCounts -SqlRows $SqlRows -NowUtc $NowUtc; foreach ($k in @($dc.Keys)) { $c[$k] = $dc[$k] } } catch { }
     if ($c.ContainsKey('users')) {
         # users' AD part (AD-only enabled user accounts from the Exposure Graph); unreadable = Entra only + one plain line
         $ad = $null

@@ -213,7 +213,8 @@ Describe 'the engine wiring (#737)' {
         $script:Txt | Should -Match '\$__abNext = Get-RACountAfterSplit -BucketCount \(\[int\]\$bucketCountToUse\) -Slices @\(\$__abSplitSlices\.Values\)'
         $i = $script:Txt.IndexOf('$__abHalf = Get-RACountAfterSmallRun')
         $i | Should -BeGreaterThan 0
-        $guard = $script:Txt.Substring($i - 2600, 2600)
+        # (#1378: the shrink to fit sits between the guard and the halving, which is now its fallback -- a wider window)
+        $guard = $script:Txt.Substring($i - 4600, 4600)
         # #880: a busy answer that was retried and answered at its own size no longer keeps the count up; a NOT COMPLETE
         # report (a slice lost) never changes it
         $guard | Should -Match '-not \$__abSplitUsed -and -not \$__abIncomplete -and -not \$completeBucketDone'

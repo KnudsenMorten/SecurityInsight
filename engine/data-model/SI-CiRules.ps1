@@ -647,6 +647,6 @@ function Set-SICiOverrides {
     }
     if ($applied.Count -gt 0) { $Ci['si_overrides'] = $applied.ToArray() }
     # #579 the explanation names the override (who, reason, expiry) and what the rules would have chosen
-    if (@($applied | Where-Object { $_.field -eq 'si_tier' }).Count -gt 0 -and (Get-Command -Name Get-SICiTierExplanation -ErrorAction SilentlyContinue)) { $Ci['si_tier_explanation'] = Get-SICiTierExplanation -Ci $Ci }
+    if (@($applied | Where-Object { $_.field -eq 'si_tier' }).Count -gt 0 -and (Test-Path -Path 'function:Get-SICiTierExplanation')) { $Ci['si_tier_explanation'] = Get-SICiTierExplanation -Ci $Ci }
     return $Ci
 }

@@ -1828,6 +1828,21 @@ function Get-AutoBucketRequestMeasure {
   return $o
 }
 
+function Get-AutoBucketFitMeasure {
+  <# #1378 PURE. This run's measure (Reset-/Add-AutoBucketMeasure) in the shape of a history row, for the shrink-to-fit
+     sizing (RA-BucketStore.ps1 Get-SIRaBucketFitCount): the answer, the request shape (Get-AutoBucketRequestMeasure), the
+     slice time with its fixed part and back end, and how many slices were measured. $null without a measure. #>
+  param($Measure)
+  if ($null -eq $Measure) { return $null }
+  $p = { param($n) if ($Measure.PSObject.Properties[$n]) { $Measure.$n } else { $null } }
+  $req = Get-AutoBucketRequestMeasure -Measure $Measure
+  [pscustomobject]@{
+    ResultRows = & $p 'ResultRows'; MaxBucketRows = & $p 'MaxBucketRows'; MaxBucketBytes = & $p 'MaxBucketBytes'; MaxRequestBytes = & $p 'MaxRequestBytes'
+    RequestRows = $req.Rows; RequestBytesPerRow = $req.BytesPerRow; RequestOverheadBytes = $req.OverheadBytes
+    MaxBucketSeconds = & $p 'MaxBucketSeconds'; FixedSeconds = & $p 'FixedSeconds'; Backend = & $p 'Backend'; Slices = & $p 'Slices'
+  }
+}
+
 # ---- per report: where the count starts, and what the run leaves behind ---------------------------------------------
 
 function Get-AutoBucketStartPlan {
@@ -1920,7 +1935,10 @@ function Complete-AutoBucketReport {
   # #880 -Incomplete: the report ended NOT COMPLETE -- recorded as 'incomplete' (never 'raised': it proves no count, and its
   # partial measurement sizes nothing; Get-SIRaBucketShrinkCount / Get-SIRaBucketDownCount / Get-AutoBucketStartPlan skip it).
   param([string]$ReportName, [string]$QueryKey, [int]$StartCount, [int]$FinalCount, [string]$Source,
-        [long]$RequestRows = 0, [int]$RequestBytesPerRow = 0, [int]$RequestOverheadBytes = 0, [int]$RanCount = 0, [switch]$Incomplete)
+        [long]$RequestRows = 0, [int]$RequestBytesPerRow = 0, [int]$RequestOverheadBytes = 0, [int]$RanCount = 0, [switch]$Incomplete,
+        [switch]$SizedToFit)
+  # #1378 -SizedToFit: the count kept LOWER was sized to fit this run's own answer (Get-SIRaBucketFitCount) -- recorded as
+  # 'fit' (the page says "sized to fit (N rows -> M buckets)"); a count kept lower any other way stays 'down'
   if (-not (Test-AutoBucketSqlActive)) { return '' }
   if (-not (Get-Variable -Name AutoBucketJumps -Scope Script -ErrorAction SilentlyContinue) -or $null -eq $script:AutoBucketJumps) { $script:AutoBucketJumps = New-Object System.Collections.Generic.List[object] }
   $why = ''
@@ -1930,7 +1948,7 @@ function Complete-AutoBucketReport {
     # #1202 (1): the usual count is over the runs of the report's CURRENT query version only (fewer than 3: no usual, no
     # 4 x judgement) -- a usual spanning a query change compared the new query's count with the old query's
     $usual = Get-SIRaBucketUsual -Counts (Get-SIRaBucketSameQueryCounts -History $hist -Fingerprint $(if ($parts) { [string]$parts.Fingerprint } else { '' }))
-    $decided = if ($Incomplete) { 'incomplete' } elseif ($FinalCount -gt $StartCount) { 'raised' } elseif ($FinalCount -lt $StartCount) { 'down' } else {
+    $decided = if ($Incomplete) { 'incomplete' } elseif ($FinalCount -gt $StartCount) { 'raised' } elseif ($FinalCount -lt $StartCount -and $SizedToFit) { 'fit' } elseif ($FinalCount -lt $StartCount) { 'down' } else {
       switch ($Source) { 'memo' { 'cache' } 'cache' { 'cache' } 'hint' { 'cache' } 'probe' { 'probe' } 'measured' { 'measured' } 'down' { 'down' } default { 'configured' } }
     }
     $m = if ((Get-Variable -Name AutoBucketMeasure -Scope Script -ErrorAction SilentlyContinue) -and $script:AutoBucketMeasure) { $script:AutoBucketMeasure } else { $null }

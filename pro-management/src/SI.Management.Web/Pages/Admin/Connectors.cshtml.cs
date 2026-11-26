@@ -38,6 +38,11 @@ public sealed class ConnectorsModel : PageModel
     public IReadOnlyList<RunHealthRow> Health { get; private set; } = Array.Empty<RunHealthRow>();
     public IReadOnlyList<ConsoleLine> Lines { get; private set; } = Array.Empty<ConsoleLine>();
     public List<QueryInfo> Queries { get; } = new();
+
+    /// #1377: a vulnerability connector's "Not proven fixed" count links to the close-loop's reasons (Close-loop state,
+    /// By status and reason); the CMDB connector's (CIs not seen, not retired yet) has no such view.
+    public static bool HeldLinksToCloseLoop(string connectorName) =>
+        !string.Equals(connectorName, "asset-cmdb-sql", StringComparison.OrdinalIgnoreCase) && !connectorName.Contains("cmdb", StringComparison.OrdinalIgnoreCase);
     public List<string> Errors { get; } = new();
 
     public static bool IsConnectorEngine(string engine) =>
@@ -95,7 +100,7 @@ public sealed class ConnectorsModel : PageModel
             info.Notes.AddRange(Errors);
             x.Sheet(info, "Runs per connector", new[]
                 {
-                    "Connector", "Kind", "Run", "Started", "Ended", "Mode", "Outcome", "Plan open", "Plan reopen", "Plan update", "Plan close", "Held",
+                    "Connector", "Kind", "Run", "Started", "Ended", "Mode", "Outcome", "Plan open", "Plan reopen", "Plan update", "Plan close", CollectionViewSql.HeldLabel,
                     "Opened", "Reopened", "Updated", "Closed", "Errors", "Not sent", "Halt reason", "Error",
                 },
                 ConnectorRunRows.Select(r => new object?[]

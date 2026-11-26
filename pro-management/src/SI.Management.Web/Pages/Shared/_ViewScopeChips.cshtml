@@ -1,0 +1,10 @@
+@* #1386: the filters the person has in force, visible above the table (the rest of "What you're looking at" sits in the
+   collapsed About) -- each a removable chip, and "Show everything". Nothing is rendered while no filter is chosen. *@
+@model SI.Management.Web.Pages.ViewScope
+@if (Model.Chips.Count > 0)
+{
+    <ul class="chips view-chips" aria-label="Active filters" data-view-chips>
+        @foreach (var c in Model.Chips) { <li><a href="@c.RemoveHref" aria-label="Remove the filter on @c.Text.Split(':')[0]">@c.Text ✕</a></li> }
+        @if (Model.ShowEverythingHref is { } all) { <li><a href="@all" data-view-chips-all>Show everything</a></li> }
+    </ul>
+}

@@ -17,6 +17,8 @@ public abstract class RemediationTaskPageModel(ICollectionViews views, ILogger l
 {
     public const string TasksPage = "/Remediations/Tasks";
     public const string TaskFindingsPage = "/Remediations/TaskFindings";
+    /// owner 2026-11-25 ("i expected a landing page for each remeidation task with all relevant info"): ONE task's page.
+    public const string TaskPage = "/Remediations/Task";
 
     public override bool CompactFrame => true;
     /// every read is the task rows of one collection, limited at FINDING level for a limited person (below)
@@ -64,19 +66,23 @@ public abstract class RemediationTaskPageModel(ICollectionViews views, ILogger l
     /// <summary>
     /// Owner 2026-11-18 ("where i can click the asset so it also shows the linked assets"): an asset opens the ASSET PAGE --
     /// its linked objects and identifiers, its tasks and its findings -- as on every other collection grid. A task's findings
-    /// count opens its findings. The asset's own task list stays one click away: on Tasks per asset the task's NAME opens every
-    /// task of its asset (the asset page links it too); on Task findings the task's name opens its findings. A person limited
-    /// to some rows is not offered the asset page (it is not limited to their departments): their asset opens its own tasks,
-    /// a task its findings, as before.
+    /// count opens its findings. Owner 2026-11-25 ("when i click this ... it just returns back t same row. i expected a landing
+    /// page for each remeidation task with all relevant info"): the task's NAME opens the TASK'S PAGE (Remediations > Task),
+    /// with the way back to this list as it is filtered. A person limited to some rows is not offered the asset page (it is
+    /// not limited to their departments): their asset opens its own tasks; the task's page is limited at finding level.
     /// </summary>
     public override string? CellLink(string column, IReadOnlyDictionary<string, object?> row) => column switch
     {
         // #1283 the chosen dimensions travel: a task opened from a filtered view lists the findings it was counted over
         "Findings" => TaskFindingsOf(row),
-        "TaskName" => Visibility is null && PagePath == TasksPage ? TasksOfAsset(row) : TaskFindingsOf(row),
+        "TaskName" => TaskOf(row),
         "AssetName" => Visibility is null && Cell(row, "AssetKey") is { Length: > 0 } a ? ViewLink("/Collection/Asset", ("key", a)) : TasksOfAsset(row),
         _ => null,
     };
+
+    /// The task's page, with this list (its filters, sort and page) as the way back.
+    private string? TaskOf(IReadOnlyDictionary<string, object?> row) =>
+        Cell(row, "TaskId") is { Length: > 0 } t ? ViewLink(TaskPage, ("id", t), ("ReturnUrl", HttpContext is null ? null : Link())) : null;
 
     private IEnumerable<(string Key, string? Value)> DimLinks() => Dims.Select(kv => ("d." + kv.Key, (string?)string.Join("|", kv.Value)));
 
@@ -94,7 +100,7 @@ public sealed class TasksModel(ICollectionViews views, ILogger<TasksModel> log) 
 {
     public override string PagePath => TasksPage;
     public override string Heading => "Tasks per asset";
-    public override string Lede => "One row per asset and task to perform: the update, the software upgrade (one per version; a library bundled in another product: one per application that bundles it), the configuration change -- with the findings and CVEs it resolves, its highest severity and risk, the asset's owner, and its state from run to run. A task closes as fixed only when its findings are gone on a complete run. Open an asset for everything known about it (its linked objects, its tasks and its findings), a task's name for every task of that asset, its findings count for the findings it resolves. Built for the newest collections; shown from the newest collection whose tasks are fully built, at or before the one picked.";
+    public override string Lede => "One row per asset and task to perform: the update, the software upgrade (one per version; a library bundled in another product: one per application that bundles it), the configuration change -- with the findings and CVEs it resolves, its highest severity and risk, the asset's owner, and its state from run to run. A task closes as fixed only when its findings are gone on a complete run. Open an asset for everything known about it (its linked objects, its tasks and its findings), a task's name for everything known about the task (what to do, where, its dates and the findings it resolves), its findings count for the findings it resolves. Built for the newest collections; shown from the newest collection whose tasks are fully built, at or before the one picked.";
     public override string ExportName => "remediation-tasks";
     protected override Task<GridPlan?> PrepareAsync(bool forExport, CancellationToken ct)
     {
@@ -122,7 +128,7 @@ public sealed class TaskFindingsModel(ICollectionViews views, ILogger<TaskFindin
 {
     public override string PagePath => TaskFindingsPage;
     public override string Heading => "Task findings";
-    public override string Lede => "The findings each task resolves (one finding can belong to several tasks: one CVE on two versions, or in three applications). For a library bundled in another product, the paths of that copy -- its fix comes from that product's vendor. Open a task from Tasks per asset to see only its findings.";
+    public override string Lede => "The findings each task resolves (one finding can belong to several tasks: one CVE on two versions, or in three applications). For a library bundled in another product, the paths of that copy -- its fix comes from that product's vendor. Open a task's name for the task's page: what to do, where, and only its findings.";
     public override string ExportName => "remediation-task-findings";
     protected override Task<GridPlan?> PrepareAsync(bool forExport, CancellationToken ct)
     {

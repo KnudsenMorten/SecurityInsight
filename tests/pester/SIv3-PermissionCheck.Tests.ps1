@@ -22,7 +22,8 @@ BeforeAll {
         '{0}.{1}.sig' -f (B64Url '{"alg":"none"}'), (B64Url (ConvertTo-Json -InputObject $p -Compress))
     }
     $script:AllCollectionRoles = @{}
-    foreach ($a in $script:Cat.identities.collection.api) { $script:AllCollectionRoles[[string]$a.audience] = @($a.roles) }
+    # every role of the list -- the plain ones and the conditional ones (#1390: a support-granted role is a conditional one)
+    foreach ($a in $script:Cat.identities.collection.api) { $script:AllCollectionRoles[[string]$a.audience] = @(@($a.roles) + @($a.conditionalRoles | ForEach-Object { $_.role }) | Where-Object { $_ }) }
     $script:FullToken = { param($Resource) New-Jwt -Roles $script:AllCollectionRoles[[string]$Resource] }
     $script:Reader = { param($Scope) , @([pscustomobject]@{ actions = @('*/read'); notActions = @() }) }
     $script:Globals = @{ SI_UseManagedIdentity = $true; SI_UAMI_ClientId = 'cccccccc-0000-0000-0000-000000000001'; SI_AzSubscriptionId = 'sub-1' }
@@ -72,7 +73,7 @@ Describe 'the catalog is the one list' {
 Describe 'API permissions: the roles of the engine''s own token' {
     It 'a token with every role: all ok; a token without some: exactly those missing' {
         $api = $script:Cat.identities.collection.api[0]
-        $all = @(Test-SIPermissionApiRoles -Api $api -TokenRoles @($api.roles) -Fix 'f')
+        $all = @(Test-SIPermissionApiRoles -Api $api -TokenRoles @(@($api.roles) + @($api.conditionalRoles | ForEach-Object { $_.role }) | Where-Object { $_ }) -Fix 'f')
         @($all | Where-Object State -ne 'ok').Count | Should -Be 0
         $some = @(Test-SIPermissionApiRoles -Api $api -TokenRoles @('User.Read.All', 'group.read.all') -Fix 'f')
         @($some | Where-Object State -eq 'ok' | ForEach-Object Item) | Should -Be @('User.Read.All', 'Group.Read.All')

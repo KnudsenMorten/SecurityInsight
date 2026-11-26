@@ -161,6 +161,9 @@ public interface ICollectionViews
     Task<QueryResult<GridPage>> GridAsync(GridQuery query, CancellationToken ct);
     /// Every matching row (bounded by <see cref="ProDataFilters.MaxExport"/>), never cached.
     Task<QueryResult<GridPage>> ExportAsync(GridQuery query, CancellationToken ct);
+    /// #1372 every row of a small list a page offers as its choices (the task reports' dimension values): read like an export,
+    /// but a caching reader keeps it like any grid of its spec (long for an immutable one, briefly otherwise).
+    Task<QueryResult<GridPage>> ChoicesAsync(GridQuery query, CancellationToken ct) => ExportAsync(query, ct);
     /// #287: how many rows each value of one value-filter column has under the grid's OTHER filters (Group = the column,
     /// Key = the value). A reader that cannot count answers none, and the dropdown shows its values without counts.
     Task<QueryResult<IReadOnlyList<CountRow>>> ValueCountsAsync(GridQuery query, string column, CancellationToken ct) =>
@@ -285,6 +288,8 @@ public sealed class CollectionViews : ICollectionViews
         var st = GridSql.Normalize(query.Spec, query.Request);
         var sp = new Dictionary<string, object?>(query.SourceParameters, StringComparer.Ordinal);
         if (query.Spec.SourceParameters.Contains("Source") && !sp.ContainsKey("Source")) sp["Source"] = _vulnSource;
+        // #1332 the findings list (the raw findings grid) reads today's stored rows until its history plan is as fast
+        using var keep = query.Spec.Name == CollectionViewSql.Rows.Name ? FindingSource.KeepStored() : null;
         var (rows, text) = await Run(GridSql.Page(query.Spec, st, sp, export), ct).ConfigureAwait(false);
         var total = rows.Count > 0 ? L(rows[0], "TotalRows") : 0;
         var data = rows.Select(r => (IReadOnlyDictionary<string, object?>)query.Spec.Columns.ToDictionary(c => c.Key, c => r.TryGetValue(c.Key, out var v) ? v : null, StringComparer.OrdinalIgnoreCase)).ToList();
@@ -296,6 +301,8 @@ public sealed class CollectionViews : ICollectionViews
         var st = GridSql.Normalize(query.Spec, query.Request);
         var sp = new Dictionary<string, object?>(query.SourceParameters, StringComparer.Ordinal);
         if (query.Spec.SourceParameters.Contains("Source") && !sp.ContainsKey("Source")) sp["Source"] = _vulnSource;
+        // #1332 the findings list (the raw findings grid) reads today's stored rows until its history plan is as fast
+        using var keep = query.Spec.Name == CollectionViewSql.Rows.Name ? FindingSource.KeepStored() : null;
         var (rows, text) = await Run(GridSql.ValueCounts(query.Spec, st, sp, column), ct).ConfigureAwait(false);
         return R<IReadOnlyList<CountRow>>(rows.Select(r => new CountRow(column, S(r, "V"), L(r, "N"))).ToList(), text);
     }

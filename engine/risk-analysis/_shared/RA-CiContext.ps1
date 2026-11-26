@@ -292,20 +292,24 @@ function Get-RACiSqlKeyedSql {
         @Names = [ "name" ]): by an id the CI carries (its own, or a linked object's), or by a name -- every current CI with
         one of the names is answered, so a name more than one CI has is dropped by New-RACiIndex as before. Retired CIs are
         not current. In CI id order (the first CI of a shared id wins, the same every run).
+        #1116 (c) (SCALE-3 A): the ids and names are loaded ONCE into keyed #temp tables (statistics, so the plan seeks the CI
+        and link keys by the real number of ids -- a table variable is planned as one row; ~65 GB re-read a day at internal),
+        in the database's collation as the table variables were. The same predicate, the same CIs.
     #>
     @'
 SET NOCOUNT ON;
-DECLARE @idList TABLE (v nvarchar(450) PRIMARY KEY);
-INSERT @idList SELECT DISTINCT LEFT(value, 450) FROM OPENJSON(@Ids) WHERE value IS NOT NULL AND value <> '';
-DECLARE @nameList TABLE (v nvarchar(400) PRIMARY KEY);
-INSERT @nameList SELECT DISTINCT LEFT(value, 400) FROM OPENJSON(@Names) WHERE value IS NOT NULL AND value <> '';
+CREATE TABLE #idList (v nvarchar(450) COLLATE DATABASE_DEFAULT NOT NULL PRIMARY KEY);
+INSERT #idList (v) SELECT DISTINCT LEFT(value, 450) FROM OPENJSON(@Ids) WHERE value IS NOT NULL AND value <> '';
+CREATE TABLE #nameList (v nvarchar(400) COLLATE DATABASE_DEFAULT NOT NULL PRIMARY KEY);
+INSERT #nameList (v) SELECT DISTINCT LEFT(value, 400) FROM OPENJSON(@Names) WHERE value IS NOT NULL AND value <> '';
 SELECT c.CiId, c.DocJson, CASE WHEN c.LastSeen IS NOT NULL AND c.LastSeen < DATEADD(day, -CONVERT(int, @StaleDays), SYSUTCDATETIME()) THEN 1 ELSE 0 END AS Stale
 FROM sidata.Ci c
 WHERE ISNULL(c.Lifecycle, '') <> 'retired' AND c.DocJson IS NOT NULL
-  AND (c.CiId IN (SELECT v FROM @idList)
-       OR c.CiId IN (SELECT l.CiId FROM sidata.CiLink l WHERE l.NativeId IN (SELECT v FROM @idList))
-       OR c.Name IN (SELECT v FROM @nameList))
+  AND (c.CiId IN (SELECT v FROM #idList)
+       OR c.CiId IN (SELECT l.CiId FROM sidata.CiLink l WHERE l.NativeId IN (SELECT v FROM #idList))
+       OR c.Name IN (SELECT v FROM #nameList))
 ORDER BY c.CiId;
+DROP TABLE #idList; DROP TABLE #nameList;
 '@
 }
 

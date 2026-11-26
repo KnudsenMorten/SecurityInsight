@@ -215,6 +215,28 @@ WHERE f.CollectionId = TRY_CONVERT(int, @c) AND f.FindingId IN (SELECT TRY_CONVE
         return map;
     }
 
+    /// #1364 the findings a meaning rule made evidence on one finding (sidata.FindingEvidence: moved out of the findings, so
+    /// they are never a finding of their own) -- report, key, title, severity, rule. Empty on a database without the table.
+    public const string EvidenceSql = """
+IF OBJECT_ID(N'sidata.FindingEvidence') IS NULL OR COL_LENGTH(N'sidata.Finding', N'RaFindingKey') IS NULL
+    SELECT CAST(NULL AS nvarchar(256)) AS ReportName, CAST(NULL AS nvarchar(256)) AS FindingKey, CAST(NULL AS nvarchar(1000)) AS Title,
+           CAST(NULL AS nvarchar(32)) AS Severity, CAST(NULL AS nvarchar(128)) AS RuleId WHERE 1 = 0;
+ELSE
+    EXEC sp_executesql N'SELECT e.ReportName, e.ConfigurationId AS FindingKey, e.Title, e.Severity, e.RuleId
+FROM sidata.FindingEvidence AS e
+WHERE e.CollectionId = TRY_CONVERT(int, @c)
+  AND e.CanonicalKey IN (SELECT f.RaFindingKey FROM sidata.Finding AS f WHERE f.CollectionId = TRY_CONVERT(int, @c) AND f.FindingId = TRY_CONVERT(bigint, @id))
+ORDER BY e.ReportName, e.ConfigurationId;', N'@c nvarchar(32), @id nvarchar(32)', @c = @c, @id = @id;
+""";
+
+    /// One finding's evidence: what else reported the same weakness on its CI (the finding page's "Also reported by").
+    public async Task<IReadOnlyList<FindingEvidenceRow>> EvidenceAsync(string collectionId, string findingId, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(collectionId) || string.IsNullOrWhiteSpace(findingId)) return Array.Empty<FindingEvidenceRow>();
+        var rows = await _sql.QueryAsync(EvidenceSql, new Dictionary<string, object?> { ["c"] = collectionId, ["id"] = findingId }, ct);
+        return rows.Select(r => new FindingEvidenceRow(r.Str("ReportName") ?? "", r.Str("FindingKey") ?? "", r.Str("Title") ?? "", r.Str("Severity") ?? "", r.Str("RuleId") ?? "")).ToList();
+    }
+
     // ---------------------------------------------------------------- writes (through the ONE writer of cfg.ItemOverride)
 
     public async Task<WriteResult> SaveAsync(FindingLink link, string by, CancellationToken ct) =>
@@ -233,4 +255,7 @@ WHERE f.CollectionId = TRY_CONVERT(int, @c) AND f.FindingId IN (SELECT TRY_CONVE
 }
 
 /// One selected finding as the link sees it: its id, its key, the owner (CI) Risk Analysis keyed it on, and what is shown.
+/// #1364 one finding a meaning rule made evidence on another (sidata.FindingEvidence).
+public sealed record FindingEvidenceRow(string Report, string Key, string Title, string Severity, string Rule);
+
 public sealed record LinkCandidate(string FindingId, string? Key, string? Owner, string Title, string AssetName, string ReportName, string Severity, double RiskScore);

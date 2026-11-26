@@ -254,7 +254,7 @@ SELECT N'Saved' AS Outcome;
         if (FlowMode == "flow" && StepOf(j) is not null && List.Any(x => x.Name == JobFlow.FlowJob)) return await QueueRun("step", JobSchedule.Key(j), ct);
         // a job that is already running is not started a second time beside itself: it says so and starts nothing
         if (!JobRules.RunsSideBySide(j) && JobRules.RunningExecution(await _jobs.ExecutionsAsync(j, 15, ct)) is { } live) return JobRules.AlreadyRunningText(live);
-        return "execution " + await _jobs.StartAsync(j, ct);
+        return QueuedStartJobsClient.Said(await _jobs.StartAsync(j, ct));
     }, ct);
     [SI.Management.Web.Audit.Audited("job.schedule.disable")]
     public Task<IActionResult> OnPostDisableAsync(CancellationToken ct) => Act("disable", async j => { await _jobs.DisableAsync(j, ct); return "disabled (manual trigger; the schedule is remembered)"; }, ct);
@@ -347,7 +347,7 @@ SELECT N'Saved' AS Outcome;
         var env = new Dictionary<string, string> { ["SI_FLOW_CANCEL"] = "1", ["SI_FLOW_CANCEL_RUN"] = id, ["SI_FLOW_CANCEL_REASON"] = reason, ["SI_FLOW_TRIGGER"] = "manual" };
         if (!string.IsNullOrEmpty(r.Holder)) env["SI_FLOW_CANCEL_RUNNER"] = r.Holder!;
         string stopped;
-        try { stopped = $"; its running jobs are being stopped (runner execution {await _jobs.StartWithEnvAsync(JobFlow.FlowJob, env, ct)})"; }
+        try { stopped = $"; its running jobs are being stopped (runner {QueuedStartJobsClient.Said(await _jobs.StartWithEnvAsync(JobFlow.FlowJob, env, ct))})"; }
         catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException)
         {
             // the run IS cancelled (never resumed, the lock is free); only the stop of its executions did not start

@@ -2,6 +2,7 @@
 @using SI.Management.Web.Advisors
 @inject IAdvisorStore Advisors
 @inject DepartmentSignInService SignIn
+@inject SI.Management.Web.Departments.GuestObjectIdResolver GuestIds
 @*
     The ADVISORS and SIGN-IN LINKS of one department (#258), on its admin page (full) and its department page (compact:
     send a link only). Every form posts to /Admin/Departments/Advisors (Admin). Reads fail soft: a database without the
@@ -50,7 +51,7 @@
                                 <td>@a.Company</td>
                                 <td class="wrap">
                                     @a.ObjectId
-                                    @if (string.IsNullOrWhiteSpace(a.ObjectId) && a.Active) { <span class="hint" data-mail-only>@SI.Management.Web.Departments.MailOnlyMatch.AdminNote</span> }
+                                    @if (string.IsNullOrWhiteSpace(a.ObjectId) && a.Active) { <span class="hint" data-mail-only>@GuestIds.NoteFor("advisor", a.AdvisorId)</span> }
                                 </td>
                                 <td>@if (a.Active) { <text>active</text> } else { <text>revoked </text>@Fmt.Time(a.RevokedAt, "date")<text> by @a.RevokedBy: @a.RevokeReason</text> }</td>
                                 <td>

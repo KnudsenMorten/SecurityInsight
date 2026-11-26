@@ -913,7 +913,13 @@ function Invoke-GraphHuntingQuery {
             # containing 'TaskCanceledException', and an HTTP failure carries a composed status line so
             # '502 Bad Gateway' still matches -- so the throw stays a plain string exactly as it became
             # in v2.2.452, and the classifiers below see the same text they always did.
-            $ahResp = Invoke-SIHuntingQueryRest -Query $Query -Token $script:GraphAccessToken -TimeoutSec 900
+            # #1321 (SI_RA_HuntingStreamRead = on, the default since owner 2026-11-23): the answer is read AS IT ARRIVES,
+            # never held as one string and one parsed tree -- the same rows in the same shape. Off (or a hunting call that has
+            # no streaming read): the call as before.
+            $__hsArgs = @{}
+            $__hsCmd = @(Get-Command -Name Invoke-SIHuntingQueryRest -ErrorAction SilentlyContinue)[0]
+            if ((Get-Command -Name Test-SIHuntingStreamOn -ErrorAction SilentlyContinue) -and (Test-SIHuntingStreamOn) -and $__hsCmd -and $__hsCmd.Parameters -and $__hsCmd.Parameters.ContainsKey('StreamRows')) { $__hsArgs['StreamRows'] = $true }
+            $ahResp = Invoke-SIHuntingQueryRest -Query $Query -Token $script:GraphAccessToken -TimeoutSec 900 @__hsArgs
             $_ahSw.Stop()
             Write-Info ("advanced hunting returned in {0:F1}s" -f $_ahSw.Elapsed.TotalSeconds)
             # #641: advanced hunting returns at most 100,000 rows and says nothing when it cuts there (its answer carries only

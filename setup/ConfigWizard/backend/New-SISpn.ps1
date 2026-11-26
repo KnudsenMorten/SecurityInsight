@@ -156,6 +156,7 @@ if (-not $GraphPermissions -or $GraphPermissions.Count -eq 0) {
         'UserAuthenticationMethod.Read.All',     # users' sign-in methods: passwordless-only accounts (read only)
         'DeviceManagementManagedDevices.Read.All', # Intune devices: serial numbers and MAC addresses for the full asset details (read only)
         'DeviceManagementConfiguration.Read.All',  # Intune: the compliance policies a device does not meet and its update ring (read only)
+        'DeviceManagementApps.Read.All',           # Intune audit events: the proof that a managed device was deleted, so its asset retires at once (read only; #1390)
         'AccessReview.Read.All',                 # access reviews: the last review of a privileged role, group or application (read only)
         'SecurityAlert.Read.All',                # security alerts: the open alerts per device -- how many, the highest severity, the newest one (read only)
         'SecurityEvents.Read.All',               # the latest Microsoft Secure Score for the hourly status report (/security/secureScores, read only; owner 2026-10-16)

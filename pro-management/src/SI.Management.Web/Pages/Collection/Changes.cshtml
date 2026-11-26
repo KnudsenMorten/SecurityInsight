@@ -3,6 +3,8 @@
 @{
     ViewData["Title"] = Model.Heading;
     var baseId = Model.Base?.CollectionId ?? Model.A;
+    // #1386: the "To" picker shows the collection's date -- the layout's plain run line would say it again
+    if (Model.Current is not null) { ViewContext.HttpContext.Items[SI.Management.Web.Pages.Collection.ViewHead.RunShownKey] = true; }
 }
 <h1>@Model.Heading</h1>
 <p class="lede">@Model.Lede</p>

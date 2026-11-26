@@ -54,6 +54,7 @@ $script:SIRemTaskRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 if (-not (Get-Command -Name Get-SIFindingFieldPlan -ErrorAction SilentlyContinue)) { . ([IO.Path]::Combine($script:SIRemTaskRoot, 'data-model', 'SI-FindingFieldMapper.ps1')) }
 if (-not (Get-Command -Name Get-SIDataModelTemplate -ErrorAction SilentlyContinue)) { . ([IO.Path]::Combine($script:SIRemTaskRoot, 'data-model', 'SI-DataModelTemplates.ps1')) }
 if (-not (Get-Command -Name Get-SISoftwareEvidence -ErrorAction SilentlyContinue)) { . ([IO.Path]::Combine($script:SIRemTaskRoot, '_shared', 'SI-SoftwareEvidence.ps1')) }
+if (-not (Get-Command -Name Invoke-SIDataFindingFold -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot 'SI-DataFindingFold.ps1') }
 
 # (lists are returned by functions, never read from a script variable: a file dot-sourced inside a function keeps its variables
 # in THAT scope -- the trap of #961)
@@ -70,12 +71,20 @@ function Get-SIRemediationTaskColumns {
         si_affected_product          = 'f.AffectedProduct'
         si_affected_vendor           = 'f.AffectedVendor'
         si_affected_version          = 'f.AffectedVersion'
-        si_title                     = 'f.Title'
+        # #1384 "<name> <version> (<vendor>)" per copy: pairs a multi-product finding's products with their versions (read for
+        # such a finding alone -- a finding of one product needs no pairs, and its signatures stay as many as they were)
+        si_affected_software         = "CASE WHEN f.AffectedProduct LIKE N'%;%' THEN f.AffectedSoftware END"
+        si_title                   = 'f.Title'
         si_category                  = 'f.Category'
         si_subcategory               = 'f.Subcategory'
         si_security_domain           = 'f.SecurityDomain'
         si_report_name               = 'f.ReportName'
         si_severity                  = 'f.Severity'
+        # #1373 Defender's remediation type of a recommendation and its software (stored with the finding only: its document),
+        # read for a recommendation's rows alone
+        si_recommendation_remediation_type = "CASE WHEN k.Typ = N'recommendation' AND ISJSON(f.DetailJson) = 1 THEN JSON_VALUE(f.DetailJson, '`$.si_recommendation_remediation_type') END"
+        si_recommendation_product          = "CASE WHEN k.Typ = N'recommendation' AND ISJSON(f.DetailJson) = 1 THEN JSON_VALUE(f.DetailJson, '`$.si_recommendation_product') END"
+        si_recommendation_vendor           = "CASE WHEN k.Typ = N'recommendation' AND ISJSON(f.DetailJson) = 1 THEN JSON_VALUE(f.DetailJson, '`$.si_recommendation_vendor') END"
     }
 }
 
@@ -105,6 +114,11 @@ function Get-SIRemediationTaskRuleFields {
             }
         }
     }
+    # #1373 a rule on Defender's remediation type: the task reads the software it is about too (Product / Vendor of the task)
+    if ($seen.Contains('si_recommendation_remediation_type')) { foreach ($x in 'si_recommendation_product', 'si_recommendation_vendor') { if (-not $seen.Contains($x)) { $seen.Add($x) } } }
+    # #1384 a rule on the affected product: the task reads the affected software too (the product / version pairs of a finding
+    # that names several products -- one task per product)
+    if ($seen.Contains('si_affected_product') -and -not $seen.Contains('si_affected_software')) { $seen.Add('si_affected_software') }
     $known = @($seen | Where-Object { $cols.Contains($_) })
     $unknown = @($seen | Where-Object { -not $cols.Contains($_) })
     [pscustomobject]@{ Known = [string[]]$known; Unknown = [string[]]$unknown }
@@ -215,6 +229,14 @@ function Split-SIRemediationTaskList {
     , $out.ToArray()
 }
 
+function Get-SIRemediationTaskSoftwareUnits {
+    <# PURE. #1384 the finding's software as aligned pairs -- the ONE rule (engine/data-model/SI-FindingFieldMapper.ps1
+       Get-SIFindingSoftwarePairs, which every output's grouping value reads too). -Versions is not needed: a version is the
+       item's own. #>
+    param([string[]]$Products = @(), [string[]]$Versions = @(), [string[]]$Vendors = @(), $Software)
+    , (Get-SIFindingSoftwarePairs -Products $Products -Vendors $Vendors -Software $Software)
+}
+
 function ConvertTo-SIRemediationTaskUnits {
     <#
     .SYNOPSIS  PURE. THE TASK RULE for one finding signature: the field values (-Values: SI field -> value, the finding type
@@ -222,24 +244,47 @@ function ConvertTo-SIRemediationTaskUnits {
                the kind are the finding field map's si_security_grouping_parent / _kind (-Map); a finding naming SEVERAL
                versions of one product (or several products of one version) is split first -- one task per version. No value =
                no task (an empty list).
+               #1384 (owner 2026-11-25 "no paths ?"): a finding naming SEVERAL PRODUCTS (one CVE in nodejs and .net) belongs to
+               ONE TASK PER PRODUCT AND VERSION -- the pairs read from its affected software (Get-SIRemediationTaskSoftwareUnits),
+               each named and keyed by its own product, version and vendor; never a ';'-joined name whose order moves run to
+               run. When the pairs cannot be read, one task per product, its version not named (every installed version of it on
+               the CI -- the evidence gives the versions and the paths, as for a Defender recommendation, #1373). The units come
+               out sorted by key; any list left in a value is sorted (stable from run to run).
     #>
     param([Parameter(Mandatory)][System.Collections.IDictionary]$Values, [Parameter(Mandatory)]$Map, $Plan, $ValueMaps)
     if ($null -eq $Plan) { $Plan = Get-SIFindingFieldPlan -Map $Map }
     $prods = Split-SIRemediationTaskList $Values['si_affected_product']
     $vers = Split-SIRemediationTaskList $Values['si_affected_version']
     $vends = Split-SIRemediationTaskList $Values['si_affected_vendor']
+    $sorted = { param($l) $x = New-Object 'System.Collections.Generic.List[string]'; foreach ($i in @($l)) { $x.Add([string]$i) }; $x.Sort([StringComparer]::OrdinalIgnoreCase); ($x.ToArray() -join ';') }
     $variants = New-Object System.Collections.Generic.List[object]
-    if ($prods.Count -le 1 -and $vers.Count -gt 1) { foreach ($v in $vers) { $variants.Add(@{ si_affected_version = $v }) } }
-    elseif ($prods.Count -gt 1 -and $vers.Count -le 1) { foreach ($p in $prods) { $variants.Add(@{ si_affected_product = $p }) } }
-    else { $variants.Add(@{}) }
+    if ($prods.Count -gt 1) {
+        # the ONE rule of a finding in several products (SI-FindingFieldMapper.ps1): its pairs, else one per product
+        $vs = Get-SIFindingSoftwareVariants -Item ([pscustomobject]@{ si_affected_product = $Values['si_affected_product']; si_affected_version = $Values['si_affected_version']
+                                                                               si_affected_vendor = $Values['si_affected_vendor']; si_affected_software = $Values['si_affected_software'] })
+        foreach ($s in $vs) {
+            $h1 = @{}; foreach ($k in $s.Keys) { if ($k -ne 'NoVersion' -or $s[$k]) { $h1[$k] = $s[$k] } }
+            $variants.Add($h1)
+        }
+    }
+    elseif ($vers.Count -gt 1) { foreach ($v in $vers) { $variants.Add(@{ si_affected_version = $v; si_affected_vendor = $(if ($vends.Count -le 1) { $Values['si_affected_vendor'] } else { & $sorted $vends }) }) } }
+    else { $variants.Add(@{ si_affected_vendor = $(if ($vends.Count -le 1) { $Values['si_affected_vendor'] } else { & $sorted $vends }) }) }
     $units = [ordered]@{}
     foreach ($var in $variants) {
         $h = [ordered]@{}
         foreach ($k in $Values.Keys) { $v = $Values[$k]; if ($v -is [System.DBNull]) { $v = $null }; $h[[string]$k] = $v }
-        foreach ($k in $var.Keys) { $h[[string]$k] = $var[$k] }
+        foreach ($k in $var.Keys) { if ($k -ne 'NoVersion') { $h[[string]$k] = $var[$k] } }
         $item = [pscustomobject]$h
         $vals = ConvertTo-SIFindingFieldValues -Item $item -Map $Map -Plan $Plan -ValueMaps $ValueMaps -Fields @('si_security_grouping_parent', 'si_security_grouping_kind')
         $name = ''; if ($vals.Contains('si_security_grouping_parent')) { $name = ([string]$vals['si_security_grouping_parent']).Trim() }
+        if (-not $name -and $var.ContainsKey('NoVersion') -and ([string]$h['si_finding_type']) -eq 'cve') {
+            # #1384 the product's own task over every installed version ("Update <product> (<vendor>)"): only where the rule
+            # names nothing else for it (an OS update, a security update by name keeps the rule's own task)
+            $nm = ('Update {0}' -f $var['si_affected_product']); if ($var['si_affected_vendor']) { $nm = ('{0} ({1})' -f $nm, $var['si_affected_vendor']) }
+            $key = Get-SIRemediationTaskKey -Kind 'software-upgrade' -Name $nm
+            if (-not $units.Contains($key)) { $units[$key] = [pscustomobject][ordered]@{ TaskKey = $key; TaskName = $nm; Kind = 'software-upgrade'; Product = [string]$var['si_affected_product']; Vendor = [string]$var['si_affected_vendor']; Version = '' } }
+            continue
+        }
         if (-not $name) { continue }
         $kind = ''; if ($vals.Contains('si_security_grouping_kind')) { $kind = ([string]$vals['si_security_grouping_kind']).Trim().ToLowerInvariant() }
         if (-not $kind) { $kind = 'other' }
@@ -247,13 +292,22 @@ function ConvertTo-SIRemediationTaskUnits {
         if ($kind -eq 'software-upgrade') {
             $pp = Split-SIRemediationTaskList $h['si_affected_product']; if ($pp.Count -eq 1) { $prod = $pp[0] }
             $vv = Split-SIRemediationTaskList $h['si_affected_version']; if ($vv.Count -eq 1) { $ver = $vv[0] }
-            if ($vends.Count -eq 1) { $vend = $vends[0] }
+            $dd = Split-SIRemediationTaskList $h['si_affected_vendor']; if ($dd.Count -eq 1) { $vend = $dd[0] }
+            # #1373 a Defender recommendation to update / upgrade software: the software Defender names (every installed version
+            # of it on the CI -- the evidence gives the versions and the paths, #1366 P6)
+            if (-not $prod -and -not $pp.Count -and [string]$h['si_recommendation_product']) {
+                $prod = ([string]$h['si_recommendation_product']).Trim(); $ver = ''
+                $vend = ([string]$h['si_recommendation_vendor']).Trim()
+            }
         }
         $key = Get-SIRemediationTaskKey -Kind $kind -Name $name
         if ($units.Contains($key)) { continue }
         $units[$key] = [pscustomobject][ordered]@{ TaskKey = $key; TaskName = $name; Kind = $kind; Product = $prod; Vendor = $vend; Version = $ver }
     }
-    , @($units.Values)
+    # #1384 in key order: the same finding gives the same units in the same order, whatever order its lists came in
+    # (ordinal: the same order on every platform and culture)
+    $ks = New-Object 'System.Collections.Generic.List[string]'; foreach ($k in $units.Keys) { $ks.Add([string]$k) }; $ks.Sort([StringComparer]::Ordinal)
+    , @($ks | ForEach-Object { $units[$_] })
 }
 
 function Get-SIRemediationTaskAppKeyName {
@@ -272,7 +326,9 @@ function Get-SIRemediationTaskBundledUnits {
     .SYNOPSIS  PURE. The software evidence of ONE software on ONE CI (-Rows: the evidence rows of the CI's devices for that
                product and version) -> @{ Known (evidence was read: at least one copy); KeepPlain (a copy that is NOT bundled
                exists -- the product's own task stays); DiskPaths (every path on disk of that software, ';' -- '' when the
-               evidence has no disk path, only a registry row: then nothing is known about any copy's place); Units (one per
+               evidence has no disk path, only a registry row: then nothing is known about any copy's place); PlainPaths (the
+               paths on disk of the copies that are NOT bundled, or whose application cannot be named -- the product's own
+               task shows them, ';'); Units (one per
                application that bundles it: TaskKey, TaskName, Application, Paths, EvidenceAt) }. A registry row of a copy that
                has a disk path says nothing on its own.
                THE TASK'S IDENTITY NEVER HOLDS THE APPLICATION'S VERSION: an application updated from 1.2 to 1.3 that still
@@ -280,21 +336,32 @@ function Get-SIRemediationTaskBundledUnits {
                inventory names (one version, else none).
                Every path is kept IN FULL, a user name in it included (owner 2026-11-17: the evidence an Admin needs).
     #>
-    param([AllowEmptyCollection()][object[]]$Rows = @(), [Parameter(Mandatory)][string]$Product, [Parameter(Mandatory)][string]$Version)
+    param([AllowEmptyCollection()][object[]]$Rows = @(), [Parameter(Mandatory)][string]$Product, [AllowEmptyString()][string]$Version = '')
     $rows = @($Rows | Where-Object { $null -ne $_ })
-    $res = [pscustomobject]@{ Known = ($rows.Count -gt 0); KeepPlain = $false; DiskPaths = ''; Units = @() }
+    $res = [pscustomobject]@{ Known = ($rows.Count -gt 0); KeepPlain = $false; DiskPaths = ''; PlainPaths = ''; Units = @() }
     if ($rows.Count -eq 0) { return $res }
     $g = { param($r, $n) $x = Get-SIEvValue $r $n; if ($x -is [System.DBNull]) { $null } else { $x } }
     $disk = @($rows | Where-Object { [string](& $g $_ 'PathType') -eq 'disk' })
-    if ($disk.Count -eq 0) { $res.KeepPlain = $true; return $res }
+    if ($disk.Count -eq 0) {
+        # #1384 only a registry row of that version (Defender's uninstall entry: often the case for chrome, office, git, entra
+        # connect): where the copy is on disk is not known (DiskPaths stays '' -- nothing is closed or split on it), but the
+        # product's own task shows WHERE IT WAS FOUND -- the registry key(s), in full -- never an empty Paths beside evidence
+        $res.KeepPlain = $true
+        $reg = New-Object 'System.Collections.Generic.SortedSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+        foreach ($r in $rows) { $fp = [string](& $g $r 'FullPath'); if ($fp -and [string](& $g $r 'PathType') -eq 'registry') { [void]$reg.Add($fp) } }
+        $res.PlainPaths = (@($reg) -join ';')
+        return $res
+    }
     $all = New-Object 'System.Collections.Generic.SortedSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    $plain = New-Object 'System.Collections.Generic.SortedSet[string]' ([StringComparer]::OrdinalIgnoreCase)
     $apps = [ordered]@{}
     foreach ($r in $disk) {
         $fp = [string](& $g $r 'FullPath')
         if ($fp) { [void]$all.Add($fp) }
-        if ([string](& $g $r 'InstallKind') -ne 'bundled') { $res.KeepPlain = $true; continue }
+        # a copy that is not bundled -- or whose application cannot be named -- is the product's own task, with its paths (never dropped)
+        if ([string](& $g $r 'InstallKind') -ne 'bundled') { $res.KeepPlain = $true; if ($fp) { [void]$plain.Add($fp) }; continue }
         $an = ([string](& $g $r 'Application')).Trim()
-        if (-not $an) { $res.KeepPlain = $true; continue }
+        if (-not $an) { $res.KeepPlain = $true; if ($fp) { [void]$plain.Add($fp) }; continue }
         # one unit per application KEY. A FOLDER-derived name leaves its version out of the key (two copies under versioned
         # folders -- jdk-17, jdk-21 -- are one task with every path of both); a name the INVENTORY matched keeps it (Python 2.7 and
         # Python 3.11 are two applications), and the inventory's own version field is never part of the key
@@ -303,20 +370,26 @@ function Get-SIRemediationTaskBundledUnits {
         $ak = $keyApp.ToLowerInvariant()
         if ($apps.Contains($ak) -and $apps[$ak].Name -cne $an) { $apps[$ak].Name = $keyApp }
         if (-not $apps.Contains($ak)) { $apps[$ak] = @{ KeyApp = $keyApp; Name = $an; Versions = (New-Object 'System.Collections.Generic.SortedSet[string]' ([StringComparer]::OrdinalIgnoreCase)); Paths = (New-Object 'System.Collections.Generic.SortedSet[string]' ([StringComparer]::OrdinalIgnoreCase)); At = $null } }
-        if ([string](& $g $r 'ApplicationSource') -eq 'inventory') { $av = ([string](& $g $r 'ApplicationVersion')).Trim(); if ($av) { [void]$apps[$ak].Versions.Add($av) } }
+        # the application's version (Defender's where it names the app, else the version folder): the task's Application version
+        $av = Get-SIEvidenceApplicationVersion $r; if ($av) { [void]$apps[$ak].Versions.Add($av) }
         if ($fp) { [void]$apps[$ak].Paths.Add($fp) }
         $ct = & $g $r 'CollectionTime'
         if ($null -ne $ct -and "$ct" -ne '') { try { $t = [datetime]$ct; if ($null -eq $apps[$ak].At -or $t -gt $apps[$ak].At) { $apps[$ak].At = $t } } catch { } }
     }
     $res.DiskPaths = (@($all) -join ';')
+    $res.PlainPaths = (@($plain) -join ';')
     $units = New-Object System.Collections.Generic.List[object]
     foreach ($a in $apps.Values) {
-        # the key: the application's name only (never its version); the name: with its version when the inventory names one
-        $keyName = ('Update {0} (bundles {1} {2})' -f $a.KeyApp, $Product, $Version)
-        $shown = $a.Name; if ($a.Versions.Count -eq 1) { $shown = $a.Name + ' ' + @($a.Versions)[0] }
-        $name = ('Update {0} (bundles {1} {2})' -f $shown, $Product, $Version)
-        $units.Add([pscustomobject][ordered]@{ TaskKey = (Get-SIRemediationTaskKey -Kind 'bundled-upgrade' -Name $keyName); TaskName = $name; Application = $a.Name
-                                               Paths = (@($a.Paths) -join ';'); EvidenceAt = $a.At })
+        # the key: the application's name only (never its version; unchanged); the name shown and the Application column: the
+        # ONE tidy rule (Format-SIEvApplicationName, owner 2026-11-24 "make title tidied consistent") -- the same name from the
+        # folder or the inventory, Title Case, no version in it
+        # (#1373 a Defender recommendation names the software, not a version: "(bundles <product>)")
+        $pv = ('{0} {1}' -f $Product, $Version).Trim()
+        $keyName = ('Update {0} (bundles {1})' -f $a.KeyApp, $pv)
+        $shown = Format-SIEvApplicationName $a.Name; if (-not $shown) { $shown = $a.Name }
+        $name = ('Update {0} (bundles {1})' -f $shown, $pv)
+        $units.Add([pscustomobject][ordered]@{ TaskKey = (Get-SIRemediationTaskKey -Kind 'bundled-upgrade' -Name $keyName); TaskName = $name; Application = $shown
+                                               Paths = (@($a.Paths) -join ';'); EvidenceAt = $a.At; ApplicationVersion = (Join-SIEvVersions @($a.Versions)) })
     }
     $res.Units = $units.ToArray()
     $res
@@ -333,7 +406,7 @@ WITH u AS (
 $(Get-SIRemediationTaskKeyApplySql)
     JOIN sidata.RemediationTaskSig AS s ON s.BuildId = CONVERT(uniqueidentifier, @BuildId) AND s.SigHash = {SIG}
     WHERE f.CollectionId = CONVERT(int, @CollectionId) AND f.RaFindingKey IS NOT NULL AND sp.P > 1
-      AND s.Kind = N'software-upgrade' AND s.Product <> N'' AND s.Version <> N'')
+      AND s.Kind = N'software-upgrade' AND s.Product <> N'')
 SELECT u.OwnerKey, u.Product, u.Vendor, u.Version,
        CASE WHEN u.OwnerKey LIKE N'asset:%' THEN LOWER(SUBSTRING(u.OwnerKey, 7, 450))
             ELSE (SELECT STRING_AGG(CONVERT(nvarchar(max), LOWER(l.NativeId)), N';') FROM sidata.CiLink AS l WHERE l.CiId = u.OwnerKey AND l.Provider = N'mde') END AS DeviceIds
@@ -355,15 +428,123 @@ FROM OPENJSON(@rows) WITH (h varchar(64) '$.h', u int '$.u', k nvarchar(max) '$.
                            p nvarchar(400) '$.p', v nvarchar(400) '$.v', r nvarchar(400) '$.r') AS j;
 '@ }
         'split' { @'
-INSERT sidata.RemediationTaskSplit (BuildId, ComboHash, OwnerKey, KeepPlain, TaskKey, TaskName, Application, Paths, EvidenceAt)
+INSERT sidata.RemediationTaskSplit (BuildId, ComboHash, OwnerKey, KeepPlain, TaskKey, TaskName, Application, Paths, EvidenceAt, PlainPaths, ApplicationVersion)
 SELECT CONVERT(uniqueidentifier, @BuildId), HASHBYTES('SHA2_256', CONCAT(j.o, NCHAR(31), ISNULL(j.v, N''), NCHAR(31), j.p, NCHAR(31), j.r)), j.o, j.keep,
-       j.k, j.n, j.a, j.x, TRY_CONVERT(datetime2(3), j.t, 127)
+       j.k, j.n, j.a, j.x, TRY_CONVERT(datetime2(3), j.t, 127), NULLIF(j.pp, N''), NULLIF(j.av, N'')
 FROM OPENJSON(@rows) WITH (o nvarchar(450) '$.o', p nvarchar(400) '$.p', v nvarchar(400) '$.v', r nvarchar(400) '$.r', keep bit '$.keep',
-                           k nvarchar(max) '$.k', n nvarchar(max) '$.n', a nvarchar(max) '$.a', x nvarchar(max) '$.x', t nvarchar(40) '$.t') AS j;
+                           k nvarchar(max) '$.k', n nvarchar(max) '$.n', a nvarchar(max) '$.a', x nvarchar(max) '$.x', t nvarchar(40) '$.t',
+                           pp nvarchar(max) '$.pp', av nvarchar(max) '$.av') AS j;
 '@ }
         'clear' { 'DELETE FROM sidata.RemediationTaskSplit WHERE BuildId = CONVERT(uniqueidentifier, @BuildId); DELETE FROM sidata.RemediationTaskSig WHERE BuildId = CONVERT(uniqueidentifier, @BuildId);' }
         'orphans' { 'DELETE FROM sidata.RemediationTaskSplit WHERE BuildId <> CONVERT(uniqueidentifier, @BuildId) AND CreatedAt < DATEADD(hour, -24, SYSUTCDATETIME()); DELETE FROM sidata.RemediationTaskSig WHERE BuildId <> CONVERT(uniqueidentifier, @BuildId) AND CreatedAt < DATEADD(hour, -24, SYSUTCDATETIME());' }
     }
+}
+
+function Get-SIRemediationTaskContextSql {
+    <#
+        PURE. #1367 THE TASK'S CONTEXT FOR A TICKET (owner 2026-11-25: "i want the have as much context in the tasks as possible,
+        as it is being sent to servicenow" / "and other ticket systems" / "the actual solution is to update azure monitor agent"):
+        the statements of ONE range inside the build (#out holds the range's tasks; #l / #t this collection's units; #p the
+        base's tasks), written once here so every output that carries tasks maps the same typed columns:
+          * a task worked out now, or carried without a context yet (#cs): its findings (#cx) read by their clustered key --
+            the recommended update(s) and remediation (each distinct text once), every CVE id, any exploit, the end of support,
+            the earliest due date and first detection, "Within Accepted Lifecycle"; the paths where its product was found; its
+            CI's type, OS, IP address, environment and exposure; the evidence of #1364 (sidata.FindingEvidence, when there);
+          * WHAT TO DO in words -- for a library bundled in an application the APPLICATION comes first (its version, where it is
+            installed), the library and its CVEs are the reason: never a bare "Update <library>";
+          * a carried task keeps the context it had (nothing about it was read again);
+          * ContextHash over all of it (never part of RowHash).
+        Set-based, a range at a time; no JSON is read.
+    #>
+    $whyCves = "CASE WHEN o.Cves > 0 THEN CONCAT(N', which has ', o.Cves, CASE WHEN o.Cves = 1 THEN N' CVE' ELSE N' CVEs' END, CASE WHEN NULLIF(o.CveList, N'') IS NOT NULL THEN N': ' + o.CveList END) END"
+    $whyPlain = "CASE WHEN o.Cves > 0 THEN CONCAT(N' Why: ', o.Cves, CASE WHEN o.Cves = 1 THEN N' CVE' ELSE N' CVEs' END, CASE WHEN NULLIF(o.CveList, N'') IS NOT NULL THEN N' (' + o.CveList + N')' END, N', highest severity ', ISNULL(o.HighestSeverity, N'unknown'), N'.')" +
+                " ELSE CONCAT(N' Why: ', o.Findings, CASE WHEN o.Findings = 1 THEN N' finding' ELSE N' findings' END, N', highest severity ', ISNULL(o.HighestSeverity, N'unknown'), N'.') END"
+    $text = @'
+-- #1367 the tasks whose context is worked out now: every task of this collection, and a carried one that has none yet
+INSERT #cs (TaskId) SELECT o.TaskId FROM #out AS o LEFT JOIN #p AS p ON p.TaskId = o.TaskId WHERE o.InThisCollection = 1 OR p.ContextHash IS NULL;
+-- a carried task keeps the context it had
+UPDATE o SET WhatToDo = p.WhatToDo, RecommendedUpdate = p.RecommendedUpdate, RemediationSteps = p.RemediationSteps, CveList = p.CveList, ExploitAvailable = p.ExploitAvailable,
+             EndOfSupport = p.EndOfSupport, EndOfSupportDate = p.EndOfSupportDate, DueDate = p.DueDate, FirstDetected = p.FirstDetected, WithinAcceptedLifecycle = p.WithinAcceptedLifecycle,
+             DetectedPaths = p.DetectedPaths, AssetType = p.AssetType, AssetOs = p.AssetOs, AssetIp = p.AssetIp, AssetEnvironment = p.AssetEnvironment, InternetExposed = p.InternetExposed,
+             AlsoReportedBy = p.AlsoReportedBy, ContextHash = p.ContextHash
+FROM #out AS o JOIN #p AS p ON p.TaskId = o.TaskId
+WHERE NOT EXISTS (SELECT 1 FROM #cs AS s WHERE s.TaskId = o.TaskId);
+-- the findings behind each: a task of this collection, its findings now; a carried one, its links' findings in the base
+INSERT #cx (TaskId, Cid, FindingId, Ok, Fk)
+SELECT t.TaskId, @c, l.FindingId, MAX(l.OwnerKey), MAX(l.FindingKey) FROM #l AS l JOIN #t AS t ON t.OwnerKey = l.OwnerKey AND t.TaskKey = l.TaskKey JOIN #cs AS s ON s.TaskId = t.TaskId
+GROUP BY t.TaskId, l.FindingId;
+INSERT #cx (TaskId, Cid, FindingId, Ok, Fk)
+SELECT o.TaskId, @b, pl.FindingId, MAX(pl.OwnerKey), MAX(pl.FindingKey)
+FROM #out AS o JOIN #cs AS s ON s.TaskId = o.TaskId
+JOIN sidata.RemediationTaskFinding AS pl ON pl.CollectionId = @b AND pl.TaskId = o.TaskId
+WHERE o.InThisCollection = 0 AND pl.FindingId IS NOT NULL
+  AND NOT EXISTS (SELECT 1 FROM #cx AS y WHERE y.TaskId = o.TaskId AND y.Cid = @b AND y.FindingId = pl.FindingId)
+GROUP BY o.TaskId, pl.FindingId;
+-- #1388 THE DUE DATE (owner 2026-11-25 "Provider's date wins if set"): the provider's own due date (si_fix_due_date, Defender for
+-- Cloud governance) where it is set; the finding model's (sidata.CiFindingState.DueAt, the days to fix) for the rest
+UPDATE x SET RaKey = f.RaFindingKey, Cve = CASE WHEN UPPER(f.Cve) LIKE N'CVE-%' THEN UPPER(f.Cve) END, Upd = NULLIF(LTRIM(RTRIM(f.FixRecommendedUpdate)), N''),
+             Rem = NULLIF(LTRIM(RTRIM(COALESCE(NULLIF(f.FixRemediationFull, N''), f.FixRemediation))), N''), Ex = f.HasExploit, EosS = NULLIF(LTRIM(RTRIM(f.EosStatus)), N''),
+             EosD = f.EosDate, Due = COALESCE(f.FixDueDate, st.DueAt), FirstAt = f.SourceFirstDetected,
+             Life = CASE WHEN x.Cid = @c AND @life = 1 THEN CASE WHEN EXISTS (SELECT 1 FROM sidata.FindingLifecycleRisk AS lr WHERE lr.CollectionId = @c AND lr.FindingId = x.FindingId) THEN 1 ELSE 0 END END
+FROM #cx AS x JOIN sidata.Finding AS f ON f.CollectionId = x.Cid AND f.FindingId = x.FindingId
+LEFT JOIN sidata.CiFindingState AS st ON st.OwnerKey = x.Ok AND st.FindingKey = x.Fk;
+UPDATE o SET
+       CveList = (SELECT STRING_AGG(CONVERT(nvarchar(max), d.V), N', ') WITHIN GROUP (ORDER BY d.V) FROM (SELECT DISTINCT x.Cve AS V FROM #cx AS x WHERE x.TaskId = o.TaskId AND x.Cve IS NOT NULL) AS d),
+       RecommendedUpdate = (SELECT STRING_AGG(CONVERT(nvarchar(max), d.V), N'; ') WITHIN GROUP (ORDER BY d.V) FROM (SELECT DISTINCT x.Upd AS V FROM #cx AS x WHERE x.TaskId = o.TaskId AND x.Upd IS NOT NULL) AS d),
+       RemediationSteps = (SELECT STRING_AGG(d.V, NCHAR(10)) WITHIN GROUP (ORDER BY d.H)
+                           FROM (SELECT HASHBYTES('SHA2_256', x.Rem) AS H, MAX(x.Rem) AS V FROM #cx AS x WHERE x.TaskId = o.TaskId AND x.Rem IS NOT NULL GROUP BY HASHBYTES('SHA2_256', x.Rem)) AS d),
+       EndOfSupport = (SELECT STRING_AGG(CONVERT(nvarchar(max), d.V), N'; ') WITHIN GROUP (ORDER BY d.V) FROM (SELECT DISTINCT x.EosS AS V FROM #cx AS x WHERE x.TaskId = o.TaskId AND x.EosS IS NOT NULL) AS d),
+       ExploitAvailable = a.Ex, EndOfSupportDate = a.EosD, DueDate = a.Due, FirstDetected = a.FirstAt,
+       WithinAcceptedLifecycle = CASE a.Life WHEN 1 THEN N'yes' WHEN 0 THEN N'no' END
+FROM #out AS o JOIN #cs AS s ON s.TaskId = o.TaskId
+OUTER APPLY (SELECT CONVERT(bit, MAX(CONVERT(tinyint, x.Ex))) AS Ex, MIN(x.EosD) AS EosD, MIN(x.Due) AS Due, MIN(x.FirstAt) AS FirstAt, CONVERT(bit, MAX(CONVERT(tinyint, x.Life))) AS Life
+             FROM #cx AS x WHERE x.TaskId = o.TaskId) AS a;
+-- where its product was found on the CI: its own paths, else the CI's Defender evidence of that product and version (the task
+-- page's "Detected paths", every path in full)
+UPDATE o SET DetectedPaths = COALESCE(NULLIF(o.ApplicationPaths, N''), ev.P)
+FROM #out AS o JOIN #cs AS s ON s.TaskId = o.TaskId
+OUTER APPLY (SELECT STRING_AGG(CAST(q.FullPath AS nvarchar(max)), N';') WITHIN GROUP (ORDER BY q.FullPath) AS P
+             FROM (SELECT DISTINCT e.FullPath
+                   FROM sidata.CiLink AS dpl
+                   JOIN sidata.SoftwareEvidence AS e ON e.DeviceId = LOWER(dpl.NativeId)
+                   WHERE NULLIF(o.ApplicationPaths, N'') IS NULL AND o.Product IS NOT NULL AND dpl.CiId = o.OwnerKey AND dpl.Provider = N'mde'
+                     AND e.Product = o.Product AND e.PathType = N'disk' AND (o.Version IS NULL OR e.Version = o.Version)) AS q) AS ev;
+-- the CI's values
+UPDATE o SET AssetType = NULLIF(LTRIM(RTRIM(ci.AssetType)), N''),
+             AssetOs = NULLIF(LTRIM(RTRIM(CONCAT(ci.OsName, CASE WHEN NULLIF(LTRIM(RTRIM(ci.OsVersion)), N'') IS NOT NULL AND CHARINDEX(LTRIM(RTRIM(ci.OsVersion)), ISNULL(ci.OsName, N'')) = 0 THEN N' ' + LTRIM(RTRIM(ci.OsVersion)) END))), N''),
+             AssetIp = NULLIF(LTRIM(RTRIM(ci.IpAddress)), N''),
+             AssetEnvironment = COALESCE(NULLIF(LTRIM(RTRIM(ci.Environment)), N''), NULLIF(LTRIM(RTRIM(ci.CmdbEnvironment)), N''), NULLIF(LTRIM(RTRIM(ci.ServiceEnvironment)), N'')),
+             InternetExposed = ci.InternetExposed
+FROM #out AS o JOIN #cs AS s ON s.TaskId = o.TaskId JOIN sidata.Ci AS ci ON ci.CiId = o.CiId;
+-- #1364's evidence: the same weakness reported by another source, folded onto one of the task's findings (when that table is there)
+IF OBJECT_ID('sidata.FindingEvidence') IS NOT NULL
+    EXEC sys.sp_executesql N'UPDATE o SET AlsoReportedBy = (SELECT STRING_AGG(CONVERT(nvarchar(max), d.T), N''; '') WITHIN GROUP (ORDER BY d.T)
+        FROM (SELECT DISTINCT CONCAT(ISNULL(NULLIF(LTRIM(RTRIM(e.ReportName)), N''''), N''another source''), N'': '', ISNULL(NULLIF(LTRIM(RTRIM(e.Title)), N''''), e.ConfigurationId)) AS T
+              FROM #cx AS x JOIN sidata.FindingEvidence AS e ON e.CollectionId = x.Cid AND e.CanonicalKey = x.RaKey
+              WHERE x.TaskId = o.TaskId AND x.RaKey IS NOT NULL) AS d)
+    FROM #out AS o JOIN #cs AS s ON s.TaskId = o.TaskId;';
+-- WHAT TO DO, in words: the application first for a bundled library; the CVEs (or the findings) are the reason
+UPDATE o SET WhatToDo = CASE
+    WHEN o.Kind = N'bundled-upgrade' THEN CONCAT(N'Update ', COALESCE(NULLIF(o.Application, N''), N'the application that bundles ' + ISNULL(o.Product, N'the library')),
+         CASE WHEN NULLIF(o.ApplicationVersion, N'') IS NOT NULL THEN CONCAT(N' (version ', o.ApplicationVersion, N')') END,
+         CASE WHEN NULLIF(o.ApplicationPaths, N'') IS NOT NULL THEN CONCAT(N', installed at ', REPLACE(o.ApplicationPaths, N';', N'; ')) END,
+         N'. Why: it bundles ', ISNULL(o.Product, N'a library'), CASE WHEN NULLIF(o.Version, N'') IS NOT NULL THEN N' ' + o.Version END, {WHYCVES},
+         N'. The fix comes from the vendor of ', COALESCE(NULLIF(o.Application, N''), N'that application'), N': update the application, not the library on its own.')
+    WHEN o.Kind = N'software-upgrade' THEN CONCAT(N'Update ', COALESCE(NULLIF(o.Product, N''), o.TaskName), CASE WHEN NULLIF(o.Version, N'') IS NOT NULL THEN N' ' + o.Version END,
+         CASE WHEN NULLIF(o.Vendor, N'') IS NOT NULL THEN N' (' + o.Vendor + N')' END, N' to a fixed version',
+         CASE WHEN NULLIF(o.RecommendedUpdate, N'') IS NOT NULL THEN CONCAT(N' (recommended: ', o.RecommendedUpdate, N')') END,
+         CASE WHEN NULLIF(o.DetectedPaths, N'') IS NOT NULL THEN CONCAT(N', installed at ', REPLACE(o.DetectedPaths, N';', N'; ')) END, N'.', {WHYPLAIN})
+    WHEN o.Kind = N'security-update' THEN CONCAT(N'Install the security update ', o.TaskName, N'.', {WHYPLAIN})
+    ELSE CONCAT(o.TaskName, CASE WHEN RIGHT(RTRIM(o.TaskName), 1) IN (N'.', N'!', N'?') THEN N'' ELSE N'.' END, {WHYPLAIN}) END
+FROM #out AS o JOIN #cs AS s ON s.TaskId = o.TaskId;
+UPDATE o SET ContextHash = HASHBYTES('SHA2_256', CONCAT(o.WhatToDo, NCHAR(31), o.RecommendedUpdate, NCHAR(31), o.RemediationSteps, NCHAR(31), o.CveList, NCHAR(31),
+             CONVERT(nvarchar(1), o.ExploitAvailable), NCHAR(31), o.EndOfSupport, NCHAR(31), CONVERT(nvarchar(30), o.EndOfSupportDate, 126), NCHAR(31),
+             CONVERT(nvarchar(30), o.DueDate, 126), NCHAR(31), CONVERT(nvarchar(30), o.FirstDetected, 126), NCHAR(31), o.WithinAcceptedLifecycle, NCHAR(31), o.DetectedPaths, NCHAR(31),
+             o.AssetType, NCHAR(31), o.AssetOs, NCHAR(31), o.AssetIp, NCHAR(31), o.AssetEnvironment, NCHAR(31), CONVERT(nvarchar(1), o.InternetExposed), NCHAR(31), o.AlsoReportedBy, NCHAR(31),
+             o.HighestRiskRating, NCHAR(31), CONVERT(nvarchar(40), o.MaxWeightedRisk, 2), NCHAR(31), o.SecurityDomain))
+FROM #out AS o JOIN #cs AS s ON s.TaskId = o.TaskId;
+'@
+    $text.Replace('{WHYCVES}', $whyCves).Replace('{WHYPLAIN}', $whyPlain)
 }
 
 function Get-SIRemediationTaskBuildSql {
@@ -378,7 +559,7 @@ function Get-SIRemediationTaskBuildSql {
     param([Parameter(Mandatory)][string[]]$Fields)
     $sig = Get-SIRemediationTaskSigExpr -Fields $Fields
     $combo = { param($o, $v, $p, $r) "HASHBYTES('SHA2_256', CONCAT($o, NCHAR(31), ISNULL($v, N''), NCHAR(31), $p, NCHAR(31), $r))" }
-    $hashCols = "CONCAT(o.TaskName, NCHAR(31), o.Kind, NCHAR(31), ISNULL(o.Product, N''), NCHAR(31), ISNULL(o.Vendor, N''), NCHAR(31), ISNULL(o.Version, N''), NCHAR(31), ISNULL(o.Application, N''), NCHAR(31), ISNULL(o.ApplicationPaths, N''), NCHAR(31), o.Findings, NCHAR(31), o.Cves, NCHAR(31), ISNULL(o.HighestSeverity, N''), NCHAR(31), ISNULL(CONVERT(nvarchar(40), o.MaxRiskScore, 2), N''), NCHAR(31), ISNULL(CONVERT(nvarchar(4), o.Tier), N''), NCHAR(31), ISNULL(o.CiOwner, N''), NCHAR(31), ISNULL(o.CiDepartment, N''), NCHAR(31), ISNULL(o.CmdbId, N''), NCHAR(31), o.State, NCHAR(31), ISNULL(o.ClosedWhy, N''), NCHAR(31), ISNULL(CONVERT(nvarchar(30), o.ClosedAt, 126), N''), NCHAR(31), CONVERT(nvarchar(30), o.FirstSeen, 126), NCHAR(31), o.ReopenCount)"
+    $hashCols = "CONCAT(o.TaskName, NCHAR(31), o.Kind, NCHAR(31), ISNULL(o.Product, N''), NCHAR(31), ISNULL(o.Vendor, N''), NCHAR(31), ISNULL(o.Version, N''), NCHAR(31), ISNULL(o.Application, N''), NCHAR(31), ISNULL(o.ApplicationPaths, N''), NCHAR(31), o.Findings, NCHAR(31), o.Cves, NCHAR(31), ISNULL(o.HighestSeverity, N''), NCHAR(31), ISNULL(CONVERT(nvarchar(40), o.MaxRiskScore, 2), N''), NCHAR(31), ISNULL(CONVERT(nvarchar(4), o.Tier), N''), NCHAR(31), ISNULL(o.CiOwner, N''), NCHAR(31), ISNULL(o.CiDepartment, N''), NCHAR(31), ISNULL(o.CmdbId, N''), NCHAR(31), o.State, NCHAR(31), ISNULL(o.ClosedWhy, N''), NCHAR(31), ISNULL(CONVERT(nvarchar(30), o.ClosedAt, 126), N''), NCHAR(31), CONVERT(nvarchar(30), o.FirstSeen, 126), NCHAR(31), o.ReopenCount, CASE WHEN o.ApplicationVersion IS NULL THEN N'' ELSE CONCAT(NCHAR(31), o.ApplicationVersion) END)"
     $text = @'
 SET NOCOUNT ON;
 SET XACT_ABORT ON;
@@ -441,14 +622,14 @@ CREATE INDEX IX_p_owner ON #p (OwnerKey, Kind, State) INCLUDE (Product, Version)
 CREATE TABLE #l (OwnerKey NVARCHAR(450) COLLATE DATABASE_DEFAULT NOT NULL, TaskKey NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NOT NULL, TaskName NVARCHAR(MAX) NOT NULL,
                  Kind NVARCHAR(32) NOT NULL, Product NVARCHAR(400) COLLATE DATABASE_DEFAULT NOT NULL, Vendor NVARCHAR(400) COLLATE DATABASE_DEFAULT NOT NULL,
                  Version NVARCHAR(400) COLLATE DATABASE_DEFAULT NOT NULL, Application NVARCHAR(MAX) NULL, Paths NVARCHAR(MAX) NULL, EvidenceAt DATETIME2(3) NULL,
-                 FindingKey NVARCHAR(256) COLLATE DATABASE_DEFAULT NOT NULL, FindingId BIGINT NOT NULL);
+                 FindingKey NVARCHAR(256) COLLATE DATABASE_DEFAULT NOT NULL, FindingId BIGINT NOT NULL, AppVersion NVARCHAR(MAX) NULL);
 CREATE INDEX IX_l ON #l (OwnerKey, FindingKey) INCLUDE (Product, Version);
 -- the tasks worked out from this collection
 CREATE TABLE #t (TaskId BINARY(32) NOT NULL PRIMARY KEY, OwnerKey NVARCHAR(450) COLLATE DATABASE_DEFAULT NOT NULL, TaskKey NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NOT NULL,
                  TaskName NVARCHAR(MAX) NOT NULL, Kind NVARCHAR(32) NOT NULL, Product NVARCHAR(400) NULL, Vendor NVARCHAR(400) NULL, Version NVARCHAR(400) NULL,
                  Application NVARCHAR(MAX) NULL, Paths NVARCHAR(MAX) NULL, EvidenceAt DATETIME2(3) NULL, Findings INT NOT NULL, Cves INT NOT NULL, SevRank TINYINT NULL,
                  MaxRisk FLOAT NULL, MaxWeighted FLOAT NULL, Tier TINYINT NULL, Doms INT NOT NULL, Dom NVARCHAR(128) NULL, Depts INT NOT NULL, Dept INT NULL,
-                 AssetKey NVARCHAR(400) NULL, AssetName NVARCHAR(400) NULL, RatingRank TINYINT NULL);
+                 AssetKey NVARCHAR(400) NULL, AssetName NVARCHAR(400) NULL, RatingRank TINYINT NULL, AppVersion NVARCHAR(MAX) NULL);
 -- the links of those tasks (one per task and finding key)
 CREATE TABLE #k (TaskId BINARY(32) NOT NULL, FindingKey NVARCHAR(256) COLLATE DATABASE_DEFAULT NOT NULL, OwnerKey NVARCHAR(450) COLLATE DATABASE_DEFAULT NOT NULL,
                  FindingId BIGINT NOT NULL, Cve NVARCHAR(256) NULL, Title NVARCHAR(1000) NULL, SevRank TINYINT NULL, RiskScore FLOAT NULL, Version NVARCHAR(400) NULL,
@@ -473,6 +654,17 @@ CREATE TABLE #d (TaskId BINARY(32) NOT NULL PRIMARY KEY, Unknown INT NOT NULL, F
 -- out now (closed by the rules above, or carried as they were) + the base's closed tasks within the retention
 SELECT TOP (0) CAST(NULL AS NVARCHAR(16)) AS Src, p.* INTO #out FROM #p AS p;
 CREATE UNIQUE CLUSTERED INDEX CX_out ON #out (TaskId);
+-- #1367 THE TASK'S CONTEXT FOR A TICKET (one range at a time, like everything above): the tasks whose context is worked out now
+-- (#cs: every task worked out from this collection, and a carried one that has none yet), the findings behind it (#cx: a task
+-- worked out now, its findings of this collection; a carried one, its links' findings in the base), each by its clustered key
+CREATE TABLE #cs (TaskId BINARY(32) NOT NULL PRIMARY KEY);
+CREATE TABLE #cx (TaskId BINARY(32) NOT NULL, Cid INT NOT NULL, FindingId BIGINT NOT NULL, RaKey NVARCHAR(900) COLLATE DATABASE_DEFAULT NULL, Cve NVARCHAR(100) COLLATE DATABASE_DEFAULT NULL,
+                  Upd NVARCHAR(1000) COLLATE DATABASE_DEFAULT NULL, Rem NVARCHAR(MAX) NULL, Ex BIT NULL, EosS NVARCHAR(400) COLLATE DATABASE_DEFAULT NULL, EosD DATETIME2(3) NULL,
+                  Due DATETIME2(3) NULL, FirstAt DATETIME2(3) NULL, Life BIT NULL, Ok NVARCHAR(450) COLLATE DATABASE_DEFAULT NULL, Fk NVARCHAR(256) COLLATE DATABASE_DEFAULT NULL,
+                  PRIMARY KEY (TaskId, Cid, FindingId));
+-- "Within Accepted Lifecycle" only for a collection whose lifecycle rows are written (the key figures' marker, as the pages read it)
+DECLARE @life BIT = 0;
+IF EXISTS (SELECT 1 FROM sidata.KeyFigure AS kf WHERE kf.CollectionId = @c AND kf.Block = N'meta' AND kf.Figure = N'lifecycle_rows') SET @life = 1;
 -- the run's totals, added up range by range (the CIs of two ranges never overlap)
 DECLARE @nTasks INT = 0, @nOpen INT = 0, @nClosed INT = 0, @nNewlyClosed INT = 0, @nKept INT = 0, @nReopened INT = 0, @nFindings INT = 0, @noTask INT = 0,
         @nOwn INT = 0, @states NVARCHAR(MAX) = NULL;
@@ -490,7 +682,7 @@ BEGIN
     IF APPLOCK_TEST(N'public', N'si-remediation-task-build', N'Exclusive', N'Session') = 1 THROW 51277, N'the build lock was lost part-way -- the collection is not marked built; the next run writes it again', 1;
     SET @t0 = SYSUTCDATETIME(); SET @tp = @t0;
     TRUNCATE TABLE #wk; TRUNCATE TABLE #f; TRUNCATE TABLE #o; TRUNCATE TABLE #p; TRUNCATE TABLE #l; TRUNCATE TABLE #t; TRUNCATE TABLE #k;
-    TRUNCATE TABLE #ls; TRUNCATE TABLE #d; TRUNCATE TABLE #out;
+    TRUNCATE TABLE #ls; TRUNCATE TABLE #d; TRUNCATE TABLE #out; TRUNCATE TABLE #cs; TRUNCATE TABLE #cx;
     INSERT #wk (OwnerKey) SELECT OwnerKey FROM #w WHERE Rn >= @lo AND Rn < @lo + @take;
     INSERT #f
 SELECT f.FindingId, LEFT(o.OwnerKey, 450), k.FKey, {SIG}, f.AssetKey, f.AssetName, COALESCE(NULLIF(f.ContextCmdbName, N''), f.CmdbName),
@@ -517,13 +709,16 @@ LEFT JOIN sidata.Ci AS c ON x.OwnerKey NOT LIKE N'asset:%' AND c.CiId = LEFT(x.O
     INSERT #p SELECT r.* FROM sidata.RemediationTask AS r JOIN #wk AS wp ON wp.OwnerKey = r.OwnerKey WHERE r.CollectionId = @b;
     SET @msF = @msF + DATEDIFF(millisecond, @tp, SYSUTCDATETIME()); SET @tp = SYSUTCDATETIME();
 INSERT #l
-SELECT f.OwnerKey, s.TaskKey, s.TaskName, s.Kind, s.Product, s.Vendor, s.Version, NULL, NULL, NULL, f.FindingKey, f.FindingId
+SELECT f.OwnerKey, s.TaskKey, s.TaskName, s.Kind, s.Product, s.Vendor, s.Version, NULL, pp.PlainPaths, NULL, f.FindingKey, f.FindingId, NULL
 FROM #f AS f
 JOIN #o AS o ON o.OwnerKey = f.OwnerKey AND o.Lc = N'active'
 JOIN sidata.RemediationTaskSig AS s ON s.BuildId = @bid AND s.SigHash = f.SigHash
 OUTER APPLY (SELECT TOP (1) x.KeepPlain FROM sidata.RemediationTaskSplit AS x
              WHERE s.Kind = N'software-upgrade' AND x.BuildId = @bid AND x.ComboHash = {COMBO_F}
              ORDER BY x.KeepPlain DESC) AS kp
+-- the product's own task: the paths of the copies that are not bundled (or whose application cannot be named), in full
+OUTER APPLY (SELECT MAX(x.PlainPaths) AS PlainPaths FROM sidata.RemediationTaskSplit AS x
+             WHERE s.Kind = N'software-upgrade' AND x.BuildId = @bid AND x.ComboHash = {COMBO_F} AND x.TaskKey IS NULL) AS pp
 OUTER APPLY (SELECT MAX(CASE WHEN x.TaskKey IS NULL AND ISNULL(x.Paths, N'') <> N'' THEN 1 ELSE 0 END) AS HasDisk FROM sidata.RemediationTaskSplit AS x
              WHERE s.Kind = N'software-upgrade' AND x.BuildId = @bid AND x.ComboHash = {COMBO_F}) AS dk
 WHERE f.Exempt = 0 AND (kp.KeepPlain IS NULL OR kp.KeepPlain = 1)
@@ -533,7 +728,7 @@ WHERE f.Exempt = 0 AND (kp.KeepPlain IS NULL OR kp.KeepPlain = 1)
   AND LOWER(LTRIM(RTRIM(s.TaskName))) <> LOWER(LTRIM(RTRIM(ISNULL(f.AssetName, N''))))
   AND LOWER(LTRIM(RTRIM(s.TaskName))) <> LOWER(LTRIM(RTRIM(ISNULL(f.CmdbName, N''))));
 INSERT #l
-SELECT f.OwnerKey, x.TaskKey, x.TaskName, N'bundled-upgrade', s.Product, s.Vendor, s.Version, x.Application, x.Paths, x.EvidenceAt, f.FindingKey, f.FindingId
+SELECT f.OwnerKey, x.TaskKey, x.TaskName, N'bundled-upgrade', s.Product, s.Vendor, s.Version, x.Application, x.Paths, x.EvidenceAt, f.FindingKey, f.FindingId, x.ApplicationVersion
 FROM #f AS f
 JOIN #o AS o ON o.OwnerKey = f.OwnerKey AND o.Lc = N'active'
 JOIN sidata.RemediationTaskSig AS s ON s.BuildId = @bid AND s.SigHash = f.SigHash AND s.Kind = N'software-upgrade'
@@ -544,14 +739,14 @@ WHERE f.Exempt = 0 AND LOWER(LTRIM(RTRIM(x.TaskName))) <> LOWER(LTRIM(RTRIM(ISNU
 INSERT #t
 SELECT HASHBYTES('SHA2_256', CONCAT(g.OwnerKey, N'|', g.TaskKey)), g.OwnerKey, g.TaskKey, g.TaskName, g.Kind, NULLIF(g.Product, N''), NULLIF(g.Vendor, N''),
        NULLIF(g.Version, N''), g.Application, g.Paths, g.EvidenceAt, g.Findings, g.Cves, g.SevRank, g.MaxRisk, g.MaxWeighted, g.Tier,
-       g.Doms, CASE WHEN g.Doms = 1 THEN g.Dom END, g.Depts, CASE WHEN g.Depts = 1 THEN g.Dept END, g.AssetKey, g.AssetName, g.RatingRank
+       g.Doms, CASE WHEN g.Doms = 1 THEN g.Dom END, g.Depts, CASE WHEN g.Depts = 1 THEN g.Dept END, g.AssetKey, g.AssetName, g.RatingRank, g.AppVersion
 FROM (SELECT l.OwnerKey, l.TaskKey, MAX(l.TaskName) AS TaskName, MAX(l.Kind) AS Kind, MAX(l.Product) AS Product, MAX(l.Vendor) AS Vendor,
              CASE WHEN MIN(l.Version) = MAX(l.Version) THEN MAX(l.Version) ELSE N'' END AS Version, MAX(l.Application) AS Application,
              MAX(l.Paths) AS Paths, MAX(l.EvidenceAt) AS EvidenceAt, COUNT(DISTINCT l.FindingKey) AS Findings, COUNT(DISTINCT f.Cve) AS Cves,
              MAX(f.SevRank) AS SevRank, MAX(f.RiskScore) AS MaxRisk, MAX(f.Weighted) AS MaxWeighted, MIN(f.Tier) AS Tier,
              COUNT(DISTINCT ISNULL(f.SecurityDomain, N'')) AS Doms, MAX(f.SecurityDomain) AS Dom,
              COUNT(DISTINCT ISNULL(f.DepartmentId, -1)) AS Depts, MAX(f.DepartmentId) AS Dept, MAX(f.AssetKey) AS AssetKey, MAX(f.AssetName) AS AssetName,
-             MAX(f.RatingRank) AS RatingRank
+             MAX(f.RatingRank) AS RatingRank, MAX(l.AppVersion) AS AppVersion
       FROM #l AS l JOIN #f AS f ON f.FindingId = l.FindingId
       GROUP BY l.OwnerKey, l.TaskKey) AS g;
 INSERT #k
@@ -574,6 +769,8 @@ SELECT p.TaskId,
                                    WHERE f2.OwnerKey = p.OwnerKey AND f2.FindingKey = pl.FindingKey AND s2.Kind = N'software-upgrade'
                                      AND s2.Product = ISNULL(p.Product, N'') AND s2.Version = p.Version) THEN N'unknown'
                       ELSE N'changed' END
+            -- #1364 the finding is now evidence on another finding of this CI (a meaning rule folded it): its task is not its own any more
+            WHEN fx.AnyRow IS NULL AND EXISTS (SELECT 1 FROM sidata.FindingEvidence AS fz WHERE fz.CollectionId = @c AND fz.OwnKey = p.OwnerKey + N'|' + LOWER(pl.FindingKey)) THEN N'changed'
             WHEN fx.AnyRow = 1 THEN N'unknown'
             WHEN st.State = N'closed' AND st.CloseReason = N'remediated' THEN N'fixed'
             WHEN st.State = N'closed' AND st.CloseReason = N'asset_retired' THEN N'retired'
@@ -602,13 +799,13 @@ FROM #ls GROUP BY TaskId;
     SET @msB = @msB + DATEDIFF(millisecond, @tp, SYSUTCDATETIME()); SET @tp = SYSUTCDATETIME();
 INSERT #out (Src, CollectionId, TaskId, OwnerKey, CiId, AssetKey, AssetName, TaskKey, TaskName, Kind, Product, Vendor, Version, Application, ApplicationPaths, EvidenceAt,
              Findings, Cves, HighestSeverity, MaxRiskScore, MaxWeightedRisk, Tier, SecurityDomain, DepartmentId, Departments, CiOwner, CiDepartment, CmdbId,
-             FirstSeen, LastSeen, State, ClosedAt, ClosedWhy, ReopenCount, InThisCollection, RowHash, ChangedAt, SentInScope, HighestRiskRating)
+             FirstSeen, LastSeen, State, ClosedAt, ClosedWhy, ReopenCount, InThisCollection, RowHash, ChangedAt, SentInScope, HighestRiskRating, ApplicationVersion)
 SELECT CASE WHEN p.TaskId IS NULL THEN N'new' WHEN p.State = N'closed' THEN N'reopened' ELSE N'seen' END,
        @c, t.TaskId, t.OwnerKey, o.CiId, t.AssetKey, t.AssetName, t.TaskKey, t.TaskName, t.Kind, t.Product, t.Vendor, t.Version, t.Application, t.Paths, t.EvidenceAt,
        t.Findings, t.Cves, CASE t.SevRank WHEN 4 THEN N'critical' WHEN 3 THEN N'high' WHEN 2 THEN N'medium' WHEN 1 THEN N'low' ELSE N'info' END,
        t.MaxRisk, t.MaxWeighted, t.Tier, t.Dom, ad.DepartmentId, CASE WHEN ad.DepartmentId IS NULL THEN 0 ELSE 1 END, o.CiOwner, o.CiDept, o.CmdbId,
        ISNULL(p.FirstSeen, @ct), @ct, N'open', NULL, NULL, ISNULL(p.ReopenCount, 0) + CASE WHEN p.State = N'closed' THEN 1 ELSE 0 END, 1, 0x00, @now, p.SentInScope,
-       {RATINGTEXT_T}
+       {RATINGTEXT_T}, t.AppVersion
 FROM #t AS t
 JOIN #o AS o ON o.OwnerKey = t.OwnerKey
 LEFT JOIN #p AS p ON p.TaskId = t.TaskId
@@ -616,11 +813,11 @@ LEFT JOIN #p AS p ON p.TaskId = t.TaskId
 LEFT JOIN sidata.Asset AS ad ON ad.AssetKey = t.AssetKey;
 INSERT #out (Src, CollectionId, TaskId, OwnerKey, CiId, AssetKey, AssetName, TaskKey, TaskName, Kind, Product, Vendor, Version, Application, ApplicationPaths, EvidenceAt,
              Findings, Cves, HighestSeverity, MaxRiskScore, MaxWeightedRisk, Tier, SecurityDomain, DepartmentId, Departments, CiOwner, CiDepartment, CmdbId,
-             FirstSeen, LastSeen, State, ClosedAt, ClosedWhy, ReopenCount, InThisCollection, RowHash, ChangedAt, SentInScope, HighestRiskRating)
+             FirstSeen, LastSeen, State, ClosedAt, ClosedWhy, ReopenCount, InThisCollection, RowHash, ChangedAt, SentInScope, HighestRiskRating, ApplicationVersion)
 SELECT z.Src, @c, p.TaskId, p.OwnerKey, p.CiId, p.AssetKey, p.AssetName, p.TaskKey, p.TaskName, p.Kind, p.Product, p.Vendor, p.Version, p.Application, p.ApplicationPaths, p.EvidenceAt,
        p.Findings, p.Cves, p.HighestSeverity, p.MaxRiskScore, p.MaxWeightedRisk, p.Tier, p.SecurityDomain, p.DepartmentId, p.Departments, p.CiOwner, p.CiDepartment, p.CmdbId,
        p.FirstSeen, p.LastSeen, CASE WHEN z.Why IS NULL THEN p.State ELSE N'closed' END, CASE WHEN z.Why IS NULL THEN p.ClosedAt ELSE @ct END,
-       ISNULL(z.Why, p.ClosedWhy), p.ReopenCount, 0, p.RowHash, p.ChangedAt, p.SentInScope, p.HighestRiskRating
+       ISNULL(z.Why, p.ClosedWhy), p.ReopenCount, 0, p.RowHash, p.ChangedAt, p.SentInScope, p.HighestRiskRating, p.ApplicationVersion
 FROM #p AS p
 LEFT JOIN #o AS o ON o.OwnerKey = p.OwnerKey
 LEFT JOIN #d AS d ON d.TaskId = p.TaskId
@@ -635,8 +832,12 @@ CROSS APPLY (SELECT CASE WHEN p.State = N'closed' THEN N'carried-closed'
                          END AS Why) AS z
 WHERE NOT EXISTS (SELECT 1 FROM #t AS t WHERE t.TaskId = p.TaskId)
   AND (p.State = N'open' OR p.ClosedAt >= DATEADD(day, -@keep, @ct));
+{CONTEXT}
 UPDATE o SET RowHash = HASHBYTES('SHA2_256', {HASHCOLS}) FROM #out AS o;
-UPDATE o SET ChangedAt = CASE WHEN p.TaskId IS NOT NULL AND p.RowHash = o.RowHash THEN p.ChangedAt ELSE @now END
+-- #1367 an OPEN task whose context changed is changed too (the SQL hand-off's delta reads ChangedAt); the first fill of a context
+-- (a task built before it existed) never is, and the context is never part of the row hash
+UPDATE o SET ChangedAt = CASE WHEN p.TaskId IS NOT NULL AND p.RowHash = o.RowHash
+                                   AND (p.ContextHash IS NULL OR o.ContextHash IS NULL OR p.ContextHash = o.ContextHash OR o.State <> N'open') THEN p.ChangedAt ELSE @now END
 FROM #out AS o LEFT JOIN #p AS p ON p.TaskId = o.TaskId;
     SET @noTask = @noTask + (SELECT COUNT(*) FROM (SELECT DISTINCT f.OwnerKey, f.FindingKey FROM #f AS f JOIN #o AS o ON o.OwnerKey = f.OwnerKey AND o.Lc = N'active'
                                                    WHERE f.Exempt = 0 AND NOT EXISTS (SELECT 1 FROM #l AS l WHERE l.OwnerKey = f.OwnerKey AND l.FindingKey = f.FindingKey)) AS q);
@@ -659,11 +860,15 @@ FROM #out AS o LEFT JOIN #p AS p ON p.TaskId = o.TaskId;
     INSERT sidata.RemediationTask (CollectionId, TaskId, OwnerKey, CiId, AssetKey, AssetName, TaskKey, TaskName, Kind, Product, Vendor, Version, Application, ApplicationPaths,
                                    EvidenceAt, Findings, Cves, HighestSeverity, MaxRiskScore, MaxWeightedRisk, Tier, SecurityDomain, DepartmentId, Departments, CiOwner,
                                    CiDepartment, CmdbId, FirstSeen, LastSeen, State, ClosedAt, ClosedWhy, ReopenCount, InThisCollection, RowHash, ChangedAt, SentInScope,
-                                   TaskKeyHash, Channel, HighestRiskRating)
+                                   TaskKeyHash, Channel, HighestRiskRating, ApplicationVersion,
+                                   WhatToDo, RecommendedUpdate, RemediationSteps, CveList, ExploitAvailable, EndOfSupport, EndOfSupportDate, DueDate, FirstDetected,
+                                   WithinAcceptedLifecycle, DetectedPaths, AssetType, AssetOs, AssetIp, AssetEnvironment, InternetExposed, AlsoReportedBy, ContextHash)
     SELECT o.CollectionId, o.TaskId, o.OwnerKey, o.CiId, o.AssetKey, o.AssetName, o.TaskKey, o.TaskName, o.Kind, o.Product, o.Vendor, o.Version, o.Application, o.ApplicationPaths,
            o.EvidenceAt, o.Findings, o.Cves, o.HighestSeverity, o.MaxRiskScore, o.MaxWeightedRisk, o.Tier, o.SecurityDomain, o.DepartmentId, o.Departments, o.CiOwner,
            o.CiDepartment, o.CmdbId, o.FirstSeen, o.LastSeen, o.State, o.ClosedAt, o.ClosedWhy, o.ReopenCount, o.InThisCollection, o.RowHash, o.ChangedAt, o.SentInScope,
-           HASHBYTES('SHA2_256', o.TaskKey), {CHANNEL_O}, o.HighestRiskRating
+           HASHBYTES('SHA2_256', o.TaskKey), {CHANNEL_O}, o.HighestRiskRating, o.ApplicationVersion,
+           o.WhatToDo, o.RecommendedUpdate, o.RemediationSteps, o.CveList, o.ExploitAvailable, o.EndOfSupport, o.EndOfSupportDate, o.DueDate, o.FirstDetected,
+           o.WithinAcceptedLifecycle, o.DetectedPaths, o.AssetType, o.AssetOs, o.AssetIp, o.AssetEnvironment, o.InternetExposed, o.AlsoReportedBy, o.ContextHash
     FROM #out AS o JOIN #wk AS w ON w.OwnerKey = o.OwnerKey;
     INSERT sidata.RemediationTaskFinding (CollectionId, TaskId, FindingKey, OwnerKey, FindingId, Cve, Title, Severity, RiskScore, Version, InThisCollection, SentInScope,
                                           RiskRating, Category, Subcategory, SecurityDomain, WeightedRisk, Tier)
@@ -713,7 +918,7 @@ SELECT @nTasks AS Tasks, @nOpen AS [Open], @nClosed AS Closed, @nNewlyClosed AS 
        @nOwn AS OwnRows, (SELECT COUNT(*) FROM #rep) AS CompleteReports, @states AS LinkStates, @ranges AS WriteRanges, (SELECT COUNT(*) FROM #hold) AS Held, @ph AS BuildPhases;
 '@
     $rkF = Get-SIRemediationTaskRatingRankSql -Column 'f.RiskRating'
-    $text = $text.Replace('{ROLLUP}', (Get-SIRemediationTaskReportsSql))
+    $text = $text.Replace('{ROLLUP}', (Get-SIRemediationTaskReportsSql)).Replace('{CONTEXT}', (Get-SIRemediationTaskContextSql))
     $text = $text.Replace('{RATINGRANK_F}', $rkF).Replace('{RATINGTEXT_F}', (Get-SIRemediationTaskRatingTextSql -Rank $rkF))
     $text = $text.Replace('{RATINGTEXT_T}', (Get-SIRemediationTaskRatingTextSql -Rank 't.RatingRank')).Replace('{RATINGTEXT_X}', (Get-SIRemediationTaskRatingTextSql -Rank 'q.Rk'))
     $text = $text.Replace('{RATINGRANK_L}', (Get-SIRemediationTaskRatingRankSql -Column 'l.RiskRating')).Replace('{CHANNEL_O}', (Get-SIRemediationTaskChannelSql -Kind 'o.Kind'))
@@ -729,9 +934,9 @@ function Get-SIRemediationTaskSchemaCheckSql {
         "OBJECT_ID('sidata.CiFindingState')", "OBJECT_ID('sidata.CiBuildState')", "OBJECT_ID('sidata.Ci')", "OBJECT_ID('sidata.CiLink')",
         "COL_LENGTH('sidata.Collection', 'RemediationTasksAt')", "COL_LENGTH('sidata.Collection', 'ContextAt')", "COL_LENGTH('sidata.Collection', 'RetiredAt')",
         "COL_LENGTH('sidata.Collection', 'RaPartialReason')", "COL_LENGTH('sidata.Collection', 'RaPartialScope')",
-        "COL_LENGTH('sidata.Finding', 'RaFindingKey')", "COL_LENGTH('sidata.Finding', 'CarriedFrom')", "COL_LENGTH('sidata.Finding', 'Component')",
+        "COL_LENGTH('sidata.Finding', 'RaFindingKey')", "OBJECT_ID('sidata.FindingEvidence')", "COL_LENGTH('sidata.Finding', 'CarriedFrom')", "COL_LENGTH('sidata.Finding', 'Component')",
         "COL_LENGTH('sidata.Finding', 'Category')", "COL_LENGTH('sidata.Finding', 'Subcategory')", "COL_LENGTH('sidata.Finding', 'AffectedVersion')",
-        "COL_LENGTH('sidata.Finding', 'AffectedProduct')", "COL_LENGTH('sidata.Finding', 'AffectedVendor')", "COL_LENGTH('sidata.Finding', 'FixRecommendedUpdate')",
+        "COL_LENGTH('sidata.Finding', 'AffectedProduct')", "COL_LENGTH('sidata.Finding', 'AffectedVendor')", "COL_LENGTH('sidata.Finding', 'AffectedSoftware')", "COL_LENGTH('sidata.Finding', 'FixRecommendedUpdate')",
         "COL_LENGTH('sidata.Finding', 'FixRecommendedUpdateId')", "COL_LENGTH('sidata.Finding', 'DepartmentId')", "COL_LENGTH('sidata.Finding', 'RiskScoreWeighted')",
         "COL_LENGTH('sidata.Finding', 'CmdbName')", "COL_LENGTH('sidata.Finding', 'ContextCmdbName')", "COL_LENGTH('sidata.Ci', 'Owner')", "COL_LENGTH('sidata.Ci', 'Department')", "COL_LENGTH('sidata.Asset', 'DepartmentId')", "COL_LENGTH('sidata.Finding', 'ExemptionId')",
         "COL_LENGTH('sidata.RemediationTask', 'SentInScope')", "COL_LENGTH('sidata.RemediationTaskFinding', 'SentInScope')",
@@ -741,7 +946,16 @@ function Get-SIRemediationTaskSchemaCheckSql {
         "COL_LENGTH('sidata.RemediationTaskFinding', 'Category')", "COL_LENGTH('sidata.RemediationTaskFinding', 'Subcategory')", "COL_LENGTH('sidata.RemediationTaskFinding', 'RiskRating')",
         "COL_LENGTH('sidata.RemediationTaskFinding', 'SecurityDomain')", "COL_LENGTH('sidata.RemediationTaskFinding', 'WeightedRisk')", "COL_LENGTH('sidata.RemediationTaskFinding', 'Tier')",
         "COL_LENGTH('sidata.Finding', 'RiskRating')", "COL_LENGTH('sidata.Collection', 'RemediationTaskRollupAt')", "COL_LENGTH('sidata.Collection', 'RemediationTaskMinAssets')",
-        "OBJECT_ID('sidata.RemediationTaskRollup')", "OBJECT_ID('sidata.RemediationTaskTrend')")
+        "OBJECT_ID('sidata.RemediationTaskRollup')", "OBJECT_ID('sidata.RemediationTaskTrend')",
+        # #1367 the task's context for a ticket: its columns and what it is read from
+        "COL_LENGTH('sidata.RemediationTask', 'ApplicationVersion')", "COL_LENGTH('sidata.RemediationTask', 'WhatToDo')", "COL_LENGTH('sidata.RemediationTask', 'DetectedPaths')",
+        "COL_LENGTH('sidata.RemediationTask', 'AlsoReportedBy')", "COL_LENGTH('sidata.RemediationTask', 'ContextHash')",
+        "COL_LENGTH('sidata.Finding', 'FixRemediationFull')", "COL_LENGTH('sidata.Finding', 'EosStatus')", "COL_LENGTH('sidata.Finding', 'FixDueDate')",
+        "COL_LENGTH('sidata.Finding', 'SourceFirstDetected')", "COL_LENGTH('sidata.Finding', 'HasExploit')", "COL_LENGTH('sidata.Ci', 'IpAddress')", "COL_LENGTH('sidata.Ci', 'Environment')",
+        "COL_LENGTH('sidata.Ci', 'CmdbEnvironment')", "COL_LENGTH('sidata.Ci', 'ServiceEnvironment')", "COL_LENGTH('sidata.Ci', 'OsName')",
+        "OBJECT_ID('sidata.SoftwareEvidence')", "OBJECT_ID('sidata.KeyFigure')", "OBJECT_ID('sidata.FindingLifecycleRisk')",
+        # #1388 the finding model's due date (the task's due date where the provider sets none)
+        "COL_LENGTH('sidata.CiFindingState', 'DueAt')")
     'SELECT CASE WHEN ' + (($need | ForEach-Object { "$_ IS NOT NULL" }) -join ' AND ') + ' THEN 1 ELSE 0 END'
 }
 
@@ -896,6 +1110,10 @@ function Invoke-SIRemediationTaskEvidence {
             $k = ('{0}|{1}|{2}' -f ([string](Get-SIEvValue $e 'DeviceId')).ToLowerInvariant(), ([string](Get-SIEvValue $e 'Product')).Trim().ToLowerInvariant(), ([string](Get-SIEvValue $e 'Version')).Trim())
             if (-not $ix.ContainsKey($k)) { $ix[$k] = New-Object System.Collections.Generic.List[object] }
             $ix[$k].Add($e)
+            # #1373 every version of a product on a device (a Defender recommendation names the software, not a version)
+            $k2 = ('{0}|{1}|*' -f ([string](Get-SIEvValue $e 'DeviceId')).ToLowerInvariant(), ([string](Get-SIEvValue $e 'Product')).Trim().ToLowerInvariant())
+            if (-not $ix.ContainsKey($k2)) { $ix[$k2] = New-Object System.Collections.Generic.List[object] }
+            $ix[$k2].Add($e)
         }
         $out = New-Object System.Collections.Generic.List[object]
         foreach ($o in $page) {
@@ -904,7 +1122,7 @@ function Invoke-SIRemediationTaskEvidence {
                 $prod = [string](& $g $u 'Product'); $vend = [string](& $g $u 'Vendor'); $ver = [string](& $g $u 'Version')
                 $match = New-Object System.Collections.Generic.List[object]
                 foreach ($d in $own.Devices) {
-                    $k = ('{0}|{1}|{2}' -f $d, $prod.Trim().ToLowerInvariant(), $ver.Trim())
+                    $k = ('{0}|{1}|{2}' -f $d, $prod.Trim().ToLowerInvariant(), $(if ($ver.Trim()) { $ver.Trim() } else { '*' }))
                     if (-not $ix.ContainsKey($k)) { continue }
                     foreach ($e in $ix[$k]) { if (-not $vend -or ([string](Get-SIEvValue $e 'Vendor')).Trim().ToLowerInvariant() -eq $vend.Trim().ToLowerInvariant()) { $match.Add($e) } }
                 }
@@ -912,11 +1130,11 @@ function Invoke-SIRemediationTaskEvidence {
                 if (-not $b.Known) { continue }
                 $res.Read++
                 $keep = [bool]$b.KeepPlain
-                $out.Add([ordered]@{ o = $o; p = $prod; v = $vend; r = $ver; keep = $keep; k = $null; n = $null; a = $null; x = [string]$b.DiskPaths; t = $null })
+                $out.Add([ordered]@{ o = $o; p = $prod; v = $vend; r = $ver; keep = $keep; k = $null; n = $null; a = $null; x = [string]$b.DiskPaths; t = $null; pp = [string]$b.PlainPaths })
                 foreach ($x in @($b.Units)) {
                     $res.Bundled++
                     $t = $null; if ($null -ne $x.EvidenceAt) { $t = ([datetime]$x.EvidenceAt).ToString('yyyy-MM-ddTHH:mm:ss.fff', [Globalization.CultureInfo]::InvariantCulture) }
-                    $out.Add([ordered]@{ o = $o; p = $prod; v = $vend; r = $ver; keep = $keep; k = $x.TaskKey; n = $x.TaskName; a = $x.Application; x = $x.Paths; t = $t })
+                    $out.Add([ordered]@{ o = $o; p = $prod; v = $vend; r = $ver; keep = $keep; k = $x.TaskKey; n = $x.TaskName; a = $x.Application; x = $x.Paths; t = $t; av = [string]$x.ApplicationVersion })
                 }
             }
         }
@@ -959,7 +1177,9 @@ function Invoke-SIDataRemediationTasks {
     param([Parameter(Mandatory)][scriptblock]$Invoke, [switch]$DryRun, [scriptblock]$Log, $Map, $ValueMaps, [int]$KeepClosedDays = 0,
           [scriptblock]$ReadEvidence, [int]$DevicesPerPage = 500, [switch]$Force, [int]$FirstTake = 0,
           # tests: { param([string[]]$Fields) } -> the build's SQL (the scale bench's reference build); default Get-SIRemediationTaskBuildSql
-          [scriptblock]$BuildSql)
+          [scriptblock]$BuildSql,
+          # tests: the recommendation equivalence (its fold rules) instead of the run's data model
+          $Equivalence)
     if (-not $Log) { $Log = { param($l, $m) Write-Host ('[{0}] {1}' -f $l, $m) } }
     $buildId = [guid]::NewGuid().ToString()
     $st = @{ Staged = $false; Locked = $false }
@@ -1004,6 +1224,9 @@ function Invoke-SIDataRemediationTasks {
         # build is running, so no running build's rows are ever touched
         if ($st.Locked) { $null = & $Invoke (Get-SIRemediationTaskStageSql -Part 'orphans') @{ BuildId = $buildId } 'nonquery' }
         $st.Staged = $true
+        # #1364 the meaning rules (fold) applied to the collection first (idempotent; the findings per CI did the same): a finding that
+        # is evidence on another of its CI gives no task of its own -- ONE task, the canonical finding's
+        $null = Invoke-SIDataFindingFold -Invoke $Invoke -CollectionId $cid -Log $Log -Equivalence $Equivalence
         $lap = [Diagnostics.Stopwatch]::StartNew(); $laps = New-Object System.Collections.Generic.List[string]
         $sig = Invoke-SIRemediationTaskSignatures -Invoke $Invoke -CollectionId $cid -BuildId $buildId -Fields $fields -Map $map -Plan $plan -ValueMaps $vmaps
         $laps.Add(('signatures={0:N0}' -f $lap.Elapsed.TotalSeconds)); $lap.Restart()

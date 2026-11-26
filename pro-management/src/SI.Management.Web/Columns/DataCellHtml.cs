@@ -7,11 +7,13 @@ namespace SI.Management.Web.Columns;
 
 /// <summary>
 /// An extra column's cell on screen: the text, HTML-encoded, with every http(s) address in it a link (More details lists
-/// "CVE-2024-1 => https://nvd..." pairs), long text cut with the whole text on hover.
+/// "CVE-2024-1 => https://nvd..." pairs) -- the WHOLE text, never cut (#1386, owner 2026-11-25: "it is important we can see
+/// all info", e.g. paths). The screen caps it at two lines (js/app/grid-cells.js); the row's "Show full text", the column's
+/// "Full text", the hover and the export show all of it. Sending it whole costs less than the old cut (400) plus the whole
+/// text again in the tooltip.
 /// </summary>
 public static partial class DataCellHtml
 {
-    public const int MaxShown = 400;
 
     [GeneratedRegex(@"https?://[^\s;,""'<>]+", RegexOptions.CultureInvariant)]
     private static partial Regex Url();
@@ -27,7 +29,7 @@ public static partial class DataCellHtml
     public static IHtmlContent Render(string? text)
     {
         if (string.IsNullOrEmpty(text)) return HtmlString.Empty;
-        var shown = text.Length > MaxShown ? text[..MaxShown] + "…" : text;
+        var shown = text;   // #1386: whole, never cut
         var sb = new StringBuilder();
         var at = 0;
         foreach (Match m in Url().Matches(shown))

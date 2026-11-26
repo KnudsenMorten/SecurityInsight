@@ -28,12 +28,12 @@ public static class PipelineRequests
                 default: env["SI_FLOW_FORCE"] = "1"; break;
             }
             var direct = await jobs.StartWithEnvAsync(JobFlow.FlowJob, env, ct);
-            return $"{what} starts now (execution {direct}) -- apply the Pro database schema again to get the run queue";
+            return $"{what} starts now ({QueuedStartJobsClient.Said(direct)}) -- apply the Pro database schema again to get the run queue";
         }
         var exec = await jobs.StartWithEnvAsync(JobFlow.FlowJob, new Dictionary<string, string> { ["SI_FLOW_DRAIN"] = "1", ["SI_FLOW_TRIGGER"] = "manual" }, ct);
         var busy = running is { } l ? $" -- now running: {l.What}; it waits for that to finish" : "";
         return outcome == "Deduplicated"
             ? $"{what} is already waiting in the queue (request {id}) -- kept once"
-            : $"{what} is queued (request {id}) and starts as soon as nothing else runs{busy} (runner execution {exec})";
+            : $"{what} is queued (request {id}) and starts as soon as nothing else runs{busy} (runner {QueuedStartJobsClient.Said(exec)})";
     }
 }

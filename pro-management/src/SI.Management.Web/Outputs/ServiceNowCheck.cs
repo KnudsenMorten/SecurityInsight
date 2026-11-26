@@ -240,7 +240,7 @@ public static class ServiceNowSchemaCompare
         var off = new HashSet<string>(canSwitchOn ?? Array.Empty<string>(), StringComparer.OrdinalIgnoreCase);
         foreach (var n in off.Where(n => !sent.Contains(n)).OrderBy(n => n, StringComparer.Ordinal))
             lines.Add(byName.TryGetValue(n, out var have)
-                ? new(n, "can-switch-on", "info", "present in the table" + (have.MaxLength > 0 ? ", length " + have.MaxLength.ToString(CultureInfo.InvariantCulture) : "") + " -- shipped switched off: it can be switched on (Configuration > Connectors > Fields sent)")
+                ? new(n, "can-switch-on", "info", "present in the table" + (have.MaxLength > 0 ? ", length " + have.MaxLength.ToString(CultureInfo.InvariantCulture) : "") + " -- shipped switched off: it can be switched on (" + SI.Management.Web.Navigation.NavModel.PathOf(SI.Management.Web.Navigation.NavModel.ConnectorsPage, "Fields sent") + ")")
                 : new(n, "off-absent", "info", "shipped switched off, not in the table -- add it to the table before it is switched on"));
         foreach (var a in actual.Where(a => !sent.Contains(a.Name) && !off.Contains(a.Name) && !a.Name.StartsWith("sys_", StringComparison.OrdinalIgnoreCase)).OrderBy(a => a.Name, StringComparer.Ordinal))
             lines.Add(new(a.Name, "extra", "info", "a column of the table SecurityInsight does not send (fine)"));

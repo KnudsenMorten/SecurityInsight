@@ -1,6 +1,7 @@
 @page
 @model SI.Management.Web.Pages.Admin.DomainRolesModel
 @using SI.Management.Web.Exemptions
+@inject SI.Management.Web.Departments.GuestObjectIdResolver GuestIds
 @{
     ViewData["Title"] = "Security owners";
     string AddLink(string domain, string? category) => "/Admin/DomainRoles?domain=" + Uri.EscapeDataString(domain) + (category is null ? "" : "&category=" + Uri.EscapeDataString(category)) + "#h-add";
@@ -55,7 +56,7 @@
                             {
                                 <form method="post" asp-page-handler="Remove" class="inline" data-confirm-title="Remove @p.Principal" data-confirm="@p.Principal stops being @DomainRoles.RoleLabel(DomainRoles.Owner, n.Category) of @n.Label.">
                                     <input type="hidden" name="Domain" value="@n.Domain" /><input type="hidden" name="Category" value="@(n.Category ?? "")" /><input type="hidden" name="Role" value="owner" /><input type="hidden" name="Principal" value="@p.Principal" />
-                                    <span data-owner>@p.Principal</span> <button type="submit" class="small secondary" aria-label="Remove @p.Principal">Remove</button>
+                                    <span data-owner>@p.Principal</span>@if (string.IsNullOrEmpty(p.ObjectId) && p.Principal.Contains('@')) { <span class="hint" data-mail-only>@GuestIds.NoteForRole(n.Domain, n.Category, "owner", p.Principal)</span> } <button type="submit" class="small secondary" aria-label="Remove @p.Principal">Remove</button>
                                 </form>
                             }
                         </td>
@@ -66,7 +67,7 @@
                             {
                                 <form method="post" asp-page-handler="Remove" class="inline" data-confirm-title="Remove @p.Principal" data-confirm="@p.Principal stops being Approver of @n.Label.">
                                     <input type="hidden" name="Domain" value="@n.Domain" /><input type="hidden" name="Category" value="" /><input type="hidden" name="Role" value="approver" /><input type="hidden" name="Principal" value="@p.Principal" />
-                                    <span>@p.Principal</span> <button type="submit" class="small secondary" aria-label="Remove @p.Principal">Remove</button>
+                                    <span>@p.Principal</span>@if (string.IsNullOrEmpty(p.ObjectId) && p.Principal.Contains('@')) { <span class="hint" data-mail-only>@GuestIds.NoteForRole(n.Domain, null, "approver", p.Principal)</span> } <button type="submit" class="small secondary" aria-label="Remove @p.Principal">Remove</button>
                                 </form>
                             }
                         </td>

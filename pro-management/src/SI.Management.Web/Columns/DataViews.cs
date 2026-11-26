@@ -66,6 +66,13 @@ public static class DataViews
         D("/Remediations/TopAssets", "the 10 most important assets and their fixes"),
         D("/Remediations/Tasks", "one row per asset and task to perform"),
         D("/Remediations/TaskFindings", "the findings each task resolves"),
+        // owner 2026-11-25: ONE task's page -- the findings it resolves in the shared grid (a detail page)
+        D("/Remediations/Task", "one remediation task and the findings it resolves (a detail page)", "/Remediations/Task?id=aa01"),
+        D("/Remediations/TaskActions", "the task report: one deployment that fixes many assets"),
+        D("/Remediations/TaskProducts", "the task report: tasks by product"),
+        D("/Remediations/TaskGroups", "the task report: tasks by tool, owner, IT service and more"),
+        D("/Remediations/TaskSingles", "the task report: tasks no mass action fits"),
+        D("/Remediations/TaskTrend", "the task report: tasks opened and fixed per week"),
         D("/Collection/Asset", "one CI's findings (a detail page)", "/Collection/Asset?key=ci-dc7"),
         D("/Departments/Detail", "a department's findings (a detail page)", "/Departments/Detail?id=1"),
         D("/Departments/Unassigned", "findings of no department"),
@@ -98,6 +105,7 @@ public static class DataViews
         F("/Wallboard", "the wall board: tiles for a screen, no table"),
         F("/Chat", "the assistant: questions and answers, no table"),
         F("/Help", "help and glossary text"),
+        F("/Admin/SignedRequests", "the signed requests list for SuperAdmins: a fixed audit table, no column choices"),
         F("/Docs/Index", "the documentation pages of this version: text, no data table"),   // #679
         F("/WhatsNew", "every release's What's new: cards drawn by Invardia's shared renderer, no data table"),   // WHATS-NEW-1
         F("/Management/Index", Dashboard),

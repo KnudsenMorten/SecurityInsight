@@ -22,8 +22,12 @@ A finding with no known fix gets no task. A task is never named after the asset 
 
 *Tasks per asset* shows one row per asset and task, with the findings and CVEs it resolves, its highest severity and
 risk rating, the asset's owner and the task's state. Open an asset for everything known about it, a task's name for
-every task of that asset, and a task's findings count for the findings it resolves (the *Task findings* view). For a
+the task's own page, and a task's findings count for the findings it resolves (the *Task findings* view). For a
 bundled library, the findings show the paths of that copy. Both views can be exported.
+
+The task's own page shows what the task is and its state, what to do (the recommended update, the application and its
+version, every detected path, the bundled library and its version), the asset it covers, its dates, and the findings
+it resolves, each linked to its finding. Its findings can be exported like every view.
 
 A person whose access is limited to some departments sees only the tasks with findings they may see.
 

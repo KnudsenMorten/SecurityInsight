@@ -177,7 +177,7 @@ BeforeAll {
         [string[]]$infoA = $script:Info.ToArray(); [string[]]$qA = $script:Queries.ToArray(); [object[]]$wA = $script:Written.ToArray(); [object[]]$errA = @($out.Errors)
         $mapCount = 0; $hasU2 = $false
         if ($null -ne $map) { $mapCount = @($map.Keys).Count; $hasU2 = [bool]$map.ContainsKey('bbbb0002-0000-4000-8000-000000000002') }
-        [pscustomobject]@{ MapCount = $mapCount; HasU2 = $hasU2; ByNode = $by; Info = $infoA; Errors = $errA; Queries = $qA; Written = $wA }
+        [pscustomobject]@{ MapCount = $mapCount; HasU2 = $hasU2; ByNode = $by; Info = $infoA; Errors = $errA; Queries = $qA; Written = $wA; RowCount = @($out.Rows).Count }
     }
     function script:RowDiff($A, $B) {
         $pa = @{}; foreach ($x in $A.PSObject.Properties) { if ($x.Name -notmatch '^si_(collection_|run_|source_last_seen$)') { $pa[$x.Name] = ConvertTo-Json -InputObject $x.Value -Compress -Depth 8 } }
@@ -347,6 +347,74 @@ Describe 'EQUIVALENCE with the wider switch SI_Identity_SkipNeverSyncedAd (no en
         $all = $script:NewW.Info -join "`n"
         $all | Should -Match ([regex]::Escape(('({0:N0} not fetched: never synced to Entra ID and not privileged -- SI_Identity_SkipNeverSyncedAd is on)' -f $script:InQueryWide.Count)))
         $all | Should -Match ([regex]::Escape(('{0} not fetched (left out in the Exposure Graph query itself), {1} left out after the read' -f $script:InQueryWide.Count, $script:AfterReadWide.Count)))
+    }
+}
+
+Describe 'ROW COUNTS (#969 / #1110): the user read at the shape of the largest install -- about 1x the users, not 10x' {
+    # The largest install (2026-10-31, read only): 1,571,443 Exposure Graph user nodes for 156,930 Entra-linked users --
+    # 1,415,513 on-premises AD accounts never synced to Entra ID, 1,415,225 of them disabled; no node twice. Scaled here
+    # 1 : ~7,800: 20 Entra-linked users, 178 never-synced disabled non-privileged AD accounts, 2 never-synced disabled
+    # PRIVILEGED ones, 1 never-synced enabled one. Before (the filter not in the query): every node fetched, most left out
+    # after the read. Now: the disabled non-privileged ones are never fetched. Kept records: identical, one per node.
+    BeforeAll {
+        Mock Invoke-SIEgIdentityQuery { param($Query) $script:Queries.Add($Query); @{ Ok = $true; Rows = (Get-Answer $Query $script:Mode); Error = '' } }
+        Mock Write-SIInfo { param($Message) $script:Info.Add([string]$Message) }
+        Mock Write-SIIdentityScopeCounts { param($Counts) foreach ($c in @($Counts)) { $script:Written.Add($c) }; @($Counts).Count }
+        $script:SavedUsers = $script:Users
+        $gen = New-Object System.Collections.Generic.List[object]
+        for ($i = 1; $i -le 20; $i++) {
+            $gen.Add((EgRow ('e-{0:d3}' -f $i) ('entra{0}' -f $i) @((OidJ ('cccc{0:d4}-0000-4000-8000-{0:d12}' -f $i)), (SidJ ('S-1-5-21-9-9-9-{0}' -f (1000 + $i)))) @{ accountName = ('entra{0}' -f $i); accountDomain = 'corp'; accountEnabled = $true }))
+        }
+        for ($i = 1; $i -le 178; $i++) {
+            $gen.Add((EgRow ('d-{0:d3}' -f $i) ('old{0}' -f $i) @((SidJ ('S-1-5-21-9-9-9-{0}' -f (5000 + $i)))) @{ accountName = ('old{0}' -f $i); accountDomain = 'corp'; accountEnabled = $false; nestedAdGroupNames = @('Domain Users') }))
+        }
+        $gen.Add((EgRow 'p-001' 'oldadm1' @((SidJ 'S-1-5-21-9-9-9-9001')) @{ accountName = 'oldadm1'; accountDomain = 'corp'; accountEnabled = $false; adminCount = 1 }))
+        $gen.Add((EgRow 'p-002' 'oldadm2' @((SidJ 'S-1-5-21-9-9-9-9002')) @{ accountName = 'oldadm2'; accountDomain = 'corp'; accountEnabled = $false; nestedAdGroupNames = @('Domain Users', 'Domain Admins') }))
+        $gen.Add((EgRow 'n-001' 'live1' @((SidJ 'S-1-5-21-9-9-9-9101')) @{ accountName = 'live1'; accountDomain = 'corp'; accountEnabled = $true }))
+        $script:Users = $gen.ToArray()
+        $script:EntraUsers = 20
+        function script:Get-UserFetched($Run) {
+            $l = @($Run.Info | Where-Object { $_ -match '\[user\s*\] count=\s*\d+\s+fetched=\s*\d+' })[0]
+            $m = [regex]::Match([string]$l, 'count=\s*(\d+)\s+fetched=\s*(\d+)')
+            [pscustomobject]@{ Count = [int]$m.Groups[1].Value; Fetched = [int]$m.Groups[2].Value }
+        }
+        $script:SetupError4 = ''
+        try {
+            Set-Switches -Ad $true
+            $script:Before = Invoke-EgRun -Mode Old
+            $script:After = Invoke-EgRun -Mode New
+            $script:AfterB = Invoke-EgRun -Mode New -PageRows 10
+        } catch { $script:SetupError4 = (('{0} | {1} | {2} | {3}' -f $_.Exception.GetType().FullName, $_.Exception.Message, $_.InvocationInfo.PositionMessage, $_.ScriptStackTrace) -replace '\r?\n', ' // ') } finally { Set-Switches; $script:Users = $script:SavedUsers }
+    }
+    It 'the reads ran' { $script:SetupError4 | Should -BeNullOrEmpty }
+    It 'before: every user node fetched (~10x the Entra users); now: only what SI keeps (~1x) -- measured from the read''s own log line' {
+        $b = Get-UserFetched $script:Before; $a = Get-UserFetched $script:After; $ab = Get-UserFetched $script:AfterB
+        ($b.Count, $b.Fetched) | Should -Be @(201, 201)
+        ($a.Count, $a.Fetched) | Should -Be @(23, 23)
+        ($ab.Count, $ab.Fetched) | Should -Be @(23, 23) -Because 'bucketed: the buckets follow the smaller count'
+        [Math]::Round($b.Fetched / [double]$script:EntraUsers, 2) | Should -Be 10.05
+        [Math]::Round($a.Fetched / [double]$script:EntraUsers, 2) | Should -Be 1.15
+        ($script:After.Info -join "`n") | Should -Match ([regex]::Escape('(178 not fetched: never synced to Entra ID, disabled and not privileged -- SI_Identity_SkipNeverSyncedDisabledAd is on)'))
+    }
+    It 'no fan-out: one record per node, every Entra-linked user once, before and now' {
+        foreach ($r in @($script:Before, $script:After, $script:AfterB)) {
+            $r.RowCount | Should -Be @($r.ByNode.Keys).Count -Because 'one record per Exposure Graph node -- no node read twice'
+            @($r.ByNode.Keys | Where-Object { $_ -like 'e-*' }).Count | Should -Be $script:EntraUsers
+        }
+        $script:After.RowCount | Should -Be 23
+    }
+    It 'the kept records are identical, field for field; the same left-out count' {
+        ($script:Before.Errors + $script:After.Errors + $script:AfterB.Errors) | Should -BeNullOrEmpty
+        @($script:After.ByNode.Keys) | Should -Be @($script:Before.ByNode.Keys)
+        @($script:AfterB.ByNode.Keys) | Should -Be @($script:Before.ByNode.Keys)
+        foreach ($k in @($script:Before.ByNode.Keys)) {
+            @(RowDiff $script:After.ByNode[$k] $script:Before.ByNode[$k]) | Should -BeNullOrEmpty -Because "$k is the same record"
+            @(RowDiff $script:AfterB.ByNode[$k] $script:Before.ByNode[$k]) | Should -BeNullOrEmpty -Because "$k is the same record (bucketed)"
+        }
+        foreach ($k in 'p-001', 'p-002', 'n-001') { $script:After.ByNode.Contains($k) | Should -BeTrue -Because "$k is privileged or enabled: kept" }
+        [long]$script:After.Written[0].LeftOut | Should -Be ([long]$script:Before.Written[0].LeftOut)
+        [long]$script:After.Written[0].LeftOut | Should -Be 178
+        $script:After.MapCount | Should -Be $script:Before.MapCount
     }
 }
 

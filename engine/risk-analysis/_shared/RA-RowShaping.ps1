@@ -462,6 +462,60 @@ function ConvertTo-PSObjectDeep {
     return (_Convert $InputObject $true)
 }
 
+# ---------------------------------------------------------------------------------------------------------------------
+# #1321 (SCALE-2): AN ADVANCED HUNTING ANSWER CONVERTED A PART AT A TIME, EACH PART'S VALUE BAGS LET GO AS IT GOES.
+# `ConvertTo-PSObjectDeep $resp.Results.AdditionalProperties` builds every row's converted copy while every row's bag is
+# still held -- the whole answer twice at once. Here the same conversion runs on the answer in parts and each part's bags
+# leave the answer as soon as they are converted, so the answer is held about once. Per row the conversion IS
+# ConvertTo-PSObjectDeep -StripOData -CastPrimitiveArrays (each row is converted on its own there too): the same rows, the
+# same values, in the same order. Only with SI_RA_HuntingStreamRead = on (the default, owner 2026-11-23); off: the line
+# as before.
+# ---------------------------------------------------------------------------------------------------------------------
+function Test-RAHuntingResultsByPart {
+  <#
+    PURE. Can this answer be converted a part at a time with exactly the result of the whole conversion? Only when the
+    switch is on and the answer is the advanced hunting shape with two or more rows, each an object whose AdditionalProperties
+    is a dictionary (then `$resp.Results.AdditionalProperties` is exactly those dictionaries, in order). Anything else -- the
+    marker rows, one row, no rows, another shape -- keeps the whole conversion.
+  #>
+  param($Resp, $Setting = $global:SI_RA_HuntingStreamRead)
+  # off | false | 0 | no = the whole conversion as before; not set / anything else = on (the default)
+  if (([string]$Setting).Trim().ToLowerInvariant() -in @('off', 'false', '0', 'no')) { return $false }
+  if ($null -eq $Resp -or $Resp -isnot [System.Management.Automation.PSCustomObject]) { return $false }
+  if ($Resp.PSObject.Properties['_SIDirectRows']) { return $false }
+  $p = $Resp.PSObject.Properties['Results']
+  if (-not $p) { return $false }
+  $res = $p.Value
+  if ($res -isnot [object[]] -or $res.Length -lt 2) { return $false }
+  foreach ($r in $res) {
+    if ($null -eq $r -or $r -isnot [System.Management.Automation.PSCustomObject]) { return $false }
+    $ap = $r.PSObject.Properties['AdditionalProperties']
+    if (-not $ap -or $ap.Value -isnot [System.Collections.IDictionary]) { return $false }
+  }
+  $true
+}
+
+function ConvertFrom-RAHuntingResults {
+  <#
+    The rows of an advanced hunting answer (Test-RAHuntingResultsByPart said yes): ConvertTo-PSObjectDeep -StripOData
+    -CastPrimitiveArrays a part at a time; each converted row's entry in -Results is set to $null (its bag let go). Answers
+    ONE object[] (never unrolled), the shape `ConvertTo-PSObjectDeep $resp.Results.AdditionalProperties` gives for two or
+    more rows. -PartRows: rows per part (the rows are converted the same at any size; it only paces what is held).
+  #>
+  param([Parameter(Mandatory)][object[]]$Results, [int]$PartRows = 2000)
+  if ($PartRows -lt 1) { $PartRows = 2000 }
+  $n = $Results.Length
+  $out = [System.Collections.Generic.List[object]]::new($n)
+  for ($i = 0; $i -lt $n; $i += $PartRows) {
+    $m = [Math]::Min($PartRows, $n - $i)
+    $bags = New-Object 'object[]' $m
+    for ($k = 0; $k -lt $m; $k++) { $bags[$k] = $Results[$i + $k].AdditionalProperties; $Results[$i + $k] = $null }
+    foreach ($o in @(ConvertTo-PSObjectDeep -InputObject $bags -StripOData -CastPrimitiveArrays)) { $out.Add($o) }
+    $bags = $null
+  }
+  return , $out.ToArray()
+}
+
 # Build the schema sample that CheckCreateUpdate-TableDcr-Structure uses to DECLARE the Log
 # Analytics custom table + DCR columns. The module takes the UNION of the property names across
 # every row it is handed (verified 2026-08-08: row 1 carried 53 columns, the union of the first 100

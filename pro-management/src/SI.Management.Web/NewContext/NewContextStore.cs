@@ -93,10 +93,21 @@ p.Source, p.RecordType, p.ResourceType, p.Part, p.Property, p.SourceSystem, p.Va
        CAST(p.Collected AS int) AS Collected, CAST(p.Baseline AS int) AS Baseline, p.MappedFields, p.NeedsPermission, p.FirstSeen, p.LastSeen
 """;
 
-    /// The properties first seen after discovery started, inside the window, the newest first (IX_SourceProperty_New).
-    public const string NewSql = "SELECT TOP (@Top) " + Columns + " " + """
+    /// <summary>
+    /// #1379 (owner 2026-11-25: "if we control it, why dont you fill out these fields and activate them ?"): the properties
+    /// SecurityInsight WRITES ITSELF (data-model/si-written-properties.locked.json -- the level inside Tier 0, its own install
+    /// tags) are never new context: they ship mapped or internal, so they are no decision for an Admin. Left out of what is
+    /// new and of the counts of what is new; Everything known still lists them. The engine records them as known too
+    /// (SI-SourceDiscovery.ps1); this condition holds the page to it at once, before the next run.
+    /// </summary>
+    public static readonly string SiWrittenCondition = SiWrittenProperties.SqlCondition(SiWrittenProperties.Default, "p");
+
+    /// The properties first seen after discovery started, inside the window, the newest first (IX_SourceProperty_New) --
+    /// never a property SecurityInsight writes itself.
+    public static readonly string NewSql = "SELECT TOP (@Top) " + Columns + " " + """
 FROM sidata.SourceProperty AS p
 WHERE p.Baseline = 0 AND p.FirstSeen >= @Since
+""" + "\n  AND NOT " + SiWrittenCondition + "\n" + """
 ORDER BY p.FirstSeen DESC, p.Source, p.RecordType, p.ResourceType, p.Part, p.Property;
 """;
 
@@ -117,18 +128,26 @@ FROM sidata.SourceDiscoveryState
 ORDER BY Source, RecordType, ResourceType, Part, Origin;
 """;
 
-    public const string CountsSql = """
-SELECT Source, COUNT(*) AS Known, SUM(CASE WHEN Baseline = 0 THEN 1 ELSE 0 END) AS NewSinceStart, SUM(CASE WHEN Collected = 0 THEN 1 ELSE 0 END) AS NotRead
+    /// Per source: everything known, what is new since discovery started (never what SecurityInsight writes itself), what
+    /// is offered and not read.
+    public static readonly string CountsSql = """
+SELECT Source, COUNT(*) AS Known,
+       SUM(CASE WHEN Baseline = 0 AND NOT
+""" + " " + SiWrittenProperties.SqlCondition(SiWrittenProperties.Default, "SourceProperty") + " " + """
+THEN 1 ELSE 0 END) AS NewSinceStart,
+       SUM(CASE WHEN Collected = 0 THEN 1 ELSE 0 END) AS NotRead
 FROM sidata.SourceProperty
 GROUP BY Source
 ORDER BY Source;
 """;
 
-    /// The properties first seen after discovery started and at or after a time, counted per source (IX_SourceProperty_New).
-    public const string NewSinceSql = """
+    /// The properties first seen after discovery started and at or after a time, counted per source (IX_SourceProperty_New)
+    /// -- never a property SecurityInsight writes itself.
+    public static readonly string NewSinceSql = """
 SELECT p.Source, COUNT(*) AS N
 FROM sidata.SourceProperty AS p
 WHERE p.Baseline = 0 AND p.FirstSeen >= @Since
+""" + "\n  AND NOT " + SiWrittenCondition + "\n" + """
 GROUP BY p.Source
 ORDER BY p.Source;
 """;
@@ -300,7 +319,7 @@ public static partial class NewContextText
     public static readonly IReadOnlySet<string> Grantable = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
     {
         "ThreatHunting.Read.All", "AuditLog.Read.All", "User.Read.All", "Device.Read.All", "Application.Read.All", "Directory.Read.All",
-        "DeviceManagementManagedDevices.Read.All", "DeviceManagementConfiguration.Read.All", "AccessReview.Read.All", "SecurityAlert.Read.All", "Machine.Read.All",
+        "DeviceManagementManagedDevices.Read.All", "DeviceManagementConfiguration.Read.All", "DeviceManagementApps.Read.All", "AccessReview.Read.All", "SecurityAlert.Read.All", "Machine.Read.All",
         "Vulnerability.Read.All", "SecurityRecommendation.Read.All", "SecurityEvents.Read.All", "Score.Read.All", "Reader",
     };
 }

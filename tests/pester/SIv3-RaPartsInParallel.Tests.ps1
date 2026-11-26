@@ -213,16 +213,17 @@ AfterAll {
 }
 
 Describe 'how many parts at a time (pure)' {
-    It 'SI_RA_PartsInParallel_Max: default 6, 1 / 0 / off = one at a time, never more than 4 per processor core' {
-        Get-RAPartsInParallelMax -Setting $null -Cores 4 | Should -Be 6
-        Get-RAPartsInParallelMax -Setting '' -Cores 4 | Should -Be 6
+    It 'SI_RA_PartsInParallel_Max: not set = no fixed number (the process bound; the adaptive rule and the run''s measured budget decide), 1 / 0 / off = one at a time, never more than 4 per processor core' {
+        Get-RAPartsInParallelMax -Setting $null -Cores 4 | Should -Be 16 -Because '2026-11-23: no fixed number -- only the bound of the process'
+        Get-RAPartsInParallelMax -Setting '' -Cores 4 | Should -Be 16
+        Get-RAPartsInParallelMax -Setting $null -Cores 4 -Default 6 | Should -Be 6 -Because 'a caller may still name its own default'
         Get-RAPartsInParallelMax -Setting 1 -Cores 4 | Should -Be 1
         Get-RAPartsInParallelMax -Setting 0 -Cores 4 | Should -Be 1
         Get-RAPartsInParallelMax -Setting 'off' -Cores 4 | Should -Be 1
         Get-RAPartsInParallelMax -Setting 12 -Cores 4 | Should -Be 12
         Get-RAPartsInParallelMax -Setting 100 -Cores 2 | Should -Be 8 -Because 'no fixed cap, but a sane bound tied to the cores'
         Get-RAPartsInParallelMax -Setting $null -Cores 1 | Should -Be 4
-        Get-RAPartsInParallelMax -Setting 'many' -Cores 4 | Should -Be 6
+        Get-RAPartsInParallelMax -Setting 'many' -Cores 4 | Should -Be 16 -Because 'not a number: as not set'
     }
     It 'queue workers (#742) SHARE one job''s budget: together never more at a time than one job; a job or the producer keeps it all' {
         Get-RAPartsInParallelShare -Max 6 | Should -Be 6 -Because 'one job (no worker role): the whole budget'

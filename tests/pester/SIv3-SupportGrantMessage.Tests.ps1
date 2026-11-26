@@ -31,7 +31,7 @@ BeforeAll {
             param($Sql, $Params, $Mode)
             $p = @{}; if ($Params) { foreach ($k in $Params.Keys) { $p[$k] = $Params[$k] } }
             $state.Calls.Add([pscustomobject]@{ Sql = [string]$Sql; Params = $p })
-            $kind = if ($Sql -match 'SupportGrantOpen') { 'Open' } elseif ($Sql -match 'SupportGrantClose') { 'Close' } elseif ($Sql -match 'SupportGrantSweep') { 'Sweep' } else { 'Status' }
+            $kind = if ($Sql -match 'SupportGrantOpen') { 'Open' } elseif ($Sql -match 'SupportGrantClose') { 'Close' } elseif ($Sql -match 'SupportGrantSweep') { 'Sweep' } elseif ($Sql -match 'SupportJitMarker WHERE ClosedUtc IS NULL') { 'OpenGrants' } else { 'Status' }
             $a = $state.Answers[$kind]
             if ($a -is [scriptblock]) { $a = & $a $p }
             if ($a -is [string] -and $a -like 'THROW*') { throw ($a.Substring(6)) }
@@ -230,5 +230,184 @@ Describe 'THE JOB (fake databases)' {
     It 'no switch holds the change back any more (Invardia 2026-11-20): the SupportAccess heartbeat replaces the support.* events' {
         Get-Command -Name Resolve-SIUplinkSupportGrantSwitch -ErrorAction SilentlyContinue | Should -BeNullOrEmpty
         Get-Command -Name Start-SISupportAccessHeartbeat -ErrorAction SilentlyContinue | Should -Not -BeNullOrEmpty
+    }
+}
+
+Describe '#1356 / #1368 -- several pending requests: each read on its own, a close wins over its OWN session, a bad one fails alone' {
+    BeforeAll {
+        # a request of a Support session (-Session) as Invardia's tools write it: "Invardia Support: <operator> (session <id>)"
+        $script:By = { param([string]$Session) if ($Session) { "Invardia Support: agent@invardia (session $Session)" } else { 'agent@invardia' } }
+        $script:Close = { param([int]$Age, [string]$Id, [string]$Session = '') & $script:M (& $script:Msg @{ SI_SUPPORT_ACTION = 'close'; SI_SUPPORT_LEVEL = 'troubleshoot'; SI_AUDIT_STARTED_BY = (& $script:By $Session) }) $Age $Id }
+        $script:Open = { param([int]$Age, [string]$Id, [string]$Session = '') & $script:M (& $script:Msg @{ SI_AUDIT_STARTED_BY = (& $script:By $Session) }) $Age $Id }
+        $script:Bad = { param([int]$Age, [string]$Id) & $script:M '{"SI_SUPPORT_ACTION":"close","EVIL":"x"}' $Age $Id }
+        $script:Dbs = { @((& $script:NewDb 'pro' @{ Sweep = $script:OkSweep; Open = $script:OkOpen; Close = $script:OkClose }), (& $script:NewDb 'ledger' @{ Sweep = $script:OkSweep; Open = $script:OkOpen; Close = $script:OkClose })) }
+        $script:XmlOf = {
+            param([object[]]$Messages)
+            $body = foreach ($m in $Messages) {
+                '<QueueMessage><MessageId>{0}</MessageId><InsertionTime>{1}</InsertionTime><PopReceipt>pr-{0}</PopReceipt><MessageText>{2}</MessageText></QueueMessage>' -f $m.Id, $m.Inserted.ToString('r', [Globalization.CultureInfo]::InvariantCulture), [Security.SecurityElement]::Escape([string]$m.Text)
+            }
+            '<?xml version="1.0" encoding="utf-8"?><QueueMessagesList>' + (@($body) -join '') + '</QueueMessagesList>'
+        }
+        # the queue read EXACTLY as the job script did before the #1356 fix: one read's batch collected with @( ) = ONE item
+        $script:RunNested = {
+            param($Dbs, [object[]]$Messages)
+            $batch = @(ConvertFrom-SISupportGrantQueueXml -Xml (& $script:XmlOf $Messages))
+            $removed = New-Object System.Collections.Generic.List[string]; $said = New-Object System.Collections.Generic.List[string]
+            $map = [ordered]@{}; foreach ($d in $Dbs) { $map[$d.State.Name] = $d.Seam }
+            $recv = { $all = [System.Collections.Generic.List[object]]::new(); foreach ($m in $batch) { $all.Add($m) }; $all.ToArray() }.GetNewClosure()
+            $r = Invoke-SISupportGrantJob -Databases $map -Receive $recv -Remove { param($m) $removed.Add([string]$m.Id) }.GetNewClosure() -NowUtc $script:Now -Say { param($l, $t) $said.Add("[$l] $t") }.GetNewClosure()
+            [pscustomobject]@{ R = $r; Removed = $removed.ToArray(); Said = $said.ToArray(); BatchItems = $batch.Count }
+        }
+        # a QUEUE across executions: each execution reads what is still on it and deletes what it deleted; until it is empty
+        $script:RunQueue = {
+            param($Dbs, [object[]]$Messages, [int]$Max = 6)
+            $q = [System.Collections.Generic.List[object]]::new(); foreach ($m in $Messages) { $q.Add($m) }
+            $map = [ordered]@{}; foreach ($d in $Dbs) { $map[$d.State.Name] = $d.Seam }
+            $runs = [System.Collections.Generic.List[object]]::new()
+            for ($i = 0; $i -lt $Max -and $q.Count; $i++) {
+                $said = New-Object System.Collections.Generic.List[string]
+                $recv = { , $q.ToArray() }.GetNewClosure()
+                $rm = { param($m) $hit = @($q | Where-Object { $_.Id -eq $m.Id }); foreach ($h in $hit) { [void]$q.Remove($h) } }.GetNewClosure()
+                $r = Invoke-SISupportGrantJob -Databases $map -Receive $recv -Remove $rm -NowUtc $script:Now -Say { param($l, $t) $said.Add("[$l] $t") }.GetNewClosure()
+                $runs.Add([pscustomobject]@{ Line = $r.Line; Said = $said.ToArray() })
+            }
+            [pscustomobject]@{ Runs = $runs.ToArray(); Left = $q.Count }
+        }
+        # the order of the grant calls a database saw (Open / Close), the sweep and the reads left out
+        $script:Seq = { param($Db) @($Db.State.Calls | ForEach-Object { if ($_.Sql -match 'SupportGrantOpen') { 'Open' } elseif ($_.Sql -match 'SupportGrantClose') { 'Close' } } | Where-Object { $_ }) }
+        $script:Calls = { param($Db, [string]$Kind) @($Db.State.Calls | Where-Object { $_.Sql -match ('SupportGrant' + $Kind) }).Count }
+    }
+
+    It 'the live shape (one read''s batch as ONE item): open + close of ONE session -> the CLOSE is answered, ok, never the DateTime failure' {
+        $dbs = & $script:Dbs
+        $x = & $script:RunNested $dbs @((& $script:Open 3 'A' 's1'), (& $script:Close 1 'B' 's1'))
+        $x.BatchItems | Should -Be 1 -Because 'this is the shape that failed live: two messages, one item'
+        $x.R.Result | Should -Be 'ok'; $x.R.ExitCode | Should -Be 0
+        $x.R.Line | Should -Match '^SUPPORT-GRANT action=close level=troubleshoot until=\S+ result=ok$'
+        ($x.Said -join "`n") | Should -Not -Match 'System.Object\[\]'
+        foreach ($d in $dbs) { & $script:Calls $d 'Close' | Should -Be 1; & $script:Calls $d 'Open' | Should -Be 0 }
+        @($x.Removed | Sort-Object) | Should -Be @('A', 'B')
+        ($x.Said -join "`n") | Should -Match 'a close wins over its own session''s open'
+    }
+    It 'the batch flattened: two and three messages in one read are two and three messages; empty stays empty' {
+        $two = @(ConvertTo-SISupportGrantMessageList -Messages @(, @((& $script:Open 2 'A'), (& $script:Close 1 'B'))) | ForEach-Object { $_ })
+        $two.Count | Should -Be 2; @($two | ForEach-Object { $_.Id }) | Should -Be @('A', 'B')
+        $three = @(ConvertTo-SISupportGrantMessageList -Messages @(, @(, @((& $script:Open 3 'A'), (& $script:Close 2 'B'), $null, (& $script:Close 1 'C')))) | ForEach-Object { $_ })
+        $three.Count | Should -Be 3
+        @(ConvertTo-SISupportGrantMessageList -Messages @() | ForEach-Object { $_ }).Count | Should -Be 0
+    }
+    It 'the session key: the session id in SI_AUDIT_STARTED_BY (case ignored); none = the request is its own session' {
+        Get-SISupportGrantSessionKey -StartedBy 'Invardia Support: operator on host1 (session 3F2A-77)' -MessageId 'm1' | Should -Be 'session:3f2a-77'
+        Get-SISupportGrantSessionKey -StartedBy 'Invardia Support: x (SESSION 3f2a-77)' -MessageId 'm2' | Should -Be 'session:3f2a-77'
+        Get-SISupportGrantSessionKey -StartedBy 'agent@invardia' -MessageId 'm1' | Should -Be 'message:m1'
+        Get-SISupportGrantSessionKey -StartedBy '' -MessageId 'm2' | Should -Be 'message:m2'
+    }
+    It 'TWO SESSIONS in one queue read (A open, B open, A close): A''s close is answered first, A''s open dropped, B''s open STAYS on the queue -- then B is opened and kept' {
+        $dbs = & $script:Dbs
+        $x = & $script:RunQueue $dbs @((& $script:Open 4 'A1' 'sA'), (& $script:Open 3 'B1' 'sB'), (& $script:Close 2 'A2' 'sA'))
+        @($x.Runs).Count | Should -Be 2; $x.Left | Should -Be 0
+        $x.Runs[0].Line | Should -Match '^SUPPORT-GRANT action=close .* result=ok$'
+        ($x.Runs[0].Said -join "`n") | Should -Match 'a close wins over its own session''s open'
+        ($x.Runs[0].Said -join "`n") | Should -Match '1 more support request\(s\) stay on the queue'
+        $x.Runs[1].Line | Should -Match '^SUPPORT-GRANT action=open .* result=ok$'
+        # per database: A's close, then B's open -- and nothing closes B afterwards (kept)
+        foreach ($d in $dbs) { @(& $script:Seq $d) | Should -Be @('Close', 'Open') }
+        @($dbs[0].State.Calls | Where-Object { $_.Sql -match 'SupportGrantOpen' })[0].Params.StartedBy | Should -Match '\(session sB\)'
+        # then B closes: both sessions are closed, read back from the close's answer
+        $y = & $script:RunQueue $dbs @((& $script:Close 1 'B2' 'sB'))
+        $y.Runs[0].Line | Should -Match '^SUPPORT-GRANT action=close .* result=ok$'
+        foreach ($d in $dbs) { @(& $script:Seq $d) | Should -Be @('Close', 'Open', 'Close') }
+    }
+    It 'TWO SESSIONS, then both close: A open, B open, A close, B close -> every request answered in turn; both closed at the end' {
+        $dbs = & $script:Dbs
+        $x = & $script:RunQueue $dbs @((& $script:Open 5 'A1' 'sA'), (& $script:Open 4 'B1' 'sB'), (& $script:Close 3 'A2' 'sA'), (& $script:Close 1 'B2' 'sB'))
+        $x.Left | Should -Be 0
+        @($x.Runs | ForEach-Object { ($_.Line -split ' ')[1] }) | Should -Be @('action=close', 'action=close')
+        # B's own close won over B's waiting open: B never opened, nothing is left open
+        foreach ($d in $dbs) { @(& $script:Seq $d) | Should -Be @('Close', 'Close') }
+        $x = & $script:RunQueue (& $script:Dbs) @((& $script:Open 5 'A1' 'sA'), (& $script:Open 4 'B1' 'sB'))
+        @($x.Runs | ForEach-Object { ($_.Line -split ' ')[1] }) | Should -Be @('action=open', 'action=open') -Because 'two opens = each answered, oldest first'
+    }
+    It 'NO session id: every request is its own session -- a close never drops another request''s open (it stays and is answered next)' {
+        $dbs = & $script:Dbs
+        $x = & $script:RunQueue $dbs @((& $script:Close 3 'A'), (& $script:Open 1 'B'))
+        @($x.Runs | ForEach-Object { ($_.Line -split ' ')[1] }) | Should -Be @('action=close', 'action=open')
+        foreach ($d in $dbs) { @(& $script:Seq $d) | Should -Be @('Close', 'Open') }
+        $s = Select-SISupportGrantRequest -Messages @((& $script:Open 3 'O'), (& $script:Close 1 'C')) -NowUtc $script:Now
+        $s.Message.Id | Should -Be 'C'; @($s.Later | ForEach-Object { $_.Id }) | Should -Be @('O'); @($s.Dropped).Count | Should -Be 0
+    }
+    It 'close + close of ONE session: one close is answered, the other said as the same close; each database closed once' {
+        $dbs = & $script:Dbs
+        $x = & $script:RunNested $dbs @((& $script:Close 2 'A' 's1'), (& $script:Close 1 'B' 's1'))
+        $x.R.Result | Should -Be 'ok'; $x.R.Line | Should -Match '^SUPPORT-GRANT action=close '
+        foreach ($d in $dbs) { & $script:Calls $d 'Close' | Should -Be 1 }
+        ($x.Said -join "`n") | Should -Match 'the same close of this session was asked again'
+        @($x.Removed | Sort-Object) | Should -Be @('A', 'B')
+    }
+    It 'three pending of ONE session (open, close, open): the close wins; nothing is opened; all three deleted' {
+        $dbs = & $script:Dbs
+        $x = & $script:RunNested $dbs @((& $script:Open 4 'A' 's1'), (& $script:Close 3 'B' 's1'), (& $script:Open 1 'C' 's1'))
+        $x.R.Line | Should -Match '^SUPPORT-GRANT action=close .* result=ok$'
+        foreach ($d in $dbs) { & $script:Calls $d 'Open' | Should -Be 0; & $script:Calls $d 'Close' | Should -Be 1 }
+        @($x.Removed).Count | Should -Be 3
+    }
+    It 'a bad request fails ALONE: close + bad (the bad one newer) -> the close is answered ok, the bad one refused, said and deleted' {
+        $dbs = & $script:Dbs
+        $x = & $script:RunNested $dbs @((& $script:Close 3 'A'), (& $script:Bad 1 'B'))
+        $x.R.Result | Should -Be 'ok'; $x.R.Line | Should -Match '^SUPPORT-GRANT action=close '
+        ($x.Said -join "`n") | Should -Match '\[WARN\] the support request was refused: the key EVIL is not part of a support request'
+        foreach ($d in $dbs) { & $script:Calls $d 'Close' | Should -Be 1 }
+        @($x.Removed | Sort-Object) | Should -Be @('A', 'B')
+    }
+    It 'only bad requests: bad-request (exit 4), nothing granted or closed; only stale ones: no-request' {
+        $dbs = & $script:Dbs
+        $x = & $script:RunNested $dbs @((& $script:Bad 2 'A'), (& $script:Bad 1 'B'))
+        $x.R.Line | Should -BeExactly 'SUPPORT-GRANT action=none level=none until=none result=bad-request'; $x.R.ExitCode | Should -Be 4
+        @($x.Said | Where-Object { $_ -match 'was refused' }).Count | Should -Be 2
+        foreach ($d in $dbs) { & $script:Calls $d 'Open' | Should -Be 0; & $script:Calls $d 'Close' | Should -Be 0 }
+        (& $script:RunNested (& $script:Dbs) @((& $script:Close 30 'A'), (& $script:Open 20 'B'))).R.Result | Should -Be 'no-request'
+    }
+    It 'open + open (no close): the OLDEST open is answered, the newer one stays on the queue for the next execution' {
+        $s = Select-SISupportGrantRequest -Messages @((& $script:Open 1 'NEW'), (& $script:Open 5 'OLD')) -NowUtc $script:Now
+        $s.Message.Id | Should -Be 'OLD'; $s.Request.Action | Should -Be 'open'
+        @($s.Later | ForEach-Object { $_.Id }) | Should -Be @('NEW'); @($s.Dropped).Count | Should -Be 0
+    }
+    It 'LOG ONLY: before a close, the job says which OTHER sessions'' open grants it ends (read first, never its own; no procedure change)' {
+        $rows = @(@{ GrantId = '11111111-1111-1111-1111-111111111111'; StartedBy = 'Invardia Support: operator (session sB)'; Reason = 'SecurityInsight fold-why: read'; LevelGranted = 'troubleshoot'; AtUtc = '2026-11-01T09:50:00Z' },
+                  @{ GrantId = '22222222-2222-2222-2222-222222222222'; StartedBy = 'Invardia Support: operator (session sA)'; Reason = 'SecurityInsight duplicate check'; LevelGranted = 'troubleshoot'; AtUtc = '2026-11-01T09:55:00Z' })
+        $pro = & $script:NewDb 'pro' @{ Sweep = $script:OkSweep; Close = $script:OkClose; OpenGrants = $rows }
+        $x = & $script:RunNested @($pro) @((& $script:Close 1 'A2' 'sA'))
+        $x.R.Line | Should -Match '^SUPPORT-GRANT action=close .* result=ok$'
+        $said = ($x.Said -join "`n")
+        $said | Should -Match '\[WARN\] pro: this close also ends the open grant of ANOTHER support session -- Invardia Support: operator \(session sB\), troubleshoot since 2026-11-01T09:50:00Z: SecurityInsight fold-why: read'
+        $said | Should -Not -Match 'session sA\), troubleshoot since'
+        # the read came BEFORE the close, and it is a read only (no procedure, no write)
+        $kinds = @($pro.State.Calls | ForEach-Object { if ($_.Sql -match 'SupportJitMarker WHERE ClosedUtc IS NULL') { 'Read' } elseif ($_.Sql -match 'SupportGrantClose') { 'Close' } } | Where-Object { $_ })
+        $kinds | Should -Be @('Read', 'Close')
+        (Get-SISupportGrantOpenGrantsSql) | Should -Not -Match '(?i)\b(INSERT|UPDATE|DELETE|MERGE|EXEC|ALTER|DROP)\b'
+    }
+    It 'the READ IS REFUSED (si_engine is not granted it, SEC-CHANGE-1 point 1): "could not read the other open grants" is said, the close goes on and reads back, the line is ok' {
+        $dbs = @((& $script:NewDb 'pro' @{ Sweep = $script:OkSweep; Close = $script:OkClose; OpenGrants = 'THROW The SELECT permission was denied on the object ''SupportJitMarker'', database ''sqldb-si-pro'', schema ''cfg''.' }),
+                 (& $script:NewDb 'ledger' @{ Sweep = $script:OkSweep; Close = $script:OkClose; OpenGrants = 'THROW The SELECT permission was denied on the object ''SupportGrant''' }))
+        $y = & $script:RunNested $dbs @((& $script:Close 1 'A2' 'sA'))
+        $y.R.Result | Should -Be 'ok'; $y.R.ExitCode | Should -Be 0
+        $y.R.Line | Should -Match '^SUPPORT-GRANT action=close .* result=ok$'
+        $said = ($y.Said -join "`n")
+        $said | Should -Match '\[INFO\] pro: could not read the other open grants -- .*the close goes on'
+        $said | Should -Match '\[INFO\] ledger: could not read the other open grants'
+        $said | Should -Not -Match '\[WARN\].*could not read the other open grants'
+        foreach ($d in $dbs) { & $script:Calls $d 'Close' | Should -Be 1 }
+        ($said) | Should -Match 'pro: closed \(1 marker'
+    }
+    It 'NO new right: si_engine has no grant on cfg.SupportJitMarker / cfg.SupportGrant (writes stay DENIED); the read is listed as not granted on purpose' {
+        . (Join-Path $script:SIRoot 'engine\pro-settings\SI-EngineGrants.ps1')
+        @($script:SIEngineObjectGrants | Where-Object { $_.Object -in 'cfg.SupportJitMarker', 'cfg.SupportGrant' }).Count | Should -Be 0
+        $d = @($script:SIEngineDenies | Where-Object { $_.Object -in 'cfg.SupportJitMarker', 'cfg.SupportGrant' })
+        @($d | ForEach-Object { $_.Verbs }) | Should -Be @('INSERT, UPDATE, DELETE', 'INSERT, UPDATE, DELETE')
+        @($script:SIEngineNotEngine | Where-Object { $_.Function -eq 'Get-SISupportGrantOpenGrantsSql' }).Count | Should -Be 1
+    }
+    It 'the job script opens the read''s batch up into one item per message' {
+        $e = Get-Content -Raw -LiteralPath (Join-Path $script:SIRoot 'engine\support-grant\Invoke-SISupportGrant.ps1')
+        $e | Should -Match 'ConvertFrom-SISupportGrantQueueXml -Xml \(\[string\]\$r\.Content\) \| ForEach-Object \{ \$_ \}'
     }
 }

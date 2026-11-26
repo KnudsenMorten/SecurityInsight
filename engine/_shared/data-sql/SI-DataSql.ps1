@@ -18,10 +18,19 @@
     PS 5.1 safe.
 #>
 
+# #1332 the readers' finding source (the reader jobs' seam: their reads of the findings go to the served views)
+if (-not (Get-Command -Name 'New-SIFindingSourceInvoke' -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot 'SI-FindingSource.ps1') }
+
 # The certificate lookup and the SPN token are the identity ledger's (same SPN, same host). Loaded, not copied.
 if (-not (Get-Command -Name 'Get-SILedgerAccessToken' -ErrorAction SilentlyContinue)) {
     $__ledger = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'data-model\identity\SI-ObjectLedgerStore.ps1'
     if (Test-Path -LiteralPath $__ledger) { . $__ledger }
+}
+
+# #1336 the bulk load of the large writers (Write-SIDataLoadRows) -- loaded with the seam it uses
+if (-not (Get-Command -Name 'Write-SIDataLoadRows' -ErrorAction SilentlyContinue)) {
+    $__bulk = Join-Path $PSScriptRoot 'SI-DataBulkLoad.ps1'
+    if (Test-Path -LiteralPath $__bulk) { . $__bulk }
 }
 
 function New-SIDataSqlInvoke {
@@ -80,6 +89,12 @@ function New-SIDataSqlInvoke {
     $waits = if ($PSBoundParameters.ContainsKey('StatementWaits')) { @($StatementWaits) } else { @(Get-SISqlStatementRetryWaits) }
     $sleepFn = if ($Sleep) { $Sleep } else { { param($s) Start-Sleep -Seconds $s } }
     $connectFn = $Connect
+    # #1310 (framework 8.18): one call that runs long says what it waits on (SI-WaitBeat.ps1), as values for the closure.
+    # The beat moves this execution's progress mark only on the settings database (where cfg.StepProgress lives), and only
+    # on a real connection (a test's own -Connect has none to give it).
+    if (-not (Get-Command -Name 'Start-SIWaitBeat' -ErrorAction SilentlyContinue)) { . (Join-Path (Split-Path -Parent $PSScriptRoot) 'SI-WaitBeat.ps1') }
+    $beatStart = ${function:Start-SIWaitBeat}; $beatStop = ${function:Stop-SIWaitBeat}; $beatWhat = ${function:Get-SIWaitBeatWhat}
+    $beatMarks = (-not $Connect) -and [string]$global:SI_ProSqlServer -eq $Server -and [string]$global:SI_ProSqlDatabase -eq $Database
     # #738: what a reader on ANOTHER thread needs to make the same connection (Risk Analysis reads its next page while it
     # posts the current one): the connection string and a current token -- values, never this script block
     $connInfo = {
@@ -178,6 +193,15 @@ function New-SIDataSqlInvoke {
             } finally { if ($cn) { $cn.Dispose() } }
         }
         $try = 0
+        # #1310: the named wait beat of THIS call -- made now, ended in the finally below (it never outlives the call)
+        $__wb = $null
+        try {
+            $__wbArgs = @{ What = (& $beatWhat -Database $db -Mode $mode -Sql $sql) }
+            if ($global:SI_WaitBeatEveryMs -is [int] -and [int]$global:SI_WaitBeatEveryMs -gt 0) { $__wbArgs['FirstMs'] = [int]$global:SI_WaitBeatEveryMs; $__wbArgs['EveryMs'] = [int]$global:SI_WaitBeatEveryMs }   # tests only
+            if ($beatMarks -and $tokenCache.Token) { $__wbArgs['ConnectionString'] = $csText; $__wbArgs['AccessToken'] = [string]$tokenCache.Token }
+            $__wb = & $beatStart @__wbArgs
+        } catch { $__wb = $null }
+        try {
         while ($true) {
             try { & $attemptOnce; break }
             catch {
@@ -196,8 +220,20 @@ function New-SIDataSqlInvoke {
                 if ($w -gt 0) { & $sleepFn $w }
             }
         }
+        } finally { if ($null -ne $__wb) { $global:SI_WaitBeatLast = & $beatStop $__wb } }
     }.GetNewClosure()
     $invoke | Add-Member -NotePropertyName SIConnectionInfo -NotePropertyValue $connInfo
+    # #1336 the bulk load (SI-DataBulkLoad.ps1): an OPEN connection of this seam (the same open-with-retry and token), for
+    # SqlBulkCopy and its batch transaction; the caller disposes it
+    $bulkOpen = {
+        $tk = {
+            param([bool]$Fresh)
+            if ($Fresh -or -not $tokenCache.Token -or [datetime]::UtcNow -ge $tokenCache.Until) { $tokenCache.Token = & $getToken; $tokenCache.Until = [datetime]::UtcNow.AddMinutes(45) }
+            $tokenCache.Token
+        }
+        if ($connectFn) { & $openSql -Server $srv -Database $db -Token $tk -Connect $connectFn } else { & $openSql -Server $srv -Database $db -Token $tk }
+    }.GetNewClosure()
+    $invoke | Add-Member -NotePropertyName SIBulkOpen -NotePropertyValue $bulkOpen
     # the database this seam writes to: the write pacing (SI-SqlPacing.ps1) reads ITS load -- only a seam marked so is read
     $invoke | Add-Member -NotePropertyName SISqlTarget -NotePropertyValue ([pscustomobject]@{ Server = $srv; Database = $db })
     # this seam reads row by row (mode 'stream', Invoke-SIDataSqlStream)
@@ -284,11 +320,13 @@ VALUES (CONVERT(datetime2(3), @CollectionTime, 126), @Kind, NULLIF(@RunId, ''), 
 }
 
 function Get-SIDataCompleteCollectionSql {
-    # Only a 'Loading' collection whose finding count equals what Log Analytics held is marked complete.
+    # Only a 'Loading' collection whose finding count equals what Log Analytics held is marked complete -- and never as long as a
+    # carry of it is pending (#1323 review: sidata.ViewState 'carry:<collection>', Get-SIDataCarrySql in SI-DataSync.ps1).
     @'
 UPDATE sidata.Collection SET Status = 'Complete', [Rows] = @Rows, LoadedAt = SYSUTCDATETIME()
 WHERE CollectionId = @CollectionId AND Status = 'Loading'
-  AND (SELECT COUNT_BIG(*) FROM sidata.Finding WHERE CollectionId = @CollectionId) = @Rows;
+  AND (SELECT COUNT_BIG(*) FROM sidata.Finding WHERE CollectionId = @CollectionId) = @Rows
+  AND (OBJECT_ID(N'sidata.ViewState') IS NULL OR NOT EXISTS (SELECT 1 FROM sidata.ViewState v WHERE v.Name = N'carry:' + CONVERT(nvarchar(20), CONVERT(int, @CollectionId))));
 SELECT @@ROWCOUNT;
 '@
 }
@@ -791,7 +829,8 @@ function Get-SIDataUnderivedSql {
     #>
     param([switch]$Services)
     # #717: never a collection whose finding rows the retention removed (its aggregates are what is left of it)
-    $live = Get-SIDataLiveFilter
+    # #1226: never a collection that is not trusted, nor one never built beside a newer trusted one (Get-SIDataBuildFilter)
+    $live = (Get-SIDataLiveFilter) + (Get-SIDataBuildFilter)
     if ($Services) { return "SELECT CollectionId, CollectionTime FROM sidata.Collection WHERE Status = 'Complete' AND (DerivedAt IS NULL OR ServicesDerivedAt IS NULL)$live ORDER BY CollectionTime DESC" }
     "SELECT CollectionId, CollectionTime FROM sidata.Collection WHERE Status = 'Complete' AND DerivedAt IS NULL$live ORDER BY CollectionTime DESC"
 }
@@ -867,9 +906,13 @@ function Get-SIDataRowColumnsSql {
         fills them here first (Invoke-SIDataRowColumnsFill). -Carried: only the rows the data sync carried in (CarriedFrom),
         for a collection whose own rows were filled that way (Invoke-SIDataDeriveCollection). Idempotent.
     #>
-    param([switch]$Carried, [switch]$NoCount)
+    param([switch]$Carried, [switch]$NoCount,
+          # #1318 SI_Data_ParseAtInsert = on: the rows Risk Analysis typed when it stored them with exactly the CURRENT
+          # statement (this fingerprint, which carries these row values) are left alone (Get-SIDataParseAtInsertSkipFilter)
+          [string]$SkipPrint = '')
     $set = @(foreach ($rc in $script:SIDataRowColumns.Keys) { '    {0} = {1}' -f $rc, (Get-SIDataRowColumnExpr -Column $rc -Parsed) }) -join ",`r`n"
     $only = if ($Carried) { ' AND f.CarriedFrom IS NOT NULL' } else { '' }
+    if ($SkipPrint) { $only += (Get-SIDataParseAtInsertSkipFilter -Print $SkipPrint) }
     $count = if ($NoCount) { '' } else { "`r`nSELECT @@ROWCOUNT;" }
     "UPDATE f SET`r`n$set`r`nFROM sidata.Finding AS f`r`n$(Get-SIDataRowFieldsApply)`r`nWHERE f.CollectionId = @CollectionId AND f.FindingId > @After AND f.FindingId <= @Upto AND ISJSON(f.DetailJson) = 1$only;$count"
 }
@@ -906,6 +949,12 @@ function Get-SIDataDeriveFindingSql {
     if ($Category) { $svc += ",`r`n    RaCategory        = LEFT(JSON_VALUE(f.DetailJson, '$.Category'), 128)" }
     if ($RowColumns) { foreach ($rc in $script:SIDataRowColumns.Keys) { $svc += (",`r`n    {0} = {1}" -f $rc, (Get-SIDataRowColumnExpr -Column $rc -Parsed)) } }
     $apply = if ($RowColumns) { "`r`n" + (Get-SIDataRowFieldsApply) } else { '' }
+    # #1323 (two queue workers deadlocked in Risk Analysis' insert, 2026-11-23): with -IdTable the rows are reached from the
+    # ids the same transaction just wrote -- a nested loop over the id table, each row by its clustered key (CollectionId,
+    # FindingId). Reached by a scan of the collection instead (the plan the optimizer chose for a small id table), the
+    # update asked for every row of the collection, so it waited on the rows another worker had just inserted and not yet
+    # committed, while that worker waited on this one's: a deadlock. By the key only, each transaction reads only its own rows.
+    $from = if ($IdTable) { "FROM $IdTable AS fid INNER LOOP JOIN sidata.Finding AS f ON f.CollectionId = CONVERT(int, @CollectionId) AND f.FindingId = fid.id" } else { 'FROM sidata.Finding AS f' }
     $tail = if ($CarriedRowColumns -and -not $RowColumns) { "DECLARE @n int = @@ROWCOUNT;`r`n" + (Get-SIDataRowColumnsSql -Carried -NoCount) + "`r`nSELECT @n;" } else { 'SELECT @@ROWCOUNT;' }
     (@'
 UPDATE f SET
@@ -972,7 +1021,19 @@ function Get-SIDataDeriveTypedSql {
         DetailIsJson and ViewComponent on every row of the range. Answers the rows whose DetailJson is JSON (what the derive
         answered). Idempotent.
     #>
-    param([switch]$Services, [switch]$Fix, [switch]$Category, [switch]$RowColumns, [switch]$CarriedRowColumns, [switch]$RiskParts)
+    param([switch]$Services, [switch]$Fix, [switch]$Category, [switch]$RowColumns, [switch]$CarriedRowColumns, [switch]$RiskParts,
+          # #1318 PARSE AT INSERT -- the SAME statement, applied elsewhere (never a second copy of the mapping):
+          #   -RowFilter  the rows it works on instead of the FindingId range (Risk Analysis' insert: the rows it just inserted)
+          #   -Mark       also writes sidata.Finding.TypedOnInsert = this mask on every row it touches (Get-SIDataTypedMask)
+          #   -NoAnswer   no "SELECT @n;" at the end (the statement is part of a larger batch; @n holds the JSON rows)
+          #   -ColumnsOnly  answers the names of the columns the statement writes, in its order (the shadow compare)
+          [string]$RowFilter = 'f.CollectionId = @CollectionId AND f.FindingId > @After AND f.FindingId <= @Upto',
+          #   -MarkPrint  with -Mark: also TypedStatement = this fingerprint (Get-SIDataTypedFingerprint: the EXACT statement)
+          #   -SkipPrint  leaves alone ONLY the rows whose TypedStatement is this fingerprint (the current statement's)
+          [int]$Mark = 0, [string]$MarkPrint = '', [string]$SkipPrint = '', [switch]$NoAnswer, [switch]$ColumnsOnly,
+          #   -IdTable  (with -RowFilter) the rows are reached FROM this id table, one key seek each (Risk Analysis' insert, #1323
+          #             deadlock): the statement then never reads -- so never waits on -- a row another writer holds
+          [ValidatePattern('^(@\w+)?$')][string]$IdTable = '')
     $fl = Get-SIDataDeriveTypedFields -Services:$Services -Fix:$Fix -Category:$Category -RiskParts:$RiskParts
     $flds = $fl.Fields
     $at = { param([string]$f) $i = $flds.IndexOf($f); if ($i -lt 0) { throw ("not a derive field: '{0}'" -f $f) }; $i }
@@ -992,7 +1053,8 @@ function Get-SIDataDeriveTypedSql {
     }
     $trim = { param([string]$f, [int]$n) "LEFT(NULLIF(LTRIM(RTRIM($(& $jv $f))), N''), $n)" }
     $set = New-Object System.Collections.Generic.List[string]
-    $add = { param([string]$c, [string]$e) $set.Add(('    {0} = {1}' -f $c, $e)) }
+    $names = New-Object System.Collections.Generic.List[string]
+    $add = { param([string]$c, [string]$e) $set.Add(('    {0} = {1}' -f $c, $e)); $names.Add($c) }
     & $add 'RiskScoreWeighted' "TRY_CONVERT(float, $(& $jv 'RiskScoreTotal_Weighted'))"
     & $add 'RiskRating' (& $trim 'RiskRating' 16)
     & $add 'MitreTactics' (& $list 'MITRE_Tactics' 1000)
@@ -1039,11 +1101,26 @@ function Get-SIDataDeriveTypedSql {
         $partsNone = ",`r`n    RiskAssetSide = NULL, RiskAssetPoints = NULL, RiskAssetBase = NULL, RiskAssetDerived = 1, RiskAssetFactors = NULL," +
                      "`r`n    RiskVulnSide = NULL, RiskVulnPoints = NULL, RiskVulnBase = NULL, RiskVulnDerived = 1, RiskVulnFactors = NULL, RiskWeightPct = NULL, RiskWeightBy = NULL"
     }
+    if ($ColumnsOnly) { return , $names.ToArray() }
+    # #1318 the marker and the skip (both empty by default: the data sync's statement is unchanged)
+    $markSet = ''; $skip = ''
+    if ($Mark -gt 0) {
+        $set.Add(('    TypedOnInsert = {0}' -f [int]$Mark)); $markSet = (', TypedOnInsert = {0}' -f [int]$Mark)
+        if ($MarkPrint) { $lit = ConvertTo-SIDataPrintLiteral $MarkPrint; $set.Add(('    TypedStatement = {0}' -f $lit)); $markSet += (', TypedStatement = {0}' -f $lit) }
+    }
+    if ($SkipPrint) { $skip = Get-SIDataParseAtInsertSkipFilter -Print $SkipPrint }
+    $answer = if ($NoAnswer) { '' } else { 'SELECT @n;' }
     $w = @(for ($i = 0; $i -lt $flds.Count; $i++) {
         $x = $flds[$i]; "[v$i] nvarchar(max) N'$.$x'"
         if ($fl.Json.Contains($x)) { "[j$i] nvarchar(max) N'$.$x' AS JSON" }
     }) -join ', '
     $first = "SUBSTRING(f.DetailJson, PATINDEX(N'%[^' + CHAR(9) + CHAR(10) + CHAR(13) + CHAR(32) + N']%', f.DetailJson), 1)"
+    # #1323 (two queue workers deadlocked in Risk Analysis' insert, 2026-11-23): with -IdTable the rows are reached from the
+    # ids the same transaction just wrote -- a nested loop over the id table, each row by its clustered key (CollectionId,
+    # FindingId). Reached by a scan of the collection instead (the plan the optimizer chose for a small id table), the
+    # update asked for every row of the collection, so it waited on the rows another worker had just inserted and not yet
+    # committed, while that worker waited on this one's: a deadlock. By the key only, each transaction reads only its own rows.
+    $from = if ($IdTable) { "FROM $IdTable AS fid INNER LOOP JOIN sidata.Finding AS f ON f.CollectionId = CONVERT(int, @CollectionId) AND f.FindingId = fid.id" } else { 'FROM sidata.Finding AS f' }
     $tail = if ($CarriedRowColumns -and -not $RowColumns) { (Get-SIDataRowColumnsSql -Carried -NoCount) + "`r`n" } else { '' }
     # (1) the rows whose DetailJson is JSON (the old derive's rows): every column; (2) the others in the range: only what the
     # old statements wrote on them (the parts) and the two new columns -- found by what (1) wrote, never by reading DetailJson
@@ -1053,15 +1130,15 @@ DECLARE @o TABLE (id bigint NOT NULL);
 UPDATE f SET
 $($set -join ",`r`n")
 OUTPUT inserted.FindingId INTO @o (id)
-FROM sidata.Finding AS f
+$from
 OUTER APPLY OPENJSON(CASE WHEN $first = N'{' THEN CASE WHEN ISJSON(f.DetailJson) = 1 THEN f.DetailJson END END) WITH ($w) AS rj
 OUTER APPLY OPENJSON(CASE WHEN $first = N'{' THEN NULL ELSE CASE WHEN ISJSON(f.DetailJson) = 1 THEN f.DetailJson END END) WITH ($w) AS ra$parts
-WHERE f.CollectionId = @CollectionId AND f.FindingId > @After AND f.FindingId <= @Upto AND ISJSON(f.DetailJson) = 1;
+WHERE $RowFilter$skip AND ISJSON(f.DetailJson) = 1;
 DECLARE @n int = (SELECT COUNT(DISTINCT id) FROM @o);
-UPDATE f SET DetailIsJson = 0, ViewComponent = NULL$partsNone
-FROM sidata.Finding AS f
-WHERE f.CollectionId = @CollectionId AND f.FindingId > @After AND f.FindingId <= @Upto AND NOT EXISTS (SELECT 1 FROM @o AS o WHERE o.id = f.FindingId);
-$($tail)SELECT @n;
+UPDATE f SET DetailIsJson = 0, ViewComponent = NULL$partsNone$markSet
+$from
+WHERE $RowFilter$skip AND NOT EXISTS (SELECT 1 FROM @o AS o WHERE o.id = f.FindingId);
+$($tail)$answer
 "@
 }
 
@@ -1079,6 +1156,177 @@ function Test-SIDataCollectionTyped {
         $sql = "IF COL_LENGTH('sidata.Collection', 'TypedAt') IS NULL OR COL_LENGTH('sidata.Finding', 'FixRecommendedUpdate') IS NULL SELECT 0; ELSE EXEC sp_executesql N'SELECT CASE WHEN EXISTS (SELECT 1 FROM sidata.Collection WHERE CollectionId = @c AND TypedAt IS NOT NULL) THEN 1 ELSE 0 END', N'@c int', @c = @CollectionId;"
         return ([string](& $Invoke $sql @{ CollectionId = $CollectionId } 'scalar') -eq '1')
     } catch { return $false }
+}
+
+# ---- #1318 PARSE ONCE AT INSERT (SCALE-2 #1314) ------------------------------------------------------------------------
+#  The data sync's "views (derive)" phase re-read every finding's DetailJson to fill the typed columns (18.3 h at a large
+#  install). Those columns depend ONLY on the row's DetailJson and its Cve, so Risk Analysis can write them when it inserts
+#  the rows: its insert runs THE SAME typed statement (Get-SIDataDeriveTypedSql, -RowFilter = the rows just inserted) in the
+#  same transaction, set-based, and marks each row with the switch set it used (sidata.Finding.TypedOnInsert = the mask of
+#  Get-SIDataTypedMask) and with the EXACT statement it ran (sidata.Finding.TypedStatement = Get-SIDataTypedFingerprint: a
+#  hash of the statement's text -- a later release whose statement differs in any expression derives the row again; only a
+#  row typed by exactly the current statement is ever skipped). What depends on more than the row -- the asset key on adopt, the tier fill, the CI lifecycle, the
+#  carried reports, the facets, the services -- stays in the data sync. A row without the mark (carried in, loaded from Log
+#  Analytics, written before, or with another switch set) is derived exactly as before.
+#  THE SWITCH SI_Data_ParseAtInsert: on (the default, owner 2026-11-23; see below); off = nothing changes;
+#  shadow = the insert writes and marks the columns, the data sync derives EVERY row anyway and compares column by column
+#  with what the insert wrote (a difference = a WARN line with the count and the first FindingIds + column names, never a
+#  value; the derive's result is what stays); on = the data sync (and the vulnerability step's row-values fill) leave the
+#  marked rows alone and do only what is left (facets, services, stamps) -- a row is left alone ONLY when its TypedStatement
+#  is the current statement's fingerprint; carried and Log Analytics rows are always derived. shadow is for troubleshooting.
+
+$script:SIDataTypedMaskBits = [ordered]@{ Base = 1; Services = 2; Fix = 4; Category = 8; RowColumns = 16; RiskParts = 32 }
+
+function Get-SIDataParseAtInsertMode {
+    <# PURE. SI_Data_ParseAtInsert: 'off' | 'shadow' | 'on' (trimmed, any case; false / 0 / no = 'off'); not set or anything
+       else = 'on' (the default, owner 2026-11-23). #>
+    param($Value = $(Get-Variable -Name SI_Data_ParseAtInsert -Scope Global -ValueOnly -ErrorAction SilentlyContinue))
+    $v = if ($null -eq $Value) { '' } else { ([string]$Value).Trim().ToLowerInvariant() }
+    if ($v -in 'shadow', 'on') { return $v }
+    if ($v -in 'off', 'false', '0', 'no') { return 'off' }
+    'on'
+}
+
+function Get-SIDataTypedMask {
+    <# PURE. The switch set of one typed statement as a number (the mark a row carries): Base + one bit per switch. #>
+    param([switch]$Services, [switch]$Fix, [switch]$Category, [switch]$RowColumns, [switch]$RiskParts)
+    $b = $script:SIDataTypedMaskBits
+    $m = $b.Base
+    if ($Services) { $m += $b.Services }; if ($Fix) { $m += $b.Fix }; if ($Category) { $m += $b.Category }
+    if ($RowColumns) { $m += $b.RowColumns }; if ($RiskParts) { $m += $b.RiskParts }
+    [int]$m
+}
+
+function Get-SIDataTypedFingerprint {
+    <#
+        PURE. THE EXACT TYPING STATEMENT as a fingerprint (32 hex characters, the first 16 bytes of the SHA-256 of the text):
+        the derive's own typed statement for this switch set, in its range form, line ends made one. Any change to any
+        expression it carries (or to the switch set) is another fingerprint -- so a row typed by one release is skipped by a
+        later release ONLY when that release would write it with exactly the same statement; any other row is derived again.
+        Stored per row in sidata.Finding.TypedStatement.
+    #>
+    param([switch]$Services, [switch]$Fix, [switch]$Category, [switch]$RowColumns, [switch]$RiskParts)
+    $t = (Get-SIDataDeriveTypedSql -Services:$Services -Fix:$Fix -Category:$Category -RowColumns:$RowColumns -RiskParts:$RiskParts).Replace("`r`n", "`n")
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try { $h = $sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($t)) } finally { $sha.Dispose() }
+    -join @($h[0..15] | ForEach-Object { $_.ToString('X2') })
+}
+
+function ConvertTo-SIDataPrintLiteral {
+    <# PURE. A fingerprint as a SQL binary literal (0x + 32 hex digits); anything else is refused (it is written into SQL). #>
+    param([Parameter(Mandatory)][string]$Print)
+    if ($Print -notmatch '^[0-9A-Fa-f]{32}$') { throw ("not a statement fingerprint: '{0}'" -f $Print) }
+    '0x' + $Print.ToUpperInvariant()
+}
+
+function Get-SIDataParseAtInsertSkipFilter {
+    <# PURE. The rows a pass leaves alone with the switch on: ONLY those typed by exactly the statement of -Print (the
+       current one). Leading ' AND'. #>
+    param([Parameter(Mandatory)][string]$Print)
+    (' AND (f.TypedStatement IS NULL OR f.TypedStatement <> {0})' -f (ConvertTo-SIDataPrintLiteral $Print))
+}
+
+function Get-SIDataParseAtInsertReadySql {
+    <# 1 = the database has the mark columns (and the one-parse derive's columns), else 0. #>
+    "SELECT CASE WHEN COL_LENGTH('sidata.Finding', 'TypedOnInsert') IS NOT NULL AND COL_LENGTH('sidata.Finding', 'TypedStatement') IS NOT NULL AND COL_LENGTH('sidata.Finding', 'DetailIsJson') IS NOT NULL AND COL_LENGTH('sidata.Finding', 'ViewComponent') IS NOT NULL AND COL_LENGTH('sidata.Collection', 'TypedAt') IS NOT NULL THEN 1 ELSE 0 END"
+}
+
+function Get-SIDataParseAtInsertPlan {
+    <#
+        What Risk Analysis' insert writes with the switch set: the SAME switches the data sync's derive takes from the same
+        database (the views' columns, the Services tables, the fix columns, RaCategory, the row values, the risk score's
+        parts) and their mask. NEVER THROWS: @{ Mode; Ready; Why; Services; Fix; Category; RowColumns; RiskParts; Mask } --
+        Ready = $false (with the reason) = the insert writes the rows as before.
+    #>
+    param([Parameter(Mandatory)][scriptblock]$Invoke, [string]$Mode = (Get-SIDataParseAtInsertMode))
+    $p = [ordered]@{ Mode = $Mode; Ready = $false; Why = ''; Services = $false; Fix = $false; Category = $false; RowColumns = $false; RiskParts = $false; Mask = 0; Print = '' }
+    if ($Mode -eq 'off') { $p.Why = 'off'; return [pscustomobject]$p }
+    try {
+        $one = { param([string]$s) ([string](& $Invoke $s @{} 'scalar')) -eq '1' }
+        if (-not (& $one (Get-SIDataParseAtInsertReadySql)) -or -not (& $one (Get-SIDataViewsSchemaCheckSql))) {
+            $p.Why = 'the database does not have the columns for it yet (the updater adds them)'; return [pscustomobject]$p
+        }
+        $p.Services = & $one (Get-SIDataServicesSchemaCheckSql)
+        $p.Fix = & $one (Get-SIDataFixSchemaCheckSql)
+        $p.Category = & $one "SELECT CASE WHEN COL_LENGTH('sidata.Finding', 'RaCategory') IS NOT NULL THEN 1 ELSE 0 END"
+        $p.RowColumns = & $one "SELECT CASE WHEN COL_LENGTH('sidata.Finding', 'RaFillRiskFactorConsequence') IS NOT NULL AND COL_LENGTH('sidata.Collection', 'RaRowsAt') IS NOT NULL THEN 1 ELSE 0 END"
+        $p.RiskParts = Test-SIDataRiskPartsReady -Invoke $Invoke
+        $p.Mask = Get-SIDataTypedMask -Services:$p.Services -Fix:$p.Fix -Category:$p.Category -RowColumns:$p.RowColumns -RiskParts:$p.RiskParts
+        $p.Print = Get-SIDataTypedFingerprint -Services:$p.Services -Fix:$p.Fix -Category:$p.Category -RowColumns:$p.RowColumns -RiskParts:$p.RiskParts
+        $p.Ready = $true
+    } catch { $p.Ready = $false; $p.Why = 'the database could not be read for it: ' + $_.Exception.Message }
+    [pscustomobject]$p
+}
+
+function Get-SIDataTypedInsertSql {
+    <#
+        PURE. The typed statement for the rows a batch just wrote: Get-SIDataDeriveTypedSql with the plan's switches, over the
+        rows whose FindingId the batch put in -IdTable (a table variable with column id), marking each with the plan's mask;
+        no answer of its own (the batch answers its own count). The caller declares -IdTable and @CollectionId.
+    #>
+    param([Parameter(Mandatory)]$Plan, [string]$IdTable = '@ins')
+    Get-SIDataDeriveTypedSql -Services:([bool]$Plan.Services) -Fix:([bool]$Plan.Fix) -Category:([bool]$Plan.Category) -RowColumns:([bool]$Plan.RowColumns) -RiskParts:([bool]$Plan.RiskParts) `
+        -RowFilter ("f.CollectionId = CONVERT(int, @CollectionId) AND f.FindingId IN (SELECT id FROM {0})" -f $IdTable) -Mark ([int]$Plan.Mask) -MarkPrint ([string]$Plan.Print) -NoAnswer -IdTable $IdTable
+}
+
+function Get-SIDataParseAtInsertShadowSql {
+    <#
+        PURE. SHADOW: one range's pass (-Body: its statement, which leaves its row count in @n and answers nothing) wrapped in
+        a compare. Before the pass, the -Columns of the range's rows that carry the insert's values (-Snapshot: the condition
+        on f) are kept aside; after it, each is compared with what the pass wrote, byte for byte (NULL = NULL; the text, the
+        number and the flag as stored). Answers ONE text 'n|compared|differing|sample' -- the sample is the first 5
+        differing rows as 'FindingId <id>: <column names>', never a value. The pass's own result is what stays.
+    #>
+    param([Parameter(Mandatory)][string]$Body, [Parameter(Mandatory)][string[]]$Columns, [Parameter(Mandatory)][string]$Snapshot)
+    $sel = (@($Columns | ForEach-Object { 'f.[{0}]' -f $_ })) -join ', '
+    $cmp = (@($Columns | ForEach-Object { "CASE WHEN EXISTS (SELECT CONVERT(varbinary(max), b.[{0}]) EXCEPT SELECT CONVERT(varbinary(max), f.[{0}])) THEN N', {0}' END" -f $_ })) -join ",`r`n           "
+    @"
+SET NOCOUNT ON;
+IF OBJECT_ID(N'tempdb..#pai') IS NOT NULL DROP TABLE #pai;
+SELECT f.FindingId, $sel INTO #pai FROM sidata.Finding AS f
+WHERE f.CollectionId = @CollectionId AND f.FindingId > @After AND f.FindingId <= @Upto AND $Snapshot;
+$Body
+DECLARE @pc int = (SELECT COUNT(*) FROM #pai);
+DECLARE @pd TABLE (id bigint NOT NULL, cols nvarchar(4000) NOT NULL);
+INSERT @pd (id, cols)
+SELECT x.FindingId, STUFF(x.c, 1, 2, N'') FROM (
+    SELECT b.FindingId, CONCAT(
+           $cmp) AS c
+    FROM #pai AS b JOIN sidata.Finding AS f ON f.CollectionId = @CollectionId AND f.FindingId = b.FindingId) AS x
+WHERE x.c <> N'';
+DROP TABLE #pai;
+DECLARE @pdn int = (SELECT COUNT(*) FROM @pd);
+DECLARE @ps nvarchar(4000) = (SELECT LEFT(STRING_AGG(CONVERT(nvarchar(max), CONCAT(N'FindingId ', t.id, N': ', t.cols)), N'; ') WITHIN GROUP (ORDER BY t.id), 4000)
+                              FROM (SELECT TOP (5) id, cols FROM @pd ORDER BY id) AS t);
+SELECT CONCAT(@n, N'|', @pc, N'|', @pdn, N'|', @ps);
+"@
+}
+
+function Get-SIDataParseAtInsertShadowSummary {
+    <# PURE. The ranges' shadow answers (Invoke-SIDataFindingRanges -Answers: 'compared|differing|sample') added up:
+       @{ Compared; Differ; Sample (the first ranges' samples, at most 5 rows) }. #>
+    param([AllowEmptyCollection()][string[]]$Answers = @())
+    $c = 0L; $d = 0L; $s = New-Object System.Collections.Generic.List[string]
+    foreach ($a in @($Answers)) {
+        if (-not $a) { continue }
+        $x = ([string]$a).Split([char]'|', 3)
+        $c += [long]$x[0]; if ($x.Count -gt 1) { $d += [long]$x[1] }
+        if ($x.Count -gt 2 -and $x[2]) { foreach ($e in $x[2].Split(@('; '), [StringSplitOptions]::RemoveEmptyEntries)) { if ($s.Count -lt 5) { $s.Add($e) } } }
+    }
+    [pscustomobject]@{ Compared = $c; Differ = $d; Sample = ($s -join '; ') }
+}
+
+function Write-SIDataParseAtInsertShadowLine {
+    <# The shadow compare's one line: INFO when every compared row is identical, WARN with the count and the first rows'
+       FindingIds + column names when not (never a value). -What: what was compared. #>
+    param([Parameter(Mandatory)]$Summary, [Parameter(Mandatory)][string]$What, [scriptblock]$Log)
+    if (-not $Log) { $Log = { param([string]$level, [string]$msg) Write-Host ('[{0}] {1}' -f $level, $msg) } }
+    $inv = [Globalization.CultureInfo]::InvariantCulture
+    if ($Summary.Differ -gt 0) {
+        & $Log 'WARN' ([string]::Format($inv, '{0}: {1} of {2} row(s) whose values were worked out when Risk Analysis stored them differ from the values worked out here -- the values worked out here are kept; first: {3}', $What, $Summary.Differ, $Summary.Compared, $Summary.Sample))
+    } else {
+        & $Log 'INFO' ([string]::Format($inv, '{0}: {1} row(s) whose values were worked out when Risk Analysis stored them compared with the values worked out here -- all identical (the values worked out here are kept)', $What, $Summary.Compared))
+    }
 }
 
 function Get-SIDataFacetSql {
@@ -1558,7 +1806,9 @@ function Invoke-SIDataFindingRanges {
         range is still run. Returns the rows the statement counted. The derive and the row values' fill run the same loop.
     #>
     param([Parameter(Mandatory)][scriptblock]$Invoke, [Parameter(Mandatory)][int]$CollectionId, [long]$Lo, [long]$Hi,
-          [Parameter(Mandatory)][string]$Sql, [ref]$BatchSize, [long]$TargetMs = 5000)
+          [Parameter(Mandatory)][string]$Sql, [ref]$BatchSize, [long]$TargetMs = 5000,
+          # #1318 shadow: the statement answers 'n|<more>' -- n is counted, <more> of every range is added here
+          [System.Collections.Generic.List[string]]$Answers)
     $done = 0L
     $size = [long]20000; if ($BatchSize -and $BatchSize.Value -gt 0) { $size = [long]$BatchSize.Value }
     $after = $Lo - 1
@@ -1567,7 +1817,12 @@ function Invoke-SIDataFindingRanges {
         if ($paced) { $pace = Invoke-SISqlPacing -Invoke $Invoke -LastBatchMs $lastMs; if ($pace.Shrink) { $size = [Math]::Max(500L, [long][Math]::Floor($size / 2)) } }
         $upto = [Math]::Min($Hi, $after + $size)
         $sw = [Diagnostics.Stopwatch]::StartNew()
-        $done += [long](& $Invoke $Sql @{ CollectionId = $CollectionId; After = $after; Upto = $upto } 'scalar')
+        $ans = & $Invoke $Sql @{ CollectionId = $CollectionId; After = $after; Upto = $upto } 'scalar'
+        if ($null -ne $Answers) {
+            $t = [string]$ans; $k = $t.IndexOf('|')
+            if ($k -ge 0) { $Answers.Add($t.Substring($k + 1)); $ans = $t.Substring(0, $k) }
+        }
+        $done += [long]$ans
         $sw.Stop(); $lastMs = $sw.ElapsedMilliseconds
         $after = $upto
         $size = Get-SIDataNextSize -Current $size -ElapsedMs $sw.ElapsedMilliseconds -TargetMs $TargetMs -Minimum 500
@@ -1585,9 +1840,13 @@ function Invoke-SIDataRowColumnsFill {
         once, not again. RaRowsAt is stamped only after the last range. NEVER THROWS: @{ Filled; Rows; Seconds; Why } --
         Filled = $false with the reason, and the reader reads the collection from DetailJson as before.
     #>
-    param([Parameter(Mandatory)][scriptblock]$Invoke, [Parameter(Mandatory)][int]$CollectionId, [long]$TargetMs = 5000)
+    param([Parameter(Mandatory)][scriptblock]$Invoke, [Parameter(Mandatory)][int]$CollectionId, [long]$TargetMs = 5000,
+          # #1318 SI_Data_ParseAtInsert: on = the rows Risk Analysis gave their row values when it stored them are left alone;
+          # shadow = every row filled as before, those rows compared with what the insert wrote (one line to -Log)
+          [string]$ParseAtInsert = (Get-SIDataParseAtInsertMode), [scriptblock]$Log)
     $sw = [Diagnostics.Stopwatch]::StartNew()
-    $out = { param([bool]$f, [long]$n, [string]$w) [pscustomobject]@{ Filled = $f; Rows = $n; Seconds = [Math]::Round($sw.Elapsed.TotalSeconds, 2); Why = $w } }
+    $fillShadow = $null
+    $out = { param([bool]$f, [long]$n, [string]$w) [pscustomobject]@{ Filled = $f; Rows = $n; Seconds = [Math]::Round($sw.Elapsed.TotalSeconds, 2); Why = $w; Shadow = $fillShadow } }
     try {
         $ready = [string](& $Invoke "SELECT CASE WHEN COL_LENGTH('sidata.Finding', 'RaFillRiskFactorConsequence') IS NOT NULL AND COL_LENGTH('sidata.Collection', 'RaRowsAt') IS NOT NULL AND COL_LENGTH('sidata.Collection', 'RaCompletedAt') IS NOT NULL AND COL_LENGTH('sidata.Collection', 'RetiredAt') IS NOT NULL THEN 1 ELSE 0 END" @{} 'scalar')
         if ($ready -ne '1') { return (& $out $false 0 'the database does not have the row value columns yet (the updater adds them)') }
@@ -1599,8 +1858,23 @@ function Invoke-SIDataRowColumnsFill {
         $lo = & $Invoke "SELECT MIN(FindingId) FROM sidata.Finding WHERE CollectionId = CONVERT(int, @CollectionId)" @{ CollectionId = $CollectionId } 'scalar'
         $hi = & $Invoke "SELECT MAX(FindingId) FROM sidata.Finding WHERE CollectionId = CONVERT(int, @CollectionId)" @{ CollectionId = $CollectionId } 'scalar'
         $n = 0L
+        $pai = 'off'; $print = ''
+        if ($ParseAtInsert -in 'shadow', 'on') {
+            # the statement Risk Analysis types with in this database (its row values included): only rows typed with exactly it count
+            $plan = Get-SIDataParseAtInsertPlan -Invoke $Invoke -Mode $ParseAtInsert
+            if ($plan.Ready -and $plan.RowColumns -and $plan.Print) { $pai = $ParseAtInsert; $print = [string]$plan.Print }
+        }
         if ($null -ne $lo -and -not ($lo -is [System.DBNull])) {
-            $n = Invoke-SIDataFindingRanges -Invoke $Invoke -CollectionId $CollectionId -Lo ([long]$lo) -Hi ([long]$hi) -Sql (Get-SIDataRowColumnsSql) -TargetMs $TargetMs
+            if ($pai -eq 'shadow') {
+                $ans = New-Object System.Collections.Generic.List[string]
+                $sql = Get-SIDataParseAtInsertShadowSql -Body ((Get-SIDataRowColumnsSql -NoCount) + "`r`nDECLARE @n int = @@ROWCOUNT;") -Columns @($script:SIDataRowColumns.Keys) `
+                    -Snapshot ('f.TypedStatement = {0}' -f (ConvertTo-SIDataPrintLiteral $print))
+                $n = Invoke-SIDataFindingRanges -Invoke $Invoke -CollectionId $CollectionId -Lo ([long]$lo) -Hi ([long]$hi) -Sql $sql -TargetMs $TargetMs -Answers $ans
+                $fillShadow = Get-SIDataParseAtInsertShadowSummary -Answers $ans.ToArray()
+                Write-SIDataParseAtInsertShadowLine -Summary $fillShadow -What ('row values  : collection {0}, check of the row values' -f $CollectionId) -Log $Log
+            } else {
+                $n = Invoke-SIDataFindingRanges -Invoke $Invoke -CollectionId $CollectionId -Lo ([long]$lo) -Hi ([long]$hi) -Sql (Get-SIDataRowColumnsSql -SkipPrint $(if ($pai -eq 'on') { $print } else { '' })) -TargetMs $TargetMs
+            }
         }
         $null = & $Invoke 'UPDATE sidata.Collection SET RaRowsAt = SYSUTCDATETIME() WHERE CollectionId = @CollectionId AND RaRowsAt IS NULL; SELECT 1;' @{ CollectionId = $CollectionId } 'scalar'
         & $out $true $n ''
@@ -1828,7 +2102,10 @@ function Invoke-SIDataDeriveCollection {
           # #590 also the finding's fix columns (the database carries them: Get-SIDataFixSchemaCheckSql)
           [switch]$Fix,
           # the facets' progress lines (Invoke-SIDataFacet)
-          [scriptblock]$Log)
+          [scriptblock]$Log,
+          # #1318 SI_Data_ParseAtInsert: off | shadow (every row derived, compared with what the insert wrote) | on (the rows
+          # Risk Analysis typed when it stored them, with this derive's switch set, are left alone)
+          [string]$ParseAtInsert = (Get-SIDataParseAtInsertMode))
     $bRaw = & $Invoke (Get-SIDataFindingBoundsSql) @{ CollectionId = $CollectionId } 'reader'
     $b = @($bRaw) | Select-Object -First 1
     $done = 0L
@@ -1851,19 +2128,55 @@ function Invoke-SIDataDeriveCollection {
     try { $typed = ([string](& $Invoke (Get-SIDataTypedReadySql) @{} 'scalar') -eq '1') } catch { $typed = $false }
     $partsReady = Test-SIDataRiskPartsReady -Invoke $Invoke
     $hasRows = [bool]($b -and $null -ne $b['Lo'] -and -not ($b['Lo'] -is [System.DBNull]))
+    # #1318 parse at insert: only with the one-parse derive and the mark column; else exactly as before
+    $pai = 'off'; $mask = 0; $print = ''; $typedRows = 0L; $shadow = $null
+    if ($typed -and $ParseAtInsert -in 'shadow', 'on') {
+        $paiReady = $false
+        try { $paiReady = ([string](& $Invoke (Get-SIDataParseAtInsertReadySql) @{} 'scalar') -eq '1') } catch { $paiReady = $false }
+        if ($paiReady) {
+            $pai = $ParseAtInsert
+            $mask = Get-SIDataTypedMask -Services:$Services -Fix:$Fix -Category:$cat -RowColumns:$rowCols -RiskParts:$partsReady
+            # the EXACT statement this derive would write with: a row counts as typed only when its fingerprint is this one
+            $print = Get-SIDataTypedFingerprint -Services:$Services -Fix:$Fix -Category:$cat -RowColumns:$rowCols -RiskParts:$partsReady
+            $typedRows = [long](& $Invoke ("SELECT COUNT_BIG(*) FROM sidata.Finding WHERE CollectionId = @CollectionId AND TypedStatement IS NOT NULL AND TypedStatement = {0}" -f (ConvertTo-SIDataPrintLiteral $print)) @{ CollectionId = $CollectionId } 'scalar')
+        }
+    }
     if ($typed) {
         # the facets read the typed columns only once every range wrote them: cleared now, stamped after the last range
         $null = & $Invoke 'UPDATE sidata.Collection SET TypedAt = NULL WHERE CollectionId = @CollectionId AND TypedAt IS NOT NULL; SELECT 1;' @{ CollectionId = $CollectionId } 'scalar'
-        $sql = if ($rowsDone) { Get-SIDataDeriveTypedSql -Services:$Services -Fix:$Fix -Category:$cat -CarriedRowColumns:$carriedCol -RiskParts:$partsReady }
-               else { Get-SIDataDeriveTypedSql -Services:$Services -Fix:$Fix -Category:$cat -RowColumns:$rowCols -RiskParts:$partsReady }
+        $tp = @{ Services = $Services; Fix = $Fix; Category = $cat; RiskParts = $partsReady }
+        if ($rowsDone) { $tp.CarriedRowColumns = $carriedCol } else { $tp.RowColumns = $rowCols }
+        if ($pai -eq 'on') { $tp.SkipPrint = $print }
+        if ($pai -eq 'shadow') {
+            # every row derived as before; the rows the insert typed with this switch set are compared column by column
+            $cols = Get-SIDataDeriveTypedSql -Services:$Services -Fix:$Fix -Category:$cat -RowColumns:$rowCols -RiskParts:$partsReady -ColumnsOnly
+            $sql = Get-SIDataParseAtInsertShadowSql -Body (Get-SIDataDeriveTypedSql @tp -NoAnswer) -Columns $cols -Snapshot ("f.TypedStatement = {0}" -f (ConvertTo-SIDataPrintLiteral $print))
+            $shadow = New-Object System.Collections.Generic.List[string]
+        } else {
+            $sql = Get-SIDataDeriveTypedSql @tp
+        }
     } else {
         $sql = if ($rowsDone) { Get-SIDataDeriveFindingSql -Services:$Services -Fix:$Fix -Category:$cat -CarriedRowColumns:$carriedCol }
                else { Get-SIDataDeriveFindingSql -Services:$Services -Fix:$Fix -Category:$cat -RowColumns:$rowCols }
     }
-    if ($hasRows) {
+    # on: every row of the collection was typed when Risk Analysis stored it -- no range has anything left to do
+    $allTyped = $false
+    if ($pai -eq 'on' -and $hasRows -and $typedRows -gt 0) {
+        $allRows = [long](& $Invoke 'SELECT COUNT_BIG(*) FROM sidata.Finding WHERE CollectionId = @CollectionId' @{ CollectionId = $CollectionId } 'scalar')
+        $allTyped = $typedRows -ge $allRows
+    }
+    if ($hasRows -and -not $allTyped) {
         $rg = @{ Invoke = $Invoke; CollectionId = $CollectionId; Lo = [long]$b['Lo']; Hi = [long]$b['Hi']; Sql = $sql; TargetMs = $TargetMs }
         if ($BatchSize) { $rg.BatchSize = $BatchSize }
+        if ($null -ne $shadow) { $rg.Answers = $shadow }
         $done = Invoke-SIDataFindingRanges @rg
+    }
+    $shadowSum = $null
+    if ($null -ne $shadow) {
+        $shadowSum = Get-SIDataParseAtInsertShadowSummary -Answers $shadow.ToArray()
+        Write-SIDataParseAtInsertShadowLine -Summary $shadowSum -What ('views       : collection {0}, check of the view values' -f $CollectionId) -Log $Log
+    } elseif ($pai -eq 'on' -and $Log) {
+        & $Log 'INFO' ([string]::Format([Globalization.CultureInfo]::InvariantCulture, 'views       : collection {0}: {1} finding row(s) got their view values when Risk Analysis stored them; {2} more were worked out here', $CollectionId, $typedRows, $done))
     }
     # #830 / #834 every range carried the row values: the readers read this collection from its typed columns from now on
     if ($rowCols -and -not $rowsDone) { $null = & $Invoke 'UPDATE sidata.Collection SET RaRowsAt = SYSUTCDATETIME() WHERE CollectionId = @CollectionId; SELECT 1;' @{ CollectionId = $CollectionId } 'scalar' }
@@ -1891,7 +2204,7 @@ function Invoke-SIDataDeriveCollection {
     $facets = Invoke-SIDataFacet -Invoke $Invoke -CollectionId $CollectionId -FixColumn:$Fix -Typed:$typedFacets -BatchSize ([ref]$fsz) -TargetMs $TargetMs -Log $Log
     $svc = $null
     if ($Services) { $svc = [int](Invoke-SIDataServices -Invoke $Invoke -CollectionId $CollectionId -Log $Log) }
-    [pscustomobject]@{ CollectionId = $CollectionId; Findings = $done; Facets = $facets; Services = $svc }
+    [pscustomobject]@{ CollectionId = $CollectionId; Findings = $done; Facets = $facets; Services = $svc; ParseAtInsert = $pai; TypedAtInsert = $typedRows; Shadow = $shadowSum }
 }
 
 # ------------------------------------------------------------------------------------------------------------------
@@ -2106,7 +2419,7 @@ function Get-SIDataUnexemptedSql {
         base aggregate (DerivedAt, ServicesDerivedAt, ResolvedAt) was recomputed after them. Newest first. The base steps
         never touch the twins: the timestamps they already stamp are what makes a twin stale.
     #>
-    "SELECT CollectionId, CollectionTime, CASE WHEN DerivedAt IS NULL THEN 0 ELSE 1 END AS Derived, CASE WHEN ResolvedVersion IS NULL THEN 0 ELSE 1 END AS Resolved, CASE WHEN ServicesDerivedAt IS NULL THEN 0 ELSE 1 END AS ServicesDerived FROM sidata.Collection WHERE Status = 'Complete' AND Kind = 'Detailed' AND (ExemptedDerivedAt IS NULL OR ExemptedDerivedAt < DerivedAt OR ExemptedDerivedAt < ServicesDerivedAt OR ExemptedDerivedAt < ResolvedAt)$(Get-SIDataLiveFilter) ORDER BY CollectionTime DESC"
+    "SELECT CollectionId, CollectionTime, CASE WHEN DerivedAt IS NULL THEN 0 ELSE 1 END AS Derived, CASE WHEN ResolvedVersion IS NULL THEN 0 ELSE 1 END AS Resolved, CASE WHEN ServicesDerivedAt IS NULL THEN 0 ELSE 1 END AS ServicesDerived FROM sidata.Collection WHERE Status = 'Complete' AND Kind = 'Detailed' AND (ExemptedDerivedAt IS NULL OR ExemptedDerivedAt < DerivedAt OR ExemptedDerivedAt < ServicesDerivedAt OR ExemptedDerivedAt < ResolvedAt)$(Get-SIDataLiveFilter)$(Get-SIDataBuildFilter) ORDER BY CollectionTime DESC"
 }
 
 function Get-SIDataExemptedStampSql {
@@ -2211,6 +2524,9 @@ IF OBJECT_ID('sidata.FindingPivotState') IS NOT NULL DELETE FROM sidata.FindingP
 IF OBJECT_ID('sidata.SummaryGroup') IS NOT NULL DELETE FROM sidata.SummaryGroup WHERE CollectionId = @CollectionId;
 IF OBJECT_ID('sidata.SummaryGroupCounted') IS NOT NULL DELETE FROM sidata.SummaryGroupCounted WHERE CollectionId = @CollectionId;
 IF OBJECT_ID('sidata.SummaryGroupState') IS NOT NULL DELETE FROM sidata.SummaryGroupState WHERE CollectionId = @CollectionId;
+IF OBJECT_ID('sidata.SummaryGroupLifecycle') IS NOT NULL DELETE FROM sidata.SummaryGroupLifecycle WHERE CollectionId = @CollectionId;
+IF OBJECT_ID('sidata.SummaryGroupLifecycleState') IS NOT NULL DELETE FROM sidata.SummaryGroupLifecycleState WHERE CollectionId = @CollectionId;
+IF OBJECT_ID('sidata.FindingLifecycleRisk') IS NOT NULL DELETE FROM sidata.FindingLifecycleRisk WHERE CollectionId = @CollectionId;
 IF OBJECT_ID('sidata.RemediationAsset') IS NOT NULL DELETE FROM sidata.RemediationAsset WHERE CollectionId = @CollectionId;
 IF OBJECT_ID('sidata.Remediation') IS NOT NULL DELETE FROM sidata.Remediation WHERE CollectionId = @CollectionId;
 IF OBJECT_ID('sidata.KeyFigure') IS NOT NULL DELETE FROM sidata.KeyFigure WHERE CollectionId = @CollectionId;
@@ -2539,6 +2855,9 @@ function Get-SIDataLiveFilter {
     ''
 }
 
+# #1226 (SCALE-3 A) THE BUILD RULE -- one definition for the data sync and the update's key-figures step
+. (Join-Path $PSScriptRoot 'SI-DataBuildRule.ps1')
+
 function Get-SIDataRetiredColumnsSql {
     <# The mark on a database set up before it existed: the SAME guarded, additive statements as sql/si-data-schema.sql. Answers 1 when the mark is there. #>
     @'
@@ -2832,6 +3151,17 @@ BEGIN
     IF @lk < 0 BEGIN ROLLBACK TRANSACTION; SELECT 0; RETURN; END
     EXEC sp_executesql N'SELECT @p = DetailedCollectionId FROM sidata.PublishedRun WHERE Name = N''current''', N'@p int OUTPUT', @p = @pub OUTPUT;
     IF @pub = @c BEGIN ROLLBACK TRANSACTION; SELECT 0; RETURN; END
+END
+-- #1323 data-quality review 2 (2026-11-23): a collection a carry is working on is never marked -- the source a carry mark
+-- pins ('xc:<collection>:<report>' = 'f=<source>;l=...') and the collection being completed ('carry:<collection>'). Retiring
+-- a pinned source would leave the carry with nothing to read back: the report carried empty.
+IF OBJECT_ID('sidata.ViewState') IS NOT NULL
+BEGIN
+    DECLARE @pin bit = 0;
+    EXEC sp_executesql N'SELECT @p = CASE WHEN EXISTS (SELECT 1 FROM sidata.ViewState AS v WITH (UPDLOCK, HOLDLOCK)
+        WHERE (v.Name LIKE N''xc:%'' AND v.Value LIKE N''f=%'' AND TRY_CONVERT(int, SUBSTRING(v.Value, 3, CHARINDEX(N'';'', v.Value + N'';'') - 3)) = @c)
+           OR v.Name = N''carry:'' + CONVERT(nvarchar(20), @c)) THEN 1 ELSE 0 END', N'@c int, @p bit OUTPUT', @c = @c, @p = @pin OUTPUT;
+    IF @pin = 1 BEGIN ROLLBACK TRANSACTION; SELECT 0; RETURN; END
 END
 UPDATE c SET RetiredAt = SYSUTCDATETIME(), RetiredWhy = LEFT(@Why, 32)
 FROM sidata.Collection AS c

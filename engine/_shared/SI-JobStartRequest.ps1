@@ -29,9 +29,18 @@
     NEVER THROWS: no database, an older schema or a read that fails = the run goes on as configured. PS 5.1 safe.
 #>
 
-$script:SIJobStartRequestMaxAgeMinutes = 30
-$script:SIJobStartRequestBindWaitSeconds = 20
-
+# #1391 (owner's click test on internal 3.1.50, 2026-11-25: "we cannot have that admins cannot use the gui"): THE LISTS ARE
+# SET BY A FUNCTION, NEVER ONLY AT LOAD. A function reads $script: from the script that CALLS it, not from the one that
+# loaded this file. The container entrypoint loads this file (the claim, before the engine) and then runs the engine as its
+# own script; the engine found Get-SIJobStartRequestAllowed defined, did not load the file again, and read its lists from
+# its OWN script scope, where they were never set -- every web app request on the job request queue failed with "Cannot
+# index into a null array", and the pipeline runner's starts for a person (#1292) read a max age of 0. Every function
+# below calls Initialize-SIJobStartRequestLists first: the lists exist in whatever script calls them.
+function Initialize-SIJobStartRequestLists {
+    <# Sets the lists in the calling script's scope when they are not there (idempotent). Returns the numbers. PS 5.1. #>
+    if ($null -eq $script:SIJobStartRequestMaxAgeMinutes) { $script:SIJobStartRequestMaxAgeMinutes = 30 }
+    if ($null -eq $script:SIJobStartRequestBindWaitSeconds) { $script:SIJobStartRequestBindWaitSeconds = 20 }
+    if ($null -eq $script:SIJobStartRequestAllowed) {
 # The names a start request may set, per job (the job name without caj-si-). Every job: who started it.
 $script:SIJobStartRequestAllowed = @{
     '*'               = @('SI_AUDIT_CID', 'SI_AUDIT_STARTED_BY')
@@ -42,7 +51,8 @@ $script:SIJobStartRequestAllowed = @{
     'risk-analysis'          = @('SI_RA_REPORT_TEMPLATE', 'SI_RA_MODE', 'SI_RA_SEND_TO_LOG_ANALYTICS', 'SI_RA_SEND_MAIL')
     'risk-analysis-detailed' = @('SI_RA_REPORT_TEMPLATE', 'SI_RA_MODE', 'SI_RA_SEND_TO_LOG_ANALYTICS', 'SI_RA_SEND_MAIL')
 }
-
+    }
+    if ($null -eq $script:SIJobStartRequestBoundOnly) {
 # Names applied ONLY from a request bound to THIS execution (the start that ran with it). A request handed back by a
 # skipped execution is taken by whichever execution of the job comes next -- a scheduled one too -- so it never carries
 # these: a scheduled run is never switched off Log Analytics or mail, or moved to another report, by a row in the table.
@@ -50,14 +60,19 @@ $script:SIJobStartRequestAllowed = @{
 # outbox-only check (the day's mail would not go out); a handed-back check is simply not run, the next one is asked again.
 $script:SIJobStartRequestBoundOnly = @('SI_RA_REPORT_TEMPLATE', 'SI_RA_MODE', 'SI_RA_SEND_TO_LOG_ANALYTICS', 'SI_RA_SEND_MAIL',
     'SI_SNOW_VERIFY', 'SI_SNOW_VERIFY_BY', 'SI_EXEMPTION_MAIL_ONLY')
-
+    }
 # #1292: the jobs the pipeline runner starts for a person, and the value such a request MUST carry (anything else is refused)
-$script:SIJobRunnerStartAllowed = @{ 'caj-si-close-loop-mail' = 'SI_SNOW_VERIFY' }
-$script:SIJobRunnerStartMaxAgeMinutes = 30
+    if ($null -eq $script:SIJobRunnerStartAllowed) { $script:SIJobRunnerStartAllowed = @{ 'caj-si-close-loop-mail' = 'SI_SNOW_VERIFY' } }
+    if ($null -eq $script:SIJobRunnerStartMaxAgeMinutes) { $script:SIJobRunnerStartMaxAgeMinutes = 30 }
+    [pscustomobject]@{ MaxAgeMinutes = [int]$script:SIJobStartRequestMaxAgeMinutes; BindWaitSeconds = [int]$script:SIJobStartRequestBindWaitSeconds
+                       RunnerMaxAgeMinutes = [int]$script:SIJobRunnerStartMaxAgeMinutes }
+}
+$null = Initialize-SIJobStartRequestLists
 
 function Get-SIJobStartRequestAllowed {
     <# PURE. The names a start request may set on job -Job (caj-si-<x> or <x>). #>
     param([string]$Job)
+    $null = Initialize-SIJobStartRequestLists
     $key = ([string]$Job) -replace '^caj-si-', ''
     $names = @($script:SIJobStartRequestAllowed['*'])
     if ($script:SIJobStartRequestAllowed.ContainsKey($key)) { $names += @($script:SIJobStartRequestAllowed[$key]) }
@@ -113,6 +128,7 @@ function Get-SIJobRunnerStartDecision {
         job's required value. @{ Ok; Why }.
     #>
     param([Parameter(Mandatory)]$Request, [AllowEmptyCollection()][string[]]$Installed = @())
+    $null = Initialize-SIJobStartRequestLists
     $job = [string]$Request.JobName
     if (-not $script:SIJobRunnerStartAllowed.ContainsKey($job)) { return @{ Ok = $false; Why = ('{0} is not a job the pipeline starts for a person' -f $job) } }
     if (@($Installed) -notcontains $job) { return @{ Ok = $false; Why = ('{0} is not one of this install''s jobs' -f $job) } }
@@ -132,7 +148,7 @@ function Invoke-SIJobRunnerStarts {
         @{ RequestId; Job; Outcome = started | waiting | refused | failed | taken-elsewhere; Detail } per row.
     #>
     param([Parameter(Mandatory)][scriptblock]$Invoke, [Parameter(Mandatory)][scriptblock]$Start, [scriptblock]$Running,
-          [AllowEmptyCollection()][string[]]$Installed = @(), [scriptblock]$Log, [int]$MaxAgeMinutes = $script:SIJobRunnerStartMaxAgeMinutes)
+          [AllowEmptyCollection()][string[]]$Installed = @(), [scriptblock]$Log, [int]$MaxAgeMinutes = (Initialize-SIJobStartRequestLists).RunnerMaxAgeMinutes)
     if (-not $Log) { $Log = { param($l, $m) } }
     $out = New-Object System.Collections.Generic.List[object]
     $rows = @()
@@ -186,6 +202,7 @@ function ConvertFrom-SIJobStartRequestEnv {
         @{ Env = ordered name -> value; Dropped = names refused }.
     #>
     param([string]$EnvJson, [string]$Job, [switch]$HandedBack)
+    $null = Initialize-SIJobStartRequestLists
     $r = @{ Env = [ordered]@{}; Dropped = @() }
     if (-not ([string]$EnvJson).Trim()) { return $r }
     try { $o = $EnvJson | ConvertFrom-Json -ErrorAction Stop } catch { $r.Dropped = @('(the values are not valid JSON)'); return $r }
@@ -204,9 +221,10 @@ function Invoke-SIJobStartRequestClaim {
         Claims this execution's start request and sets its allowed values in the process environment. -Invoke: the Pro
         database seam (sql, params, mode). @{ Claimed; RequestId; Names; Line }. Never throws.
     #>
-    param([scriptblock]$Invoke, [string]$Job, [string]$Execution, [int]$MaxAgeMinutes = $script:SIJobStartRequestMaxAgeMinutes,
-          [int]$BindWaitSeconds = $script:SIJobStartRequestBindWaitSeconds, [scriptblock]$Sleep = { param($s) Start-Sleep -Seconds $s })
-    $none = @{ Claimed = $false; RequestId = $null; Names = @(); Line = '' }
+    param([scriptblock]$Invoke, [string]$Job, [string]$Execution, [int]$MaxAgeMinutes = (Initialize-SIJobStartRequestLists).MaxAgeMinutes,
+          [int]$BindWaitSeconds = (Initialize-SIJobStartRequestLists).BindWaitSeconds, [scriptblock]$Sleep = { param($s) Start-Sleep -Seconds $s })
+    $null = Initialize-SIJobStartRequestLists
+    $none =@{ Claimed = $false; RequestId = $null; Names = @(); Line = '' }
     if (-not $Invoke -or -not $Job -or -not $Execution) { return $none }
     $p = @{ Job = $Job; Exec = $Execution; MaxAge = $MaxAgeMinutes }
     $rows = @(); $waited = 0

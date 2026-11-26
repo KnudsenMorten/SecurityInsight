@@ -208,7 +208,10 @@ Describe 'no free file loads a Pro file' {
         # Docs are skipped -- a dangling doc link cannot break a run.
         $terms = @($script:ProExclude | Where-Object { $_ -notlike '*.md' } | ForEach-Object {
             $leaf = Split-Path -Leaf $_
-            if ($leaf -match '[-.]') { $leaf }
+            # a vendor-only test FIXTURE folder is named after what it tests (tests/fixtures/view-context: the view context's fixtures):
+            # matched as its path, never by its bare name -- the free code names that phase ('view-context') as text
+            if ($_ -like 'tests/fixtures/*' -and $leaf -notmatch '\.') { 'fixtures/' + $leaf; 'fixtures\' + $leaf }
+            elseif ($leaf -match '[-.]') { $leaf }
             else {
                 $parts = @($_ -split '[\\/]' | Where-Object { $_ })
                 # a top-level folder with a plain name (release) is matched as a path: 'release/' or 'release\'

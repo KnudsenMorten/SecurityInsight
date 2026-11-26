@@ -5,29 +5,26 @@ what decides whether it may go further. The update itself is described in [Updat
 
 ## Rings
 
-Every install belongs to one update ring. A release reaches the rings in order, never skipping one:
+Every install takes its releases from one update channel. Before a version reaches a channel, SecurityInsight builds,
+tests and verifies it on its own installs.
 
-| Ring | Name | Who |
-|---|---|---|
-| 0 | Dev | The vendor's own installs |
-| 1 | Test | The vendor's test installs |
-| 2 | Design partners | Customers who take releases early and give feedback |
-| 3 | Broad | Every other customer (the default) |
+| Channel | Who |
+|---|---|
+| Early release (ring 2) | Customers who take releases early and give feedback |
+| Standard (ring 3) | Every other customer (the default) |
 
 SecurityInsight decides which version goes to which ring; Invardia's update platform relays it and signs, per ring, a
 manifest that names the release and its SHA-256. Your updater asks for the manifest of **its own** ring only, and
 refuses a manifest signed for another ring.
 
-![Releases travel ring 0, 1, 2 and 3 in order; rings 2 and 3 need the release owner's approval and wait while an install that runs the version on a lower ring is Unhealthy; a wave serves named installs a version early; every install reports counts the release is judged on](images/release-rings.png)
+![A release is built and verified by SecurityInsight, then reaches the early-release and standard channels in order; both need a recorded release approval and wait while an install that runs the version on a lower ring is Unhealthy; a wave serves named installs a version early; every install reports counts the release is judged on](images/release-rings.png)
 
 ## What a release must pass
 
 | Gate | Rule |
 |---|---|
-| Ring 0 | Always allowed. |
-| Ring 1 | Never held, but a release goes to ring 1 only after it has run cleanly on ring 0. |
-| Rings 2 and 3 | Need the **APPROVED** state on the release, set only by the vendor's release owner, with a reason, recorded. Invardia refuses a ring 2 or 3 release, or a wave, of a version without it. |
-| The health gate | A version is not promoted to the next ring while an install that runs it turned Unhealthy after taking it (see [Data health](data-health)), or stopped reporting for 48 hours. Only the release owner overrides, with a reason. |
+| Rings 2 and 3 | Need the **APPROVED** state on the release: a recorded release approval with a reason. Invardia refuses a ring 2 or 3 release, or a wave, of a version without it. |
+| The health gate | A version is not promoted to the next ring while an install that runs it turned Unhealthy after taking it (see [Data health](data-health)), or stopped reporting for 48 hours. An override needs a recorded release approval with a reason. |
 | Setup-only releases | A release that changes only setup or install scripts, and no engine code, needs no APPROVED and goes to rings 1 and 2 as before, so a fix for a customer waiting on an install is not delayed. It is shown and logged on the release. |
 
 Withdrawing APPROVED stops further promotion. It never rolls an install back.
@@ -80,13 +77,13 @@ and which. A change to shared core code makes every component Testing.
    kept, never names, ids or values. Your environment's switch **"release spot checks allowed"** (on by default for
    rings 0-2) turns it off without leaving the ring. A spot check never holds a release by itself.
 3. **The release review.** Invardia's support writes its findings on the release, SecurityInsight answers, and a
-   proposal (approve, wait or stop, with the reason) goes to the release owner, who decides.
+   proposal (approve, wait or stop, with the reason) goes to the release approval, which decides.
 
 ## What you control
 
 | You want to ... | How |
 |---|---|
-| Take releases early | Ask to join ring 2 (Design partners) or a wave |
+| Take releases early | Ask to join the early-release channel (ring 2) or a wave |
 | Take releases late | Stay on ring 3 (Broad), the default |
 | Stop spot checks | Switch "release spot checks allowed" off for your environment at Invardia |
 | Stop updates for a while | Switch *Pro updates from Invardia* off in *Settings* |

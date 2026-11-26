@@ -205,7 +205,7 @@ $splitShipped = $fullShipped -and ($split -or $InstallCurrent)
 
 $result = [ordered]@{ Mode = 'plan'; Source = $source; Version = ''; PackVersion = ''; Fingerprint = ''; Baseline = ''; Recorded = ''; Moved = $false; Initial = $false
     Allowed = $false; Changes = @(); Written = 0; Verified = $false; Reason = ''; SelectionFingerprint = ''; Methods = @(); Selected = @(); Affected = 0; Staged = ''
-    PackName = ''; Decision = ''; InstalledPack = ''; PackStatus = ''; Migration = $null
+    PackName = ''; Decision = ''; InstalledPack = ''; PackStatus = ''; Migration = $null; CommitId = ''
     Split = [bool]$split; Auto = $false; CodeVersion = $codeVersion; KeptMicrosoft = $false; Direct = [bool]$InstallCurrent; Class = @($Class | Where-Object { $_ }) }
 $finish = {
     param($mode, $reason)
@@ -219,7 +219,7 @@ $finish = {
             $tplAttr = [pscustomobject]@{ Actor = [string]$RequestedBy; ApprovedBy = ''; CorrelationId = ''; Via = 'request' }
         }
         [void](Write-SIAuditEvent -Store $Store -Action 'template.pack.publish' -Actor (Get-SIAuditActor) -ActorSource $(if ($global:SI_UseManagedIdentity) { 'job' } else { 'setup' }) -Attribution $tplAttr `
-            -Target ('template pack ' + [string]$result.Version) -Reason ([string]$reason) -Outcome $(if ($mode -eq 'applied') { 'ok' } else { 'refused' }) `
+            -Target ('template pack ' + [string]$result.Version) -Reason ([string]$reason) -CorrelationId ([string]$result.CommitId) -Outcome $(if ($mode -eq 'applied') { 'ok' } else { 'refused' }) `
             -OutcomeText $(if ($mode -eq 'blocked') { [string]$reason } else { $null }) `
             -After ([ordered]@{ version = [string]$result.Version; written = $result.Written; fingerprint = [string]$result.Fingerprint; verified = [bool]$result.Verified; requestedBy = [string]$RequestedBy }))
     }
@@ -530,7 +530,10 @@ $missing = @(Test-SIProVersioningSchema -Store $Store)
 if ($missing.Count) { throw ('nothing written: the Pro database lacks {0} -- run again with -CreateSchema' -f ($missing -join ', ')) }
 
 $by = '{0} (publish {1})' -f (Get-SIProSessionActor), $result.Version
-$n = Invoke-SITemplatePublish -Store $Store -Plan $plan -ChangedBy $by
+# #1377: the whole publish is ONE commit of the change journal ("Template pack 1.17 installed by the product: N rows"),
+# under the same id as this publish's audit event (its "What it did")
+$result.CommitId = [guid]::NewGuid().ToString('N')
+$n = Invoke-SITemplatePublish -Store $Store -Plan $plan -ChangedBy $by -CommitId $result.CommitId -CommitReason (Get-SITemplatePublishCommitReason -Version ([string]$result.Version))
 $result.Written = $n
 Write-Host ("[OK]   {0} template change(s) written to {1}; customer overrides untouched" -f $n, $Store.Name)
 

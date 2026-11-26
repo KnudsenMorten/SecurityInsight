@@ -2,13 +2,13 @@
 @model SI.Management.Web.Pages.Admin.EnvironmentReportModel
 @using SI.Management.Web.EnvReport
 @{
-    ViewData["Title"] = "Environment report";
+    ViewData["Title"] = "System Documentation";
     var r = Model.Report;
     var brand = await SI.Management.Web.Licensing.EditionBrand.CurrentAsync(HttpContext.RequestServices.GetService(typeof(SI.Management.Web.Licensing.IProLicence)) as SI.Management.Web.Licensing.IProLicence, HttpContext.RequestAborted);
 }
 <link rel="stylesheet" href="~/css/report.css" asp-append-version="true" />
 <div class="report-actions no-print" data-report-actions>
-    <h1>Environment report</h1>
+    <h1>System Documentation</h1>
     <p class="lede">The architecture and security facts of this SecurityInsight install, read from the live environment now: its Azure resources, identities, permissions, features, data flows, recent changes and findings. A sensitive document -- Admins and SuperAdmins only; it never holds a secret value (names, ids and states only).</p>
     <div class="actions">
         <button type="button" data-print>Export PDF</button>
@@ -23,7 +23,7 @@
     <article class="report-doc" data-env-report data-confidential="Confidential -- @s.Customer">
         <section class="report-cover" data-cover>
             <img src="@brand.LightLogo" alt="@brand.LogoAlt" class="report-logo" data-edition="@(brand.Pro ? "pro" : "community")" />
-            <h1>Environment report</h1>
+            <h1>System Documentation</h1>
             <p class="report-customer">@s.Customer</p>
             <p>Tenant @s.Tenant @if (s.TenantId is not null) { <code class="tech">@s.TenantId</code> } · environment @s.Environment</p>
             <p>Read from the live environment @Fmt.Time(r.ReadUtc)</p>

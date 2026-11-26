@@ -331,6 +331,15 @@ $global:SI_StorageAccount = '<storage-account-name>'
 # $global:SI_AzureExposureGraph_IdentityLabels   = @('user','serviceprincipal')
 # $global:SI_AzureExposureGraph_AccessEdgeLabels = @('has access to','can authenticate as')
 
+# How long ONE Azure read call (one page of Resource Graph / ARM) may wait before it counts as no answer and is tried
+# again (each retry is said in the log). Default 120 seconds; Azure answers a page in seconds.
+# $global:SI_AzureReadTimeoutSec = 120
+
+# How long the Defender for Cloud assessments read of ONE subscription may take. Default 15 minutes (it takes seconds). A
+# subscription that runs out counts as one whose read failed: Resource Graph's rows answer for it when it has some, else
+# it is unknown -- never "nothing there".
+# $global:SI_MdcArmSubscriptionTimeoutMinutes = 15
+
 
 # ============================================================================
 # 7.  ENGINE: PUBLICIP  --  public-IP scanner (Shodan REST integration)
@@ -571,12 +580,12 @@ $global:SI_StorageAccount = '<storage-account-name>'
 # $global:SI_Identity_SignInMethodsMaxAgeDays  = 90      # read again at the latest after this many days
 # $global:SI_Identity_SignInMethodsFillMinutes = 8       # minutes of background reading per 15-minute run
 
-# Retire at once on PROOF of deletion, per source. Off by default. On, an asset whose source proves it deleted (never merely
+# Retire at once on PROOF of deletion, per source. On by default ($false keeps that source on the grace period): an asset whose source proves it deleted (never merely
 # missing from a list -- that keeps the not-seen grace period) retires at once, and its open vulnerabilities close as
 # 'asset deleted in <source>', never as fixed. Restored / listed again = active again, its findings reopen.
-# $global:SI_DeletionProof_Entra  = $false   # a user, device or group in Entra ID's deleted items
-# $global:SI_DeletionProof_Azure  = $false   # an Azure resource with a Delete in the Resource Graph resource changes
-# $global:SI_DeletionProof_Intune = $false   # a managed device deleted in Intune's audit events (needs DeviceManagementApps.Read.All)
+# $global:SI_DeletionProof_Entra  = $true    # a user, device or group in Entra ID's deleted items
+# $global:SI_DeletionProof_Azure  = $true    # an Azure resource with a Delete in the Resource Graph resource changes
+# $global:SI_DeletionProof_Intune = $true    # a managed device deleted in Intune's audit events (needs DeviceManagementApps.Read.All)
 
 # --- Optional copy of the provider records to Log Analytics ---
 # The records live in the database (correlation and the CI build run in SQL only). 'records' also posts them to
@@ -616,10 +625,11 @@ $global:SI_StorageAccount = '<storage-account-name>'
 # $global:SI_Pro_TaskMassMinAssets = 5   # the fewest assets a task must be open on to be a candidate for one fleet-wide deployment (marks rows only)
 
 # --- Findings per CI: the days a finding has to be fixed, per severity (its due date; 0 = no due date) ---
-# $global:SI_Pro_FindingSla_CriticalDays = 15
-# $global:SI_Pro_FindingSla_HighDays     = 30    # the days a high finding has to be fixed (0 = no due date)
-# $global:SI_Pro_FindingSla_MediumDays   = 90    # the days a medium finding has to be fixed (0 = no due date)
-# $global:SI_Pro_FindingSla_LowDays      = 180   # the days a low finding has to be fixed (0 = no due date)
+# $global:SI_Pro_FindingSla_CriticalDays  = 15
+# $global:SI_Pro_FindingSla_HighDays      = 30    # the days a high finding has to be fixed (0 = no due date)
+# $global:SI_Pro_FindingSla_MediumDays    = 60    # the days a medium finding has to be fixed (0 = no due date)
+# $global:SI_Pro_FindingSla_LowDays       = 90    # the days a low finding has to be fixed (0 = no due date)
+# $global:SI_Pro_FindingSla_ExploitedDays = 14    # the days a finding with a verified exploit or one in an exploit kit has to be fixed, whatever its severity (0 = off)
 
 # --- ServiceNow CMDB connector (the asset-cmdb job) and the asset correlation ---
 # $global:SI_Cmdb_Run         = 'plan'         # 'plan' (default: nothing written) | 'apply' (writes to ServiceNow)
@@ -801,8 +811,20 @@ $global:SI_StorageAccount = '<storage-account-name>'
 # $global:SI_AutoBucketSubFanOut    = 4   # sub-buckets created per split
 # The most parts of one Risk Analysis report asked from Defender at a time (the next parts' answers are on their way
 # while a part is processed). Adapts by itself: starts at 2, more while Defender answers quickly, fewer when it asks to
-# slow down. 1 = one part at a time.
-# $global:SI_RA_PartsInParallel_Max = 6
+# slow down. Not set (the default): no fixed number -- the queue workers of a run share one budget measured from
+# Defender's own answers. A number = the ceiling. 1 = one part at a time.
+# $global:SI_RA_PartsInParallel_Max = 6   # an example ceiling -- not a default (not set = no fixed number)
+# How often (seconds) a Risk Analysis queue worker reads the run's shared budget of parts at a time. A worker that Defender
+# asks to slow down tells the others at once, whatever this is.
+# $global:SI_RA_PartsBudgetSeconds = 60
+# A small part of a Risk Analysis report is asked together with its untouched partner part (the same rows, fewer requests).
+# on (the default); off = every part is asked on its own.
+# $global:SI_RA_SliceMerge = 'on'
+# How Risk Analysis reads the answers of Microsoft Defender's advanced hunting. on (the default) = each answer is read as
+# it arrives, a few MB of rows at a time, so a large answer never has to fit in the worker's memory several times at once;
+# an answer that cannot be read that way is asked again the older way. off = each answer is read whole, then parsed (the
+# older read). The rows are the same either way.
+# $global:SI_RA_HuntingStreamRead = 'on'
 # Minutes one Risk Analysis report may spend asking again for query slices the service kept refusing (its late retries and
 # its smaller slices together), counted from its first retry. When they are spent, the slices still refused are reported
 # as not read (their findings are unknown, never resolved), the report is marked incomplete and the run goes on; the next
@@ -1045,6 +1067,11 @@ $global:SI_StorageAccount = '<storage-account-name>'
 # $global:SI_VulnSync_MaxCloseAbsolute = 0
 # The share of the open records that must still be reported (0 to 1).
 # $global:SI_VulnSync_CollapseFloor = 0.5
+# How the vulnerability connector compares the newest results with its records. on (the default) = only new, changed,
+# reopened and absent findings are planned one by one (closes still come from every finding against every open record, and
+# the close limits decide on the whole run); off = every finding planned one by one, as before; shadow = both ways,
+# compared, the full compare applied (troubleshooting only: it doubles the work).
+# $global:SI_VulnLoop_ChangedSet = 'on'
 # Vulnerability close limit (vuln.connector.close-ceiling). Off: the step goes on as if the check had not tripped -- the vulnerability connector closes every record the run would close, however many; nothing is held for release.
 # $global:SI_Guard_VulnConnectorCloseCeiling_Enabled = $true
 # Its mail: off = the event is still shown on the Guards page, but not mailed.
@@ -1290,6 +1317,35 @@ $global:SI_StorageAccount = '<storage-account-name>'
 # collections keep only their totals for the trends. While the database is 70 % full or more, one fewer is kept each run
 # (never fewer than 2) and the run says so in a warning; below 70 % this number applies again. Default 3, at least 2.
 # $global:SI_Data_KeepCollections = 3
+# The old collections leave by their own partition. On (the default): in an idle window the index build job empties a
+# removed collection's findings, recommendations and prepared issue rows in seconds (never the published run, the newest
+# two or a kept collection; the rows are counted before and after, and any difference keeps them all), and first moves an
+# existing install's large tables onto one partition per collection, a part per idle window, resumable, never during a
+# run; every update also does a bounded part of that move (a few minutes, under the install's lock, resumed by the next
+# window). Whatever a partition cannot take is removed a little at a time, as before. Off: the findings of old collections are
+# only removed a little at a time by the pipeline runner's wake-ups.
+# $global:SI_Data_RetireByPartition = $true
+# Columnstore indexes on the largest tables the data sync scans and totals (the findings, the finding lifecycle). On
+# (the default) = the updater records them and the index build job builds them ONLINE when the install is idle; off = none,
+# and the next update drops any built. An index only: results are the same either way. Azure SQL Standard S3 or above; on
+# Basic and S0-S2 nothing is built and the update says why.
+# $global:SI_Data_ColumnstoreIndexes = $true
+# How the nightly data sync builds a collection. 'on' (the default) = the findings that did not change since the published
+# collection keep their prepared results (only what changed is worked out again). Every run also builds a rotating
+# seventh of all CIs in full (every CI at least once in 7 runs) and about one CI in ten at random, and compares -- any
+# difference and that run is built in full before anything is published. A full build is made automatically when nothing
+# trusted is published and when the build fingerprint changes (the fields and their mapping, the typing, the templates,
+# the settings that change the output) -- not after every update; once a week only when the rotating check could not run.
+# 'off' = every collection is built in full. 'shadow' = troubleshooting only: built both ways and compared, the full
+# build kept (twice the work).
+# $global:SI_Data_ChangedSet = 'on'
+# Keep the finding history: every kept collection is also recorded as the states of its findings, checked row for row
+# against the stored findings every run (any difference and the stored findings are what is shown and sent). 'on' (the
+# default) | 'shadow' (troubleshooting) | 'off' (no history).
+# $global:SI_Data_HistoryModel = 'on'
+# Days of finding history kept: a collection stays in the history, as it was published, until it is this many days old
+# (not set = 30; 0 = the history follows the kept collections).
+# $global:SI_Data_HistoryDays = 30
 # The shipped named views hidden from the view picker of Security recommendations > Summary and Detailed, for everyone:
 # critical-high, tier0, cve, exploited, mitre, compliance, cvss (summary:<view> / detailed:<view> = one page). Default none.
 # $global:SI_Pro_HiddenViews = @()
@@ -1313,10 +1369,14 @@ $global:SI_StorageAccount = '<storage-account-name>'
 # $global:SI_ProtectionScore_OtherGraceDays_CloudResource = 0
 # The protection score's grace for findings on public IPs that are not patches, in days (default 0).
 # $global:SI_ProtectionScore_OtherGraceDays_PublicIp = 0
-# The protection score's tier weights, Tier 0..3 (an unclassified asset weighs as Tier 3). Default '8,4,2,1'.
-# $global:SI_ProtectionScore_TierWeights = '8,4,2,1'
-# The severities that take an asset out of good standing. Default 'Very High,Critical,High'.
-# $global:SI_ProtectionScore_Severities = 'Very High,Critical,High'
+# (#1361) The protection score's share of each tier, Tier 0..3 in percent, whatever the number of assets in the tier (an
+# unclassified asset counts as Tier 3; a tier with no assets hands its share to the others). Default '40,30,20,10'.
+# $global:SI_ProtectionScore_TierShares = '40,30,20,10'
+# The points each open fix costs an asset's health (100), by severity: one fix = one recommended update however many CVEs it
+# closes; any other finding counts as one. Default 'Very High=25,High=10,Medium=3,Low=1'.
+# $global:SI_ProtectionScore_SeverityPoints = 'Very High=25,High=10,Medium=3,Low=1'
+# The most points Medium and Low fixes together take from one asset's health (0 = they do not count). Default 20.
+# $global:SI_ProtectionScore_MinorPointsCap = 20
 # The key figures' windows (the Executive overview, report and management mail; every window a figure counts over is a
 # setting -- #859). "Vulnerabilities opened / fixed in the last N days", in days (default 30).
 # $global:SI_KeyFigures_RecentDays = 30
@@ -1350,6 +1410,23 @@ $global:SI_StorageAccount = '<storage-account-name>'
 # $global:SI_SqlPacing_HighPercent = 85
 # The database load (percent) below which they go back to full pace. Default 70; must be below the high mark.
 # $global:SI_SqlPacing_LowPercent = 70
+# The view values of each finding worked out as Risk Analysis stores it, instead of by the data sync re-reading every stored
+# finding afterwards. on (the default) = the data sync leaves alone only the findings Risk Analysis worked out with exactly
+# the current statement and does what is left (findings carried over or loaded from Log Analytics are always worked out
+# again); off = the data sync works out every finding (the older way); shadow (for troubleshooting) = both work them out,
+# the data sync compares and keeps its own (a difference is a warning line). The views show the same values in every mode.
+# $global:SI_Data_ParseAtInsert = 'on'
+# How the largest writes reach the database (the Risk Analysis findings and summary rows, the staging of the findings per
+# CI, the data out summary). on (the default) = in bulk batches, the same statement over the same texts, each batch counted
+# and checked back before it is kept (loaded again once, then the step stops); off = as text chunks (the earlier way);
+# shadow (for troubleshooting) = each batch checked through the bulk copy and rolled back, the rows written the earlier way.
+# $global:SI_Data_BulkLoad = 'on'
+# When the views' prepared context of each finding is filled. on (the default) = per report as Risk Analysis finishes
+# each one, beside the run; the data sync leaves out the reports that still hold exactly the rows filled early (one that
+# does not match is filled as before, with a warning line); shadow (for troubleshooting) = the data sync still fills every
+# finding and compares; off = only the data sync fills them (the earlier way). Nothing is published before the run ends.
+# Needs SI_Data_ParseAtInsert on: without it every finding is filled by the data sync, as with off.
+# $global:SI_Data_LoadPerReport = 'on'
 # Asset properties, two levels. 'security' (the default) = what SecurityInsight needs for risk: the profilers read their
 # sources exactly as always and nothing extra is stored. 'full' = each profiler reads each source ONCE with every
 # property, builds the same security profile from it, and publishes the whole object (Defender, Entra, Intune, AD, Azure,
@@ -4144,6 +4221,22 @@ $global:SI_StorageAccount = '<storage-account-name>'
 #                     off.
 #   More info:        https://invardia.com/docs/si/settings/SI_ForceFullRun_Azure/
 #
+# Azure read call timeout  [SI_AzureReadTimeoutSec]  (advanced, seconds)
+#   What it is for:   How long one Azure read call (one page of Resource Graph or Azure Resource Manager) may wait
+#                     before it counts as no answer and is tried again.
+#   Default:          120 seconds.
+#   If you change it: A call that waits longer is tried again (up to 4 times, each retry said in the log). Longer
+#                     tolerates a slow platform at the cost of a longer step when Azure does not answer; shorter
+#                     retries sooner. Nothing that was read is lost either way: a subscription whose read fails is
+#                     marked unknown, never empty.
+#   When to change:   Only when support asks for it, or when Azure reads time out on a slow network.
+#   Risk:             Changes what is collected from the next run: narrowing it means some assets or data are not
+#                     collected, so they look absent in profiles, CIs and reports (absence is never read as fixed).
+#                     Reversible: change it back; the next run collects again.
+#   Recommended:      Keep the default. Change it when: Only when support asks for it, or when Azure reads time out on
+#                     a slow network.
+#   More info:        https://invardia.com/docs/si/settings/SI_AzureReadTimeoutSec/
+#
 # Azure Resource Graph row cap  [SI_AzureMaxResources]  (advanced, rows)
 #   What it is for:   A safety cap on how many resources the Azure engine pulls from Azure Resource Graph in one run.
 #   Default:          No cap of its own; Resource Graph's own limit still applies.
@@ -4210,6 +4303,20 @@ $global:SI_StorageAccount = '<storage-account-name>'
 #                     different tiers. Reversible at once (the next run links them again).
 #   Recommended:      Off.
 #   More info:        https://invardia.com/docs/si/settings/SI_DisableEndpointAzureCorrelation/
+#
+# Defender for Cloud read per subscription  [SI_MdcArmSubscriptionTimeoutMinutes]  (advanced, minutes)
+#   What it is for:   How long the Defender for Cloud assessments read of one subscription may take.
+#   Default:          15 minutes.
+#   If you change it: A subscription that runs out counts as one whose read failed: Resource Graph's rows answer for
+#                     it when it has some, else its findings are unknown -- never shown as nothing there. Longer gives
+#                     a very large subscription more time; shorter ends a stuck read sooner.
+#   When to change:   Only when support asks for it, or when a very large subscription's read is cut off.
+#   Risk:             Changes what is collected from the next run: narrowing it means some assets or data are not
+#                     collected, so they look absent in profiles, CIs and reports (absence is never read as fixed).
+#                     Reversible: change it back; the next run collects again.
+#   Recommended:      Keep the default. Change it when: Only when support asks for it, or when a very large
+#                     subscription's read is cut off.
+#   More info:        https://invardia.com/docs/si/settings/SI_MdcArmSubscriptionTimeoutMinutes/
 #
 # Device tier from its most frequent user  [SI_Endpoint_MostFrequentUserTier_Mode]  (advanced)
 #   What it is for:   Whether a device takes the tier of its most frequent user (the Exposure Graph's device users
@@ -4770,11 +4877,13 @@ $global:SI_StorageAccount = '<storage-account-name>'
 # Users' sign-in methods: background reading per slice (minutes)  [SI_Identity_SignInMethodsFillMinutes]  (advanced, minutes)
 #   What it is for:   How many minutes of each 15-minute run of its own job (caj-si-signin-methods) the background
 #                     read of the users' sign-in methods may use.
-#   Default:          8 minutes
+#   Default:          8 minutes, and 12 while users are due (never read, or their sign-in methods changed)
 #   If you change it: More minutes fill the detail sooner (about 250-300 users a minute, depending on how much
-#                     Microsoft throttles); fewer leave more of the tick idle. A slice that is still running is never
-#                     started twice.
-#   When to change:   Raise it to fill a large tenant faster the first time; lower it to keep the job's runs short.
+#                     Microsoft throttles); fewer leave more of the tick idle. With the default the slice grows to 12
+#                     minutes by itself while users are due, so a first fill or a wave of changes is read sooner; any
+#                     other value is used as it is, always. A slice that is still running is never started twice.
+#   When to change:   Leave it at the default: it already reads longer while users are due. Lower it only to keep the
+#                     job's runs short (that value is then used always).
 #   Risk:             More minutes make each run of the job caj-si-signin-methods longer (its limit is 30 minutes);
 #                     fewer fill the detail more slowly. Nothing collected is changed. Reversible at once.
 #   Recommended:      8 minutes (the default).
@@ -5366,6 +5475,23 @@ $global:SI_StorageAccount = '<storage-account-name>'
 #                     estate change.
 #   More info:        https://invardia.com/docs/si/settings/ResetCache/
 #
+# Risk Analysis asks small parts together  [SI_RA_SliceMerge]  (advanced)
+#   What it is for:   A large Risk Analysis report is asked from Microsoft Defender in parts. When the answers come
+#                     back small, a part is asked together with its partner part that nothing has asked yet: one
+#                     request instead of two, the same rows. Each row is still written as part of its own part, in the
+#                     same order.
+#   Choices:          'off'; 'on'
+#   Default:          on -- small parts are asked together with their partner parts
+#   If you change it: on: fewer requests to Defender for a report whose parts are small; a request that held several
+#                     parts and failed is asked again part by part. off: every part is asked on its own (the older
+#                     way). The rows, columns and values are the same either way.
+#   When to change:   Most installs never should. Set it to off only when support asks for it while a problem with a
+#                     report's parts is looked into.
+#   Risk:             Only changes how many requests a report's parts take: the findings are the same either way.
+#                     Reversible at once.
+#   Recommended:      Keep on (the default).
+#   More info:        https://invardia.com/docs/si/settings/SI_RA_SliceMerge/
+#
 # Risk Analysis late bucket retries  [SI_BucketLateRetries]  (advanced, attempts)
 #   What it is for:   How many extra attempts a query slice gets at the end of a Risk Analysis report when it failed
 #                     earlier because the service was throttling or unavailable.
@@ -5384,7 +5510,8 @@ $global:SI_StorageAccount = '<storage-account-name>'
 #   What it is for:   A large Risk Analysis report is asked from Microsoft Defender in parts. While one part is
 #                     processed (risk scores, the database), the next parts are already asked, so Defender and
 #                     SecurityInsight work at the same time. This is the most parts asked at a time.
-#   Default:          6 (never more than 4 per processor core)
+#   Default:          Not set: no fixed number -- the queue workers of a run share one budget measured from Defender's
+#                     own answers (never more than 4 per processor core)
 #   If you change it: The number adapts by itself: each report starts at 2, asks more while Defender answers quickly,
 #                     and halves at once when Defender asks to slow down (it then waits as long as Defender says). A
 #                     higher maximum lets a large report finish sooner when Defender keeps up; 1 asks one part at a
@@ -5395,8 +5522,26 @@ $global:SI_StorageAccount = '<storage-account-name>'
 #                     Analysis takes: 1 makes a large report take much longer; a higher number can make Defender ask
 #                     SecurityInsight to slow down more often (it then does). The findings are the same either way.
 #                     Reversible at once.
-#   Recommended:      Keep 6 (the default).
+#   Recommended:      Keep it not set (the default): the run measures what Defender allows.
 #   More info:        https://invardia.com/docs/si/settings/SI_RA_PartsInParallel_Max/
+#
+# Risk Analysis reads hunting answers as they arrive  [SI_RA_HuntingStreamRead]  (advanced)
+#   What it is for:   How Risk Analysis reads the answers of Microsoft Defender's advanced hunting. A large answer
+#                     read whole is held in the worker's memory several times at once (the text, the parsed answer,
+#                     the rows); read as it arrives, a few MB of rows at a time, it is held about once.
+#   Choices:          'off'; 'on'
+#   Default:          on -- each answer is read as it arrives
+#   If you change it: on: each answer is read as it arrives, so a query slice whose answer did not fit in the worker's
+#                     memory no longer has to be split again and again; an answer that cannot be read this way is
+#                     asked again the older way and the run log says so in one line. off: each answer is read whole,
+#                     then parsed (the older read). The rows, columns and values are the same either way.
+#   When to change:   Most installs never should. Set it to off only when support asks for it while a problem with
+#                     reading Defender's answers is looked into.
+#   Risk:             Only changes how Risk Analysis reads Defender's answers, not what it reads: the findings are the
+#                     same either way. On uses far less memory for a large answer; an answer it cannot read that way
+#                     is asked again the older way (one more request, said in the run log). Reversible at once.
+#   Recommended:      Keep on (the default).
+#   More info:        https://invardia.com/docs/si/settings/SI_RA_HuntingStreamRead/
 #
 # Risk Analysis report export location  [SI_RiskAnalysis_ExportDestination]  (advanced)
 #   What it is for:   Storage URL where container-hosted Risk Analysis jobs save their report workbooks and data
@@ -5446,6 +5591,21 @@ $global:SI_StorageAccount = '<storage-account-name>'
 #                     once.
 #   Recommended:      Keep 90 (the default).
 #   More info:        https://invardia.com/docs/si/settings/SI_RA_RecoveryBudgetMinutes/
+#
+# Risk Analysis shared budget, read every (seconds)  [SI_RA_PartsBudgetSeconds]  (advanced, seconds)
+#   What it is for:   The queue workers of one Risk Analysis run share one budget of how many report parts they ask
+#                     Microsoft Defender at a time. It is measured from Defender's own answers: halved for every
+#                     worker when Defender asks any of them to slow down, raised again after quiet rounds, and shared
+#                     by how many parts each running report still has. This is how often a worker reads it.
+#   Default:          60 seconds (a worker that is asked to slow down tells the others at once)
+#   If you change it: Shorter: a worker takes up a share another worker gave back sooner, at one more small read of
+#                     the run's storage each time. Longer: fewer reads, a freed share is taken up later. The findings
+#                     are the same either way.
+#   When to change:   Most installs never should. Change it only if support asks you to.
+#   Risk:             Only changes how often a worker reads the run's shared budget, so how soon a freed share is
+#                     used: the findings are the same either way. Reversible at once.
+#   Recommended:      Keep 60 (the default).
+#   More info:        https://invardia.com/docs/si/settings/SI_RA_PartsBudgetSeconds/
 #
 # Risk Analysis stale device filter  [SI_RA_StaleDeviceFilter]  (advanced)
 #   What it is for:   Optionally removes devices not seen recently from the heavy attack-path Risk Analysis reports:
@@ -5868,28 +6028,44 @@ $global:SI_StorageAccount = '<storage-account-name>'
 #   Recommended:      Keep the default. Change it when: Your network team has an agreed time to close exposures.
 #   More info:        https://invardia.com/docs/si/settings/SI_ProtectionScore_OtherGraceDays_PublicIp/
 #
-# Protection score: severities that count  [SI_ProtectionScore_Severities]
-#   What it is for:   The finding severities that take an asset out of good standing in the protection score.
-#   Default:          Very High, Critical, High
-#   If you change it: An asset with an open, non-exempted finding of one of these severities is not in good standing.
-#                     Separate with commas.
-#   When to change:   Also count Medium findings, for a stricter score.
+# Protection score: Medium and Low cost at most (points per asset)  [SI_ProtectionScore_MinorPointsCap]  (points)
+#   What it is for:   The most points Medium and Low fixes together take from one asset's health, so many small
+#                     findings cannot outweigh a Very High.
+#   Default:          20
+#   If you change it: 0 = Medium and Low fixes do not count. 0 to 100; anything else = the default.
+#   When to change:   Medium and Low findings matter more (raise it) or not at all (0) to your management.
 #   Risk:             Changes how the headline figures are presented in the mails and the executive view; the findings
 #                     themselves are unchanged. Reversible at once.
-#   Recommended:      Keep the default. Change it when: Also count Medium findings, for a stricter score.
-#   More info:        https://invardia.com/docs/si/settings/SI_ProtectionScore_Severities/
+#   Recommended:      Keep the default. Change it when: Medium and Low findings matter more (raise it) or not at all
+#                     (0) to your management.
+#   More info:        https://invardia.com/docs/si/settings/SI_ProtectionScore_MinorPointsCap/
 #
-# Protection score: tier weights  [SI_ProtectionScore_TierWeights]
-#   What it is for:   How much an asset of each tier weighs in the protection score, Tier 0 to Tier 3, separated by
-#                     commas.
-#   Default:          8,4,2,1 (an unclassified asset weighs as Tier 3)
-#   If you change it: A Tier 0 asset out of good standing lowers the score as much as eight Tier 3 assets with the
-#                     default. Four numbers, 0 or more; anything else = the default.
-#   When to change:   Your management weighs tiers differently.
+# Protection score: points per open fix  [SI_ProtectionScore_SeverityPoints]
+#   What it is for:   How many points of an asset's health (100) each open fix costs, by its severity: one fix = one
+#                     recommended update however many CVEs it closes; any other finding counts as one.
+#   Default:          Very High=25,High=10,Medium=3,Low=1
+#   If you change it: An asset's health = 100 less the points of its open fixes (Medium and Low together at most
+#                     SI_ProtectionScore_MinorPointsCap), never below 0. A severity at 0 does not count. Write
+#                     <severity>=<0..100> for Very High, High, Medium, Low; anything else = the default.
+#   When to change:   Your management weighs the severities differently.
 #   Risk:             Changes how the headline figures are presented in the mails and the executive view; the findings
 #                     themselves are unchanged. Reversible at once.
-#   Recommended:      Keep the default. Change it when: Your management weighs tiers differently.
-#   More info:        https://invardia.com/docs/si/settings/SI_ProtectionScore_TierWeights/
+#   Recommended:      Keep the default. Change it when: Your management weighs the severities differently.
+#   More info:        https://invardia.com/docs/si/settings/SI_ProtectionScore_SeverityPoints/
+#
+# Protection score: share of each tier (%)  [SI_ProtectionScore_TierShares]
+#   What it is for:   How much of the protection score each tier owns, Tier 0 to Tier 3 in percent, separated by
+#                     commas -- whatever the number of assets in the tier (an unclassified asset counts as Tier 3).
+#   Default:          40,30,20,10
+#   If you change it: The score = Tier 0's average asset health x its share + Tier 1's x its share + ...; a tier with
+#                     no assets hands its share to the others. Four numbers, 0 or more, not all 0; anything else = the
+#                     default. From the next run; stored collections keep their score.
+#   When to change:   Your management wants Tier 0 to count even more, or the tiers more evenly.
+#   Risk:             Changes how the headline figures are presented in the mails and the executive view; the findings
+#                     themselves are unchanged. Reversible at once.
+#   Recommended:      Keep the default. Change it when: Your management wants Tier 0 to count even more, or the tiers
+#                     more evenly.
+#   More info:        https://invardia.com/docs/si/settings/SI_ProtectionScore_TierShares/
 #
 # Summary and Detailed agreement  [SI_AISummary_Mode]
 #   What it is for:   Chooses whether the Summary and Detailed reports show identical AI summary, risk score and top
@@ -6649,6 +6825,26 @@ $global:SI_StorageAccount = '<storage-account-name>'
 #   Recommended:      Keep the default. Change it when: Practically never; the shipped name should be kept.
 #   More info:        https://invardia.com/docs/si/settings/LockedYamlFile/
 #
+# Vulnerability connector compares only what changed  [SI_VulnLoop_ChangedSet]  (advanced)
+#   What it is for:   How the vulnerability connector compares the newest results with the records it already holds. A
+#                     large install has well over a million findings, and nearly all of them are the same as in the
+#                     run before.
+#   Choices:          'on'; 'off'; 'shadow'
+#   Default:          on -- only new, changed, reopened and absent findings are planned one by one
+#   If you change it: on: a still-reported finding whose record is unchanged is refreshed as seen without being
+#                     planned one by one, and the results are read faster; closes still come from every finding of the
+#                     results against every open record, and the close limits decide on the whole run. off: every
+#                     finding is planned one by one, as before. shadow: both ways on every page, compared -- the full
+#                     compare's result is what is applied, and any difference is a warning on the run (troubleshooting
+#                     only: it doubles the work).
+#   When to change:   Only when support asks for it: shadow to check the faster compare at an install, off if a
+#                     difference was reported.
+#   Risk:             Only changes how the connector compares, not what it decides or sends: the same records are
+#                     opened, updated, closed and held either way, and the same close limits decide. Off makes a large
+#                     install's connector step take hours longer; shadow doubles its work. Reversible at once.
+#   Recommended:      On (the default).
+#   More info:        https://invardia.com/docs/si/settings/SI_VulnLoop_ChangedSet/
+#
 # Your asset tagging rules file  [CustomYamlFile]  (engine: asset-tagging, advanced)
 #   What it is for:   File name of your own asset tagging rules, loaded from the rules folder on top of the shipped
 #                     rules.
@@ -6899,6 +7095,31 @@ $global:SI_StorageAccount = '<storage-account-name>'
 #   Recommended:      Not set (keep the audit trail), or your audit policy's period.
 #   More info:        https://invardia.com/docs/si/settings/SI_Pro_AuditRetentionMonths/
 #
+# Build the data from what changed  [SI_Data_ChangedSet]  (advanced)
+#   What it is for:   How the nightly data sync builds a collection: from what changed since the published collection
+#                     (the default), or in full.
+#   Choices:          'on' (On: build from what changed (checked every run)); 'shadow' (Shadow: build both ways and
+#                     compare (troubleshooting, twice the work)); 'off' (Off: always build in full)
+#   Default:          On -- only what changed is worked out again; every run checks a rotating seventh of the CIs and
+#                     a sample in full
+#   If you change it: On: a finding that did not change since the published collection keeps its prepared results (the
+#                     views' columns, the findings per CI's rows); everything that changed, is new or is gone is
+#                     worked out as before. Every run also builds a rotating seventh of all CIs in full (every CI at
+#                     least once in 7 runs) and about one CI in ten at random, and compares: any difference and that
+#                     run is built in full before anything is published, and support is told. A full build is made
+#                     automatically when nothing trusted is published and when the build fingerprint changes (the
+#                     fields and their mapping, the typing, the templates, the settings that change the output) -- not
+#                     after every update; once a week only when the rotating check could not run. What the pages show
+#                     and what is sent to ServiceNow, the CMDB and data out is the same either way. Off: every
+#                     collection is built in full (slower at a large install). Shadow: built both ways and compared,
+#                     the full build kept -- for troubleshooting only, it doubles the work.
+#   When to change:   Keep on. Off or shadow only when support asks for it.
+#   Risk:             What is shown and sent is the same either way: every run checks a sample against a full build
+#                     and builds in full on any difference. Off makes a large install's nightly run much longer;
+#                     shadow doubles its work. Reversible at once (the next run).
+#   Recommended:      On.
+#   More info:        https://invardia.com/docs/si/settings/SI_Data_ChangedSet/
+#
 # Change journal kept (days)  [SI_Pro_ConfigJournalRetentionDays]  (advanced, days)
 #   What it is for:   How many days the change journal keeps its rows -- every configuration change, record by record,
 #                     that undo and restore are built on.
@@ -6985,6 +7206,26 @@ $global:SI_StorageAccount = '<storage-account-name>'
 #                     per extra collection.
 #   Recommended:      Keep 3 (the newest and the 2 before it).
 #   More info:        https://invardia.com/docs/si/settings/SI_Data_KeepCollections/
+#
+# Columnstore indexes on the largest tables  [SI_Data_ColumnstoreIndexes]  (advanced)
+#   What it is for:   Faster nightly data sync at a large install: columnstore indexes on the findings and the finding
+#                     lifecycle, the tables the data sync reads in full and totals every run. An index only -- every
+#                     page, report and connector shows and sends exactly the same data with or without it.
+#   Default:          On -- built when the install is idle (Standard S3 or above)
+#   If you change it: On: the next update records the indexes, and the index build job builds them online when the
+#                     install is idle long enough (about as long as an index on those tables takes; the next run waits
+#                     only if one is being built). An install whose runs go back to back gets them too: after a day of
+#                     waiting one is built before a scheduled run, which then starts up to 3 hours late, at most once
+#                     a day per index. The data sync then reads far less from the database. Needs an Azure SQL
+#                     database of Standard S3 or above; on Basic and S0-S2 nothing is built and the update says why.
+#                     Off: the next update removes them.
+#   When to change:   Most installs never should. Turn it off only when support advises it, for example while a
+#                     database change is looked into.
+#   Risk:             An index only: no result changes. While an index is being built (when the install is idle) a
+#                     pipeline run that starts waits for it. Writes of new findings take a little longer with the
+#                     index there. Reversible: off removes the indexes at the next update.
+#   Recommended:      Keep on (the default).
+#   More info:        https://invardia.com/docs/si/settings/SI_Data_ColumnstoreIndexes/
 #
 # Copy records to Log Analytics  [SI_LaExport]  (advanced)
 #   What it is for:   Optionally copies the provider records (every object a collection reads, mapped to SI fields) to
@@ -7112,20 +7353,6 @@ $global:SI_StorageAccount = '<storage-account-name>'
 #   Recommended:      The general value.
 #   More info:        https://invardia.com/docs/si/settings/SI_Pro_AssetRetire_GraceDays_User/
 #
-# Days to fix a critical finding  [SI_Pro_FindingSla_CriticalDays]  (advanced, days)
-#   What it is for:   How many days a critical finding has to be fixed, counted from when it was first found (or found
-#                     again after it was fixed).
-#   Default:          15 days
-#   If you change it: Sets the due date of every critical finding. A finding past its due date is shown as overdue on
-#                     the CI page, the service views and the trend. 0 = critical findings have no due date.
-#   When to change:   Set it to the deadline your security policy gives critical findings.
-#   Risk:             Changes how long data is kept or how quickly assets are treated as gone. Shortening a retention
-#                     DELETES older data at the next clean-up and that cannot be undone; shortening a grace period
-#                     retires assets (and closes their findings) sooner. Lengthening is safe but uses more storage.
-#   Recommended:      Keep the default. Change it when: Set it to the deadline your security policy gives critical
-#                     findings.
-#   More info:        https://invardia.com/docs/si/settings/SI_Pro_FindingSla_CriticalDays/
-#
 # Days to fix a high finding  [SI_Pro_FindingSla_HighDays]  (advanced, days)
 #   What it is for:   How many days a high finding has to be fixed, counted from when it was first found (or found
 #                     again after it was fixed).
@@ -7143,7 +7370,7 @@ $global:SI_StorageAccount = '<storage-account-name>'
 # Days to fix a low finding  [SI_Pro_FindingSla_LowDays]  (advanced, days)
 #   What it is for:   How many days a low finding has to be fixed, counted from when it was first found (or found
 #                     again after it was fixed).
-#   Default:          180 days
+#   Default:          90 days
 #   If you change it: Sets the due date of every low finding. A finding past its due date is shown as overdue. 0 = low
 #                     findings have no due date.
 #   When to change:   Set it to the deadline your security policy gives low findings.
@@ -7157,7 +7384,7 @@ $global:SI_StorageAccount = '<storage-account-name>'
 # Days to fix a medium finding  [SI_Pro_FindingSla_MediumDays]  (advanced, days)
 #   What it is for:   How many days a medium finding has to be fixed, counted from when it was first found (or found
 #                     again after it was fixed).
-#   Default:          90 days
+#   Default:          60 days
 #   If you change it: Sets the due date of every medium finding. A finding past its due date is shown as overdue. 0 =
 #                     medium findings have no due date.
 #   When to change:   Set it to the deadline your security policy gives medium findings.
@@ -7167,6 +7394,52 @@ $global:SI_StorageAccount = '<storage-account-name>'
 #   Recommended:      Keep the default. Change it when: Set it to the deadline your security policy gives medium
 #                     findings.
 #   More info:        https://invardia.com/docs/si/settings/SI_Pro_FindingSla_MediumDays/
+#
+# Days to fix a very high (critical) finding  [SI_Pro_FindingSla_CriticalDays]  (advanced, days)
+#   What it is for:   How many days a very high finding (SI's top severity; the Rating column says Critical) has to be
+#                     fixed, counted from when it was first found (or found again after it was fixed).
+#   Default:          15 days
+#   If you change it: Sets the due date of every very high (critical) finding. A finding past its due date is shown as
+#                     overdue on the CI page, the service views and the trend; the remediation tasks and the tickets
+#                     carry it unless Defender for Cloud governance set a due date of its own. 0 = very high findings
+#                     have no due date.
+#   When to change:   Set it to the deadline your security policy gives very high (critical) findings.
+#   Risk:             Changes how long data is kept or how quickly assets are treated as gone. Shortening a retention
+#                     DELETES older data at the next clean-up and that cannot be undone; shortening a grace period
+#                     retires assets (and closes their findings) sooner. Lengthening is safe but uses more storage.
+#   Recommended:      Keep the default. Change it when: Set it to the deadline your security policy gives very high
+#                     (critical) findings.
+#   More info:        https://invardia.com/docs/si/settings/SI_Pro_FindingSla_CriticalDays/
+#
+# Days to fix an actively exploited finding  [SI_Pro_FindingSla_ExploitedDays]  (advanced, days)
+#   What it is for:   How many days a vulnerability (CVE) finding has to be fixed when its exploit is verified or is
+#                     in an exploit kit, whatever its severity, counted from when it was first found (or found again
+#                     after it was fixed). An exploit that is only known to exist does not count.
+#   Default:          14 days
+#   If you change it: A finding with a verified exploit, or one in an exploit kit, is due after this many days when
+#                     that is sooner than the days of its severity (or its severity has no due date). A due date set
+#                     in Defender for Cloud governance is kept. 0 = off: only the days of the severity count.
+#   When to change:   Set it to the deadline your security policy gives actively exploited vulnerabilities (CISA BOD
+#                     22-01 gives 14 days), or 0 to use the severity alone.
+#   Risk:             Changes how long data is kept or how quickly assets are treated as gone. Shortening a retention
+#                     DELETES older data at the next clean-up and that cannot be undone; shortening a grace period
+#                     retires assets (and closes their findings) sooner. Lengthening is safe but uses more storage.
+#   Recommended:      Keep the default. Change it when: Set it to the deadline your security policy gives actively
+#                     exploited vulnerabilities (CISA BOD 22-01 gives 14 days), or 0 to use the severity alone.
+#   More info:        https://invardia.com/docs/si/settings/SI_Pro_FindingSla_ExploitedDays/
+#
+# Finding history kept (days)  [SI_Data_HistoryDays]  (advanced, days)
+#   What it is for:   How many days of finding history are kept: a collection stays in the history, as it was
+#                     published, until it is that many days old -- also after the clean-up removed its findings.
+#   Default:          30 days
+#   If you change it: 30 (the default): a collection whose findings the clean-up removed stays in the history, as it
+#                     was published, until it is 30 days old, then leaves it by its partition. 0: a collection leaves
+#                     the history with its findings. More days keep more history (more storage).
+#   When to change:   Only when support asks for it; the pages read the kept collections.
+#   Risk:             A higher value keeps the history of removed collections longer (more storage); nothing a page
+#                     shows changes.
+#   Recommended:      30 (the default).
+#   More info:        https://invardia.com/docs/si/settings/SI_Data_HistoryDays/
 #
 # Full asset metadata: days kept  [SI_AssetProperties_RetentionDays]  (advanced, days)
 #   What it is for:   How many days the full asset metadata is kept, in Log Analytics and in the Pro database.
@@ -7183,6 +7456,71 @@ $global:SI_StorageAccount = '<storage-account-name>'
 #   Recommended:      Keep the default. Change it when: Raise it only if the full asset metadata must be looked up
 #                     further back.
 #   More info:        https://invardia.com/docs/si/settings/SI_AssetProperties_RetentionDays/
+#
+# Keep the finding history  [SI_Data_HistoryModel]  (advanced)
+#   What it is for:   Whether the nightly data sync also keeps every collection as a history of finding states and
+#                     checks it against the stored findings every run.
+#   Choices:          'on' (On: keep the history, checked every run); 'shadow' (Shadow: keep and check it
+#                     (troubleshooting)); 'off' (Off: no history)
+#   Default:          On -- every kept collection is also kept as finding states, checked row for row every run
+#   If you change it: On: after each run every kept collection is also recorded as the states of its findings (one row
+#                     per distinct state, and a small row per finding), checked row for row against the stored
+#                     findings, and What changed is checked from the findings that changed. Any difference and the
+#                     stored findings and the full builds are what is shown and sent, and support is told. What the
+#                     pages show and what is sent to ServiceNow, the CMDB and data out is the same either way. Shadow:
+#                     the same, for troubleshooting. Off: no history is kept.
+#   When to change:   Keep on. Off only when support asks for it.
+#   Risk:             What is shown and sent is the same either way: the history is checked row for row against the
+#                     stored findings every run, and on any difference the stored findings are what is used. On adds a
+#                     read of the newest collection per run and a little storage. Reversible at once (the next run).
+#   Recommended:      Keep on (the default).
+#   More info:        https://invardia.com/docs/si/settings/SI_Data_HistoryModel/
+#
+# Load the large writes in bulk  [SI_Data_BulkLoad]  (advanced)
+#   What it is for:   How the largest writes reach the database (the Risk Analysis findings and summary rows, the
+#                     staging of the findings per CI, the data out summary): in bulk batches that are counted and
+#                     checked back, or as text chunks (as before).
+#   Choices:          'off'; 'shadow'; 'on'
+#   Default:          on -- in bulk batches, each counted and checked back
+#   If you change it: on: the rows go to the database in bulk batches -- the same statement works out every column
+#                     from the same texts as before -- each batch counted and checked back before it is kept; a batch
+#                     that does not arrive as sent is loaded again once, then the step stops. off: the rows go as text
+#                     chunks (the earlier way). shadow (for troubleshooting): each batch is checked through the bulk
+#                     copy and rolled back, the rows are written the earlier way, and a difference is one warning
+#                     line. The stored rows are the same in every mode.
+#   When to change:   Most installs never should. shadow or off only when support asks for it.
+#   Risk:             on: the rows are worked out by exactly the statement of before, from exactly the texts of
+#                     before; each batch is counted and checked back before it is kept, and a batch that does not
+#                     arrive as sent is loaded again once, then the step stops instead of keeping a part. shadow
+#                     changes nothing that is stored: each batch is checked through the bulk copy and rolled back, and
+#                     the rows are written the earlier way. Reversible at once: off writes the earlier way from the
+#                     next write.
+#   Recommended:      Keep on (the default); shadow or off only when support asks.
+#   More info:        https://invardia.com/docs/si/settings/SI_Data_BulkLoad/
+#
+# Prepare the views per report as Risk Analysis finishes them  [SI_Data_LoadPerReport]  (advanced)
+#   What it is for:   When the views' prepared context of each finding (product, vendor, description, fix, remediation
+#                     and the other columns the views show) is filled: by the data sync after the whole Risk Analysis
+#                     (as before), or report by report as Risk Analysis finishes each one, beside the run.
+#   Choices:          'off'; 'shadow'; 'on'
+#   Default:          on -- filled per report as Risk Analysis finishes each one, checked by the data sync
+#   If you change it: on (the default): each report is filled as it is complete; the data sync leaves out the reports
+#                     that still hold exactly the rows filled early, so it has less to read after the run -- a report
+#                     that does not match is filled by the data sync as before and said in a warning line. shadow (for
+#                     troubleshooting): the data sync still fills every finding and first compares the reports filled
+#                     early with its own fill -- a difference is one warning line and the data sync's values are kept.
+#                     off: only the data sync fills them (the earlier way). Nothing is published before the whole run
+#                     has ended in any mode. It needs SI_Data_ParseAtInsert on: without it every finding is filled by
+#                     the data sync, as with off.
+#   When to change:   Most installs never should. shadow or off only when support asks for it.
+#   Risk:             on (the default): the data sync takes a report as filled only when it still holds exactly the
+#                     rows that were filled, nothing else lies in its range and its view values are those of the
+#                     current statement; any other report is filled by the data sync as before and said in a warning
+#                     line. shadow changes nothing that is stored: the data sync still fills every finding and keeps
+#                     its own values. Nothing is published before the whole run has ended in either mode. Reversible
+#                     at once: off fills everything in the data sync again from the next run.
+#   Recommended:      Keep on (the default); shadow or off only when support asks.
+#   More info:        https://invardia.com/docs/si/settings/SI_Data_LoadPerReport/
 #
 # Pro data sync database  [SI_Pro_DataSqlDatabase]  (advanced)
 #   What it is for:   The SQL database the Pro data sync writes run data to, when it should differ from the Pro
@@ -7238,32 +7576,60 @@ $global:SI_StorageAccount = '<storage-account-name>'
 #                     Pro settings.
 #   More info:        https://invardia.com/docs/si/settings/SI_Pro_DataSqlServer/
 #
-# Retire at once: devices deleted in Intune  [SI_DeletionProof_Intune]  (advanced)
-#   What it is for:   Retires an asset at once when Intune PROVES its managed device was deleted: a successful Delete
-#                     of the managed device in Intune's audit events. Merely missing from a list is never proof -- it
+# Remove old collections by partition  [SI_Data_RetireByPartition]  (advanced)
+#   What it is for:   How the findings of old collections leave the Pro database: each old collection at once from its
+#                     own partition (on, the default), or only a little at a time (off). A large install holds
+#                     millions of rows waiting to be removed; a little at a time that takes days.
+#   Default:          On: old collections leave by their own partition in an idle window; what a partition cannot take
+#                     is removed a little at a time.
+#   If you change it: On: in an idle window (no run, data sync or data out going, no update waiting) the index build
+#                     job empties an old collection's findings, recommendations and prepared issue rows in seconds --
+#                     never the published run, the newest two or a kept collection; the rows are counted before and
+#                     after, and any difference keeps them all. On an install made before this release it first moves
+#                     the three large tables onto one partition per collection, a part per idle window, resumable --
+#                     and every update also does a bounded part of that move (a few minutes, under the install's lock,
+#                     resumed by the next window); until that is done, and for anything a partition cannot take, the
+#                     removal goes on a little at a time. Off: the pipeline runner's wake-ups remove the findings of
+#                     old collections a little at a time, as before.
+#   When to change:   Rarely: turn it off only when support asks for it, for example while a problem with the move of
+#                     the large tables is looked at.
+#   Risk:             Only changes HOW old collections leave, never WHICH: the same collections the clean-up removes
+#                     today, never the published run, the newest two or a kept collection. On an install made before
+#                     this release the first idle windows move the three large tables onto partitions (a copy beside
+#                     the table, checked row for row per collection before it is used; the old table is kept until a
+#                     later check). Reversible: off goes back to removing a little at a time; the tables stay on their
+#                     partitions, which reads exactly as before.
+#   Recommended:      Keep it on.
+#   More info:        https://invardia.com/docs/si/settings/SI_Data_RetireByPartition/
+#
+# Retire at once when deleted in Azure  [SI_DeletionProof_Azure]  (advanced)
+#   What it is for:   Retires an asset at once when Azure PROVES its resource was deleted: a Delete in Azure Resource
+#                     Graph's resource changes (the last 14 days). Merely missing from a list is never proof -- it
 #                     keeps the not-seen grace period.
-#   Default:          Off: a device Intune no longer lists waits the not-seen grace period, as before
-#   If you change it: Stages: the CI build checks the Intune records missing from a complete collection against
-#                     Intune's audit events; a proven one is recorded, its CI retires at once ('retired at once:
-#                     deleted in Intune') -- the proof wins over the grace period -- and its open vulnerabilities
-#                     close as 'asset deleted in Intune', never as fixed. A CI another source still sees stays active.
-#                     A device listed again is active again and its findings reopen. A read that is not complete (for
-#                     example without the permission) decides nothing for what it did not return.
-#   When to change:   When a device deleted in Intune should not wait the grace period before it and its
+#   Default:          On: an Azure resource with a Delete in Azure's resource changes retires at once and its findings
+#                     close as 'asset deleted in Azure', never as fixed; a resource merely missing from a list waits
+#                     the not-seen grace period
+#   If you change it: Stages: the CI build checks the Azure records missing from a complete collection against the
+#                     resource changes; a proven one is recorded, its CI retires at once ('retired at once: deleted in
+#                     Azure') -- the proof wins over the grace period -- and its open vulnerabilities close as 'asset
+#                     deleted in Azure', never as fixed. A CI another source still sees stays active. A resource
+#                     listed again is active again and its findings reopen. A read that is not complete decides
+#                     nothing for what it did not return.
+#   When to change:   When an asset deleted in Azure should not wait the grace period before it and its
 #                     vulnerabilities are retired.
-#   Risk:             Assets of devices deleted in Intune retire from the next CI build and their vulnerabilities
+#   Risk:             Assets of resources deleted in Azure retire from the next CI build and their vulnerabilities
 #                     close as deleted (ServiceNow closures follow). Reversible: turn it off and the next build
 #                     decides them by the grace period again.
-#   Recommended:      Off, unless your organisation chose it.
-#   More info:        https://invardia.com/docs/si/settings/SI_DeletionProof_Intune/
+#   Recommended:      On (the default): only a proof of deletion retires an asset at once.
+#   More info:        https://invardia.com/docs/si/settings/SI_DeletionProof_Azure/
 #
-# Retire at once: objects deleted in Entra ID  [SI_DeletionProof_Entra]  (advanced)
+# Retire at once when deleted in Entra ID  [SI_DeletionProof_Entra]  (advanced)
 #   What it is for:   Retires an asset at once when Entra ID PROVES its object was deleted: the user, device or group
 #                     is in Entra ID's deleted items. Merely missing from a list is never proof -- it keeps the
 #                     not-seen grace period.
-#   Default:          Off: a user Entra ID lists as deleted retires at once whatever this setting says, unless another
-#                     source still sees it. This setting only concerns a user, device or group that has disappeared
-#                     from a complete collection without being listed as deleted: those wait the not-seen grace period
+#   Default:          On: a user, device or group in Entra ID's deleted items retires at once (unless another source
+#                     still sees it) and its findings close as 'asset deleted in Entra ID', never as fixed; an object
+#                     merely missing from a list waits the not-seen grace period
 #   If you change it: Stages: the CI build checks the Entra ID records (and the Exposure Graph users and groups)
 #                     missing from a complete collection against Entra ID's deleted items; a proven one is recorded,
 #                     its CI retires at once ('retired at once: deleted in Entra ID') -- the proof wins over the grace
@@ -7276,27 +7642,30 @@ $global:SI_StorageAccount = '<storage-account-name>'
 #   Risk:             Assets of objects deleted in Entra ID retire from the next CI build and their vulnerabilities
 #                     close as deleted (ServiceNow closures follow). Reversible: turn it off and the next build
 #                     decides them by the grace period again.
-#   Recommended:      Off, unless your organisation chose it.
+#   Recommended:      On (the default): only a proof of deletion retires an asset at once.
 #   More info:        https://invardia.com/docs/si/settings/SI_DeletionProof_Entra/
 #
-# Retire at once: resources deleted in Azure  [SI_DeletionProof_Azure]  (advanced)
-#   What it is for:   Retires an asset at once when Azure PROVES its resource was deleted: a Delete in Azure Resource
-#                     Graph's resource changes (the last 14 days). Merely missing from a list is never proof -- it
+# Retire at once when deleted in Intune  [SI_DeletionProof_Intune]  (advanced)
+#   What it is for:   Retires an asset at once when Intune PROVES its managed device was deleted: a successful Delete
+#                     of the managed device in Intune's audit events. Merely missing from a list is never proof -- it
 #                     keeps the not-seen grace period.
-#   Default:          Off: an Azure resource Azure no longer lists waits the not-seen grace period, as before
-#   If you change it: Stages: the CI build checks the Azure records missing from a complete collection against the
-#                     resource changes; a proven one is recorded, its CI retires at once ('retired at once: deleted in
-#                     Azure') -- the proof wins over the grace period -- and its open vulnerabilities close as 'asset
-#                     deleted in Azure', never as fixed. A CI another source still sees stays active. A resource
-#                     listed again is active again and its findings reopen. A read that is not complete decides
-#                     nothing for what it did not return.
-#   When to change:   When an asset deleted in Azure should not wait the grace period before it and its
+#   Default:          On: a managed device with a successful Delete in Intune's audit events retires at once and its
+#                     findings close as 'asset deleted in Intune', never as fixed; a device merely missing from a list
+#                     waits the not-seen grace period. Until DeviceManagementApps.Read.All is granted the read answers
+#                     403 and decides nothing
+#   If you change it: Stages: the CI build checks the Intune records missing from a complete collection against
+#                     Intune's audit events; a proven one is recorded, its CI retires at once ('retired at once:
+#                     deleted in Intune') -- the proof wins over the grace period -- and its open vulnerabilities
+#                     close as 'asset deleted in Intune', never as fixed. A CI another source still sees stays active.
+#                     A device listed again is active again and its findings reopen. A read that is not complete (for
+#                     example without the permission) decides nothing for what it did not return.
+#   When to change:   When a device deleted in Intune should not wait the grace period before it and its
 #                     vulnerabilities are retired.
-#   Risk:             Assets of resources deleted in Azure retire from the next CI build and their vulnerabilities
+#   Risk:             Assets of devices deleted in Intune retire from the next CI build and their vulnerabilities
 #                     close as deleted (ServiceNow closures follow). Reversible: turn it off and the next build
 #                     decides them by the grace period again.
-#   Recommended:      Off, unless your organisation chose it.
-#   More info:        https://invardia.com/docs/si/settings/SI_DeletionProof_Azure/
+#   Recommended:      On (the default): only a proof of deletion retires an asset at once.
+#   More info:        https://invardia.com/docs/si/settings/SI_DeletionProof_Intune/
 #
 # Send the data health result to Invardia  [SI_Telemetry_SendHealth]  (advanced)
 #   What it is for:   Pro installs with an install key send Invardia the daily data health result -- the state and,
@@ -7366,6 +7735,31 @@ $global:SI_StorageAccount = '<storage-account-name>'
 #                     writes, and the web app is slow meanwhile. No data is changed either way. Reversible at once.
 #   Recommended:      On (the default).
 #   More info:        https://invardia.com/docs/si/settings/SI_SqlPacing_Enabled/
+#
+# Work out the view values as findings are stored  [SI_Data_ParseAtInsert]  (advanced)
+#   What it is for:   Where the values the views read from each finding (its rating, score, CVSS, MITRE and compliance
+#                     lists, fix, CMDB service, score parts) are worked out: by the data sync re-reading every stored
+#                     finding (as before), or once, as Risk Analysis stores the finding.
+#   Choices:          'off'; 'shadow'; 'on'
+#   Default:          on -- worked out once, as Risk Analysis stores each finding
+#   If you change it: on: the data sync leaves alone only the findings Risk Analysis worked out with exactly the
+#                     current statement and does what is left (the totals per view, the services, and every finding
+#                     carried over or loaded from Log Analytics), so the data sync is much shorter. off: the data sync
+#                     works the values out again for every finding (the older way). shadow (for troubleshooting): Risk
+#                     Analysis works the values out as it stores each finding; the data sync still works them out
+#                     again for every finding, compares the two and keeps its own -- a difference is one warning line
+#                     in the data sync's log (how many findings, the first finding ids and column names). The views
+#                     and everything sent out show the same values in every mode.
+#   When to change:   Most installs never should. shadow or off only when support asks for it while a difference in
+#                     the view values is looked into.
+#   Risk:             on: the data sync keeps the values Risk Analysis worked out only for a finding worked out by
+#                     exactly the current statement -- the same statement, so the same values; every other finding
+#                     (carried over, loaded from Log Analytics, or worked out by an older release) is worked out
+#                     again. shadow changes nothing that is shown or sent: the data sync's own values are kept and any
+#                     difference is said in a warning line; Risk Analysis takes a little longer to store its findings.
+#                     Reversible at once: off works everything out in the data sync again from the next run.
+#   Recommended:      Keep on (the default); shadow only for troubleshooting when support asks.
+#   More info:        https://invardia.com/docs/si/settings/SI_Data_ParseAtInsert/
 #
 # ----------------------------------------------------------------------------------------------------
 # Sign-in & Azure resources

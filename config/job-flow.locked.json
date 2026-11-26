@@ -40,7 +40,8 @@
     { "key": "heartbeat", "defaultCron": "7,22,37,52 * * * *", "engine": "heartbeat", "needs": [], "neverInFlow": true },
     { "key": "signin-methods", "defaultCron": "3,18,33,48 * * * *", "engine": "signin-methods", "needs": [], "neverInFlow": true },
     { "key": "data-out", "engine": "data-out", "needs": [], "neverInFlow": true, "manualOnly": true, "brings": "the ServiceNow hand-off and the other outputs, sent from the newest collection the data sync marked ready" },
-    { "key": "support-grant", "engine": "support-grant", "needs": [], "neverInFlow": true, "manualOnly": true, "brings": "the Invardia Support app's database access, opened and closed just in time on a support request" }
+    { "key": "support-grant", "engine": "support-grant", "needs": [], "neverInFlow": true, "manualOnly": true, "brings": "the Invardia Support app's database access, opened and closed just in time on a support request" },
+    { "key": "job-requests", "engine": "job-requests", "needs": [], "neverInFlow": true, "manualOnly": true, "brings": "the jobs people ask for in the web app (Run now, Stop, a template release, a mail sent now), started by its queue as the engine identity" }
   ],
   "defaultPipeline": {
     "id": "daily",

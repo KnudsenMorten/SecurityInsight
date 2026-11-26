@@ -1356,6 +1356,12 @@ function Invoke-RAGraphStageAnswer {
         -Data / -Link / -Peer are seams for tests.
     #>
     param([Parameter(Mandatory)][hashtable]$Plan, [string]$ReportName = '', $Data, $Link, $Peer)
+    # #1310 (SUP-2026-00674): a WHOLE count of the Detailed report is counted in the report's own slices
+    # ($script:RAGpsCountSlices, set by Invoke-RAReadCount for the time of its count) -- never as one build of every path
+    $__cs = [long]$script:RAGpsCountSlices
+    if ($null -eq $Data -and [string]$Plan.Kind -eq 'count' -and [string]$Plan.Grain -eq 'Detailed' -and [long]$Plan.Count -le 1 -and [long]$Plan.RowCount -le 1 -and $__cs -gt 1) {
+        return (Invoke-RAGraphStageSlicedCount -Plan $Plan -Slices $__cs -Link $Link -Peer $Peer)
+    }
     $set = $null
     if ($null -eq $Data) {
         $set = Sync-RAGraphStage -Stream $script:RAStream
@@ -1383,11 +1389,46 @@ function Invoke-RAGraphStageAnswer {
         $script:RAGpsRun.OtherPart[('{0}|{1}|{2}|{3}|{4}' -f $ReportName, $Plan.Count, $Plan.Index, $Plan.RowCount, $Plan.RowIndex)] = [long]$pr.OtherPart
         return [pscustomobject]@{ _SIDirectRows = @($rows) }
     }
-    if ($Plan.Kind -eq 'count') { return [pscustomobject]@{ _SIDirectRows = @([pscustomobject]@{ Count = [long]@($rows).Count }) } }
+    if ($Plan.Kind -eq 'count') { $script:RAGpsCountFromStage = $true; return [pscustomobject]@{ _SIDirectRows = @([pscustomobject]@{ Count = [long]@($rows).Count }) } }
     $hs = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::Ordinal)
     foreach ($r in @($rows)) {
         $t = (@($Plan.GroupColumns | ForEach-Object { ConvertTo-RAGpsKqlString (Get-RAGpsValue -Row $r -Name $_) }) -join '|~|').ToLowerInvariant()
         [void]$hs.Add((Get-RAGpsHex -Text $t))
     }
     return [pscustomobject]@{ _SIDirectRows = @($hs | ForEach-Object { [pscustomobject]@{ SIGroupHash = $_ } }) }
+}
+
+function Invoke-RAGraphStageSlicedCount {
+    <#
+        #1310 (SUP-2026-00674, live 2026-11-22): the WHOLE count of the Detailed attack-path report, counted in the report's
+        own -Slices. The whole count built every path of the run's graph at once -- 7,120 s before the read and 7,039 s after
+        it for 107,965 rows, where the report's 21 slices built the same rows in 588 s -- and wrote nothing in that time, so
+        the run monitor took the working step for dead. The slices cut the graph on the device key (each device, and with it
+        each of its rows, in exactly one slice), so the sum of the slices' counts IS the whole count: each slice is counted by
+        exactly the code that builds it for the read. After each slice the report's own progress record is written again
+        (#1274: the beat the producer passes on to the step, -OnSlice) and, at most every 3 minutes, one log line says how far
+        the count is. -OnSlice { param($Done, $Total) } and -Log { param($Level, $Text) } are seams. Returns the count answer.
+    #>
+    param([Parameter(Mandatory)][hashtable]$Plan, [Parameter(Mandatory)][long]$Slices, $Link, $Peer, [scriptblock]$OnSlice, [scriptblock]$Log)
+    if (-not $OnSlice) { $OnSlice = { param($d, $t) if ($null -ne $script:RACountBeat -and (Get-Command -Name Step-RAReportProgressBeat -ErrorAction SilentlyContinue)) { Step-RAReportProgressBeat -Beat $script:RACountBeat } } }
+    if (-not $Log) { $Log = { param($l, $t) if (Get-Command -Name Write-Info -ErrorAction SilentlyContinue) { Write-Info $t } } }
+    # the CI lookups once for every slice (read through the engine's lookup cache, as each slice reads them)
+    if ($null -eq $Link) { $lr = Get-RAGpsLetRows -Query $Plan.Body -Name '_ciLink'; $Link = New-RAGpsCiIndex -Rows $lr.Rows -Key '_ciKey' -Columns $lr.Columns }
+    if ($null -eq $Peer) { $pp = Get-RAGpsLetRows -Query $Plan.Body -Name '_ciPeer'; $Peer = New-RAGpsCiIndex -Rows $pp.Rows -Key '_peerKey' -Columns $pp.Columns }
+    # (log lines only: the progress record stays the report's own -- one record per execution, the producer reads it)
+    $tk = $null
+    if (Get-Command -Name New-RAProgressTicker -ErrorAction SilentlyContinue) {
+        $tk = New-RAProgressTicker -Stream $null -What 'completeness: the source''s count (the run''s stored attack-path graph)' -Unit 'query slices counted' -Total $Slices -Log $Log
+    }
+    $total = 0L
+    for ($i = 0L; $i -lt $Slices; $i++) {
+        $p = $Plan.Clone(); $p.Count = $Slices; $p.Index = $i
+        $a = Invoke-RAGraphStageAnswer -Plan $p -Link $Link -Peer $Peer
+        $total += [long]@($a._SIDirectRows)[0].Count
+        try { & $OnSlice ($i + 1) $Slices } catch { }
+        if ($null -ne $tk) { $null = Step-SIStepProgressTicker -Ticker $tk -Done ($i + 1) }
+    }
+    # the count came from the run's stored graph: it does not change while the run reads it (Invoke-RAReadCount)
+    $script:RAGpsCountFromStage = $true
+    return [pscustomobject]@{ _SIDirectRows = @([pscustomobject]@{ Count = $total }) }
 }

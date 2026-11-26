@@ -303,13 +303,18 @@ function Get-SIDisabledIdentityCountKql {
 # A report does not filter on the enabled state in its own KQL. data-model/report-scope.locked.json says, per report,
 # what the disabled part is: 'setting' (SI_DisabledAssets_RiskAnalysis decides -- off, the default, keeps enabled
 # accounts and devices only), 'exclude' (the report asks about usable accounts: never disabled ones) or 'include' (the
-# disabled state is part of the finding -- the two hygiene reports and the "disabled account still ..." reports). The
+# disabled state is part of the finding -- the guest hygiene report and the "disabled account still ..." reports). The
 # engine's scope preamble (engine/risk-analysis/_shared/RA-ScopePreamble.ps1) asks THIS function for the decision and
 # the CI predicate and puts it in the report's CI blocks -- users, service principals and devices alike (an Entra device
 # carries accountEnabled). A legacy marked line (a customer's own query written for #533) is still rewritten from the
 # same decision.
+# #1353 (owner 2026-11-24: "a disabled spn should not count as a vulnerabille asset - it must be handled similar to a
+# disabled user, even though it includes high privileged"): NO report always shows a disabled service principal or
+# managed identity. Identity_SPN_OwnsResourcePublicAccess was 'include' (a disabled SP holding a role on a public
+# resource was listed whatever the setting); it follows SI_DisabledAssets_RiskAnalysis like every other report on a
+# disabled user. Its open findings freeze (rule 4), they are not closed; re-enabled = listed again.
 $script:SIDisabledRaMarker = '//__SI_DISABLED_ASSETS_RA__'
-$script:SIDisabledRaAlwaysSee = @('Identity_GuestWithPrivilegedRole', 'Identity_SPN_OwnsResourcePublicAccess')
+$script:SIDisabledRaAlwaysSee = @('Identity_GuestWithPrivilegedRole')
 $script:SIDisabledRaCiPredicate = 'coalesce(tobool(column_ifexists("si_account_enabled", bool(null))), true)'
 
 function Get-SIDisabledAssetsRaMarker { $script:SIDisabledRaMarker }

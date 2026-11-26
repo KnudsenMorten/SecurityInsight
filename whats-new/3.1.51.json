@@ -1,0 +1,18 @@
+{
+  "version": "3.1.51",
+  "date": "2026-11-25",
+  "type": "feature",
+  "summary": "Job buttons work again, deleted assets retire at once, exploited findings are due in 14 days, and tiles and columns say what they show.",
+  "new": [
+    { "title": "Deleted assets retire at once", "text": "An asset deleted in Entra ID, Azure or Intune retires at once and its findings close as deleted, never as fixed. Intune needs one new read-only permission that Invardia grants." },
+    { "title": "Pages load their newest scripts", "text": "After an update every page loads its newest scripts; a page that cannot load shows a Reload link." },
+    { "title": "Exploited findings due in 14 days", "text": "A finding whose exploit is verified, or that is in an exploit kit, is due within 14 days, whatever its severity." }
+  ],
+  "fixes": [
+    { "title": "Job buttons work again", "text": "Buttons that run a job (one step, Refresh, Run now, Update now, Apply settings, Test mail, Send now) work again. A cancelled run no longer reports its last step as failed." },
+    { "title": "Tiles and columns in plain words", "text": "The executive tiles say what they count, with the formula and an (i). Column titles are in words, exports included: scripts reading old header names need updating." },
+    { "title": "New days-to-fix defaults", "text": "Medium findings 60 days, low findings 90 days, so some may show as overdue sooner. Your own values and Defender for Cloud due dates are kept." },
+    { "title": "One task per product and version", "text": "A vulnerability naming several products gives one task per product and version, each with its own paths." },
+    { "title": "Smaller fixes", "text": "Sign-in methods per user fill in again at every installation. Asset profiling builds its rows 5-7 times faster. Views are compact, with resizable columns and full text." }
+  ]
+}

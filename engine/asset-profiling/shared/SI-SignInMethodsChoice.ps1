@@ -23,7 +23,13 @@
 
     THE FILLER (Invoke-SISignInMethodsFill, its OWN job caj-si-signin-methods every 15 minutes -- engine\signin-methods\Invoke-SISignInMethods.ps1)
       Reads per user, into the saved detail, for at most SI_Identity_SignInMethodsFillMinutes (default 8) per tick, then
-      stops and carries on next tick; one tick at a time (the claim row cfg.InstallState 'SignInMethodsFill'). Who is read
+      stops and carries on next tick; one tick at a time (the claim row cfg.InstallState 'SignInMethodsFill').
+      AS FAST AS MICROSOFT ALLOWS (#1144 P2-P4, SCALE-3): with the default slice a tick reads for 12 minutes while users are
+      due (never read / report entry changed) and 8 once only the periodic refresh is left; it starts at the pace the last
+      tick ended on (kept in the claim row, at most 48 hours old), doubles the requests in flight after each clean wave until
+      Microsoft first asks to slow down (then one more per clean wave, half after a throttled one, Retry-After honoured per
+      wave and item), and holds its pace while Microsoft says the tenant is above 0.8 of its limit
+      (x-ms-throttle-limit-percentage). No fixed ceiling. Who is read
       first (one SQL pick, Get-SISignInMethodsFillPickSql):
         1. privileged users (an Entra role permanent or eligible, through a group or PIM for Groups, an Azure role, or the
            report's isAdmin -- as the last collection recorded it), by the order below
@@ -48,8 +54,21 @@
 
 $script:SISignInMethodsModes = @('all', 'privileged', 'off')
 $script:SISignInMethodsDefaults = @{ Mode = 'all'; MaxAgeDays = 90; FillMinutes = 8 }
-$script:SISignInMethodsFill = @{ ClaimRow = 'SignInMethodsFill'; BatchSize = 200; RetryAfterMinutes = 10; ListedWithinDays = 14; KeepUnlistedDays = 60 }
+$script:SISignInMethodsFill = @{ ClaimRow = 'SignInMethodsFill'; BatchSize = 200; RetryAfterMinutes = 10; ListedWithinDays = 14; KeepUnlistedDays = 60
+    # #1144 P4: the adaptive slice while users are due (privileged / changed / never read): 12 minutes of the 15-minute timer
+    # (the run's start and its end fit in the rest -- the next run must find this one ended); the pace a run ended on is
+    # taken by the next run when it is at most PaceKeepHours old
+    BacklogFillMinutes = 12; PaceKeepHours = 48 }
 if (-not (Get-Variable -Name _SICache -Scope Script -ErrorAction SilentlyContinue)) { $script:_SICache = @{} }
+# The database seam (engine\data-model\SI-RecordSql.ps1), loaded HERE at file level -- never inside a function (#1383,
+# owner 2026-11-25 "Fix the broken cache"): loaded inside New-SISignInMethodsCache its functions lived only in that
+# function's scope, and the seam it returned called Invoke-SIRecordSqlDb by name later, outside it -- "The term
+# 'Invoke-SIRecordSqlDb' is not recognized" on every identity run, so no user's work row was recorded and the background
+# read picked nobody.
+if (-not (Get-Command -Name New-SIRecordSqlInvoke -ErrorAction SilentlyContinue) -or -not (Get-Command -Name Invoke-SIRecordSqlDb -ErrorAction SilentlyContinue)) {
+    $script:_SISignInMethodsRecordSql = [IO.Path]::Combine((Split-Path -Parent (Split-Path -Parent $PSScriptRoot)), 'data-model', 'SI-RecordSql.ps1')
+    if ([IO.File]::Exists($script:_SISignInMethodsRecordSql)) { try { . $script:_SISignInMethodsRecordSql } catch { } }
+}
 
 # =====================================================================================================================
 #  The choice -- PURE
@@ -90,7 +109,10 @@ function Get-SISignInMethodsChoice {
     }
     $age = & $num 'SI_Identity_SignInMethodsMaxAgeDays' $script:SISignInMethodsDefaults.MaxAgeDays 1 365
     $fill = & $num 'SI_Identity_SignInMethodsFillMinutes' $script:SISignInMethodsDefaults.FillMinutes 1 25
-    [pscustomobject]@{ Mode = $mode; MaxAgeDays = [int]$age; FillMinutes = [int]$fill; Note = ($notes -join '; ') }
+    # #1144 P4: the default slice (8 minutes, or not set) is ADAPTIVE -- longer while users are due (Invoke-SISignInMethodsFill);
+    # any other value is the install's own slice, always
+    $adaptive = ([int]$fill -eq [int]$script:SISignInMethodsDefaults.FillMinutes)
+    [pscustomobject]@{ Mode = $mode; MaxAgeDays = [int]$age; FillMinutes = [int]$fill; FillAdaptive = [bool]$adaptive; Note = ($notes -join '; ') }
 }
 
 function Test-SISignInMethodsLookupHas {
@@ -312,7 +334,8 @@ SELECT @n AS Written;
 
 function Get-SISignInMethodsFillClaimSql {
     <# Claim the filler for @until (cfg.InstallState 'SignInMethodsFill'): no row, or a claim that ran out (until < @now) = taken.
-       Answers Claimed (1 / 0). No cfg.InstallState = 0 (no claim can be shared: the tick does not read). #>
+       Answers Claimed (1 / 0) and Previous (the row's value before this claim: the pace the last tick ended on, #1144 P2).
+       No cfg.InstallState = 0 (no claim can be shared: the tick does not read). #>
     @"
 SET NOCOUNT ON;
 IF OBJECT_ID(N'cfg.InstallState') IS NULL BEGIN SELECT CAST(0 AS int) AS Claimed; RETURN; END
@@ -325,7 +348,7 @@ IF @has = 0 BEGIN INSERT cfg.InstallState (Name, Value, [Version], UpdatedBy) VA
 ELSE IF @u IS NULL OR @u < TRY_CONVERT(DATETIME2(0), @now, 127)
 BEGIN UPDATE cfg.InstallState SET Value = @Value, UpdatedAt = SYSUTCDATETIME(), UpdatedBy = N'sign-in methods' WHERE Name = N'$($script:SISignInMethodsFill.ClaimRow)'; SET @ok = 1; END
 COMMIT;
-SELECT @ok AS Claimed;
+SELECT @ok AS Claimed, @cur AS Previous;
 "@
 }
 
@@ -352,13 +375,9 @@ function Get-SISignInMethodsSettingsSql {
 
 function New-SISignInMethodsCache {
     <# The collection's handle on the saved detail: @{ Invoke; Usable; Note; Noted }. -Invoke: the data seam; none = the
-       install's database (New-SIRecordSqlInvoke); no database = not usable (said once). #>
+       install's database (New-SIRecordSqlInvoke, loaded at file level above); no database = not usable (said once). #>
     param([scriptblock]$Invoke, [switch]$NoDatabaseLookup)
     if (-not $Invoke -and -not $NoDatabaseLookup) {
-        if (-not (Get-Command -Name New-SIRecordSqlInvoke -ErrorAction SilentlyContinue)) {
-            $rs = [IO.Path]::Combine((Split-Path -Parent (Split-Path -Parent $PSScriptRoot)), 'data-model', 'SI-RecordSql.ps1')
-            if ([IO.File]::Exists($rs)) { try { . $rs } catch { } }
-        }
         if (Get-Command -Name New-SIRecordSqlInvoke -ErrorAction SilentlyContinue) { try { $Invoke = New-SIRecordSqlInvoke } catch { $Invoke = $null } }
     }
     $c = [pscustomobject]@{ Invoke = $Invoke; Usable = [bool]$Invoke; Note = ''; Noted = $false }
@@ -519,9 +538,45 @@ function Read-SISignInMethodsStoredChoice {
 
 function New-SISignInMethodsClaimValue {
     <# PURE. The claim row's value: {by, claimedUtc, until} (under 400 characters). #>
-    param([Parameter(Mandatory)][string]$By, [Parameter(Mandatory)][datetime]$NowUtc, [Parameter(Mandatory)][datetime]$UntilUtc)
+    param([Parameter(Mandatory)][string]$By, [Parameter(Mandatory)][datetime]$NowUtc, [Parameter(Mandatory)][datetime]$UntilUtc, $Pace)
     $inv = [Globalization.CultureInfo]::InvariantCulture
-    ConvertTo-Json -Compress -InputObject ([ordered]@{ by = $By; claimedUtc = $NowUtc.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ', $inv); until = $UntilUtc.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ', $inv) })
+    $o = [ordered]@{ by = $By; claimedUtc = $NowUtc.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ', $inv); until = $UntilUtc.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ', $inv) }
+    # #1144 P2: the pace this tick ended on (the release writes it; the next tick's claim reads it back)
+    if ($Pace) { $o['pace'] = [ordered]@{ concurrency = [int]$Pace.Concurrency; doubling = [bool]$Pace.Doubling; at = $UntilUtc.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ', $inv) } }
+    ConvertTo-Json -Compress -InputObject $o
+}
+
+function ConvertFrom-SISignInMethodsPace {
+    <#
+        PURE. #1144 P2: the pace the last tick ended on, from the claim row's previous value: @{ Concurrency (>= 1); Doubling }
+        -- or the first-run pace (1, doubling) when there is none, it does not read, or it is older than -KeepHours.
+    #>
+    param([AllowNull()][AllowEmptyString()][string]$Previous, [datetime]$NowUtc = [datetime]::UtcNow, [int]$KeepHours = $script:SISignInMethodsFill.PaceKeepHours)
+    $first = [pscustomobject]@{ Concurrency = 1; Doubling = $true; FromLastRun = $false }
+    if (-not $Previous -or -not $Previous.Trim()) { return $first }
+    $o = $null; try { $o = $Previous | ConvertFrom-Json } catch { return $first }
+    if ($null -eq $o -or -not $o.PSObject.Properties['pace'] -or $null -eq $o.pace) { return $first }
+    $p = $o.pace
+    $c = 0; if (-not $p.PSObject.Properties['concurrency'] -or -not [int]::TryParse([string]$p.concurrency, [ref]$c) -or $c -lt 1) { return $first }
+    $at = $null; if ($p.PSObject.Properties['at']) { $at = ConvertTo-SISignInMethodsUtc $p.at }
+    if ($null -eq $at -or ($NowUtc.ToUniversalTime() - $at).TotalHours -gt $KeepHours) { return $first }
+    $d = $true; if ($p.PSObject.Properties['doubling']) { $d = [bool]$p.doubling }
+    [pscustomobject]@{ Concurrency = $c; Doubling = $d; FromLastRun = $true }
+}
+
+function Get-SISignInMethodsStartPace {
+    <# The pace this tick's per-user read starts at (set by Invoke-SISignInMethodsFill after its claim); first-run pace when none. #>
+    if ($script:_SICache.ContainsKey('SignInMethodsStartPace') -and $null -ne $script:_SICache['SignInMethodsStartPace']) { return $script:_SICache['SignInMethodsStartPace'] }
+    [pscustomobject]@{ Concurrency = 1; Doubling = $true; FromLastRun = $false }
+}
+
+function Get-SISignInMethodsEndPace {
+    <# PURE. #1144 P2: the pace to hand on, from the read's run state ($null when the read did not run): the number of requests
+       it ended on, and whether it was still doubling (never throttled). #>
+    param([AllowNull()]$State)
+    if ($null -eq $State -or -not $State.PSObject.Properties['Concurrency']) { return $null }
+    $d = $false; if ($State.PSObject.Properties['Doubling']) { $d = [bool]$State.Doubling }
+    [pscustomobject]@{ Concurrency = [Math]::Max(1, [int]$State.Concurrency); Doubling = $d }
 }
 
 function Invoke-SISignInMethodsFill {
@@ -549,9 +604,19 @@ function Invoke-SISignInMethodsFill {
         [scriptblock]$Between
     )
     if (-not $Clock) { $Clock = { [datetime]::UtcNow } }
-    if ($BudgetSeconds -le 0) { $BudgetSeconds = 60 * [int]$Choice.FillMinutes }
+    # #1144 P4 THE ADAPTIVE SLICE: with the default slice (Choice.FillAdaptive) the tick reads for BacklogFillMinutes (12 of the
+    # 15-minute timer) while users are DUE -- a pick holds users never read or whose report entry changed -- and for the default
+    # 8 minutes once only the periodic refresh (older than the maximum age) is left. An install's own slice, or -BudgetSeconds,
+    # is fixed.
+    $baseSeconds = $BudgetSeconds; $longSeconds = $BudgetSeconds
+    if ($BudgetSeconds -le 0) {
+        $baseSeconds = 60 * [int]$Choice.FillMinutes; $longSeconds = $baseSeconds
+        if ($Choice.PSObject.Properties['FillAdaptive'] -and [bool]$Choice.FillAdaptive) { $longSeconds = [Math]::Max($baseSeconds, 60 * [int]$script:SISignInMethodsFill.BacklogFillMinutes) }
+    }
+    $BudgetSeconds = $longSeconds
+    $backlog = $false
     $inv = [Globalization.CultureInfo]::InvariantCulture
-    $out = [pscustomobject]@{ Status = ''; Picked = 0; Read = 0; Unread = 0; Privileged = 0; Reasons = [ordered]@{ changed = 0; never = 0; maxage = 0 }; Seconds = 0.0; Line = '' }
+    $out = [pscustomobject]@{ Status = ''; Picked = 0; Read = 0; Unread = 0; Privileged = 0; Reasons = [ordered]@{ changed = 0; never = 0; maxage = 0 }; Seconds = 0.0; Line = ''; SliceSeconds = $baseSeconds; StartConcurrency = 1; EndConcurrency = 0 }
     $start = [datetime](& $Clock)
     $say = {
         param($Status, $Text)
@@ -569,13 +634,19 @@ function Invoke-SISignInMethodsFill {
         $r = @(& $ProInvoke (Get-SISignInMethodsFillClaimSql) $p 'reader' | ForEach-Object { $_ }) | Select-Object -First 1
         $c = Get-SISqlRowValue $r 'Claimed'; if ($null -eq $c -and ($r -is [ValueType])) { $c = $r }
         $claimed = ([int]$c -eq 1)
+        $prevValue = $null; if ($claimed -and -not ($r -is [ValueType])) { $prevValue = [string](Get-SISqlRowValue $r 'Previous') }
     } catch { return (& $say 'error' ('not read this tick -- the claim could not be made ({0})' -f $_.Exception.Message)) }
     if (-not $claimed) { return (& $say 'busy' 'another tick is still reading -- this one leaves it alone') }
+    # #1144 P2: this tick's read starts at the pace the last tick ended on (Get-SISignInMethodsStartPace, read by -ReadUsers)
+    $startPace = ConvertFrom-SISignInMethodsPace -Previous $prevValue -NowUtc $start
+    $script:_SICache['SignInMethodsStartPace'] = $startPace
+    $out.StartConcurrency = [int]$startPace.Concurrency
     $stop = ''
     try {
         while ($true) {
             $now = [datetime](& $Clock)
-            if (($now - $start).TotalSeconds -ge $BudgetSeconds) { $stop = 'budget'; break }
+            $limit = $baseSeconds; if ($backlog) { $limit = $longSeconds }
+            if (($now - $start).TotalSeconds -ge $limit) { $stop = 'budget'; $out.SliceSeconds = $limit; break }
             if ($Between) { try { $null = & $Between } catch { } }
             $pick = @(& $DataInvoke (Get-SISignInMethodsFillPickSql) @{ n = [string]$BatchSize; maxAge = [string]$Choice.MaxAgeDays; all = $(if ($Choice.Mode -eq 'all') { '1' } else { '0' }); now = $now.ToString('yyyy-MM-ddTHH:mm:ss.fffZ', $inv) } 'rows')
             $pick = @($pick | Where-Object { $null -ne $_ -and [string](Get-SISqlRowValue $_ 'UserId') })
@@ -589,6 +660,7 @@ function Invoke-SISignInMethodsFill {
                 $keys[$id] = $r
                 if ([int](Get-SISqlRowValue $r 'Privileged') -eq 1) { $out.Privileged = [int]$out.Privileged + 1 }
                 $why = [string](Get-SISqlRowValue $r 'Reason'); if ($out.Reasons.Contains($why)) { $out.Reasons[$why] = [int]$out.Reasons[$why] + 1 }
+                if ($why -in 'never', 'changed') { $backlog = $true }
             }
             $got = $null
             try { $got = & $ReadUsers @($users.ToArray()) } catch { $got = $null }
@@ -621,14 +693,22 @@ function Invoke-SISignInMethodsFill {
     } catch {
         $stop = 'error'; $out.Line = [string]$_.Exception.Message
     } finally {
-        try { $null = & $ProInvoke (Get-SISignInMethodsFillReleaseSql) @{ Value = (New-SISignInMethodsClaimValue -By $By -NowUtc $start -UntilUtc ([datetime](& $Clock))); by = $By } 'reader' } catch { }
+        $endPace = $null
+        if (Get-Command -Name Get-SIEntraAuthMethodsState -ErrorAction SilentlyContinue) { $endPace = Get-SISignInMethodsEndPace -State (Get-SIEntraAuthMethodsState) }
+        if ($endPace) { $out.EndConcurrency = [int]$endPace.Concurrency }
+        try { $null = & $ProInvoke (Get-SISignInMethodsFillReleaseSql) @{ Value = (New-SISignInMethodsClaimValue -By $By -NowUtc $start -UntilUtc ([datetime](& $Clock)) -Pace $endPace); by = $By } 'reader' } catch { }
+        $script:_SICache.Remove('SignInMethodsStartPace')
     }
     $err = $out.Line
     $txt = ('{0:N0} user(s) read per user and saved, {1:N0} left for a later tick (Microsoft asked to slow down, or they could not be read); picked {2:N0}: {3:N0} privileged, {4:N0} changed, {5:N0} never read, {6:N0} older than {7} days' -f
         [int]$out.Read, [int]$out.Unread, [int]$out.Picked, [int]$out.Privileged, [int]$out.Reasons['changed'], [int]$out.Reasons['never'], [int]$out.Reasons['maxage'], [int]$Choice.MaxAgeDays)
     switch ($stop) {
         'done'    { $txt += ' -- nothing more is due' }
-        'budget'  { $txt += (' -- the {0}-minute slice is used; the next tick carries on' -f [Math]::Round($BudgetSeconds / 60.0, 1)) }
+        'budget'  {
+            $txt += (' -- the {0}-minute slice is used' -f [Math]::Round([double]$out.SliceSeconds / 60.0, 1))
+            if ($backlog -and $longSeconds -gt $baseSeconds) { $txt += ' (the longer slice: users are due)' }
+            $txt += '; the next tick carries on'
+        }
         'refused' { $txt += ' -- Microsoft refused the read: the identity needs UserAuthenticationMethod.Read.All with admin consent' }
         'error'   { $txt += (' -- stopped: {0}' -f $err) }
     }
@@ -652,7 +732,9 @@ function Invoke-SISignInMethodsFillTick {
         # the token is never built into script text: the read finds it in this function's scope when the tick calls it (the tick
         # runs inside this call), as it finds the read function
         $siSignInGraphToken = [string]$tok
-        $read = { param($Users) Get-SIEntraPasswordlessByUser -Token $siSignInGraphToken -Users $Users -ReadDevices -MaxRounds 3 -MaxDelaySeconds 30 }
+        # #1144 P2: the first batch of the tick starts at the pace the last tick ended on (set by the fill after its claim);
+        # a clean wave doubles until Microsoft first asks to slow down -- later batches of the tick carry the pace on
+        $read = { param($Users) $sp = Get-SISignInMethodsStartPace; Get-SIEntraPasswordlessByUser -Token $siSignInGraphToken -Users $Users -ReadDevices -MaxRounds 3 -MaxDelaySeconds 30 -StartConcurrency ([int]$sp.Concurrency) -Doubling:([bool]$sp.Doubling) }
         Invoke-SISignInMethodsFill -Choice $choice -DataInvoke $DataInvoke -ProInvoke $ProInvoke -ReadUsers $read -Between $Between
     } catch {
         [pscustomobject]@{ Status = 'error'; Picked = 0; Read = 0; Unread = 0; Line = ('sign-in methods (background read): not run this tick ({0})' -f $_.Exception.Message) }

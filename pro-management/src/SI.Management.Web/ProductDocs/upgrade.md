@@ -20,7 +20,7 @@ travels from ring to ring.
 
 The checks below and the update steps are the same for both editions.
 
-![How a release reaches your install: Invardia signs one manifest per update ring, from ring 0 to ring 3; the updater in your subscription checks it, downloads and checks the release, waits while a pipeline run is going, applies the database changes, builds the images in your registry, rolls and verifies every job and app with a rollback to the previous image, then brings the install to the current defaults](images/update-process.png)
+![How a release reaches your install: Invardia signs one manifest per update channel; the updater in your subscription checks it, downloads and checks the release, waits while a pipeline run is going, applies the database changes, builds the images in your registry, rolls and verifies every job and app with a rollback to the previous image, then brings the install to the current defaults](images/update-process.png)
 
 What one update does, in order:
 

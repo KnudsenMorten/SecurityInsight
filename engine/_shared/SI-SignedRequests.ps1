@@ -15,7 +15,7 @@
       * a resend / undo into a connector (cfg.CollectionSend, data out) without a verified signed request is set 'refused';
       * every refusal is said in plain words, recorded (cfg.SignedRequest Verdict 'refused', the resend's OutcomeText) and
         written once per refused commit to the audit trail (signedrequest.change.refuse, outcome refused: who changed what,
-        why it was refused, what to do -- Admin > History). No guard switch: a security refusal cannot be turned off.
+        why it was refused, what to do -- Operations > Audit trail). No guard switch: a security refusal cannot be turned off.
     Never touched: the Invardia Support app, the updater, the engine, setup -- none of them is the web app's identity.
 
     THE VERIFICATION (as in observe):
@@ -244,7 +244,7 @@ function Get-SISignedRequestHoldText {
     }
     foreach ($x in @($s | Select-Object -First 2)) { $parts.Add(('a {0} into {1} asked by {2} (its signed request is not verified yet)' -f $x.Kind, $x.Connector, $x.RequestedBy)) }
     $more = ($c.Count + $s.Count) - $parts.Count
-    ('signed requests: no new pipeline run starts -- {0} change(s) made in the web app carry no verified signed request: {1}{2}. A running run is not stopped. Undo the change on Configuration > Commits, or make it again signed in; the next wake-up then starts the run.' -f ($c.Count + $s.Count), ($parts -join '; '), $(if ($more -gt 0) { (' and {0} more' -f $more) } else { '' }))
+    ('signed requests: no new pipeline run starts -- {0} change(s) made in the web app carry no verified signed request: {1}{2}. A running run is not stopped. Undo the change on Operations > Commits (undo), or make it again signed in; the next wake-up then starts the run.' -f ($c.Count + $s.Count), ($parts -join '; '), $(if ($more -gt 0) { (' and {0} more' -f $more) } else { '' }))
 }
 
 function Get-SISignedRequestKindCounts {
@@ -267,7 +267,7 @@ function Get-SISignedRequestAuditRecords {
         $who = if ("$($f.InitiatedBy)".Trim()) { [string]$f.InitiatedBy } else { 'an unknown writer' }
         $why = Get-SISignedRequestWhy -Signed ([string]$f.Signed)
         $text = if ($Observe) { '{0} changed {1} at {2:yyyy-MM-dd HH:mm}Z in the web app; the change carries no verified signed request ({3}). It would be refused once this install is adopted -- nothing is held now.' -f $who, $what, (ConvertTo-SISignedUtc $f.CommittedUtc), $why }
-                else { '{0} changed {1} at {2:yyyy-MM-dd HH:mm}Z in the web app; the change carries no verified signed request ({3}), so no new pipeline run starts until it is undone on Configuration > Commits or made again signed in.' -f $who, $what, (ConvertTo-SISignedUtc $f.CommittedUtc), $why }
+                else { '{0} changed {1} at {2:yyyy-MM-dd HH:mm}Z in the web app; the change carries no verified signed request ({3}), so no new pipeline run starts until it is undone on Operations > Commits (undo) or made again signed in.' -f $who, $what, (ConvertTo-SISignedUtc $f.CommittedUtc), $why }
         $out.Add(@{ Action = $(if ($Observe) { $script:SISignedWouldAuditAction } else { $script:SISignedAuditAction }); ActorSource = 'engine'; Outcome = $(if ($Observe) { 'warning' } else { 'refused' }); CorrelationId = [string]$g.Name
                     Target = ('{0}' -f $what); Reason = $why; OutcomeText = $text
                     After = [ordered]@{ commitId = [string]$g.Name; changedBy = $who; counts = (Get-SISignedRequestKindCounts -Changes $g.Group); records = @($g.Group | ForEach-Object { '{0} {1} ({2})' -f $_.Entity, $_.EntityKey, $_.Op }) } })
@@ -314,7 +314,7 @@ function Get-SISignedRequestRecordedHash {
 
 function Test-SISignedRequestSuperAdmin {
     <# Is the verified token's person a SuperAdmin? Their app role SuperAdmin in the token, or their own (person) assignment
-       on Configuration > Access. A SuperAdmin only through a group cannot be checked by the engine (said). @{ Ok; Why } #>
+       on Configuration > Access (roles + scopes). A SuperAdmin only through a group cannot be checked by the engine (said). @{ Ok; Why } #>
     param([Parameter(Mandatory)][scriptblock]$Invoke, [string]$Detail)
     $oid = if ("$Detail" -match '; oid ([0-9a-fA-F-]{36})') { $Matches[1].ToLowerInvariant() } else { '' }
     $roles = if ("$Detail" -match '; roles ([^;]*)$') { @($Matches[1] -split ',' | Where-Object { $_ }) } else { @() }
@@ -322,7 +322,7 @@ function Test-SISignedRequestSuperAdmin {
     if (-not $oid) { return @{ Ok = $false; Why = 'the signed token names no person (object id)' } }
     $n = @(& $Invoke "SELECT COUNT(*) AS N FROM cfg.AccessAssignment WHERE PrincipalType = N'User' AND Role = N'SuperAdmin' AND LOWER(PrincipalId) = @Oid" @{ Oid = $oid } 'reader' | ForEach-Object { $_ }) | Select-Object -First 1
     $cnt = if ($n -is [System.Collections.IDictionary]) { [long]$n['N'] } elseif ($n) { [long]$n.N } else { 0 }
-    if ($cnt -gt 0) { return @{ Ok = $true; Why = 'SuperAdmin on Configuration > Access' } }
+    if ($cnt -gt 0) { return @{ Ok = $true; Why = 'SuperAdmin on Configuration > Access (roles + scopes)' } }
     @{ Ok = $false; Why = 'the person who signed is not a SuperAdmin of this install (a SuperAdmin only through a group: ask one assigned as a person, or with the app role)' }
 }
 

@@ -7,6 +7,8 @@
 //     by position.
 //   - COLUMN WIDTHS: drag a header's right edge (or focus it and use the left / right arrow keys); double-click (or
 //     Enter) sets the column back to automatic. Saved per person per view.
+//   - #1386 THE CELLS (grid-cells.js): auto width, two lines at most per cell, the row's and the column's full text -- the
+//     columns shown in full are kept with the widths ("$full"), so "Save for me" and a saved layout carry them too.
 //   - THE LAST SORT / FILTERS / SEARCH: after a change the person makes ON the page, the view's address parameters are
 //     reported to the server, which shows them again the next time the view is opened FROM THE MENU (its links carry
 //     nav=menu; a tile, a link of another page or a typed address shows the view's standard) without any (an address that names
@@ -20,9 +22,11 @@
 // box still switches layouts and "Clear" still clears. No inline style attribute is written (the content security policy):
 // widths are set through the style object.
 import { toast, refusalOf } from "./ui.js";
+import { initGridCells } from "./grid-cells.js";
 
 var CHANGE_KEY = "si-view-change";
 var MIN_WIDTH = 40, MAX_WIDTH = 2000, KEY_STEP = 16, LIVE_ROWS = 200;
+var FULL_KEY = "$full";   // #1386 the columns shown in full, kept with the widths (Columns/ViewState.cs FullTextKey)
 var addressTools = [];
 var listening = false;
 
@@ -548,8 +552,17 @@ export function initViewTools(tools, chooser) {
       if (canSave && heads.length > 1) { addMoveButtons(ctx, table, th); addDrag(ctx, table, th); }
       if (more) { addGrip(ctx, table, th); }
     });
+    // #1386 the cells: two lines at most, the full text per row and per column (kept with the widths, under "$full")
+    initGridCells(table, {
+      full: Array.isArray(ctx.widths[FULL_KEY]) ? ctx.widths[FULL_KEY] : [],
+      onFull: function (keys) {
+        if (keys.length) { ctx.widths[FULL_KEY] = keys; } else { delete ctx.widths[FULL_KEY]; }
+        if (more) { saveWidths(ctx); }
+      }
+    });
     if (more) {
       Object.keys(ctx.widths).forEach(function (key) {
+        if (key === FULL_KEY) { return; }
         var th = headByKey(table, key), px = Number(ctx.widths[key]);
         if (th && isFinite(px)) { setWidth(table, th, clamp(px)); }
       });

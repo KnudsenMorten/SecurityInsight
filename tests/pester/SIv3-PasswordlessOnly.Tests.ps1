@@ -96,7 +96,7 @@ Describe 'the permission: requested, granted, checked' {
         $without = @($script:GraphApi.roles | Where-Object { $_ -ne 'UserAuthenticationMethod.Read.All' })
         $r = @(Test-SIPermissionApiRoles -Api $script:GraphApi -TokenRoles $without -Fix 'f')
         @($r | Where-Object State -eq 'missing' | ForEach-Object Item) | Should -Be @('UserAuthenticationMethod.Read.All')
-        @(Test-SIPermissionApiRoles -Api $script:GraphApi -TokenRoles @($script:GraphApi.roles) -Fix 'f' | Where-Object State -ne 'ok').Count | Should -Be 0
+        @(Test-SIPermissionApiRoles -Api $script:GraphApi -TokenRoles @(@($script:GraphApi.roles) + @($script:GraphApi.conditionalRoles | ForEach-Object { $_.role }) | Where-Object { $_ }) -Fix 'f' | Where-Object State -ne 'ok').Count | Should -Be 0
     }
 }
 

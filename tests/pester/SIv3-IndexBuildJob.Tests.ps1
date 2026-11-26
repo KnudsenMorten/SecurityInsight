@@ -147,6 +147,26 @@ Describe '#1111 the index build job: one index, the right statement, one outcome
     }
 }
 
+Describe 'review item 6: a build in the gap stops at its limit and never uses up the one-time forced build' {
+    It 'capped (SI_INDEXBUILD_CAP, 3 min): the interrupt says the limit at minute 3, the filtered build is cancelled, the row waits, nothing recorded as forced' {
+        $w = New-W -Checks 6 -DaysAgo 9; $w.ExistsAfter = $false
+        $r = Invoke-Job $w ([pscustomobject]@{ Table = ''; Index = ''; Minutes = 3; Force = $true; Cap = $true })
+        $r.Outcome | Should -Be 'waiting' -Because ($w.Log -join ' / ')
+        @($w.Saves | Where-Object { $_ -match '\+forced' }).Count | Should -Be 0
+        ($w.Whys -join ' ') | Should -Match 'the gap''s limit of 3 min before the run is reached'
+    }
+    It 'not capped (a true idle window): the same build runs to its end and the forced one is recorded' {
+        $w = New-W -Checks 6 -DaysAgo 9
+        $r = Invoke-Job $w ([pscustomobject]@{ Table = ''; Index = ''; Minutes = 3; Force = $true })
+        $r.Outcome | Should -Be 'built' -Because ($w.Log -join ' / ')
+        @($w.Saves | Where-Object { $_ -match '\+forced' }).Count | Should -BeGreaterThan 0
+    }
+    It 'the job reads SI_INDEXBUILD_CAP' {
+        $i = Read-SIIndexBuildJobInput -Env @{ SI_INDEXBUILD_SERVER = 'server.database.windows.net'; SI_INDEXBUILD_DATABASE = 'sqldb-si-pro'; SI_INDEXBUILD_CAP = '1'; SI_INDEXBUILD_MINUTES = '180' }
+        $i.Request.Cap | Should -BeTrue; $i.Request.Minutes | Should -Be 180
+    }
+}
+
 Describe '#1111 THE UPDATE ALWAYS GOES FIRST' {
     It 'an update waits (the wait mark) or runs BEFORE the job starts: nothing taken, nothing built, said plainly' {
         $w = New-W -Update @('an update waits to install (the updater''s wait mark: update waits: run r-1 is running)')

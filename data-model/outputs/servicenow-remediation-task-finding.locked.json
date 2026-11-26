@@ -3,7 +3,7 @@
   "kind": "output-map",
   "id": "servicenow-remediation-task-finding",
   "version": "1.0.0",
-  "description": "ServiceNow remediation task links (Import Set): one row per task and finding it resolves (many-to-many: one finding can belong to several tasks). u_source_record_id is the vulnerable item's own record id (<CI key>|<finding>), unchanged. The SQL hand-off view snowstage.vImportRemediationTaskFinding carries the same columns, the same row hash and source run. Every date UTC 'yyyy-MM-dd HH:mm:ss'; u_changed_at is when its task last changed. Key u_si_task_id + u_vulnerability. Column names are a contract; append only.",
+  "description": "ServiceNow remediation task links (Import Set): one row per task and finding it resolves (many-to-many: one finding can belong to several tasks). u_source_record_id is the vulnerable item's own record id (<CI key>|<finding>), unchanged. The SQL hand-off view snowstage.vImportRemediationTaskFinding carries the same columns, the same row hash and source run. Every date UTC 'yyyy-MM-dd HH:mm:ss'; u_changed_at is when its task last changed. Each link also carries its finding's CVSS, risk score and rating, weighted risk, exploit, first detection and due date, and u_si_more_info (its task's page in SecurityInsight) -- each sent only when the Import Set table has its column (on by default). Key u_si_task_id + u_vulnerability. Column names are a contract; append only.",
   "grain": "remediation_task_finding",
   "columns": [
     {
@@ -70,6 +70,46 @@
     {
       "target": "u_si_cleared",
       "from": "$cleared"
+    },
+    {
+      "target": "u_cvss",
+      "from": "record.cvss",
+      "soft": true
+    },
+    {
+      "target": "u_risk_score",
+      "from": "record.risk_score",
+      "soft": true
+    },
+    {
+      "target": "u_risk_rating",
+      "from": "record.risk_rating",
+      "soft": true
+    },
+    {
+      "target": "u_weighted_risk",
+      "from": "record.weighted_risk",
+      "soft": true
+    },
+    {
+      "target": "u_exploit_available",
+      "from": "record.exploit_available",
+      "soft": true
+    },
+    {
+      "target": "u_first_detected",
+      "from": "record.first_detected",
+      "soft": true
+    },
+    {
+      "target": "u_due_date",
+      "from": "record.due_date",
+      "soft": true
+    },
+    {
+      "target": "u_si_more_info",
+      "from": "record.more_info",
+      "soft": true
     }
   ],
   "contract": "snowstage.vImportRemediationTaskFinding"

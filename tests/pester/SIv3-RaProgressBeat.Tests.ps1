@@ -257,7 +257,9 @@ Describe 'the wiring' {
         $ra | Should -Match ([regex]::Escape('New-RAReportProgressBeat -Stream $script:RAStream -Report $ReportName'))
         $ra | Should -Match ([regex]::Escape('if ($null -ne $__rpBeat) { Set-RAReportProgressSlice -Beat $__rpBeat -Done ($b - $__soFrom) -Total ($__soTo - $__soFrom) }'))
         ([regex]::Matches($ra, 'Step-RARecoveryBudgetCall -Budget \$__rb   # #1200[^\r\n]*\r?\n\s*if \(\$null -ne \$__rpBeat\) \{ Step-RAReportProgressBeat -Beat \$__rpBeat \}')).Count | Should -Be 2
-        ([regex]::Matches($ra, 'Step-RAReportProgressBeat')).Count | Should -Be 2
+        # the two recovery calls + (#1310) every call of the report's count moves the record too (the count's own beat)
+        $ra | Should -Match ([regex]::Escape('if ($null -ne $script:RACountBeat -and (Get-Command -Name Step-RAReportProgressBeat -ErrorAction SilentlyContinue)) { Step-RAReportProgressBeat -Beat $script:RACountBeat }'))
+        ([regex]::Matches($ra, 'Step-RAReportProgressBeat -Beat')).Count | Should -Be 3
         # the slice loop's own record is unchanged
         $ra | Should -Match ([regex]::Escape("Write-RAStepProgressRow -Stream `$script:RAStream -Phase ('report {0}' -f `$ReportName) -Done (`$b - `$__soFrom) -Total (`$__soTo - `$__soFrom)"))
     }

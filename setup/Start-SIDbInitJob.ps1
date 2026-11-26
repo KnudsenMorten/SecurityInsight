@@ -27,8 +27,11 @@
          identity is given its Microsoft Graph read permissions, read back, and the ones it no longer needs are taken
          off, read back (G5, G5a);
       3. the job (made or brought up to date with the engine jobs' image and the install's identities);
-      4. ONE run (the Invardia Support app's own database access is part of this run only: the Support session's own app,
-         or -SupportAppId -- refused when it is not the session's), waited for; the verdict is the run's own status: the job
+      4. ONE run (the Invardia Support app's own READ-ONLY database user -- the role si_support_read -- and the just-in-time
+         support grant are part of this run only: the Support session's own app, or -SupportAppId -- refused when it is not
+         the session's; framework SECAUDIT-1a, #1374: the run NEVER gives the Support app db_owner or the SQL admin group --
+         admin comes only just in time; a db_owner of an earlier release is not changed by it, the update takes it off),
+         waited for; the verdict is the run's own status: the job
          ends successfully only when every identity was read back. A user under the Support app's name made from ANOTHER
          client id is replaced by the run (support-user-replace); both SIDs are in the job's lines.
       -Steps grants: the run makes users, role memberships and grants only -- no procedure, schema or database setting is
@@ -52,7 +55,8 @@ param(
     [Parameter(Mandatory)][ValidatePattern('^[A-Za-z0-9_.()-]{1,90}$')][string]$ResourceGroup,
     [string]$SubscriptionId,
     [switch]$Apply,
-    # the Invardia Support app's client id: its own database user and the support grant are part of THIS run only. Default:
+    # the Invardia Support app's client id: its own READ-ONLY database user and the support grant are part of THIS run only
+    # (never db_owner, never the SQL admin group -- SECAUDIT-1a). Default:
     # the Support session's own (this tenant's) Support app; a typed id that is not the session's is REFUSED, nothing changed
     [ValidatePattern('^$|^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$')][string]$SupportAppId = '',
     [string]$Reason = 'SecurityInsight database setup job',
@@ -101,7 +105,7 @@ if (-not $tpl.Ok) { $stop.Add($tpl.Problem) }
 if (-not @($principals | Where-Object { $_.component -eq 'engine' }).Count) { $stop.Add('the engine identity was not found on the engine jobs') }
 & $say 'Gray' ('database: {0}/{1}; admin group {2}' -f $shape.SqlFqdn, $(if ($shape.Database) { $shape.Database } else { $n.ProDatabase }), $(if ($gid) { $gid } else { '(not a group)' }))
 & $say 'Gray' ('identities: {0}' -f ((@($principals | ForEach-Object { '{0}={1}' -f $_.component, $_.name })) -join ', '))
-if ($SupportAppId) { & $say 'Gray' ('this run also gives the Invardia Support app {0} its own database access' -f $SupportAppId) }
+if ($SupportAppId) { & $say 'Gray' ('this run also gives the Invardia Support app {0} its own read-only database user (si_support_read) and the just-in-time support grant -- no standing admin (no db_owner, no SQL admin group)' -f $SupportAppId) }
 if ($stop.Count) { foreach ($s in $stop) { & $say 'Yellow' ('STOP: ' + $s) }; & $say 'Yellow' 'Nothing was changed.'; if ($PassThru) { return [pscustomobject]$result }; exit 1 }
 # Never beside a running update -- a running execution of the updater job (this script never opens the database, so
 # the updater's executions are what it reads; Start-SIDbInitRun checks them once more right before the start). The plan

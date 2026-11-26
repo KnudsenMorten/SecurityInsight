@@ -26,6 +26,14 @@
 #>
 
 $script:SIDirectoryNames = @{ PageRows = 1000; GroupBudgetSeconds = 900; SearchTop = 20; RequestMaxAgeHours = 24; RequestBatch = 10 }
+# The database seam (engine\data-model\SI-RecordSql.ps1), loaded HERE at file level -- never inside a function (#1383,
+# owner 2026-11-25 "Fix the broken cache"): loaded inside New-SIDirectoryNameStore its functions lived only in that
+# function's scope and the seam it returned called Invoke-SIRecordSqlDb by name later -- "not recognized", so the people
+# picker's names were never saved.
+if (-not (Get-Command -Name New-SIRecordSqlInvoke -ErrorAction SilentlyContinue) -or -not (Get-Command -Name Invoke-SIRecordSqlDb -ErrorAction SilentlyContinue)) {
+    $script:_SIDirectoryNamesRecordSql = [IO.Path]::Combine((Split-Path -Parent (Split-Path -Parent $PSScriptRoot)), 'data-model', 'SI-RecordSql.ps1')
+    if ([IO.File]::Exists($script:_SIDirectoryNamesRecordSql)) { try { . $script:_SIDirectoryNamesRecordSql } catch { } }
+}
 $script:SIDirectoryNamesMissingTables = "IF OBJECT_ID(N'sidata.DirectoryName') IS NULL OR OBJECT_ID(N'sidata.DirectoryNameLoad') IS NULL THROW 50000, N'the tables of the people picker''s names are not in the database yet (the next update adds them)', 1;"
 
 # =====================================================================================================================
@@ -184,13 +192,9 @@ function Get-SIDirectorySearchDoneSql {
 # =====================================================================================================================
 function New-SIDirectoryNameStore {
     <# The handle on the store: @{ Invoke; Usable; Note; Noted; Rows (per kind) }. -Invoke: the data seam; none = the install's
-       database (New-SIRecordSqlInvoke); no database = not usable. #>
+       database (New-SIRecordSqlInvoke, loaded at file level above); no database = not usable. #>
     param([scriptblock]$Invoke, [switch]$NoDatabaseLookup)
     if (-not $Invoke -and -not $NoDatabaseLookup) {
-        if (-not (Get-Command -Name New-SIRecordSqlInvoke -ErrorAction SilentlyContinue)) {
-            $rs = [IO.Path]::Combine((Split-Path -Parent (Split-Path -Parent $PSScriptRoot)), 'data-model', 'SI-RecordSql.ps1')
-            if ([IO.File]::Exists($rs)) { try { . $rs } catch { } }
-        }
         if (Get-Command -Name New-SIRecordSqlInvoke -ErrorAction SilentlyContinue) { try { $Invoke = New-SIRecordSqlInvoke } catch { $Invoke = $null } }
     }
     $s = [pscustomobject]@{ Invoke = $Invoke; Usable = [bool]$Invoke; Note = ''; Noted = $false; Rows = @{ user = 0; group = 0 }; Failed = @{ user = $false; group = $false } }

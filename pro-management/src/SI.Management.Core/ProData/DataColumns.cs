@@ -271,8 +271,10 @@ public static partial class DataColumnKeys
         if (key == CiId) return "CI id";
         if (key == Links) return "Linked objects (ids)";
         if (FieldOf(key) is { } f) return (CiFieldWords.TryGetValue(f, out var w) ? w : CiColumns.LabelOf(f)) + " (CI)";
-        if (IdTypeOf(key) is { } t) return t == MemberType ? "SI asset id (linked objects)" : t;
-        if (SourceOf(key) is { } s) return s.Name;
+        // #1382 (owner 2026-11-25, the column chooser: "some dont have a title"): an identifier type reads as words, never its raw
+        // name (MdeDeviceId); the raw name stays the key, shown small under the label
+        if (IdTypeOf(key) is { } t) return t == MemberType ? "SI asset id (linked objects)" : IdentifierWords.TryGetValue(t, out var iw) ? iw : FieldWords(t);
+        if (SourceOf(key) is { } s) return SourceWords(s.Source, s.Name);
         // a finding's SI field reads "(finding)"; a column the Risk Analysis report carries as it is reads "(report)" -- so
         // si_category and the report's own Category never share a heading
         if (FindingFieldOf(key) is { } ff)
@@ -294,6 +296,59 @@ public static partial class DataColumnKeys
     {
         ["si_components"] = "Installed on asset",
     };
+
+    /// <summary>
+    /// #1382 (owner 2026-11-25: "some dont have a title"): the words of the identifier types (sidata.AssetIdentifier.IdType) --
+    /// the grid header, the column chooser and the exports read the same. A type not listed reads its name in words
+    /// (<see cref="FieldWords"/>: "EntraAccountObjectId" -> "Entra account object id").
+    /// </summary>
+    public static readonly IReadOnlyDictionary<string, string> IdentifierWords = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+    {
+        ["MdeDeviceId"] = "Defender device id",
+        ["AadDeviceId"] = "Entra device id",
+        ["AzureResourceId"] = "Azure resource id",
+        ["AzureVmId"] = "Azure VM id",
+        ["ExposureGraphNodeId"] = "Exposure Graph node id",
+        ["EgNodeId"] = "Exposure Graph node id",
+        ["EntraAccountObjectId"] = "Entra account object id",
+        ["PrimaryEntityId"] = "Primary entity id",
+    };
+
+    /// <summary>
+    /// #1382 (owner 2026-11-25, the column chooser: "some dont have a title"): a column TITLE is words, never a raw field name.
+    /// Every grid column (<see cref="GridColumn"/>) and every page table column (the web app's DataColumn) passes its label
+    /// through here, so the header, the chooser and the exports read the same: a label that is a raw name -- no space, and a
+    /// lower-to-upper hump or an underscore ("MdeDeviceId", "ConfigurationName", "RiskScoreTotal_Weighted", "si_tier") -- reads
+    /// in words (<see cref="FieldWords"/>, a few names their own words: "cmdbId" -> "CMDB id"); every other label is kept as it is.
+    /// The key stays the column's id (shown small under the label in the chooser).
+    /// </summary>
+    public static string Title(string label) =>
+        string.IsNullOrEmpty(label) || !IsRawName(label) ? label
+        : IdentifierWords.TryGetValue(label, out var iw) ? iw
+        : RawWords.TryGetValue(label, out var w) ? w : FieldWords(label);
+
+    /// A raw field name as a title: no space, and a lower-to-upper hump or an underscore.
+    public static bool IsRawName(string label) =>
+        !string.IsNullOrEmpty(label) && !label.Any(char.IsWhiteSpace) && (label.Contains('_') || RawHump().IsMatch(label));
+
+    [GeneratedRegex(@"[a-z][A-Z]", RegexOptions.CultureInvariant)]
+    private static partial Regex RawHump();
+
+    /// The raw names whose derived words would read wrong.
+    public static readonly IReadOnlyDictionary<string, string> RawWords = new Dictionary<string, string>(StringComparer.Ordinal)
+    {
+        ["cmdbId"] = "CMDB id", ["cmdbName"] = "CMDB name", ["cmdbCriticality"] = "CMDB criticality", ["cmdbDataSensitivity"] = "CMDB data sensitivity",
+        ["RiskScoreTotal_Weighted"] = "Weighted risk score total", ["RiskScore_Weight_Factor"] = "Risk score weight factor",
+        ["RiskScore_Weight_Detailed"] = "Risk score weight detailed",
+    };
+
+    /// #1382: a source property ("mde" / "mde.osPlatform") in words: "Os platform (mde)"; a nested path keeps each step in words.
+    public static string SourceWords(string source, string flattenedName)
+    {
+        var rest = flattenedName.Length > source.Length + 1 ? flattenedName[(source.Length + 1)..] : flattenedName;
+        var words = string.Join(" ", rest.Split('.', StringSplitOptions.RemoveEmptyEntries).Select(FieldWords));
+        return (words.Length == 0 ? flattenedName : words) + " (" + source + ")";
+    }
 
     /// <summary>
     /// A finding field as words (owner 2026-10-19: the column picker showed si_component, RiskFactor_Probability_Detailed):

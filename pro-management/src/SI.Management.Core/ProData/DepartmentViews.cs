@@ -80,7 +80,7 @@ ORDER BY c.CollectionTime DESC;
 SELECT ISNULL(a.DepartmentId, 0) AS DepartmentId, COUNT_BIG(*) AS Assets
 FROM sidata.Asset AS a
 LEFT JOIN sidata.Ci AS ci ON ci.CiId = a.AssetKey
-WHERE ISNULL(NULLIF(ci.Lifecycle, N'), N'active') = N'active'
+WHERE ISNULL(NULLIF(ci.Lifecycle, N''), N'active') = N'active'
 GROUP BY ISNULL(a.DepartmentId, 0);
 """;
 

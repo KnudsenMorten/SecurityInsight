@@ -19,13 +19,16 @@
 else if (Model.Rows.Count > 0)
 {
     var first = Model.Rows[0];
+    var who = Model.Names.Of(first.InitiatedBy);
+    var approvedBy = Model.Names.Of(first.ApprovedBy);
+    var recPages = Model.Plan.Count == 0 ? 1 : (int)Math.Ceiling(Model.Plan.Count / (double)Model.PageSize);
     <p><a href="/Admin/Commits">&larr; All commits</a></p>
     <section class="card" aria-labelledby="commit-h" data-commit="@first.CommitId">
-        <h2 id="commit-h">Commit by @first.InitiatedBy</h2>
+        <h2 id="commit-h">Commit by <span title="@who.Raw" data-who="@first.InitiatedBy">@who.Text</span></h2>
         <dl class="facts">
             <dt>When</dt><dd>@Fmt.Time(first.CommittedUtc, zone: true)</dd>
             <dt>From</dt><dd data-source="@first.Source">@CommitsModel.SourceWords(first.Source)</dd>
-            @if (!string.IsNullOrEmpty(first.ApprovedBy)) { <dt>Approved by</dt><dd data-approved>@first.ApprovedBy</dd> }
+            @if (!string.IsNullOrEmpty(first.ApprovedBy)) { <dt>Approved by</dt><dd data-approved title="@approvedBy.Raw">@approvedBy.Text</dd> }
             @if (!string.IsNullOrEmpty(first.UndoOf)) { <dt>Undoes</dt><dd><a href="/Admin/Commits?id=@Uri.EscapeDataString(first.UndoOf)" data-undo-of>commit @first.UndoOf</a></dd> }
             @if (!string.IsNullOrEmpty(first.Reason)) { <dt>Why</dt><dd>@first.Reason</dd> }
             <dt>Commit id</dt><dd><code class="tech">@first.CommitId</code> (the same id on the <a href="/Admin/History?q=@Uri.EscapeDataString(first.CommitId)">audit trail</a>)</dd>
@@ -36,18 +39,22 @@ else if (Model.Rows.Count > 0)
             <ul class="events" data-commit-events>
                 @foreach (var ev in Model.Events)
                 {
-                    <li>@Fmt.Time(ev.TsUtc) · <code class="tech">@ev.Action</code> by @ev.Actor · <span class="badge @(ev.Outcome == "ok" ? "ok" : ev.Outcome == "held" ? "warn" : "bad")">@ev.Outcome</span>@(string.IsNullOrEmpty(ev.OutcomeText) ? "" : " -- " + ev.OutcomeText)</li>
+                    <li>@Fmt.Time(ev.TsUtc) · <code class="tech">@ev.Action</code> by @{ var actor = Model.Names.Of(ev.Actor); }<span title="@actor.Raw">@actor.Text</span> · <span class="badge @(ev.Outcome == "ok" ? "ok" : ev.Outcome == "held" ? "warn" : "bad")">@ev.Outcome</span>@(string.IsNullOrEmpty(ev.OutcomeText) ? "" : " -- " + ev.OutcomeText)</li>
                 }
             </ul>
         }
         <form method="post" asp-page-handler="Undo" class="stack-form" data-undo-form
               data-confirm-title="Stage the undo of the ticked records?" data-confirm="Their inverse becomes pending changes. Nothing changes until you commit them on Review & commit.">
             <input type="hidden" name="Id" value="@first.CommitId" />
+            @{
+                var recTools = new GridToolbar { Id = "commit-records-tools", Total = Model.Plan.Count, Skip = (Model.PageNo - 1) * Model.PageSize, Count = Model.PlanPage.Count, Noun = "record(s)", Page = Model.PageNo, Pages = recPages, PageLink = n => Model.RecordsLink(n), Size = Model.PageSize, SizeLink = n => Model.RecordsLink(1, n) };
+            }
+            @if (recPages > 1) { <partial name="~/Pages/Shared/_GridToolbar.cshtml" model="recTools" /> }
             <div class="table-wrap">
                 <table class="findings grid" data-sortable data-list="commit-records" aria-describedby="commit-h">
                     <thead><tr><th scope="col">Undo</th><th scope="col">What</th><th scope="col">Change</th><th scope="col">Before &rarr; after</th></tr></thead>
                     <tbody>
-                        @foreach (var item in Model.Plan)
+                        @foreach (var item in Model.PlanPage)
                         {
                             var fields = ConfigEntities.Fields(item.Entity ?? Model.Entities.All[0], item.Row.Before, item.Row.After);
                             <tr data-record="@item.Row.JournalId" data-op="@item.Row.Op" data-changed-since="@(item.ChangedSince is not null ? "1" : "0")">
@@ -60,7 +67,7 @@ else if (Model.Rows.Count > 0)
                                     else { <span class="hint" data-blocked>can't</span> }
                                 </td>
                                 <td class="wrap"><strong>@(item.Entity?.Label ?? item.Row.Entity)</strong><div class="hint"><code class="tech">@item.Row.EntityKey</code></div>
-                                    @if (item.ChangedSince is { } since) { <div class="notice warn small" data-since>Changed since by @since.InitiatedBy (@Fmt.Time(since.CommittedUtc)) -- not ticked; <a href="/Admin/Commits?id=@Uri.EscapeDataString(since.CommitId)">see that commit</a>. Ticking it reverts their change too.</div> }
+                                    @if (item.ChangedSince is { } since) { <div class="notice warn small" data-since>Changed since by @Model.Names.Of(since.InitiatedBy).Text (@Fmt.Time(since.CommittedUtc)) -- not ticked; <a href="/Admin/Commits?id=@Uri.EscapeDataString(since.CommitId)">see that commit</a>. Ticking it reverts their change too.</div> }
                                     @if (item.Blocked is not null) { <div class="hint" data-blocked-why>@item.Blocked</div> }
                                 </td>
                                 <td>@CommitsModel.OpWords(item.Row.Op)<div class="hint">undo: @(item.Op == "Add" ? "put it back" : item.Op == "Remove" ? "take it out" : "set it back")</div></td>
@@ -76,6 +83,7 @@ else if (Model.Rows.Count > 0)
                     </tbody>
                 </table>
             </div>
+            @if (recPages > 1) { <partial name="~/Pages/Shared/_GridToolbar.cshtml" model="recTools.AsBottom()" /> }
             @if (Model.MayUndo)
             {
                 <label for="undo-reason">Why undo it? (required, on the audit trail)</label>
@@ -120,13 +128,15 @@ else if (Model.HasTable)
                     @if (Model.Commits.Count == 0) { <tr><td colspan="6" class="hint">No commits yet@(Model.AllCommits ? "" : " made by you").</td></tr> }
                     @foreach (var c in Model.Commits)
                     {
+                        var cWho = Model.Names.Of(c.InitiatedBy);
+                        var cApproved = Model.Names.Of(c.ApprovedBy);
                         <tr data-commit-row="@c.CommitId">
                             <td><a href="/Admin/Commits?id=@Uri.EscapeDataString(c.CommitId)">@Fmt.Time(c.CommittedUtc, zone: true)</a></td>
-                            <td>@c.InitiatedBy</td>
-                            <td>@(c.ApprovedBy ?? "")</td>
+                            <td title="@cWho.Raw" data-who="@c.InitiatedBy">@cWho.Text</td>
+                            <td title="@cApproved.Raw">@(cApproved.Text)</td>
                             <td>@CommitsModel.SourceWords(c.Source)@(c.UndoOf is null ? "" : " (undo)")</td>
                             <td class="num">@Fmt.Int(c.Records)</td>
-                            <td class="wrap">@string.Join(", ", c.Entities.Split(", ").Select(n => Model.Entities.Find(n)?.Label ?? n))</td>
+                            <td class="wrap" data-what>@(CommitsModel.IsGroupedInstall(c.Source, c.Reason) ? c.Reason!.Trim() + ": " + Fmt.Int(c.Records) + " rows" : string.Join(", ", c.Entities.Split(", ").Select(n => Model.Entities.Find(n)?.Label ?? n)))</td>
                         </tr>
                     }
                 </tbody>

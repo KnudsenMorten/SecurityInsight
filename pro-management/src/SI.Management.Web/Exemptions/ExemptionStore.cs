@@ -58,8 +58,15 @@ SELECT CASE WHEN OBJECT_ID(N'cfg.DomainRole') IS NOT NULL AND OBJECT_ID(N'cfg.Ex
 """;
 
     /// Both levels in one list: a domain-level row carries Category NULL.
+    /// #1370: with the ObjectId columns (a database one schema behind has none: ObjectId NULL, as before -- the columns are
+    /// named only inside EXEC, so the statement compiles on either).
     public const string RolesSql = """
-IF OBJECT_ID(N'cfg.DomainRole') IS NOT NULL AND OBJECT_ID(N'cfg.CategoryRole') IS NOT NULL
+IF COL_LENGTH(N'cfg.DomainRole', N'ObjectId') IS NOT NULL AND COL_LENGTH(N'cfg.CategoryRole', N'ObjectId') IS NOT NULL
+EXEC (N'SELECT Domain, CAST(NULL AS nvarchar(128)) AS Category, Role, Principal, AddedAt, AddedBy, ObjectId FROM cfg.DomainRole WHERE RemovedAt IS NULL
+UNION ALL
+SELECT Domain, Category, Role, Principal, AddedAt, AddedBy, ObjectId FROM cfg.CategoryRole WHERE RemovedAt IS NULL
+ORDER BY Domain, Category, Role, Principal;');
+ELSE IF OBJECT_ID(N'cfg.DomainRole') IS NOT NULL AND OBJECT_ID(N'cfg.CategoryRole') IS NOT NULL
 SELECT Domain, CAST(NULL AS nvarchar(128)) AS Category, Role, Principal, AddedAt, AddedBy FROM cfg.DomainRole WHERE RemovedAt IS NULL
 UNION ALL
 SELECT Domain, Category, Role, Principal, AddedAt, AddedBy FROM cfg.CategoryRole WHERE RemovedAt IS NULL
@@ -403,7 +410,7 @@ SELECT N'Saved' AS Outcome;
 
     public async Task<IReadOnlyList<DomainRoleRow>> RolesAsync(CancellationToken ct) =>
         (await _sql.QueryAsync(RolesSql, P(), ct)).Select(r => new DomainRoleRow(r.Str("Domain") ?? "", r.Str("Role") ?? "", r.Str("Principal") ?? "", r.Date("AddedAt"), r.Str("AddedBy"),
-            DomainRoles.NormalizeCategory(r.Str("Category")))).ToList();
+            DomainRoles.NormalizeCategory(r.Str("Category")), r.Str("ObjectId") is { Length: > 0 } oid ? oid.Trim().ToLowerInvariant() : null)).ToList();
 
     private static string Who(string role, string domain, string? category) => $"{DomainRoles.RoleLabel(role, category)} of {DomainRoles.Label(domain, category)}";
 

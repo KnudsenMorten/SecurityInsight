@@ -22,14 +22,14 @@ public sealed class EnvironmentReportService(GetStartedService getStarted, Heade
     {
         var now = clock.GetUtcNow().UtcDateTime;
         GetStartedResult? gs = null;
-        try { gs = await getStarted.EvaluateAsync(fresh: false, ct); } catch (Exception ex) when (ex is not OperationCanceledException) { log.LogWarning(ex, "environment report: Get Started facts"); }
+        try { gs = await getStarted.EvaluateAsync(fresh: false, ct); } catch (Exception ex) when (ex is not OperationCanceledException) { log.LogWarning(ex, "system documentation: Get Started facts"); }
         var f = gs?.Facts;
         HeaderInfo? h = null;
-        try { h = await header.ReadAsync(ct); } catch (Exception ex) when (ex is not OperationCanceledException) { log.LogWarning(ex, "environment report: header"); }
+        try { h = await header.ReadAsync(ct); } catch (Exception ex) when (ex is not OperationCanceledException) { log.LogWarning(ex, "system documentation: header"); }
         InstallTenant? t = null;
-        try { t = await tenant.ReadAsync(ct); } catch (Exception ex) when (ex is not OperationCanceledException) { log.LogInformation(ex, "environment report: tenant"); }
+        try { t = await tenant.ReadAsync(ct); } catch (Exception ex) when (ex is not OperationCanceledException) { log.LogInformation(ex, "system documentation: tenant"); }
         AzureFacts az;
-        try { az = await azure.ReadAsync(ct); } catch (Exception ex) when (ex is not OperationCanceledException) { log.LogWarning(ex, "environment report: Azure"); az = AzureFacts.NotConfigured with { Error = "the Azure part could not be read: " + ViewerError.Text(ex) }; }
+        try { az = await azure.ReadAsync(ct); } catch (Exception ex) when (ex is not OperationCanceledException) { log.LogWarning(ex, "system documentation: Azure"); az = AzureFacts.NotConfigured with { Error = "the Azure part could not be read: " + ViewerError.Text(ex) }; }
         IReadOnlyList<ConfigCommit> commits = Array.Empty<ConfigCommit>();
         string? changesNote = null;
         try
@@ -37,7 +37,7 @@ public sealed class EnvironmentReportService(GetStartedService getStarted, Heade
             if (await journal.ExistsAsync(ct)) commits = (await journal.CommitsAsync(null, null, null, 0, 25, ct)).Rows;
             else changesNote = "the change journal is not in this database yet";
         }
-        catch (Exception ex) when (ex is not OperationCanceledException) { log.LogWarning(ex, "environment report: commits"); changesNote = "the configuration commits could not be read: " + ViewerError.Text(ex); }
+        catch (Exception ex) when (ex is not OperationCanceledException) { log.LogWarning(ex, "system documentation: commits"); changesNote = "the configuration commits could not be read: " + ViewerError.Text(ex); }
 
         var settings = f?.Settings ?? Array.Empty<SettingRow>();
         var licence = f?.Licence;

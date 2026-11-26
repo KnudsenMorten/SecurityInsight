@@ -1131,6 +1131,16 @@ CREATE TABLE cfg.CategoryRole (
     CONSTRAINT PK_CategoryRole PRIMARY KEY (Domain, Category, Role, Principal)
 );
 
+-- #1370 (owner 2026-11-25: "Yes, build it"): the Entra object id of a Security domain / category owner or approver, written
+-- ONCE by the web app from the directory (exactly one account whose mail or sign-in name IS the Principal address; never a
+-- guess). A row with it matches that object id only; NULL = matched by the sign-in name the directory issued for one of its
+-- own members (#995). Not journaled (config-entities "ignore"): it is derived from the directory and found again after a restore.
+IF COL_LENGTH('cfg.DomainRole', 'ObjectId') IS NULL
+ALTER TABLE cfg.DomainRole ADD ObjectId NVARCHAR(64) NULL;
+
+IF COL_LENGTH('cfg.CategoryRole', 'ObjectId') IS NULL
+ALTER TABLE cfg.CategoryRole ADD ObjectId NVARCHAR(64) NULL;
+
 -- A request's Category = the category whose owners decide it (NULL = the domain's owners / approvers decide it); an
 -- item's and an exemption's Category = the finding's own category, so the monthly review of a category owner lists
 -- exactly the exemptions of that category. NULL on every row made before #283.

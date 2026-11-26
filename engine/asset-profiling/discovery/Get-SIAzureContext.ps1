@@ -915,7 +915,7 @@ function Add-SIRecordDiagnosticParts {
             $info = Get-SIArmIdInfo $id
             if ($info -and [string]$info.Type -eq 'microsoft.network/publicipaddresses') { $rt = 'public_ip' }
             # only a resource that is a record of its own: a child resource (an extension, a disk) is part of its parent
-            if ($null -ne $scope -and (Get-Command -Name Resolve-SIAzurePlacement -ErrorAction SilentlyContinue)) {
+            if ($null -ne $scope -and (Test-Path -Path 'function:Resolve-SIAzurePlacement')) {
                 if ((Resolve-SIAzurePlacement -Id $id -Scope $scope).Action -ne 'record') { continue }
             }
             $key = 'azure|{0}|{1}' -f $rt, $id

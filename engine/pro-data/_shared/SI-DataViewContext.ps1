@@ -131,6 +131,7 @@ function Get-SIDataUncontextedSql {
     #>
     # #717: never a collection whose finding rows the retention removed
     $live = ''; if (Get-Command -Name Get-SIDataLiveFilter -ErrorAction SilentlyContinue) { $live = Get-SIDataLiveFilter }
+    if (Get-Command -Name Get-SIDataBuildFilter -ErrorAction SilentlyContinue) { $live += Get-SIDataBuildFilter }   # #1226
     "SELECT CollectionId, CollectionTime FROM sidata.Collection WHERE Status = 'Complete' AND (ContextAt IS NULL OR ContextSet IS NULL OR ContextSet <> @Set OR (DerivedAt IS NOT NULL AND DerivedAt > ContextAt))$live ORDER BY CollectionTime DESC"
 }
 
@@ -285,6 +286,21 @@ function Get-SIDataIssueContextSql {
     }
     $names = ($cols | ForEach-Object { '[{0}]' -f [string]$_.issue }) -join ', '
     $pnames = ($cols | ForEach-Object { 'p.[{0}]' -f [string]$_.issue }) -join ', '
+    # #1213 B3 (SCALE-3): the collection's findings are READ ONCE -- the columns the issue rows are made of, of the findings that
+    # carry a CVE or a configuration id, into #f (keyed on FindingId) -- and every step below reads #f instead of reading the
+    # wide finding rows again (four reads of sidata.Finding before: the two key sides, the items, the counts, the asset
+    # names). The same rows, the same values (SELECT ... INTO keeps each column's type and collation).
+    $fset = New-Object System.Collections.Generic.List[string]
+    $addF = { param([string]$c) if ($c -and -not ($fset | Where-Object { $_ -ieq $c })) { $fset.Add($c) } }
+    foreach ($c in 'FindingId', 'Cve', 'ConfigurationId', 'RiskScore', 'AssetKey', 'AssetName') { & $addF $c }
+    foreach ($e in $cols) {
+        & $addF ([string]$e.column)
+        if ([string]$e.key -eq 'fc.software' -and $by.ContainsKey('fc.software#product') -and $by.ContainsKey('fc.version') -and $by.ContainsKey('fc.vendor')) {
+            & $addF $by['fc.software#product']; & $addF $by['fc.version']; & $addF $by['fc.vendor']
+        }
+    }
+    foreach ($e in $typed) { & $addF ([string]$e.column) }
+    $fsel = ($fset | ForEach-Object { 'f.[{0}]' -f $_ }) -join ', '
     # LOG VOLUME (2026-10-18): a row that is already exactly this is kept, not removed and written again (a collection prepared
     # once more rewrote every issue row, the same values). Compared EXACTLY: a text as its bytes, a number as its 8 bytes.
     # Every column the table has is one of these -- else (a column this list does not know) the collection's rows are all
@@ -300,11 +316,15 @@ function Get-SIDataIssueContextSql {
     @"
 SET NOCOUNT ON;
 SET XACT_ABORT ON;
+-- the collection's findings, read ONCE (#1213 B3): only the findings that carry a key, only the columns used below
+SELECT $fsel INTO #f FROM sidata.Finding AS f
+WHERE f.CollectionId = @CollectionId AND ((f.Cve IS NOT NULL AND f.Cve <> N'') OR (f.ConfigurationId IS NOT NULL AND f.ConfigurationId <> N''));
+CREATE UNIQUE CLUSTERED INDEX CX_f ON #f (FindingId);
 CREATE TABLE #k (K NVARCHAR(256) COLLATE DATABASE_DEFAULT NOT NULL, FindingId BIGINT NOT NULL, Rn INT NOT NULL, PRIMARY KEY (K, FindingId));
 WITH m AS (
-    SELECT f.Cve AS K, f.FindingId, f.RiskScore FROM sidata.Finding AS f WHERE f.CollectionId = @CollectionId AND f.Cve IS NOT NULL AND f.Cve <> N''
+    SELECT f.Cve AS K, f.FindingId, f.RiskScore FROM #f AS f WHERE f.Cve IS NOT NULL AND f.Cve <> N''
     UNION
-    SELECT f.ConfigurationId, f.FindingId, f.RiskScore FROM sidata.Finding AS f WHERE f.CollectionId = @CollectionId AND f.ConfigurationId IS NOT NULL AND f.ConfigurationId <> N''
+    SELECT f.ConfigurationId, f.FindingId, f.RiskScore FROM #f AS f WHERE f.ConfigurationId IS NOT NULL AND f.ConfigurationId <> N''
 )
 INSERT #k (K, FindingId, Rn)
 SELECT m.K, m.FindingId, ROW_NUMBER() OVER (PARTITION BY m.K ORDER BY m.RiskScore DESC, m.FindingId) FROM m;
@@ -312,19 +332,19 @@ CREATE TABLE #v (K NVARCHAR(256) COLLATE DATABASE_DEFAULT NOT NULL, Col TINYINT 
 INSERT #v (K, Col, Item, Rn)
 SELECT k.K, c.Col, LTRIM(RTRIM(s.[value])), k.Rn
 FROM #k AS k
-JOIN sidata.Finding AS f ON f.CollectionId = @CollectionId AND f.FindingId = k.FindingId
+JOIN #f AS f ON f.FindingId = k.FindingId
 CROSS APPLY (VALUES $($values -join ",`r`n                    ")) AS c (Col, V)
 CROSS APPLY STRING_SPLIT(c.V, N';') AS s
 WHERE c.V IS NOT NULL AND LTRIM(RTRIM(s.[value])) <> N'';
 CREATE TABLE #a (K NVARCHAR(256) COLLATE DATABASE_DEFAULT NOT NULL PRIMARY KEY, Findings INT NOT NULL, Assets INT NOT NULL$typedDecl);
 INSERT #a (K, Findings, Assets$typedCols)
 SELECT k.K, COUNT(*), COUNT(DISTINCT f.AssetKey)$typedAgg
-FROM #k AS k JOIN sidata.Finding AS f ON f.CollectionId = @CollectionId AND f.FindingId = k.FindingId
+FROM #k AS k JOIN #f AS f ON f.FindingId = k.FindingId
 GROUP BY k.K;
 CREATE TABLE #n (K NVARCHAR(256) COLLATE DATABASE_DEFAULT NOT NULL PRIMARY KEY, Shown INT NOT NULL, Names NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL);
 WITH nm AS (
     SELECT k.K, f.AssetName, MIN(k.Rn) AS Rn
-    FROM #k AS k JOIN sidata.Finding AS f ON f.CollectionId = @CollectionId AND f.FindingId = k.FindingId
+    FROM #k AS k JOIN #f AS f ON f.FindingId = k.FindingId
     WHERE f.AssetName IS NOT NULL AND LTRIM(RTRIM(f.AssetName)) <> N''
     GROUP BY k.K, f.AssetName
 ), r AS (
@@ -719,8 +739,19 @@ function Invoke-SIDataViewContext {
         # #740: how often a long field fill says how far it is (seconds; a line only while rows are left)
         [double]$ProgressSeconds = 60,
         # ranges filled at once: 0 = the database's cores (Get-SIDataFillWorkers); 1 = one after another
-        [int]$Workers = 0)
+        [int]$Workers = 0,
+        # #1319 (SCALE-2) the data sync's switch SI_Data_ChangedSet (the setting is on by default and the data sync passes it; not passed = off): off = exactly as before; shadow / on = the findings
+        # that did not change since the published collection carry its prepared columns (SI-DataChangedSet.ps1). The seed and
+        # the sample's share: tests only (0 / -1 = a random seed, the contract's share)
+        [string]$ChangedSet = 'off', [int]$ChangedSetSeed = 0, [int]$ChangedSetSamplePercent = -1,
+        # #1337 SI_Data_LoadPerReport (SI-DataReportEarly.ps1): '' = the setting; off = exactly as before; on (default) = their ranges are left out of this fill; shadow =
+        # the reports Risk Analysis filled early are compared with this fill first (a difference is a warning), every row is
+        # still filled here
+        [string]$LoadPerReport = '')
     if (-not $Log) { $Log = { param($l, $m) Write-Host ('[{0}] {1}' -f $l, $m) } }
+    $vcCsResults = New-Object System.Collections.Generic.List[object]
+    $early = [ordered]@{ Mode = 'off'; Reports = 0; Rows = 0L; Compared = 0L; Differences = 0L; Rejected = 0 }
+    if (Get-Command -Name Get-SIDataLoadPerReportMode -ErrorAction SilentlyContinue) { $early.Mode = $(if ($LoadPerReport) { Get-SIDataLoadPerReportMode -Value $LoadPerReport } else { Get-SIDataLoadPerReportMode }) }
     try {
         if (-not $List) { $List = Get-SIViewStoredColumns }
         if (-not $List) {
@@ -741,6 +772,8 @@ function Invoke-SIDataViewContext {
         }
         if ($pending.Count -eq 0) { return [pscustomobject]@{ Status = 'ok'; Collections = 0; Pending = 0 } }
         $fill = Get-SIDataFindingContextSql -List $List
+        $fillAll = $fill
+        $vcCsOn = ($ChangedSet -in 'shadow', 'on') -and [bool](Get-Command -Name Start-SIDataViewContextChangedSet -ErrorAction SilentlyContinue)
         $issue = Get-SIDataIssueContextSql -List $List
         $clock = [Diagnostics.Stopwatch]::StartNew()
         $size = [long]5000; $done = 0; $rows = [long]0; $issues = [long]0
@@ -750,21 +783,61 @@ function Invoke-SIDataViewContext {
             $cid = [int]$p['CollectionId']
             $bRaw = & $Invoke (Get-SIDataFindingContextBoundsSql) @{ CollectionId = $cid } 'reader'
             $b = @($bRaw) | Select-Object -First 1
+            $fill = $fillAll; $vcCsState = $null; $vcCsCheck = $null
             if ($b -and $null -ne $b['Lo'] -and -not ($b['Lo'] -is [System.DBNull])) {
                 $hi = [long]$b['Hi']; $lo = [long]$b['Lo']; $after = $lo - 1
+                # #1319 shadow / on: the unchanged findings' prepared columns from the published collection (SI-DataChangedSet.ps1);
+                # $null (off) or a full build leaves the fill exactly as it is
+                $vcMarkTail = ''
+                if ($vcCsOn) {
+                    # the mark as it is stored: a quick build's mark names its build, base and seed -- the same build goes on with the same
+                    # sample, anything else is filled again from the start (a full fill always reads the whole collection)
+                    $vcMarkRaw = $null
+                    try { $vcMarkRaw = & $Invoke (Get-SIDataContextMarkReadSql) @{ Name = (Get-SIDataContextMarkName -CollectionId $cid -SetId $setId); CollectionId = $cid } 'scalar' } catch { $vcMarkRaw = $null }
+                    if ($vcMarkRaw -is [System.DBNull]) { $vcMarkRaw = $null }
+                    $vcCsState = Start-SIDataViewContextChangedSet -Invoke $Invoke -CollectionId $cid -List $List -SetId $setId -Fill $fillAll -Mode $ChangedSet -Lo $lo -Hi $hi -Seed $ChangedSetSeed -SamplePercent $ChangedSetSamplePercent -Log $Log -ResumeMark ([string]$vcMarkRaw)
+                    if ($vcCsState) {
+                        $fill = [string]$vcCsState.Fill; $vcMarkTail = [string]$vcCsState.MarkTail
+                        if (-not $vcCsState.ResumeOk) { try { $null = & $Invoke (Get-SIDataContextMarkWriteSql) @{ Name = (Get-SIDataContextMarkName -CollectionId $cid -SetId $setId); Value = [string]($lo - 1) } 'nonquery' } catch { } }
+                    }
+                }
                 # NO LIMITS (owner 2026-10-22, a large install: hours serial while the database sat at 4 % CPU): ONLY THE ROWS NOT YET
                 # FILLED -- a fill that a run left half done goes on from the last range it finished (sidata.ViewState
                 # 'ctx:<collection>:<list>', kept after every wave) instead of reading every finding's JSON again
                 $mark = Get-SIDataContextMarkName -CollectionId $cid -SetId $setId
                 try {
                     $wm = & $Invoke (Get-SIDataContextMarkReadSql) @{ Name = $mark; CollectionId = $cid } 'scalar'
-                    if ($null -ne $wm -and -not ($wm -is [System.DBNull])) { $w = 0L; if ([long]::TryParse([string]$wm, [ref]$w) -and $w -gt $after -and $w -le $hi) { & $Log 'INFO' ("context     : collection {0} goes on where the last run left its field fill" -f $cid); $after = $w } }
+                    if ($null -ne $wm -and -not ($wm -is [System.DBNull])) { $w = 0L; $wmText = [string]$wm; if ($vcMarkTail -and $wmText.EndsWith($vcMarkTail)) { $wmText = $wmText.Substring(0, $wmText.Length - $vcMarkTail.Length) }; if ([long]::TryParse($wmText, [ref]$w) -and $w -gt $after -and $w -le $hi) { & $Log 'INFO' ("context     : collection {0} goes on where the last run left its field fill" -f $cid); $after = $w } }
                 } catch { }
                 # #740: a long fill is never silent -- one plain line about once a minute: the rows so far, of how many, and
                 # about how long is left (from the pace so far)
                 $total = $hi - $lo + 1
                 $nv = $b['N']; if ($null -ne $nv -and -not ($nv -is [System.DBNull])) { $total = [long]$nv }
                 $mine = [long]0; $fillClock = [Diagnostics.Stopwatch]::StartNew(); $said = [double]0
+                # #1337 the reports Risk Analysis filled as each was complete (SI-DataReportEarly.ps1): only those that still
+                # match; shadow compares them with this fill first, on leaves their ranges out (not with a quick build of #1319)
+                $skipIv = New-Object System.Collections.Generic.List[object]
+                if ($early.Mode -ne 'off' -and (Get-Command -Name Get-SIDataReportEarlyIntervals -ErrorAction SilentlyContinue) -and ($null -eq $vcCsState -or [string]$vcCsState.Build -eq 'full')) {
+                    $eiv = Get-SIDataReportEarlyIntervals -Invoke $Invoke -CollectionId $cid -SetId $setId -Print (Get-SIDataEarlyPrint -Invoke $Invoke)
+                    $early.Rejected += @($eiv.Rejected).Count
+                    foreach ($rj in @($eiv.Rejected)) { & $Log 'WARN' ("context     : collection {0}, {1} -- that report filled as it was complete is not taken; it is filled here as before" -f $cid, $rj) }
+                    if (@($eiv.Intervals).Count -gt 0) {
+                        if ($early.Mode -eq 'shadow') {
+                            $diffSql = Get-SIDataFindingContextDiffSql -Fill $fillAll
+                            $dn = 0L; $dr = New-Object System.Collections.Generic.List[string]
+                            foreach ($x in @($eiv.Intervals)) {
+                                $d = [long](& $Invoke $diffSql @{ CollectionId = $cid; After = ([long]$x.Lo - 1); Upto = [long]$x.Hi } 'scalar')
+                                $early.Compared += [long]$x.Rows; $dn += $d; if ($d -gt 0) { $dr.Add(('report {0}: {1}' -f $x.Report, $d)) }
+                            }
+                            $early.Differences += $dn; $early.Reports += @($eiv.Intervals).Count
+                            if ($dn -gt 0) { & $Log 'WARN' ("context     : collection {0} -- {1:N0} of {2:N0} finding(s) filled as their report was complete differ from the data sync's own fill ({3}); the data sync's values are kept" -f $cid, $dn, $early.Compared, ($dr -join ', ')) }
+                            else { & $Log 'INFO' ("context     : collection {0} -- the {1:N0} finding(s) of {2} report(s) filled as each report was complete match the data sync's own fill (check mode: every row is filled here too)" -f $cid, $early.Compared, @($eiv.Intervals).Count) }
+                        } else {
+                            foreach ($x in @($eiv.Intervals)) { $skipIv.Add($x) }
+                            $early.Reports += $skipIv.Count
+                        }
+                    }
+                }
                 # PARALLEL RANGES, SIZED TO THE DATABASE: as many ranges at once as the database has cores (its own
                 # resource governance), one fewer each time the database is saturated (SI-SqlPacing.ps1), one more again
                 # when it is not -- disjoint FindingId ranges, each on its own connection, no command time limit. A seam
@@ -782,52 +855,89 @@ function Invoke-SIDataViewContext {
                 $ctxTick = $null
                 $ctxWarn = { param($l, $m) if ([string]$l -ne 'INFO') { & $Log $l $m } }.GetNewClosure()
                 if (Get-Command -Name New-SIStepProgressTicker -ErrorAction SilentlyContinue) { $ctxTick = New-SIStepProgressTicker -What ("the views' prepared context of collection {0}" -f $cid) -Unit 'field fill rows' -Total $total -Invoke $Invoke -Log $ctxWarn }
-                while ($after -lt $hi) {
-                    # the database's own load paces the ranges (SI-SqlPacing.ps1): a pause, a smaller range and fewer ranges
-                    # at once only while it is saturated -- every range is still filled, with the same values
-                    if ($paced) {
-                        $pace = Invoke-SISqlPacing -Invoke $Invoke -LastBatchMs $lastMs -Log $Log
-                        if ($pace.Shrink) { $size = [Math]::Max(500L, [long][Math]::Floor($size / 2)); $workersNow = [Math]::Max(1, $workersNow - 1) }
-                        elseif ($workersNow -lt $maxWorkers -and [string]$pace.State -eq 'normal') { $workersNow++ }
+                foreach ($vcCsPass in 1, 2) {
+                    while ($after -lt $hi) {
+                        # the database's own load paces the ranges (SI-SqlPacing.ps1): a pause, a smaller range and fewer ranges
+                        # at once only while it is saturated -- every range is still filled, with the same values
+                        if ($paced) {
+                            $pace = Invoke-SISqlPacing -Invoke $Invoke -LastBatchMs $lastMs -Log $Log
+                            if ($pace.Shrink) { $size = [Math]::Max(500L, [long][Math]::Floor($size / 2)); $workersNow = [Math]::Max(1, $workersNow - 1) }
+                            elseif ($workersNow -lt $maxWorkers -and [string]$pace.State -eq 'normal') { $workersNow++ }
+                        }
+                        $wave = New-Object System.Collections.Generic.List[object]
+                        $from = $after
+                        for ($k = 0; $k -lt $workersNow -and $from -lt $hi; $k++) {
+                            # #1337 on: a report filled as it was complete is left out (its range is its own, checked above)
+                            while ($skipIv.Count -gt 0 -and [long]$skipIv[0].Hi -le $from) { $skipIv.RemoveAt(0) }
+                            if ($skipIv.Count -gt 0 -and $from -ge ([long]$skipIv[0].Lo - 1)) {
+                                $early.Rows += [long]$skipIv[0].Rows; $mine += [long]$skipIv[0].Rows; $from = [long]$skipIv[0].Hi; $skipIv.RemoveAt(0); $k--; continue
+                            }
+                            $to = [Math]::Min($hi, $from + $size)
+                            if ($skipIv.Count -gt 0 -and $to -gt ([long]$skipIv[0].Lo - 1)) { $to = [long]$skipIv[0].Lo - 1 }
+                            $wave.Add(@($from, $to)); $from = $to
+                        }
+                        if ($wave.Count -eq 0) { $after = $from; continue }
+                        $sw = [Diagnostics.Stopwatch]::StartNew()
+                        if ($wave.Count -gt 1) {
+                            $res = Invoke-SIDataParallelRanges -ConnectionInfo $ci -Sql $fill -CollectionId $cid -Ranges $wave.ToArray() -Log $Log
+                            $n = [long]0; $ms = [long]0
+                            foreach ($r in $res) { $n += [long]$r.N; if ([long]$r.Ms -gt $ms) { $ms = [long]$r.Ms } }
+                        } else {
+                            $n = [long](& $Invoke $fill @{ CollectionId = $cid; After = $wave[0][0]; Upto = $wave[0][1] } 'scalar')
+                            $ms = $sw.ElapsedMilliseconds
+                        }
+                        $sw.Stop(); $lastMs = $ms
+                        $rows += $n; $mine += $n
+                        if ($ctxTick) { $null = Step-SIStepProgressTicker -Ticker $ctxTick -Done $mine }
+                        $after = $from
+                        # the wave is whole: everything up to $after is filled -- the next run starts from there
+                        try { $null = & $Invoke (Get-SIDataContextMarkWriteSql) @{ Name = $mark; Value = ([string]$after + $vcMarkTail) } 'nonquery' } catch { }
+                        $size = Get-SIDataNextSize -Current $size -ElapsedMs $ms -TargetMs $TargetMs -Minimum 500
+                        $now = $fillClock.Elapsed.TotalSeconds
+                        if ($after -lt $hi -and ($now - $said) -ge $ProgressSeconds) {
+                            $said = $now
+                            & $Log 'INFO' ("context     : " + (Format-SIDataFillProgress -Done $mine -Total $total -Seconds $now))
+                        }
                     }
-                    $wave = New-Object System.Collections.Generic.List[object]
-                    $from = $after
-                    for ($k = 0; $k -lt $workersNow -and $from -lt $hi; $k++) { $to = [Math]::Min($hi, $from + $size); $wave.Add(@($from, $to)); $from = $to }
-                    $sw = [Diagnostics.Stopwatch]::StartNew()
-                    if ($wave.Count -gt 1) {
-                        $res = Invoke-SIDataParallelRanges -ConnectionInfo $ci -Sql $fill -CollectionId $cid -Ranges $wave.ToArray() -Log $Log
-                        $n = [long]0; $ms = [long]0
-                        foreach ($r in $res) { $n += [long]$r.N; if ([long]$r.Ms -gt $ms) { $ms = [long]$r.Ms } }
-                    } else {
-                        $n = [long](& $Invoke $fill @{ CollectionId = $cid; After = $wave[0][0]; Upto = $wave[0][1] } 'scalar')
-                        $ms = $sw.ElapsedMilliseconds
+                    # #1319 the quick build is compared with the full one (shadow: every carried finding; on: the sample); on + a
+                    # difference: the whole collection is filled again with the field fill as it is (the full build), before anything
+                    # is published -- the fill writes only what differs, so what it holds then is exactly the full build's
+                    if ($vcCsPass -eq 1 -and $vcCsState -and [string]$vcCsState.Build -in 'shadow', 'changed-set') {
+                        $vcCsCheck = Test-SIDataViewContextChangedSet -Invoke $Invoke -State $vcCsState -List $List -CollectionId $cid -Lo $lo -Hi $hi -Log $Log
+                        if ($vcCsCheck.Redo) {
+                            $fill = $fillAll; $after = $lo - 1; $vcMarkTail = ''
+                            try { $null = & $Invoke (Get-SIDataContextMarkWriteSql) @{ Name = $mark; Value = [string]$after } 'nonquery' } catch { }
+                            continue
+                        }
                     }
-                    $sw.Stop(); $lastMs = $ms
-                    $rows += $n; $mine += $n
-                    if ($ctxTick) { $null = Step-SIStepProgressTicker -Ticker $ctxTick -Done $mine }
-                    $after = $from
-                    # the wave is whole: everything up to $after is filled -- the next run starts from there
-                    try { $null = & $Invoke (Get-SIDataContextMarkWriteSql) @{ Name = $mark; Value = [string]$after } 'nonquery' } catch { }
-                    $size = Get-SIDataNextSize -Current $size -ElapsedMs $ms -TargetMs $TargetMs -Minimum 500
-                    $now = $fillClock.Elapsed.TotalSeconds
-                    if ($after -lt $hi -and ($now - $said) -ge $ProgressSeconds) {
-                        $said = $now
-                        & $Log 'INFO' ("context     : " + (Format-SIDataFillProgress -Done $mine -Total $total -Seconds $now))
-                    }
+                    break
                 }
             }
             $issues += [long](& $Invoke $issue @{ CollectionId = $cid; Set = $setId } 'scalar')
             # the collection is prepared (its ContextAt is set): its resume mark is no longer needed
             try { $null = & $Invoke (Get-SIDataContextMarkClearSql) @{ Name = (Get-SIDataContextMarkName -CollectionId $cid -SetId $setId) } 'nonquery' } catch { }
+            # #1337 and so are the marks of its reports filled early
+            if (Get-Command -Name Remove-SIDataReportEarlyLoad -ErrorAction SilentlyContinue) { Remove-SIDataReportEarlyLoad -Invoke $Invoke -CollectionId $cid }
+            # #1319 the phase's record is finished only now (a collection whose prepared context did not complete is never a base)
+            if ($vcCsState) {
+                $vcCsRes = ConvertTo-SIDataChangedSetResult -State $vcCsState -Check $vcCsCheck
+                if ($vcCsState.RunId) {
+                    $finalBuild = if ($vcCsRes.FellBack) { 'full' } else { [string]$vcCsState.Build }
+                    try { Complete-SIDataChangedSetRun -Invoke $Invoke -RunId ([long]$vcCsState.RunId) -Build $finalBuild -Outcome 'ok' -Findings $vcCsState.Findings -Carried $vcCsRes.Carried -Compared $vcCsRes.Compared -Differences $vcCsRes.Differences -Detail $vcCsRes.Detail -SampleCis $vcCsRes.SampleCis -FellBack:([bool]$vcCsRes.FellBack) }
+                    catch { $vcCsRes.Problem = ('its record was not written: {0}' -f (Get-SIDataChangedSetSafeError $_)) }
+                }
+                $vcCsResults.Add($vcCsRes)
+            }
             $done++
         }
         $left = $pending.Count - $done
         & $Log 'OK' ("context     : {0} collection(s) got their prepared context ({1} finding row(s), {2} CVE / issue row(s))" -f $done, $rows, $issues)
+        if ($early.Mode -eq 'on' -and $early.Rows -gt 0) { & $Log 'INFO' ("context     : {0:N0} finding row(s) of {1} report(s) were filled as each report was complete and are not read again here" -f $early.Rows, $early.Reports) }
         if ($left -gt 0) { & $Log 'INFO' ("context     : {0} older collection(s) follow on the next run(s) -- their views read the context from the finding rows until then" -f $left) }
-        return [pscustomobject]@{ Status = 'ok'; Collections = $done; Findings = $rows; Issues = $issues; Pending = $left }
+        return [pscustomobject]@{ Status = 'ok'; Collections = $done; Findings = $rows; Issues = $issues; Pending = $left; ChangedSet = $vcCsResults.ToArray(); Early = [pscustomobject]$early }
     } catch {
         & $Log 'WARN' ("context     : the views' prepared context was not completed this run -- {0}. It is tried again on the next run; the views read what is not prepared from the finding rows." -f $_.Exception.Message)
-        return [pscustomobject]@{ Status = 'failed'; Error = $_.Exception.Message }
+        return [pscustomobject]@{ Status = 'failed'; Error = $_.Exception.Message; ChangedSet = $vcCsResults.ToArray() }
     }
 }
 
@@ -1150,6 +1260,7 @@ function Get-SIDataCveSummaryPendingSql {
         than the derive (an asset merge or a repair derived the collection again). Newest first. Never a retired collection.
     #>
     $live = ''; if (Get-Command -Name Get-SIDataLiveFilter -ErrorAction SilentlyContinue) { $live = Get-SIDataLiveFilter -Alias 'c' }
+    if (Get-Command -Name Get-SIDataBuildFilter -ErrorAction SilentlyContinue) { $live += Get-SIDataBuildFilter -Alias 'c' }   # #1226
     "SELECT c.CollectionId, c.CollectionTime FROM sidata.Collection AS c LEFT JOIN sidata.CveSummaryState AS s ON s.CollectionId = c.CollectionId WHERE c.Status = 'Complete' AND c.Kind = 'Detailed' AND c.DerivedAt IS NOT NULL AND (s.CollectionId IS NULL OR s.BuiltAt < c.DerivedAt)$live ORDER BY c.CollectionTime DESC"
 }
 
@@ -1215,6 +1326,45 @@ SELECT @cves;
 '@).Replace('{RANK}', $script:SIDataCveSeverityRank).Replace('{TIER}', $script:SIDataCveTierWords)
 }
 
+function Get-SIDataCveExploitSql {
+    <#
+        #1388 (owner 2026-11-25 "Verified/kit, build now") THE ACTIVELY EXPLOITED CVEs of the NEWEST collection that has per-CVE
+        rows -- what the finding model's "Days to fix an actively exploited finding" reads: sidata.CveSummary.ExploitVerified /
+        InExploitKit = 1 when any active finding of that CVE says the exploit is VERIFIED (si_exploit_verified, the report's
+        IsExploitVerified: Defender vulnerability management's exploitVerified, Exposure Graph's isExploitVerified, the public IP
+        scan's verified) or IN AN EXPLOIT KIT (si_in_exploit_kit / IsInExploitKit: Defender's exploitInKit, Exposure Graph's
+        isInExploitKit); never the exploit-available flag. Its own pass, apart from the per-CVE statement (which reads narrow
+        columns only): ONE parse of each CVE finding's row of that one collection, only while its columns are not worked out
+        (NULL) -- once per collection, so an existing install gets them on its next data sync without rewriting a stored
+        finding. Answers the per-CVE rows written (0 = nothing to do, -1 = the database has no such columns yet).
+    #>
+    @'
+SET NOCOUNT ON;
+IF OBJECT_ID('sidata.CveSummary') IS NULL OR COL_LENGTH('sidata.CveSummary', 'ExploitVerified') IS NULL OR COL_LENGTH('sidata.CveSummary', 'InExploitKit') IS NULL
+BEGIN SELECT -1; RETURN; END
+DECLARE @c INT = (SELECT TOP (1) c.CollectionId FROM sidata.Collection AS c WHERE EXISTS (SELECT 1 FROM sidata.CveSummary AS s WHERE s.CollectionId = c.CollectionId) ORDER BY c.CollectionTime DESC);
+IF @c IS NULL BEGIN SELECT 0; RETURN; END
+-- the columns are named through dynamic SQL: this statement compiles on a database the updater has not updated yet
+EXEC sp_executesql N'
+IF NOT EXISTS (SELECT 1 FROM sidata.CveSummary WHERE CollectionId = @c AND (ExploitVerified IS NULL OR InExploitKit IS NULL)) BEGIN SELECT 0; RETURN; END
+CREATE TABLE #x (Cve NVARCHAR(100) COLLATE DATABASE_DEFAULT NOT NULL PRIMARY KEY, V BIT NOT NULL, K BIT NOT NULL);
+INSERT #x (Cve, V, K)
+-- one-statement-ok: one collection''s CVE findings, once per collection -- the same scope as the per-CVE statement above
+SELECT LEFT(f.Cve, 100),
+       CONVERT(bit, MAX(CASE WHEN LOWER(j.v1) IN (N''true'', N''1'') OR LOWER(j.v2) IN (N''true'', N''1'') THEN 1 ELSE 0 END)),
+       CONVERT(bit, MAX(CASE WHEN LOWER(j.k1) IN (N''true'', N''1'') OR LOWER(j.k2) IN (N''true'', N''1'') THEN 1 ELSE 0 END))
+FROM sidata.Finding AS f
+CROSS APPLY OPENJSON(CASE WHEN ISJSON(f.DetailJson) = 1 THEN f.DetailJson END)
+     WITH (v1 NVARCHAR(16) ''$.si_exploit_verified'', v2 NVARCHAR(16) ''$.IsExploitVerified'', k1 NVARCHAR(16) ''$.si_in_exploit_kit'', k2 NVARCHAR(16) ''$.IsInExploitKit'') AS j
+WHERE f.CollectionId = @c AND f.Cve IS NOT NULL AND (f.CiLifecycle IS NULL OR f.CiLifecycle = N''active'')
+GROUP BY LEFT(f.Cve, 100);
+UPDATE s SET ExploitVerified = ISNULL(x.V, 0), InExploitKit = ISNULL(x.K, 0)
+FROM sidata.CveSummary AS s LEFT JOIN #x AS x ON x.Cve = s.Cve
+WHERE s.CollectionId = @c;
+SELECT @@ROWCOUNT;', N'@c INT', @c = @c;
+'@
+}
+
 function Invoke-SIDataCveSummary {
     <#
     .SYNOPSIS  Writes the per-CVE rows of every complete collection that has none (or older than its derive). Never throws.
@@ -1235,7 +1385,14 @@ function Invoke-SIDataCveSummary {
             & $Log 'INFO' ("cves        : {0} collection(s) would get their per-CVE rows; nothing is written." -f $pending.Count)
             return [pscustomobject]@{ Status = 'dry-run'; Collections = 0; Pending = $pending.Count }
         }
-        if ($pending.Count -eq 0) { return [pscustomobject]@{ Status = 'ok'; Collections = 0; Pending = 0; Cves = 0 } }
+        # #1388 the actively exploited CVEs of the newest collection (verified / in a kit), once per collection -- after the rows
+        $exploit = {
+            try {
+                $x = & $Invoke (Get-SIDataCveExploitSql) @{} 'scalar'
+                if ("$x" -match '^\d+$' -and [long]"$x" -gt 0) { & $Log 'OK' ("cves        : the newest collection's {0} CVE row(s) say whether an exploit is verified or in an exploit kit (the days to fix an actively exploited finding)" -f $x) }
+            } catch { & $Log 'WARN' ("cves        : whether an exploit is verified or in an exploit kit was not worked out this run -- {0}. Tried again on the next run; until then no finding is due sooner for it." -f $_.Exception.Message) }
+        }
+        if ($pending.Count -eq 0) { & $exploit; return [pscustomobject]@{ Status = 'ok'; Collections = 0; Pending = 0; Cves = 0 } }
         $sql = Get-SIDataCveSummarySql
         $clock = [Diagnostics.Stopwatch]::StartNew()
         $paced = [bool](Get-Command -Name Invoke-SISqlPacing -ErrorAction SilentlyContinue); $lastMs = 0L
@@ -1250,6 +1407,7 @@ function Invoke-SIDataCveSummary {
             $done++
         }
         $left = $pending.Count - $done
+        & $exploit
         & $Log 'OK' ("cves        : {0} collection(s) got their per-CVE rows ({1} CVE row(s)) -- Security recommendations > Summary > Vulnerabilities (CVE) reads them" -f $done, $cves)
         if ($left -gt 0) { & $Log 'INFO' ("cves        : {0} older collection(s) follow on the next run(s) -- their Vulnerabilities list says it is being prepared until then" -f $left) }
         return [pscustomobject]@{ Status = 'ok'; Collections = $done; Cves = $cves; Pending = $left }
@@ -1334,6 +1492,7 @@ function Get-SIDataAssetRiskSummaryPendingSql {
         or older than the derive (an asset merge or a repair derived the collection again). Newest first. Never retired.
     #>
     $live = ''; if (Get-Command -Name Get-SIDataLiveFilter -ErrorAction SilentlyContinue) { $live = Get-SIDataLiveFilter -Alias 'c' }
+    if (Get-Command -Name Get-SIDataBuildFilter -ErrorAction SilentlyContinue) { $live += Get-SIDataBuildFilter -Alias 'c' }   # #1226
     "SELECT c.CollectionId, c.CollectionTime FROM sidata.Collection AS c LEFT JOIN sidata.AssetRiskSummaryState AS s ON s.CollectionId = c.CollectionId WHERE c.Status = 'Complete' AND c.Kind = 'Detailed' AND c.DerivedAt IS NOT NULL AND (s.CollectionId IS NULL OR s.BuiltAt < c.DerivedAt)$live ORDER BY c.CollectionTime DESC"
 }
 
@@ -1423,6 +1582,7 @@ function Get-SIDataDomainCategorySchemaCheckSql {
 function Get-SIDataDomainCategoryPendingSql {
     <# Complete Detailed collections without their pairs (or with pairs older than a re-derive). Newest first. Never retired. #>
     $live = ''; if (Get-Command -Name Get-SIDataLiveFilter -ErrorAction SilentlyContinue) { $live = Get-SIDataLiveFilter -Alias 'c' }
+    if (Get-Command -Name Get-SIDataBuildFilter -ErrorAction SilentlyContinue) { $live += Get-SIDataBuildFilter -Alias 'c' }   # #1226
     "SELECT c.CollectionId, c.CollectionTime FROM sidata.Collection AS c LEFT JOIN sidata.DomainCategoryState AS s ON s.CollectionId = c.CollectionId WHERE c.Status = 'Complete' AND c.Kind = 'Detailed' AND (s.CollectionId IS NULL OR (c.DerivedAt IS NOT NULL AND s.BuiltAt < c.DerivedAt))$live ORDER BY c.CollectionTime DESC"
 }
 
@@ -1483,6 +1643,7 @@ function Get-SIDataReportPreviewSchemaCheckSql {
 
 function Get-SIDataReportPreviewPendingSql {
     $live = ''; if (Get-Command -Name Get-SIDataLiveFilter -ErrorAction SilentlyContinue) { $live = Get-SIDataLiveFilter -Alias 'c' }
+    if (Get-Command -Name Get-SIDataBuildFilter -ErrorAction SilentlyContinue) { $live += Get-SIDataBuildFilter -Alias 'c' }   # #1226
     "SELECT c.CollectionId, c.CollectionTime FROM sidata.Collection AS c LEFT JOIN sidata.ReportPreviewState AS s ON s.CollectionId = c.CollectionId WHERE c.Status = 'Complete' AND c.Kind = 'Detailed' AND (s.CollectionId IS NULL OR (c.DerivedAt IS NOT NULL AND s.BuiltAt < c.DerivedAt))$live ORDER BY c.CollectionTime DESC"
 }
 
@@ -1642,4 +1803,10 @@ function Set-SIDataViewVersion {
         & $Log 'WARN' ("views       : the views' data mark was not set this run ({0}) -- the web app notices new data by its own counts." -f $_.Exception.Message)
         return [pscustomobject]@{ Status = 'failed'; Error = $_.Exception.Message }
     }
+}
+
+# #1337 the reports Risk Analysis filled as each was complete (SI-DataReportEarly.ps1) -- loaded with the field fill
+if (-not (Get-Command -Name Get-SIDataReportEarlyIntervals -ErrorAction SilentlyContinue)) {
+    $__siEarly = Join-Path $PSScriptRoot 'SI-DataReportEarly.ps1'
+    if (Test-Path -LiteralPath $__siEarly) { . $__siEarly }
 }

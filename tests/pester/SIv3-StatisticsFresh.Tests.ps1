@@ -55,16 +55,21 @@ Describe 'STATIC: the schema, the grant and the runner' {
         @(Get-SISchemaSecurityRows -SIRoot $script:SIRoot | Where-Object { $_.on -eq 'sidata.StatisticsRefresh' -and $_.permission -eq 'EXECUTE' -and $_.to -eq 'public' }).Count | Should -Be 1 -Because 'the signed grant procedure applies it on the signed path'
     }
     It 'the work procedure runs as its owner, has NO grant of its own, builds every name from the catalog and never reads a whole large table' {
-        $m = [regex]::Match($script:Schema, "(?s)DECLARE @SIStatsProc nvarchar\(max\) = N'CREATE OR ALTER PROCEDURE sidata\.StatisticsRefreshTable .*?END';")
+        # #1372: the v2 definition, APPENDED at the file's end (the file only appends; the later definition overrides the v1 one)
+        $m = [regex]::Match($script:Schema, "(?s)DECLARE @SIStatsProc2 nvarchar\(max\) = N'CREATE OR ALTER PROCEDURE sidata\.StatisticsRefreshTable .*?END';")
         $m.Success | Should -BeTrue
         $body = $m.Value
         # SELF = the identity that applied the schema (setup's admin, or the updater: db_ddladmin may not impersonate the owner,
         # live finding of this suite's first run -- "Cannot execute as the user 'dbo'"), never OWNER
         $body | Should -Match '(?m)^WITH EXECUTE AS SELF\r?$'
         $script:Schema | Should -Not -Match 'EXECUTE AS OWNER\r?\n'
-        $body | Should -Match 'si-statistics-refresh v1'
+        $body | Should -Match 'si-statistics-refresh v2'
         # made again when missing, older, or when the identity it runs as is gone -- the module guard never sees it (a variable)
-        $script:Schema | Should -Match "(?s)IF OBJECT_ID\(N'sidata\.StatisticsRefreshTable'\) IS NULL\s+OR CHARINDEX\(N'si-statistics-refresh v1'.*?execute_as_principal_id.*?EXEC \(@SIStatsProc\);"
+        $script:Schema | Should -Match "(?s)IF OBJECT_ID\(N'sidata\.StatisticsRefreshTable'\) IS NULL\s+OR CHARINDEX\(N'si-statistics-refresh v2'.*?execute_as_principal_id.*?EXEC \(@SIStatsProc2\);"
+        # the v1 definition above is not made again over v2 on every apply: v2 carries v1's marker too
+        $body | Should -Match 'si-statistics-refresh v1'
+        $script:Schema.IndexOf('DECLARE @SIStatsProc2') | Should -BeGreaterThan $script:Schema.IndexOf('DECLARE @SIStatsProc nvarchar')
+        $script:Schema.LastIndexOf("EXEC (N'CREATE OR ALTER PROCEDURE sidata.StatisticsRefresh @After") | Should -BeGreaterThan $script:Schema.IndexOf('DECLARE @SIStatsProc2') -Because 'the gate with @Only comes last, so it overrides'
         $body | Should -Match ([regex]::Escape("SET @sql = N''UPDATE STATISTICS '' + @Table + N'' ('' + QUOTENAME(@name) + N'');'';")) -Because 'the table name is QUOTENAME''d from sys.tables, the statistic''s too'
         $body | Should -Match 'QUOTENAME\(SCHEMA_NAME\(t\.schema_id\)\) \+ N''''\.'''' \+ QUOTENAME\(t\.name\)'
         $body | Should -Not -Match '(?i)FULLSCAN|RESAMPLE|\bSAMPLE\b' -Because 'the database''s default sampling -- never a full scan of a large table'
@@ -196,6 +201,84 @@ Describe 'THE DRIVER: table by table, never throws, plain words' {
     }
 }
 
+Describe '#1372 THE DATA SYNC REFRESHES THE TABLES IT REWROTE, AT ITS END (fakes)' {
+    BeforeAll {
+        # answers: the catalog read (the stale sidata tables, largest change first), then one row per table call
+        function script:New-RewrittenFake {
+            param([string[]]$Tables, [scriptblock]$OnCall, [switch]$NotV2, [switch]$CatalogThrows)
+            $st = [pscustomobject]@{ Calls = (New-Object System.Collections.Generic.List[object]) }
+            $inv = {
+                param($Sql, $Params, $Mode)
+                $st.Calls.Add([pscustomobject]@{ Sql = $Sql; Params = $Params; Mode = $Mode })
+                if ($Sql -match 'GROUP BY t\.schema_id, t\.name') { if ($CatalogThrows) { throw 'Lock request time out period exceeded.' }; return , @($Tables | ForEach-Object { @{ TableName = $_; Stats = 2; Changes = 1000; Rows = 9000 } }) }
+                if ($OnCall) { & $OnCall }
+                if ($NotV2) { return , @(@{ Ready = $false }) }
+                , @(@{ Ready = $true; TableName = $Params.Only; Refreshed = 2; Failed = 0; Error = $null; Async = $true })
+            }.GetNewClosure()
+            $st | Add-Member -NotePropertyName Invoke -NotePropertyValue $inv
+            $st
+        }
+    }
+    It 'one catalog read, then ONE call per stale sidata table (@Only), in the order read; one timing line; nothing left' {
+        $f = New-RewrittenFake -Tables @('[sidata].[SummaryGroup]', '[sidata].[Finding]', '[sidata].[IssueContext]')
+        $lines = New-Object System.Collections.Generic.List[string]
+        $r = Invoke-SIDataStatisticsRefreshRewritten -Invoke $f.Invoke -SyncSeconds 3000 -Log { param($l, $m) $lines.Add("$l $m") }.GetNewClosure()
+        $r.Ready | Should -BeTrue; $r.Tables | Should -Be 3; $r.Refreshed | Should -Be 6; $r.Left | Should -Be 0; $r.Error | Should -BeNullOrEmpty
+        $r.Budget | Should -Be 300 -Because 'a tenth of the data sync''s 3,000 s'
+        @($f.Calls | Where-Object { $_.Sql -match 'GROUP BY t\.schema_id' }).Count | Should -Be 1
+        @($f.Calls | Where-Object { $_.Params -and $_.Params.Only } | ForEach-Object { $_.Params.Only }) | Should -Be @('[sidata].[SummaryGroup]', '[sidata].[Finding]', '[sidata].[IssueContext]')
+        $lines.Count | Should -Be 1
+        $lines[0] | Should -Match '^INFO statistics   : 6 statistic\(s\) of 3 table\(s\) this data sync rewrote refreshed in [\d.]+ s \(budget 300 s\)$'
+    }
+    It 'the catalog read is the sidata schema only, the database''s own stale threshold, largest change first, catalog views only' {
+        $q = Get-SIDataStatisticsRewrittenSql
+        $q | Should -Match ([regex]::Escape("t.schema_id = SCHEMA_ID(N'sidata')"))
+        $q | Should -Match ([regex]::Escape('CASE WHEN ISNULL(sp.rows, 0) <= 500 THEN 500.0'))
+        $q | Should -Match ([regex]::Escape('WHEN 500.0 + 0.2 * sp.rows < SQRT(1000.0 * sp.rows) THEN 500.0 + 0.2 * sp.rows'))
+        $q | Should -Match 'ORDER BY MAX\(ISNULL\(sp\.modification_counter, 0\)\) DESC'
+        $q | Should -Not -Match '(?i)\b(INSERT|UPDATE|DELETE|MERGE)\b'
+        $one = Get-SIDataStatisticsRefreshOneSql
+        $one | Should -Match ([regex]::Escape("name = N'@Only'")) -Because 'a procedure not made again yet (v1) is not called'
+        $one | Should -Match ([regex]::Escape('@Only = @Only;'))
+    }
+    It 'THE BUDGET: a tenth of the data sync''s own time, at least a minute -- a measurement, the rest goes to the refresh after the run' {
+        Get-SIDataStatisticsRewrittenBudget -SyncSeconds 0 | Should -Be 60
+        Get-SIDataStatisticsRewrittenBudget -SyncSeconds 300 | Should -Be 60
+        Get-SIDataStatisticsRewrittenBudget -SyncSeconds 7200 | Should -Be 720
+        Get-SIDataStatisticsRewrittenBudget -SyncSeconds 36000 | Should -Be 3600 -Because 'the same share at a 500k-device install: no fixed ceiling'
+        # spent after the second table: no new table, the third is left (said), nothing skipped for good
+        $clock = @{ T = 0.0 }
+        $f = New-RewrittenFake -Tables @('[sidata].[A]', '[sidata].[B]', '[sidata].[C]') -OnCall { $clock.T += 40 }.GetNewClosure()
+        $lines = New-Object System.Collections.Generic.List[string]
+        $r = Invoke-SIDataStatisticsRefreshRewritten -Invoke $f.Invoke -BudgetSeconds 60 -Clock { $clock.T }.GetNewClosure() -Log { param($l, $m) $lines.Add("$l $m") }.GetNewClosure()
+        $r.Tables | Should -Be 2; $r.Left | Should -Be 1; @($r.LeftNames) | Should -Be @('[sidata].[C]')
+        $lines[0] | Should -Match '^INFO statistics   : 4 statistic\(s\) of 2 table\(s\) this data sync rewrote refreshed in 80\.0 s \(budget 60 s\); 1 table\(s\) left to the refresh after the run \(the 60 s budget, a tenth of the data sync, was spent\)$'
+    }
+    It 'NEVER FAILS THE DATA SYNC: a procedure not made again yet, a catalog read that fails, no database' {
+        $f = New-RewrittenFake -Tables @('[sidata].[A]', '[sidata].[B]') -NotV2
+        $lines = New-Object System.Collections.Generic.List[string]
+        $r = Invoke-SIDataStatisticsRefreshRewritten -Invoke $f.Invoke -Log { param($l, $m) $lines.Add("$l $m") }.GetNewClosure()
+        $r.Ready | Should -BeFalse; $r.Tables | Should -Be 0; $r.Left | Should -Be 2
+        $lines[0] | Should -Match 'left to the refresh after the run \(the database''s refresh procedure is not updated yet\)$'
+        $g = New-RewrittenFake -Tables @('[sidata].[A]') -CatalogThrows
+        $lines.Clear()
+        $log2 = { param($l, $m) $lines.Add("$l $m") }.GetNewClosure()
+        { $script:R2 = Invoke-SIDataStatisticsRefreshRewritten -Invoke $g.Invoke -Log $log2 } | Should -Not -Throw
+        @($lines) | Should -Be @("WARN the statistics of the tables this data sync rewrote were not refreshed (Lock request time out period exceeded.) -- the refresh after the run does it; the data is not affected")
+        (Invoke-SIDataStatisticsRefreshRewritten -Invoke $null).Ready | Should -BeFalse
+    }
+    It 'THE WIRING: the data sync runs it as its own step after the writes, BEFORE the views'' mark moves the pages, in its own try, with its own timing line' {
+        $ds = [IO.File]::ReadAllText((Join-Path $script:SIRoot 'engine\pro-data\_shared\SI-DataSync.ps1'))
+        $call = $ds.IndexOf('Invoke-SIDataStatisticsRefreshRewritten -Invoke $Invoke -SyncSeconds $syncClock.Elapsed.TotalSeconds -Log $Log')
+        $mark = $ds.IndexOf('Set-SIDataViewVersion -Invoke $Invoke -Log $Log')
+        $ret = $ds.IndexOf("& `$phase 'asset metadata retention'")
+        $call | Should -BeGreaterThan 0; $mark | Should -BeGreaterThan $call; $ret | Should -BeLessThan $call
+        $ds | Should -Match ([regex]::Escape("& `$phase 'statistics (rewritten tables)'"))
+        $ds | Should -Match ([regex]::Escape('$syncClock = [Diagnostics.Stopwatch]::StartNew()'))
+        $ds.Substring($ret, $mark - $ret) | Should -Match '(?s)try \{.*Invoke-SIDataStatisticsRefreshRewritten.*\} catch \{ & \$Log ''WARN'''
+    }
+}
+
 Describe 'REAL SQL: the setting, a stale statistic, no row changed, the gate, the updater''s procedures (local SQL Server Express)' -Skip:(-not $script:HasSql) {
     BeforeAll {
         . (Join-Path $script:SIRoot 'engine\pro-settings\SI-ProSchema.ps1')
@@ -315,6 +398,39 @@ WHERE s.object_id = OBJECT_ID(N'sidata.Finding') AND s.name = N'PK_Finding'
         $s = @(& $script:Admin $script:StaleSql @{} 'rows' | ForEach-Object { $_ })[0]
         [long]$s['Mods'] | Should -BeGreaterThan 0 -Because 'the refused call refreshed nothing'
     }
+    It '#1372 THE DATA SYNC''S REFRESH OF THE TABLES IT REWROTE: the engine''s own user, one sidata table per call (@Only), the stale ones only, one timing line, no row changed' {
+        # the fixture: 200,000 more findings (the findings table rewritten, as a data sync does); measured, said in the output
+        $sw = [Diagnostics.Stopwatch]::StartNew(); & $script:Rows 200000; $gen = $sw.Elapsed.TotalSeconds
+        $digest = [string](& $script:Admin $script:Digest @{} 'scalar')
+        $stale = @(& $script:AsEngine (Get-SIDataStatisticsRewrittenSql) @{} 'rows' | ForEach-Object { $_ })
+        @($stale | ForEach-Object { [string]$_['TableName'] }) | Should -Contain '[sidata].[Finding]'
+        @($stale | Where-Object { [string]$_['TableName'] -notlike '`[sidata`].*' }).Count | Should -Be 0 -Because 'only the data sync''s own schema'
+        $lines = New-Object System.Collections.Generic.List[string]
+        $r = Invoke-SIDataStatisticsRefreshRewritten -Invoke $script:AsEngine -SyncSeconds 600 -Log { param($l, $m) $lines.Add("$l $m") }.GetNewClosure()
+        $mline = ('MEASURE #1372 statistics at the data sync''s end: {0} statistic(s) of {1} table(s) in {2:0.0} s (budget {3:0} s) -- fixture {4:N0} finding rows, generated in {5:0.0} s; tables: {6}' -f $r.Refreshed, $r.Tables, $r.Seconds, $r.Budget, [long](& $script:Admin 'SELECT COUNT_BIG(*) FROM sidata.Finding' @{} 'scalar'), $gen, (@($r.Names) -join ', '))
+        Write-Host $mline
+        try { $mf = [IO.Path]::Combine($script:SIRoot, '..', '..', 'TestResults', 'statistics-measure.txt'); $null = New-Item -ItemType Directory -Force -Path (Split-Path -Parent $mf); Add-Content -LiteralPath $mf -Value $mline } catch { }
+        $r.Ready | Should -BeTrue -Because $r.Error
+        $r.Error | Should -BeNullOrEmpty
+        $r.Failed | Should -Be 0 -Because $r.FailedError
+        $r.Left | Should -Be 0
+        $r.Budget | Should -Be 60 -Because 'a tenth of a 600 s data sync'
+        @($r.Names) | Should -Contain '[sidata].[Finding]'
+        $r.Tables | Should -Be $stale.Count
+        @($lines | Where-Object { $_ -match '^INFO statistics   : \d+ statistic\(s\) of \d+ table\(s\) this data sync rewrote refreshed in [\d.]+ s \(budget 60 s\)$' }).Count | Should -Be 1 -Because ($lines -join ' | ')
+        $s = @(& $script:Admin $script:StaleSql @{} 'rows' | ForEach-Object { $_ })[0]
+        [long]$s['Mods'] | Should -Be 0
+        [string](& $script:Admin $script:Digest @{} 'scalar') | Should -Be $digest -Because 'a statistics refresh changes no row'
+        # nothing stale left in sidata: the next read finds none, and the step says 0
+        @(& $script:AsEngine (Get-SIDataStatisticsRewrittenSql) @{} 'rows' | ForEach-Object { $_ } | Where-Object { $_ }).Count | Should -Be 0
+        # a reader (not a job identity) is refused by the gate: one warning, nothing thrown
+        # (past the database's threshold for ~214,000 rows: sqrt(1000 x rows) ~ 14,600 changes -- the next test refreshes it)
+        & $script:Rows 20000
+        $w = New-Object System.Collections.Generic.List[string]
+        $logW = { param($l, $m) $w.Add("$l $m") }.GetNewClosure()
+        { $script:Rr = Invoke-SIDataStatisticsRefreshRewritten -Invoke $script:AsReader -Log $logW } | Should -Not -Throw
+        @($w | Where-Object { $_ -like 'WARN *only a job identity may refresh the statistics*' }).Count | Should -Be 1 -Because ($w -join ' | ')
+    }
     It 'THE UPDATER makes the procedures (db_ddladmin, no ALTER on the database): its schema applies, and the engine''s refresh runs with the updater''s rights -- the setting is left as it is, said nowhere' {
         & $script:Admin 'CREATE USER si_upd WITHOUT LOGIN;' @{} 'nonquery'
         foreach ($r in 'db_datareader', 'db_datawriter', 'db_ddladmin') { & $script:Admin "ALTER ROLE [$r] ADD MEMBER [si_upd];" @{} 'nonquery' }
@@ -352,7 +468,7 @@ WHERE s.object_id = OBJECT_ID(N'sidata.Finding') AND s.name = N'PK_Finding'
         ($m.Moved -join ' ') | Should -Match 'StatisticsRefreshTable\]: it now runs as si_upd_new'
         [string](& $script:Admin "SELECT p.name FROM sys.sql_modules AS m JOIN sys.database_principals AS p ON p.principal_id = m.execute_as_principal_id WHERE m.object_id = OBJECT_ID(N'sidata.StatisticsRefreshTable')" @{} 'scalar') | Should -Be 'si_upd_new'
         [int](& $script:Admin "SELECT COUNT(*) FROM sys.database_permissions WHERE major_id = OBJECT_ID(N'sidata.StatisticsRefreshTable') AND grantee_principal_id = USER_ID(N'si_rd') AND permission_name = N'VIEW DEFINITION'" @{} 'scalar') | Should -Be 1
-        [int](& $script:Admin "SELECT CHARINDEX(N'si-statistics-refresh v1', OBJECT_DEFINITION(OBJECT_ID(N'sidata.StatisticsRefreshTable')))" @{} 'scalar') | Should -BeGreaterThan 0
+        [int](& $script:Admin "SELECT CHARINDEX(N'si-statistics-refresh v2', OBJECT_DEFINITION(OBJECT_ID(N'sidata.StatisticsRefreshTable')))" @{} 'scalar') | Should -BeGreaterThan 0
         & $script:Admin 'DROP USER si_upd;' @{} 'nonquery'
         [int](& $script:Admin "SELECT COUNT(*) FROM sys.database_principals WHERE name = N'si_upd'" @{} 'scalar') | Should -Be 0
         # the refresh still runs, with the new user's rights

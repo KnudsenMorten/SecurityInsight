@@ -116,6 +116,41 @@ ORDER BY ff.Facet, ff.Findings DESC;
         return spec with { Ctes = spec.Ctes.Replace("WHERE " + ThisCollection + " AND f.AssetKey IS NOT NULL", "WHERE " + ThisCollection + " AND f.AssetKey IS NOT NULL AND " + lifecycle.Sql("f.CiLifecycle"), StringComparison.Ordinal) };
     }
 
+    // ---- #1355 (owner 2026-11-24): "Actual Risks" (every open finding, the default) vs "Within Accepted Lifecycle" ----------
+    // The findings the wall board's "Within Accepted Lifecycle" view counts are STORED per collection by the key figures' own
+    // build (sidata.FindingLifecycleRisk, the same #pg.Life verdict as its findings_lifecycle figure -- engine\pro-data\_shared\
+    // SI-DataKeyFigures.ps1). A finding grid narrowed to them adds one EXISTS on that table's clustered key (CollectionId,
+    // FindingId) -- never the rule worked out per row, never the source record.
+
+    /// The finding (alias f) is one the "Within Accepted Lifecycle" view counts.
+    public const string WithinAcceptedLifecycleSql =
+        "EXISTS (SELECT 1 FROM sidata.FindingLifecycleRisk AS lr WHERE lr.CollectionId = f.CollectionId AND lr.FindingId = f.FindingId)";
+
+    /// The keyset page's total when the grid is narrowed to them: the stored rows of the collection on the CIs the opening
+    /// view counts (active; the keyset is only kept for the active-only lifecycle, <see cref="WithLifecycle"/>) -- seeks on the
+    /// two clustered keys.
+    public const string WithinAcceptedLifecycleTotal =
+        "(SELECT COUNT_BIG(*) FROM sidata.FindingLifecycleRisk AS lt JOIN sidata.Finding AS f ON f.CollectionId = lt.CollectionId AND f.FindingId = lt.FindingId " +
+        "WHERE lt.CollectionId = TRY_CONVERT(int, @CollectionId) AND (f.CiLifecycle = N'active' OR f.CiLifecycle IS NULL))";
+
+    /// <summary>
+    /// A grid over one collection's finding rows (its source reads sidata.Finding AS f "WHERE " + <see cref="ThisCollection"/>)
+    /// narrowed to the findings the "Within Accepted Lifecycle" view counts: the source, its late projection and the keyset's
+    /// keys get the EXISTS; the keyset's total counts the stored rows; the dropdowns count the narrowed rows (no stored counts).
+    /// </summary>
+    public static GridSpec WithinAcceptedLifecycle(GridSpec spec)
+    {
+        var where = "WHERE " + ThisCollection;
+        if (!spec.Source.Contains(where, StringComparison.Ordinal)) throw new InvalidOperationException($"grid {spec.Name}: not a grid of one collection's finding rows");
+        string Narrow(string s) => s.Replace(where, where + " AND " + WithinAcceptedLifecycleSql, StringComparison.Ordinal);
+        return spec with
+        {
+            Source = Narrow(spec.Source),
+            Late = spec.Late is { } late ? new GridLate(needed => Narrow(late.NarrowSource(needed)), late.Join) : null,
+            Keyset = spec.Keyset is { } k ? k with { Keys = k.Keys + " AND " + WithinAcceptedLifecycleSql, Total = WithinAcceptedLifecycleTotal, Counts = null } : null,
+        };
+    }
+
     // ---- (1) raw rows, also the findings of one CI (3) and the facet views (7..10) ---------------------------------
 
     // ---- the risk score's parts as STORED COLUMNS (owner 2026-10-28: "it should be possible to see the Risk Score
@@ -921,6 +956,12 @@ SELECT N'assets', ac.Change, COUNT_BIG(*) FROM ac GROUP BY ac.Change;
 
     // ---- (14) connector changes in the window of this collection -----------------------------------------------------
 
+    /// #1377 (owner 2026-11-25: "what is held ? we dont understand"; "make it shorter"): what a person reads for a
+    /// connector run's Held count (cfg.ConnectorRun.Held -- the column and the code keep the name Held), everywhere it is
+    /// shown: the grids' header, the export header and the page help. <see cref="HeldHelp"/> is the header's tooltip.
+    public const string HeldLabel = "Not proven fixed";
+    public const string HeldHelp = "Gone from the source, kept open until SecurityInsight is sure it is fixed. Checked every run.";
+
     public static readonly GridSpec ConnectorRuns = GridSql.Check(new GridSpec("connectorruns", "", """
 SELECT CONVERT(nvarchar(64), r.ConnectorRunId) AS ConnectorRunId, r.ConnectorName, r.Kind, r.Mode, r.Outcome, r.StartedAt, r.EndedAt,
        r.PlanOpen, r.PlanReopen, r.PlanUpdate, r.PlanClose, r.Held, r.Opened, r.Reopened, r.Updated, r.Closed, r.Errors, r.NotSent, r.Unchanged, COALESCE(r.HaltReason, r.Error) AS HaltReason, r.RunId
@@ -938,7 +979,7 @@ WHERE r.StartedAt >= @From AND r.StartedAt < @To
         new("PlanReopen", "Plan: reopen", GridType.Number),
         new("PlanUpdate", "Plan: update", GridType.Number),
         new("PlanClose", "Plan: close", GridType.Number),
-        new("Held", "Held", GridType.Number),
+        new("Held", HeldLabel, GridType.Number),
         new("Opened", "Opened", GridType.Number),
         new("Reopened", "Reopened", GridType.Number),
         new("Updated", "Updated", GridType.Number),

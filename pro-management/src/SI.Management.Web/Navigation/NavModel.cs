@@ -183,8 +183,10 @@ public static class NavModel
         // owner 2026-10-19 ("can we structure into menu groups like Connectors, Data Enrichment, or let it follow the namings
         // used in pipeline"): Configuration under the pipeline's own stage titles (JobFlow.StageTitle, the same words the Jobs
         // page shows a step under), then Platform for the install itself.
-        // Collect (data-in): what SecurityInsight reads -- the profile tables' columns and raw data, and what sources newly offer
-        new NavItem("Configuration", "/SchemaOverlay/Index", "Schema overlays", "reader", Stage: Collect),
+        // Collect (data-in): what SecurityInsight reads -- what sources newly offer. #1381 (owner 2026-11-25: "even i dont
+        // understand what an overlays is. hide it if it is not relevant to customers"): Schema overlays is no menu item --
+        // the page stays for a SuperAdmin (SecurityInsight / Invardia support) at its own address (Program.cs), and the
+        // overlays an install has keep working
         // continuous discovery: what each source offers that was not there before; an Admin adds it to a default layout or maps it
         new NavItem("Configuration", "/SchemaOverlay/NewContext", "New context available", "reader", Stage: Collect),
         // Correlate (data structure): how SecurityInsight understands it -- the profiling rules, the CI rule packs (tier,
@@ -231,7 +233,7 @@ public static class NavModel
             new("/Templates/Index", "Template conformance"), new("/Templates/Releases", "Template releases")) with { Stage = Platform },
         // #404 (CONFIG-1.3 / 1.4): configuration backups and pick-what-you-restore
         new NavItem("Configuration", "/Admin/Backups", "Backups (restore)", "admin", Stage: Platform),
-        new NavItem("Configuration", "/Admin/EnvironmentReport", "Environment report", "admin", Stage: Platform),   // ENV-REPORT-1 (#482)
+        new NavItem("Configuration", "/Admin/EnvironmentReport", "System Documentation", "admin", Stage: Platform),   // ENV-REPORT-1 (#482)
         new("Help", "/Help", "Help + glossary", "reader"),
         // #679: the documentation of THIS version, shipped inside the release -- every signed-in role may read it
         new("Help", "/Docs/Index", "Documentation", "home"),

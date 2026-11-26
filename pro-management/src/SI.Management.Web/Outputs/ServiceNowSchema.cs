@@ -44,6 +44,11 @@ public static class ServiceNowSchema
         // the tags (owner 2026-11-03: the customer sends them to the ServiceNow CI): a machine can carry many tags with long
         // values, so the field is created at ServiceNow's large-string size and a row is never cut
         ["si_tags_all"] = 65000, ["si_tags"] = 65000, ["si_tags_inherited"] = 65000,
+        // #1367 the remediation task's context for a ticket: texts with no upper bound (every path, every CVE id, every
+        // remediation text) are created at the large-string size, so a value is never cut; the link holds the web address
+        ["record.what_to_do"] = 65000, ["record.detected_paths"] = 65000,["record.recommended_update"] = 65000,
+        ["record.remediation"] = 65000, ["record.cve_ids"] = 65000, ["record.end_of_support"] = 65000, ["record.also_reported_by"] = 65000,
+        ["record.application_version"] = 1000, ["record.more_info"] = 1000, ["record.context_hash"] = 64,
     };
 
     /// The tag lists ({ name, value } entries, an inherited one with its scope): sent as ONE text, never JSON -- the engine's
@@ -57,6 +62,9 @@ public static class ServiceNowSchema
     public static readonly IReadOnlyDictionary<string, string> PathTypes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
     {
         ["closed_at"] = "datetime", ["absent_runs"] = "integer", ["record_id"] = "string", ["item_key"] = "string",
+        // #1367 the remediation task's context (record.<name>)
+        ["due_date"] = "datetime", ["first_detected"] = "datetime", ["end_of_support_date"] = "datetime",
+        ["weighted_risk"] = "decimal", ["risk_score"] = "decimal", ["cvss"] = "decimal",
     };
 
     private static ColumnType Of(string type, string? format = null) => new(type, type switch

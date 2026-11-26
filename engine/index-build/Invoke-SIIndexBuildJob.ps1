@@ -28,6 +28,8 @@ try {
     . ([IO.Path]::Combine($siRoot, 'engine', '_shared', 'SI-SqlRetry.ps1'))
     . ([IO.Path]::Combine($siRoot, 'engine', '_shared', 'SI-IndexBuild.ps1'))
     . ([IO.Path]::Combine($siRoot, 'engine', '_shared', 'SI-UpdaterStart.ps1'))
+    # #1317 the collection partitions (a start with SI_INDEXBUILD_PARTITIONS=1, SI_Data_RetireByPartition on)
+    . ([IO.Path]::Combine($siRoot, 'engine', 'pro-settings', 'SI-ProPartitionMove.ps1'))
     # the install's lock: the updater's own run gate (the same lock row, the same rules; the job never waits for it)
     . ([IO.Path]::Combine($siRoot, 'container', 'updater', '_shared', 'SI-UpdaterRunGate.ps1'))
     . ([IO.Path]::Combine($PSScriptRoot, 'SI-IndexBuildJob.ps1'))
@@ -54,10 +56,12 @@ $sqlToken = { param([bool]$Fresh) Get-SIManagedIdentityToken -Resource 'https://
 $store = [pscustomobject]@{
     Server = $in.Server; Database = $in.Database
     Invoke = {
-        param([string]$Sql, $Params, [string]$Mode)
+        # -TimeoutSeconds (optional, #1317): a statement time limit for the bounded work that asks for one (the collection
+        # partitions); 0 / not given = no limit (an index build is bounded by its own window)
+        param([string]$Sql, $Params, [string]$Mode, [int]$TimeoutSeconds = 0)
         $c = Open-SISqlConnectionRetry -Server $in.Server -Database $in.Database -Token $sqlToken
         try {
-            $cmd = $c.CreateCommand(); $cmd.CommandText = $Sql; $cmd.CommandTimeout = 0
+            $cmd = $c.CreateCommand(); $cmd.CommandText = $Sql; $cmd.CommandTimeout = [Math]::Max(0, $TimeoutSeconds)
             if ($Params) { foreach ($k in @($Params.Keys)) { $v = $Params[$k]; [void]$cmd.Parameters.AddWithValue('@' + $k, $(if ($null -eq $v) { [DBNull]::Value } else { $v })) } }
             if ($Mode -eq 'reader') {
                 $rd = $cmd.ExecuteReader(); $rows = New-Object System.Collections.Generic.List[object]

@@ -255,27 +255,28 @@ public sealed class IndexModel : SI.Management.Web.Columns.DataViewPageModel
         static FindingRow F(object o) => (FindingRow)o;
         var marked = ShowsExempted;
         var limited = HttpContext?.RequestServices.GetService<IAccessScope>()?.Visibility(User) is not null;
-        // the columns of the findings export, in its order and with its names (CollectionTime ... FindingId, Exempted)
+        // the columns of the findings export, in its order (CollectionTime ... FindingId, Exempted); #1382 (owner 2026-11-25: "some dont
+        // have a title"): each with a plain title, the key stays the column's id
         var cols = new List<SI.Management.Web.Columns.DataColumn>
         {
-            new("CollectionTime", "CollectionTime", o => F(o).CollectionTime),
+            new("CollectionTime", "Collection time", o => F(o).CollectionTime),
             new("Tier", "Tier", o => ExcelExport.Tier(F(o).Tier), Text: o => SI.Management.Web.Pages.Tiers.TierLinks.IsUnclassified(F(o).Tier) ? "Unclassified" : "Tier " + F(o).Tier),
             // owner 2026-11-18: the asset opens its page (linked objects and identifiers, tasks, findings) -- for a person who sees
             // everything; that page is not limited to departments, so a limited person keeps the name as text
-            new("AssetName", "AssetName", o => F(o).AssetName,
+            new("AssetName", "Asset name", o => F(o).AssetName,
                 Link: limited ? null : o => string.IsNullOrWhiteSpace(F(o).AssetKey) ? null
                     : "/Collection/Asset?c=" + Uri.EscapeDataString(F(o).CollectionId) + "&key=" + Uri.EscapeDataString(F(o).AssetKey)),
-            new("AssetKind", "AssetKind", o => F(o).AssetKind),
+            new("AssetKind", "Asset kind", o => F(o).AssetKind),
             new("Severity", "Severity", o => F(o).Severity),
             new("RiskScore", "Risk Score", o => F(o).RiskScore, Number: true, Text: o => Fmt.Score(F(o).RiskScore)),
-            new("SecurityDomain", "SecurityDomain", o => F(o).SecurityDomain),
-            new("ReportName", "ReportName", o => F(o).ReportName),
-            new("Cve", "Cve", o => ExcelExport.Blank(F(o).Cve)),
-            new("ConfigurationId", "ConfigurationId", o => ExcelExport.Blank(F(o).ConfigurationId)),
+            new("SecurityDomain", "Security domain", o => F(o).SecurityDomain),
+            new("ReportName", "Report name", o => F(o).ReportName),
+            new("Cve", "CVE", o => ExcelExport.Blank(F(o).Cve)),
+            new("ConfigurationId", "Configuration id", o => ExcelExport.Blank(F(o).ConfigurationId)),
             new("Title", "Title", o => string.IsNullOrEmpty(F(o).Title) ? "(untitled)" : F(o).Title,
                 Link: o => "/Findings/Detail?c=" + Uri.EscapeDataString(F(o).CollectionId) + "&id=" + Uri.EscapeDataString(F(o).FindingId)),
-            new("AssetKey", "AssetKey", o => F(o).AssetKey),
-            new("FindingId", "FindingId", o => F(o).FindingId),
+            new("AssetKey", "Asset key", o => F(o).AssetKey),
+            new("FindingId", "Finding id", o => F(o).FindingId),
         };
         if (marked) cols.Add(new(ExemptedColumn, ExemptedColumn, o => F(o).IsExempted ? MarkOf(F(o)) : null));
         var collection = C ?? rows.FirstOrDefault()?.CollectionId;
@@ -369,9 +370,9 @@ public sealed class IndexModel : SI.Management.Web.Columns.DataViewPageModel
 
 
     /// The CSV and Excel column headers (the same list). The score column reads "Risk Score"; the field behind it is
-    /// still the finding's RiskScore.
+    /// still the finding's RiskScore. #1382 (owner 2026-11-25: "some dont have a title"): every header in words.
     public static readonly string[] ExportColumns =
-        ["CollectionTime", "Tier", "AssetName", "AssetKind", "Severity", "Risk Score", "SecurityDomain", "ReportName", "Cve", "ConfigurationId", "Title", "AssetKey", "FindingId"];
+        ["Collection time", "Tier", "Asset name", "Asset kind", "Severity", "Risk Score", "Security domain", "Report name", "CVE", "Configuration id", "Title", "Asset key", "Finding id"];
 
     /// #264: the column an export carries when the view includes exempted findings.
     public const string ExemptedColumn = "Exempted";

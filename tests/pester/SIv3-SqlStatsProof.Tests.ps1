@@ -120,6 +120,52 @@ Describe '#1210 (b) a read that fails leaves the three out, and adds no other ke
     }
 }
 
+Describe '#1372 the statistics read is KEPT: read again only after a refresh or every DatabaseStatsReadEveryHours (17 s at internal)' {
+    BeforeAll {
+        $script:Kept = { param([datetime]$At, [string]$Txt = '{"async":1,"total":200,"stale":7}') [pscustomobject]@{ K = 'state'; Name = 'StatisticsStaleRead'; T1 = $At; Txt = $Txt } }
+    }
+    It 'a kept answer younger than the hours and newer than the last refresh is sent as it was read -- the same keys and values, no catalog read' {
+        $rows = @($script:StateRow, (& $script:Kept ([datetime]'2026-11-12T08:30:00')))
+        $sr = Get-SIHeartbeatStoredStatsRows -Rows $rows -NowUtc $script:Now
+        @($sr).Count | Should -Be 1
+        $d = (Get-Fields -CfgRows $rows)['Database']
+        @($d.PSObject.Properties.Name) | Should -Be $script:Nine
+        $d.statsAsync | Should -BeTrue; $d.statsStalePct | Should -Be 3.5; $d.statsRefreshedUtc | Should -Be '2026-11-12T03:41:07Z'
+        Test-SIHeartbeatField -Name 'Database' -Value $d | Should -BeNullOrEmpty
+    }
+    It 'read again (not kept): older than the hours, a refresh recorded after it, not whole, none kept' {
+        (Get-SIHeartbeatFieldsContract).DatabaseStatsReadEveryHours | Should -Be 6
+        Get-SIHeartbeatStoredStatsRows -Rows @($script:StateRow, (& $script:Kept ([datetime]'2026-11-12T04:00:00'))) -NowUtc $script:Now | Should -BeNullOrEmpty -Because '6 hours old'
+        Get-SIHeartbeatStoredStatsRows -Rows @($script:StateRow, (& $script:Kept ([datetime]'2026-11-12T03:00:00'))) -NowUtc ([datetime]'2026-11-12T05:00:00Z') | Should -BeNullOrEmpty -Because 'a refresh came after it'
+        Get-SIHeartbeatStoredStatsRows -Rows @((& $script:Kept ([datetime]'2026-11-12T09:00:00') '{"async":1,"total":200}')) -NowUtc $script:Now | Should -BeNullOrEmpty
+        Get-SIHeartbeatStoredStatsRows -Rows @((& $script:Kept ([datetime]'2026-11-12T09:00:00') 'not json')) -NowUtc $script:Now | Should -BeNullOrEmpty
+        Get-SIHeartbeatStoredStatsRows -Rows @($script:StateRow) -NowUtc $script:Now | Should -BeNullOrEmpty
+        # a test session reads no database: not kept = the six only, as before
+        @((Get-Fields -CfgRows @($script:StateRow, (& $script:Kept ([datetime]'2026-11-12T01:00:00'))))['Database'].PSObject.Properties.Name) | Should -Be $script:Six
+        # handed-in rows (the test seam) still win over a kept answer
+        (Get-Fields -StatsRows @(@{ Async = $false; Total = 10; Stale = 5 }) -CfgRows @($script:StateRow, (& $script:Kept ([datetime]'2026-11-12T09:00:00'))))['Database'].statsStalePct | Should -Be 50
+    }
+    It 'what is kept: the read''s three numbers in a short JSON, written by one statement to cfg.InstallState; the settings read carries the row' {
+        ConvertTo-SIHeartbeatStatsKeepValue -Rows @(@{ Async = $true; Total = 200; Stale = 7 }) | Should -Be '{"async":1,"total":200,"stale":7}'
+        ConvertTo-SIHeartbeatStatsKeepValue -Rows @(@{ Async = 0; Total = 0; Stale = 0 }) | Should -Be '{"async":0,"total":0,"stale":0}'
+        ConvertTo-SIHeartbeatStatsKeepValue -Rows @(@{ Async = $null; Total = 3; Stale = 1 }) | Should -Be ''
+        ConvertTo-SIHeartbeatStatsKeepValue -Rows @() | Should -Be ''
+        $k = Get-SIHeartbeatStatsKeepSql
+        $k | Should -Match "UPDATE cfg\.InstallState SET Value = LEFT\(@Value, 400\), UpdatedAt = SYSUTCDATETIME\(\), UpdatedBy = @By WHERE Name = N'StatisticsStaleRead'"
+        $k | Should -Match "INSERT cfg\.InstallState \(Name, Value, \[Version\], UpdatedBy\) VALUES \(N'StatisticsStaleRead'"
+        Get-SIHeartbeatFieldsCfgSql | Should -Match "N'StatisticsRefresh', N'StatisticsStaleRead'\);"
+        # round trip: what is kept is read back as the same answer
+        $sr = Get-SIHeartbeatStoredStatsRows -Rows @((& $script:Kept ([datetime]'2026-11-12T09:00:00') (ConvertTo-SIHeartbeatStatsKeepValue -Rows @(@{ Async = $false; Total = 40; Stale = 4 })))) -NowUtc $script:Now
+        (ConvertFrom-SIHeartbeatDatabaseStats -Rows @($sr)).statsStalePct | Should -Be 10
+        (ConvertFrom-SIHeartbeatDatabaseStats -Rows @($sr)).statsAsync | Should -BeFalse
+    }
+    It 'the heartbeat keeps a fresh read through the settings seam (best effort: a write that fails costs nothing)' {
+        $f = [IO.File]::ReadAllText((Join-Path $script:SIRoot 'engine\_shared\SI-HeartbeatFields.ps1'))
+        $f | Should -Match ([regex]::Escape('if ($null -eq $sr -and $null -ne $CfgRows) { $sr = Get-SIHeartbeatStoredStatsRows -Rows @($CfgRows) -NowUtc $NowUtc }'))
+        $f | Should -Match ([regex]::Escape("if (`$kv -and `$CfgInvoke) { try { `$null = & `$CfgInvoke (Get-SIHeartbeatStatsKeepSql) ([ordered]@{ Value = `$kv; By = 'caj-si-heartbeat' }) 'nonquery' } catch { } }"))
+    }
+}
+
 Describe '#1210 (c) the stale rule: changes over 20 % of the rows + 500' {
     It 'the boundary, in PowerShell' {
         Test-SIHeartbeatStatStale -Rows 1000 -Changes 700 | Should -BeFalse -Because '0.2 x 1000 + 500 = 700 is not over it'
@@ -180,7 +226,7 @@ Describe '#1210 (d) the refresh time is recorded by the pipeline''s refresh and 
         Save-SIDataStatisticsRefreshRecord -Invoke { param($s, $p, $m) throw 'denied' } -Result $r | Should -BeFalse
     }
     It 'the heartbeat''s settings read carries the row; the engine may write it (cfg.InstallState INSERT, UPDATE)' {
-        Get-SIHeartbeatFieldsCfgSql | Should -Match "N'Housekeeping', N'StatisticsRefresh'\)"
+        Get-SIHeartbeatFieldsCfgSql | Should -Match "N'Housekeeping', N'StatisticsRefresh', N'StatisticsStaleRead'\)"
         Get-SIHeartbeatStatsRefreshedUtc -Rows @($script:StateRow) | Should -Be '2026-11-12T03:41:07Z'
         Get-SIHeartbeatStatsRefreshedUtc -Rows @([pscustomobject]@{ K = 'state'; Name = 'Housekeeping'; T1 = $script:Refreshed }) | Should -BeNullOrEmpty
         . (Join-Path $script:SIRoot 'engine\pro-settings\SI-EngineGrants.ps1')

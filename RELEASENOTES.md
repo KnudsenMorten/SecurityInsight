@@ -13,6 +13,211 @@ SecurityInsight Pro and the Pro trial install from invardia.com, never from GitH
 [invardia.com/trial](https://invardia.com/trial/), and your installation page there gives your two lines.
 <!-- /install lines -->
 
+## v3.1.51 — job buttons work again, deleted assets retire at once, exploited findings due in 14 days, clearer tiles and columns
+
+### New
+- **Deleted assets retire at once.** An asset deleted in Entra ID, Azure or Intune retires at once (proof of deletion
+  only) and its findings close as 'asset deleted in <source>', never as fixed; a deletion that is undone reopens it.
+  On by default; switches on Settings > Assets no longer seen. For Intune this needs one new read-only Microsoft Graph
+  permission on SecurityInsight's engine identity, DeviceManagementApps.Read.All; Invardia grants it at each
+  installation — until then Intune-deleted devices wait the usual grace period.
+- **Pages always load their newest scripts after an update**; if a page can't load (e.g. sign-in expired) it shows
+  'This page needs a reload' with a Reload link.
+- **Actively exploited findings are due within 14 days**, whatever their severity: a finding whose exploit is
+  verified, or that is in an exploit kit.
+
+### Changes
+- **The executive tiles say what they count**, with the formula line and an (i) on each tile. 'Fixed
+  vulnerabilities, last 7 days' now counts real fixes only (retired devices no longer count as fixed). A score change
+  against a run from before 3.1.46 shows 'not comparable'.
+- **Column titles in words everywhere, exports included.** No column is titled with its raw name, in the pages and
+  in the CSV and Excel exports. Scripts that read exports by the old header names need updating.
+- **Days to fix:** the default for a medium finding is now 60 days (was 90) and for a low finding 90 days (was 180),
+  so some findings may show as overdue sooner. Your own values are kept. A due date set in Defender for Cloud
+  governance is kept. The top severity is labelled Very High.
+- **Operations > Commits shows who in words** (SecurityInsight update, engine, web app, Invardia Support app …); a
+  template install is now one commit.
+- **Connector status: 'Held' is now 'Not proven fixed'.**
+
+### Fixes
+- **Buttons that run a job work again** (one step, Refresh, Run now, Update now, Apply settings, Test mail, Send now, template release) — their requests were refused since the job-request queue arrived.
+- **Cancelling a run no longer reports its last finished step as failed.**
+- **The Resend page's 'send again' and 'undo' work again.**
+- **One task per product and version.** A vulnerability naming several products (e.g. nodejs and .net) now gives one
+  task per product and version, each with its own paths; the old combined task closes once as 'task changed'.
+  Software found only in the registry shows its registry key as path. The ServiceNow grouping field is a sorted,
+  stable list.
+- **Defender for Cloud update recommendations are typed by their action.** About 180 'Update <package>' tasks become
+  software-upgrade once; their configuration tasks close once as 'task changed'.
+- **Sign-in methods per user (passwordless, MFA strength) fill in again at every install** — they were unknown since
+  the cache broke; identity collection reads groups and app permissions in batches (much faster); a role on a deleted
+  group no longer marks the admin read incomplete.
+- **Finding-history pages get their 10 page indexes** (built online in the idle window after the update).
+- **Faster collection:** asset profiling builds its rows 5–7 times faster with the same result, so runs are shorter
+  at large installations.
+- **Compact views.** The view header is compact, columns get sensible widths, long values wrap on two lines and the
+  full text is kept — extra columns are sent whole, never cut; you can resize every column, and a 'Full text' button
+  per column shows every line; your choice is saved with your layout.
+- **Report parts are sized from what the last run returned**, so a small report no longer keeps many parts.
+- **Properties SecurityInsight writes itself never show as new context**, and Schema overlays is no longer a menu item.
+- **The Invardia Support app's database access is just in time**: it is given for a support session and removed at
+  the end of an installation.
+- **The Departments page no longer fails to load** when an asset has no lifecycle value.
+- **System Documentation** is named the same everywhere.
+
+## v3.1.50 — the job buttons through a queue, faster Remediations pages, and profiling rules grouped by kind
+
+### New
+- **Profiling rules grouped by kind.** Configuration > Profiling rules lists the rules in collapsible groups, one per
+  kind of condition.
+- **A Defender recommendation's task follows Defender's own remediation type**, so each task says the kind of work it
+  needs.
+
+### Fixes
+- **The job buttons go through the queue.** Run now, Stop, schedule changes, template release and mail send-now go to
+  the installation through a queue, so the web app itself holds no right to start jobs. The update now makes the job
+  that takes the requests, with only the settings that job needs. Invardia gives the web app this one right at each
+  installation (send only, on that one queue); until it has it, the buttons work as before.
+- **Faster Remediations pages.** The task reports' values are kept ready, and the database's statistics are refreshed
+  at the end of each data sync, so the first click on a Remediations page answers quickly.
+- **One finding when Defender for Cloud and the Exposure Graph report the same recommendation** on the same CI.
+- **Security domain and category owners named by e-mail address are recognised at sign-in**: SecurityInsight looks up
+  their account once and stores it, so they can decide their requests.
+
+## v3.1.49 — duplicate recommendations merged, the full task context to ServiceNow, and jobs started through a queue
+
+### New
+- **Every remediation task sent to ServiceNow or the SQL hand-off now carries its full context:** what to do first (for
+  a bundled library: the application to update, its version and where it's installed, with the library and its CVEs as
+  the reason), detected paths, recommended update, remediation, CVE ids, risk, exploit, end of support, due date,
+  lifecycle, the asset, 'also reported by', and a More info link to the task's page in SecurityInsight. ServiceNow: add
+  the new columns from the table definition on the connector page; until then they are skipped with one warning.
+- **Duplicates not merged are shown.** Operations > Data quality shows duplicates not merged ('Duplicates not merged');
+  the run log warns with examples.
+
+### Fixes
+- **Duplicate recommendations from several providers are merged.** When Defender for Cloud reports 'Update <software>'
+  for software whose CVEs are already on the same asset, it becomes evidence on those CVE findings ('Also reported by')
+  instead of a finding and task of its own; its old task closes once as 'task changed'.
+- **A merged recommendation is closed as 'Linked'.** A recommendation merged into a CVE finding is sent to ServiceNow
+  and the SQL hand-off as closed 'Linked' to that CVE finding, never as fixed and never dropped.
+- **The job buttons work again.** Run now, Stop, schedule changes, template release and mail send-now work again from
+  the web app. They now go to the installation through a queue, so the web app itself holds no right to start jobs. At
+  installations where this needs one more right, the page says so: ask your admin to re-run the Invardia Support app
+  setup script (Setup level); until then the buttons work as before.
+- **Support access:** a support session's close no longer cancels another session's waiting request; each request is
+  answered in turn.
+- **Guests are recognised again at sign-in.** Guests kept on a department or as advisor by e-mail address are
+  recognised again at sign-in: SecurityInsight looks up their account once and stores it, with no object id to enter
+  by hand.
+
+## v3.1.47 — a page for every remediation task
+
+### New
+- **A page for every remediation task.** Each remediation task has its own page: what to do, the application, its
+  version and every path, the asset, the dates, and every finding behind the task (with export).
+
+### Fixes
+- **Signed requests show local times.** The signed requests page now shows its times like every other page.
+
+## v3.1.46 — the protection score gives credit for every fix
+
+### New
+- **The protection score gives credit for every fix.** Each asset now has a health from 0 to 100. Every open fix lowers
+  it: Very High -25, High -10, and Medium and Low together at most -20. The average health of each tier counts with a
+  fixed share of the score: Tier 0 40 %, Tier 1 30 %, Tier 2 20 % and Tier 3 10 %. Earlier runs keep the score they had.
+- **The formula next to every protection score.** The formula, with your own settings, is shown next to every
+  protection score: on the Executive overview, in the Executive report and on the wall board.
+
+### Fixes
+- **Support access closes when it should.** When several support requests waited at the same time, a request to close
+  support access could fail, and the access then stayed open until it expired. Every request is now answered on its
+  own, and a close always goes through.
+- **The update reports its progress while it refreshes the pages' data.** On a large installation the update's
+  refresh of the CI and asset pages can take a long time. It now says when it starts and how far it has come, and a
+  finished update is no longer reported as stopped.
+- **Remediation tasks: the application columns sit right after the task.** Application, Application version, Paths and
+  Detected paths now sit right after the task, also in layouts you saved; the asset's own columns follow the task's columns.
+- **Summary groups keep one spelling of a value** (for example User and user), so the run's history check no longer
+  reports false differences. The first data sync after the update writes the grouped Summary rows once more.
+- **The finding history's checks no longer time out during an update**; they run in the next data sync.
+
+## v3.1.45 — Actual Risks or Within Accepted Lifecycle on Security recommendations
+
+### New
+- **Actual Risks or Within Accepted Lifecycle.** Security recommendations Summary and Detailed have a choice above the
+  table. **Actual Risks** is the default and shows every open finding as before. **Within Accepted Lifecycle** shows
+  only the findings past their accepted time to fix, with the line "An open finding counts as a risk only after its
+  accepted time to fix" under the choice. The wall board's table offers the same choice, and the Protection Score
+  tile keeps its sentence. The choice follows into the Summary drill-down and the exports. A run that finished before
+  this version shows no choice until the next run.
+
+## v3.1.44.2 — the finding history writes only what changed
+
+### Fixes
+- **The finding history writes only what changed.** A finding that did not change between two runs keeps its state, so
+  each run records only the new, changed and closed findings instead of writing every finding again. The data sync's
+  history step is short again on every installation.
+- **Bundled libraries: one task per application.** A library that comes bundled with several applications (for example
+  one library in five install folders) is now one remediation task per application, named after the folder it is
+  installed in, with every path shown in full and the application's version in its own column.
+- **A disabled service principal is handled like a disabled user.** It no longer counts as a vulnerable asset, even when it
+  holds high privileges.
+- **"CI key" on the remediation task list.** The task list's column for the asset's own reference is now headed
+  "CI key", so it no longer shares the heading "CI id" with the CI id column.
+## v3.1.44.1 — the vulnerability close-loop step runs again
+
+### Fixes
+- **The vulnerability close-loop step runs again.** In 3.1.44 the close-loop step stopped at its start; it now reaches
+  its database again, and a check makes sure every step's script can load what it needs before a release.
+- **Security image updates within 15 minutes.** Every installation checks every 15 minutes for a newer security update
+  of its images and applies it at once, without stopping a run that is going.
+- **Release checks run first.** The quick release checks and the ring check now run before the tests, so a problem is
+  found in seconds instead of after the tests.
+## v3.1.44 — large installations finish their runs much sooner
+
+### New
+- **Results prepared as they arrive.** Risk Analysis stores each finding ready to show, so the nightly data sync no
+  longer reads every finding again to prepare the views.
+- **Only what changed is worked out again.** The data sync and the vulnerability connector work on the findings that
+  changed since the last published run. Every run also builds a rotating seventh of the assets and a random sample in
+  full and compares them, so every asset is checked in full at least once in seven runs; any difference and that run is
+  built in full. An update builds in full only when it changes what the build produces.
+- **Finding history.** Each run is kept as finding states instead of a full copy, and every run compares it with the
+  stored rows. Pages, connectors and the vulnerability connector read the history only when that run was verified;
+  otherwise they read the stored rows as before. The history is kept for 30 days.
+- **Totals worked out from what changed.** Key figures, summary groups and "what changed" are worked out from the
+  findings that changed and compared with a full build every run; any difference and the full build is published.
+- **The data sync starts per report.** The views' context of each report is prepared as Risk Analysis finishes it.
+  Nothing is published before the whole run has ended.
+- **Faster vulnerability report.** The vulnerability report asks Defender in parallel within Defender's own limits,
+  and each part counts only its own vulnerabilities.
+- **Bulk loading, checked per batch.** The largest writes go to the database in batches, each counted and checked
+  before it is kept.
+- **Old collections removed in seconds.** On large installations old collections leave the database in one step
+  instead of a little at a time. The published run and the collections that are kept are never touched.
+- **Faster totals on large installations.** The largest tables get columnstore indexes, built when the installation is
+  not busy, so totals and key figures read far less.
+- **Less memory for Defender answers.** Risk Analysis reads large Defender answers piece by piece.
+- **Mail set up through the update.** Support can switch mail on and set its recipients and sender through the
+  installation's own update; every change is recorded in the change log and read back.
+
+### Fixes
+- **One unreadable report no longer holds back the run.** When part of a report could not be read because of a passing
+  service problem, that report shows its last complete result, marked with its date, and the rest of the run is shown.
+  A query problem is still reported as a failure.
+- **Parallel loading no longer blocks itself.** Risk Analysis workers that load findings at the same time no longer
+  wait on each other.
+- **Time limits on Azure reads.** Each Azure read has a time limit, every retry is logged and a progress line appears
+  each minute; a read that gives up is marked unknown, never shown as empty.
+- **Mail off records nothing as sent.** With mail switched off, no queued mail, monthly report or digest is recorded
+  as sent.
+- **Database load visible to support.** Your installation reports the size of SecurityInsight's own tables, its
+  heaviest queries and a database size recommendation to support, as numbers only. Query text is never sent.
+
+### Good to know
+- The first run after this update builds everything once in full, so it takes longer than usual; the runs after it are
+  the faster ones.
 ## v3.1.43.5 — the Azure collection no longer waits silently on Defender for Cloud
 
 ### Fixes
@@ -263,7 +468,7 @@ SecurityInsight Pro and the Pro trial install from invardia.com, never from GitH
 - **Each SecurityInsight identity holds exactly the rights it needs.** Rights it no longer uses are removed by the update;
   rare, powerful rights are given only on demand by the support partner, never kept; the rights normal operation needs
   are granted at setup and read back.
-- **The web app reads no Azure details itself.** The environment report's facts are gathered by the update and shown by
+- **The web app reads no Azure details itself.** The System Documentation's facts are gathered by the update and shown by
   the web app from the database, so the internet-facing web app needs no read right on your resource group.
 - **Settings are changed only by the update.** A support partner sets a value on the update job; the update applies it,
   reads it back and records it -- never a direct database change.

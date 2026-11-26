@@ -158,7 +158,9 @@
     "SI_ServiceNow_ImportSetMaxRows": "The older ServiceNow push was removed, and its row ceiling with it: the data-out connector sends every record in scope as one batch. A value left here is ignored.",
     "SI_PrestageInfra": "A collection run creates no Azure resource and assigns no role any more -- setup does. It only checks, read-only, that what it needs is there; there is nothing to switch.",
     "SI_StorageKey": "Storage is reached only with the signed-in identity; a storage key is no longer used.",
-    "SI_UseStorageOAuth": "Storage is reached only with the signed-in identity; there is nothing to switch."
+    "SI_UseStorageOAuth": "Storage is reached only with the signed-in identity; there is nothing to switch.",
+    "SI_ProtectionScore_Severities": "The protection score counts every open fix by its severity points (SI_ProtectionScore_SeverityPoints); good standing is no open Very High / High fix. A value left here is ignored.",
+    "SI_ProtectionScore_TierWeights": "Each tier owns a fixed share of the protection score (SI_ProtectionScore_TierShares), whatever its number of assets. A value left here is ignored."
   },
   "help": {
     "SI_Pro_Responsibility_Sources": {
@@ -1549,10 +1551,38 @@
     "SI_RA_PartsInParallel_Max": {
       "label": "Risk Analysis parts asked at a time (most)",
       "purpose": "A large Risk Analysis report is asked from Microsoft Defender in parts. While one part is processed (risk scores, the database), the next parts are already asked, so Defender and SecurityInsight work at the same time. This is the most parts asked at a time.",
-      "defaultText": "6 (never more than 4 per processor core)",
+      "defaultText": "Not set: no fixed number -- the queue workers of a run share one budget measured from Defender's own answers (never more than 4 per processor core)",
       "effect": "The number adapts by itself: each report starts at 2, asks more while Defender answers quickly, and halves at once when Defender asks to slow down (it then waits as long as Defender says). A higher maximum lets a large report finish sooner when Defender keeps up; 1 asks one part at a time. The parts are processed in their order either way: the stored findings are the same.",
       "whenToChange": "Most installs never should. Set 1 only if support asks you to; lower it if other tools in the tenant share Defender's advanced hunting limits.",
       "unit": "parts",
+      "advanced": true,
+      "group": "Risk Analysis reports"
+    },
+    "SI_RA_HuntingStreamRead": {
+      "label": "Risk Analysis reads hunting answers as they arrive",
+      "purpose": "How Risk Analysis reads the answers of Microsoft Defender's advanced hunting. A large answer read whole is held in the worker's memory several times at once (the text, the parsed answer, the rows); read as it arrives, a few MB of rows at a time, it is held about once.",
+      "defaultText": "on -- each answer is read as it arrives",
+      "effect": "on: each answer is read as it arrives, so a query slice whose answer did not fit in the worker's memory no longer has to be split again and again; an answer that cannot be read this way is asked again the older way and the run log says so in one line. off: each answer is read whole, then parsed (the older read). The rows, columns and values are the same either way.",
+      "whenToChange": "Most installs never should. Set it to off only when support asks for it while a problem with reading Defender's answers is looked into.",
+      "advanced": true,
+      "group": "Risk Analysis reports"
+    },
+    "SI_RA_PartsBudgetSeconds": {
+      "label": "Risk Analysis shared budget, read every (seconds)",
+      "purpose": "The queue workers of one Risk Analysis run share one budget of how many report parts they ask Microsoft Defender at a time. It is measured from Defender's own answers: halved for every worker when Defender asks any of them to slow down, raised again after quiet rounds, and shared by how many parts each running report still has. This is how often a worker reads it.",
+      "defaultText": "60 seconds (a worker that is asked to slow down tells the others at once)",
+      "effect": "Shorter: a worker takes up a share another worker gave back sooner, at one more small read of the run's storage each time. Longer: fewer reads, a freed share is taken up later. The findings are the same either way.",
+      "whenToChange": "Most installs never should. Change it only if support asks you to.",
+      "unit": "seconds",
+      "advanced": true,
+      "group": "Risk Analysis reports"
+    },
+    "SI_RA_SliceMerge": {
+      "label": "Risk Analysis asks small parts together",
+      "purpose": "A large Risk Analysis report is asked from Microsoft Defender in parts. When the answers come back small, a part is asked together with its partner part that nothing has asked yet: one request instead of two, the same rows. Each row is still written as part of its own part, in the same order.",
+      "defaultText": "on -- small parts are asked together with their partner parts",
+      "effect": "on: fewer requests to Defender for a report whose parts are small; a request that held several parts and failed is asked again part by part. off: every part is asked on its own (the older way). The rows, columns and values are the same either way.",
+      "whenToChange": "Most installs never should. Set it to off only when support asks for it while a problem with a report's parts is looked into.",
       "advanced": true,
       "group": "Risk Analysis reports"
     },
@@ -1714,27 +1744,27 @@
       "group": "Sign-in & Azure resources"
     },
     "SI_DeletionProof_Azure": {
-      "label": "Retire at once: resources deleted in Azure",
+      "label": "Retire at once when deleted in Azure",
       "purpose": "Retires an asset at once when Azure PROVES its resource was deleted: a Delete in Azure Resource Graph's resource changes (the last 14 days). Merely missing from a list is never proof -- it keeps the not-seen grace period.",
-      "defaultText": "Off: an Azure resource Azure no longer lists waits the not-seen grace period, as before",
+      "defaultText": "On: an Azure resource with a Delete in Azure's resource changes retires at once and its findings close as 'asset deleted in Azure', never as fixed; a resource merely missing from a list waits the not-seen grace period",
       "effect": "Stages: the CI build checks the Azure records missing from a complete collection against the resource changes; a proven one is recorded, its CI retires at once ('retired at once: deleted in Azure') -- the proof wins over the grace period -- and its open vulnerabilities close as 'asset deleted in Azure', never as fixed. A CI another source still sees stays active. A resource listed again is active again and its findings reopen. A read that is not complete decides nothing for what it did not return.",
       "whenToChange": "When an asset deleted in Azure should not wait the grace period before it and its vulnerabilities are retired.",
       "advanced": true,
       "group": "Data & retention"
     },
     "SI_DeletionProof_Entra": {
-      "label": "Retire at once: objects deleted in Entra ID",
+      "label": "Retire at once when deleted in Entra ID",
       "purpose": "Retires an asset at once when Entra ID PROVES its object was deleted: the user, device or group is in Entra ID's deleted items. Merely missing from a list is never proof -- it keeps the not-seen grace period.",
-      "defaultText": "Off: a user Entra ID lists as deleted retires at once whatever this setting says, unless another source still sees it. This setting only concerns a user, device or group that has disappeared from a complete collection without being listed as deleted: those wait the not-seen grace period",
+      "defaultText": "On: a user, device or group in Entra ID's deleted items retires at once (unless another source still sees it) and its findings close as 'asset deleted in Entra ID', never as fixed; an object merely missing from a list waits the not-seen grace period",
       "effect": "Stages: the CI build checks the Entra ID records (and the Exposure Graph users and groups) missing from a complete collection against Entra ID's deleted items; a proven one is recorded, its CI retires at once ('retired at once: deleted in Entra ID') -- the proof wins over the grace period -- and its open vulnerabilities close as 'asset deleted in Entra ID', never as fixed. A CI another source still sees stays active. An object restored in Entra ID is listed again: its CI is active again and its findings reopen. A read that is not complete decides nothing for what it did not return.",
       "whenToChange": "When an object deleted in Entra ID should not wait the grace period before it and its vulnerabilities are retired.",
       "advanced": true,
       "group": "Data & retention"
     },
     "SI_DeletionProof_Intune": {
-      "label": "Retire at once: devices deleted in Intune",
+      "label": "Retire at once when deleted in Intune",
       "purpose": "Retires an asset at once when Intune PROVES its managed device was deleted: a successful Delete of the managed device in Intune's audit events. Merely missing from a list is never proof -- it keeps the not-seen grace period.",
-      "defaultText": "Off: a device Intune no longer lists waits the not-seen grace period, as before",
+      "defaultText": "On: a managed device with a successful Delete in Intune's audit events retires at once and its findings close as 'asset deleted in Intune', never as fixed; a device merely missing from a list waits the not-seen grace period. Until DeviceManagementApps.Read.All is granted the read answers 403 and decides nothing",
       "effect": "Stages: the CI build checks the Intune records missing from a complete collection against Intune's audit events; a proven one is recorded, its CI retires at once ('retired at once: deleted in Intune') -- the proof wins over the grace period -- and its open vulnerabilities close as 'asset deleted in Intune', never as fixed. A CI another source still sees stays active. A device listed again is active again and its findings reopen. A read that is not complete (for example without the permission) decides nothing for what it did not return.",
       "whenToChange": "When a device deleted in Intune should not wait the grace period before it and its vulnerabilities are retired.",
       "advanced": true,
@@ -2468,6 +2498,33 @@
       "group": "Data & retention",
       "needs": "SI_SqlPacing_Enabled"
     },
+    "SI_Data_ParseAtInsert": {
+      "label": "Work out the view values as findings are stored",
+      "purpose": "Where the values the views read from each finding (its rating, score, CVSS, MITRE and compliance lists, fix, CMDB service, score parts) are worked out: by the data sync re-reading every stored finding (as before), or once, as Risk Analysis stores the finding.",
+      "defaultText": "on -- worked out once, as Risk Analysis stores each finding",
+      "effect": "on: the data sync leaves alone only the findings Risk Analysis worked out with exactly the current statement and does what is left (the totals per view, the services, and every finding carried over or loaded from Log Analytics), so the data sync is much shorter. off: the data sync works the values out again for every finding (the older way). shadow (for troubleshooting): Risk Analysis works the values out as it stores each finding; the data sync still works them out again for every finding, compares the two and keeps its own -- a difference is one warning line in the data sync's log (how many findings, the first finding ids and column names). The views and everything sent out show the same values in every mode.",
+      "whenToChange": "Most installs never should. shadow or off only when support asks for it while a difference in the view values is looked into.",
+      "advanced": true,
+      "group": "Data & retention"
+    },
+    "SI_Data_BulkLoad": {
+      "label": "Load the large writes in bulk",
+      "purpose": "How the largest writes reach the database (the Risk Analysis findings and summary rows, the staging of the findings per CI, the data out summary): in bulk batches that are counted and checked back, or as text chunks (as before).",
+      "defaultText": "on -- in bulk batches, each counted and checked back",
+      "effect": "on: the rows go to the database in bulk batches -- the same statement works out every column from the same texts as before -- each batch counted and checked back before it is kept; a batch that does not arrive as sent is loaded again once, then the step stops. off: the rows go as text chunks (the earlier way). shadow (for troubleshooting): each batch is checked through the bulk copy and rolled back, the rows are written the earlier way, and a difference is one warning line. The stored rows are the same in every mode.",
+      "whenToChange": "Most installs never should. shadow or off only when support asks for it.",
+      "advanced": true,
+      "group": "Data & retention"
+    },
+    "SI_Data_LoadPerReport": {
+      "label": "Prepare the views per report as Risk Analysis finishes them",
+      "purpose": "When the views' prepared context of each finding (product, vendor, description, fix, remediation and the other columns the views show) is filled: by the data sync after the whole Risk Analysis (as before), or report by report as Risk Analysis finishes each one, beside the run.",
+      "defaultText": "on -- filled per report as Risk Analysis finishes each one, checked by the data sync",
+      "effect": "on (the default): each report is filled as it is complete; the data sync leaves out the reports that still hold exactly the rows filled early, so it has less to read after the run -- a report that does not match is filled by the data sync as before and said in a warning line. shadow (for troubleshooting): the data sync still fills every finding and first compares the reports filled early with its own fill -- a difference is one warning line and the data sync's values are kept. off: only the data sync fills them (the earlier way). Nothing is published before the whole run has ended in any mode. It needs SI_Data_ParseAtInsert on: without it every finding is filled by the data sync, as with off.",
+      "whenToChange": "Most installs never should. shadow or off only when support asks for it.",
+      "advanced": true,
+      "group": "Data & retention"
+    },
     "SI_Pro_DataRetentionDays": {
       "label": "Pro data retention",
       "purpose": "How many days of run data (findings, assets, daily aggregates) the Pro database keeps before older collections are removed.",
@@ -2487,6 +2544,75 @@
       "unit": "collections",
       "advanced": true,
       "group": "Data & retention"
+    },
+    "SI_Data_ColumnstoreIndexes": {
+      "label": "Columnstore indexes on the largest tables",
+      "purpose": "Faster nightly data sync at a large install: columnstore indexes on the findings and the finding lifecycle, the tables the data sync reads in full and totals every run. An index only -- every page, report and connector shows and sends exactly the same data with or without it.",
+      "defaultText": "On -- built when the install is idle (Standard S3 or above)",
+      "effect": "On: the next update records the indexes, and the index build job builds them online when the install is idle long enough (about as long as an index on those tables takes; the next run waits only if one is being built). An install whose runs go back to back gets them too: after a day of waiting one is built before a scheduled run, which then starts up to 3 hours late, at most once a day per index. The data sync then reads far less from the database. Needs an Azure SQL database of Standard S3 or above; on Basic and S0-S2 nothing is built and the update says why. Off: the next update removes them.",
+      "whenToChange": "Most installs never should. Turn it off only when support advises it, for example while a database change is looked into.",
+      "advanced": true,
+      "group": "Data & retention"
+    },
+    "SI_Data_RetireByPartition": {
+      "label": "Remove old collections by partition",
+      "purpose": "How the findings of old collections leave the Pro database: each old collection at once from its own partition (on, the default), or only a little at a time (off). A large install holds millions of rows waiting to be removed; a little at a time that takes days.",
+      "defaultText": "On: old collections leave by their own partition in an idle window; what a partition cannot take is removed a little at a time.",
+      "effect": "On: in an idle window (no run, data sync or data out going, no update waiting) the index build job empties an old collection's findings, recommendations and prepared issue rows in seconds -- never the published run, the newest two or a kept collection; the rows are counted before and after, and any difference keeps them all. On an install made before this release it first moves the three large tables onto one partition per collection, a part per idle window, resumable -- and every update also does a bounded part of that move (a few minutes, under the install's lock, resumed by the next window); until that is done, and for anything a partition cannot take, the removal goes on a little at a time. Off: the pipeline runner's wake-ups remove the findings of old collections a little at a time, as before.",
+      "whenToChange": "Rarely: turn it off only when support asks for it, for example while a problem with the move of the large tables is looked at.",
+      "advanced": true,
+      "group": "Data & retention"
+    },
+    "SI_Data_HistoryModel": {
+      "label": "Keep the finding history",
+      "purpose": "Whether the nightly data sync also keeps every collection as a history of finding states and checks it against the stored findings every run.",
+      "defaultText": "On -- every kept collection is also kept as finding states, checked row for row every run",
+      "effect": "On: after each run every kept collection is also recorded as the states of its findings (one row per distinct state, and a small row per finding), checked row for row against the stored findings, and What changed is checked from the findings that changed. Any difference and the stored findings and the full builds are what is shown and sent, and support is told. What the pages show and what is sent to ServiceNow, the CMDB and data out is the same either way. Shadow: the same, for troubleshooting. Off: no history is kept.",
+      "whenToChange": "Keep on. Off only when support asks for it.",
+      "advanced": true,
+      "group": "Data & retention",
+      "hint": "On = the history is kept and checked every run. Off = no history.",
+      "type": "enum",
+      "values": [
+        "on",
+        "shadow",
+        "off"
+      ],
+      "valueLabels": {
+        "on": "On: keep the history, checked every run",
+        "shadow": "Shadow: keep and check it (troubleshooting)",
+        "off": "Off: no history"
+      }
+    },
+    "SI_Data_HistoryDays": {
+      "label": "Finding history kept (days)",
+      "purpose": "How many days of finding history are kept: a collection stays in the history, as it was published, until it is that many days old -- also after the clean-up removed its findings.",
+      "defaultText": "30 days",
+      "effect": "30 (the default): a collection whose findings the clean-up removed stays in the history, as it was published, until it is 30 days old, then leaves it by its partition. 0: a collection leaves the history with its findings. More days keep more history (more storage).",
+      "whenToChange": "Only when support asks for it; the pages read the kept collections.",
+      "advanced": true,
+      "unit": "days",
+      "group": "Data & retention"
+    },    "SI_Data_ChangedSet": {
+      "label": "Build the data from what changed",
+      "purpose": "How the nightly data sync builds a collection: from what changed since the published collection (the default), or in full.",
+      "defaultText": "On -- only what changed is worked out again; every run checks a rotating seventh of the CIs and a sample in full",
+      "effect": "On: a finding that did not change since the published collection keeps its prepared results (the views' columns, the findings per CI's rows); everything that changed, is new or is gone is worked out as before. Every run also builds a rotating seventh of all CIs in full (every CI at least once in 7 runs) and about one CI in ten at random, and compares: any difference and that run is built in full before anything is published, and support is told. A full build is made automatically when nothing trusted is published and when the build fingerprint changes (the fields and their mapping, the typing, the templates, the settings that change the output) -- not after every update; once a week only when the rotating check could not run. What the pages show and what is sent to ServiceNow, the CMDB and data out is the same either way. Off: every collection is built in full (slower at a large install). Shadow: built both ways and compared, the full build kept -- for troubleshooting only, it doubles the work.",
+      "whenToChange": "Keep on. Off or shadow only when support asks for it.",
+      "advanced": true,
+      "group": "Data & retention",
+      "hint": "On = only what changed is worked out again (checked every run). Off = always in full. Shadow = troubleshooting.",
+      "type": "enum",
+      "values": [
+        "on",
+        "shadow",
+        "off"
+      ],
+      "valueLabels": {
+        "on": "On: build from what changed (checked every run)",
+        "shadow": "Shadow: build both ways and compare (troubleshooting, twice the work)",
+        "off": "Off: always build in full"
+      }
     },
     "SI_RA_SourceFirstSeen": {
       "label": "Read Defender's first sighting of each vulnerability",
@@ -2573,12 +2699,31 @@
       "advanced": false,
       "group": "Risk Analysis -- mails and executive view"
     },
-    "SI_ProtectionScore_TierWeights": {
-      "label": "Protection score: tier weights",
-      "purpose": "How much an asset of each tier weighs in the protection score, Tier 0 to Tier 3, separated by commas.",
-      "defaultText": "8,4,2,1 (an unclassified asset weighs as Tier 3)",
-      "effect": "A Tier 0 asset out of good standing lowers the score as much as eight Tier 3 assets with the default. Four numbers, 0 or more; anything else = the default.",
-      "whenToChange": "Your management weighs tiers differently.",
+    "SI_ProtectionScore_TierShares": {
+      "label": "Protection score: share of each tier (%)",
+      "purpose": "How much of the protection score each tier owns, Tier 0 to Tier 3 in percent, separated by commas -- whatever the number of assets in the tier (an unclassified asset counts as Tier 3).",
+      "defaultText": "40,30,20,10",
+      "effect": "The score = Tier 0's average asset health x its share + Tier 1's x its share + ...; a tier with no assets hands its share to the others. Four numbers, 0 or more, not all 0; anything else = the default. From the next run; stored collections keep their score.",
+      "whenToChange": "Your management wants Tier 0 to count even more, or the tiers more evenly.",
+      "advanced": false,
+      "group": "Risk Analysis -- mails and executive view"
+    },
+    "SI_ProtectionScore_SeverityPoints": {
+      "label": "Protection score: points per open fix",
+      "purpose": "How many points of an asset's health (100) each open fix costs, by its severity: one fix = one recommended update however many CVEs it closes; any other finding counts as one.",
+      "defaultText": "Very High=25,High=10,Medium=3,Low=1",
+      "effect": "An asset's health = 100 less the points of its open fixes (Medium and Low together at most SI_ProtectionScore_MinorPointsCap), never below 0. A severity at 0 does not count. Write <severity>=<0..100> for Very High, High, Medium, Low; anything else = the default.",
+      "whenToChange": "Your management weighs the severities differently.",
+      "advanced": false,
+      "group": "Risk Analysis -- mails and executive view"
+    },
+    "SI_ProtectionScore_MinorPointsCap": {
+      "label": "Protection score: Medium and Low cost at most (points per asset)",
+      "purpose": "The most points Medium and Low fixes together take from one asset's health, so many small findings cannot outweigh a Very High.",
+      "defaultText": "20",
+      "effect": "0 = Medium and Low fixes do not count. 0 to 100; anything else = the default.",
+      "whenToChange": "Medium and Low findings matter more (raise it) or not at all (0) to your management.",
+      "unit": "points",
       "advanced": false,
       "group": "Risk Analysis -- mails and executive view"
     },
@@ -2622,15 +2767,7 @@
       "advanced": false,
       "group": "Risk Analysis -- mails and executive view"
     },
-    "SI_ProtectionScore_Severities": {
-      "label": "Protection score: severities that count",
-      "purpose": "The finding severities that take an asset out of good standing in the protection score.",
-      "defaultText": "Very High, Critical, High",
-      "effect": "An asset with an open, non-exempted finding of one of these severities is not in good standing. Separate with commas.",
-      "whenToChange": "Also count Medium findings, for a stricter score.",
-      "advanced": false,
-      "group": "Risk Analysis -- mails and executive view"
-    },
+
     "SI_Pro_HiddenViews": {
       "label": "Hidden named views",
       "purpose": "The named views SecurityInsight ships for Security recommendations, Summary and Detailed (Critical and High, On Tier 0, Vulnerabilities (CVE), Known exploited, MITRE, Compliance, CVSS) that are hidden from the view picker for everyone.",
@@ -3020,11 +3157,11 @@
       "unit": "assets"
     },
     "SI_Pro_FindingSla_CriticalDays": {
-      "label": "Days to fix a critical finding",
-      "purpose": "How many days a critical finding has to be fixed, counted from when it was first found (or found again after it was fixed).",
+      "label": "Days to fix a very high (critical) finding",
+      "purpose": "How many days a very high finding (SI's top severity; the Rating column says Critical) has to be fixed, counted from when it was first found (or found again after it was fixed).",
       "defaultText": "15 days",
-      "effect": "Sets the due date of every critical finding. A finding past its due date is shown as overdue on the CI page, the service views and the trend. 0 = critical findings have no due date.",
-      "whenToChange": "Set it to the deadline your security policy gives critical findings.",
+      "effect": "Sets the due date of every very high (critical) finding. A finding past its due date is shown as overdue on the CI page, the service views and the trend; the remediation tasks and the tickets carry it unless Defender for Cloud governance set a due date of its own. 0 = very high findings have no due date.",
+      "whenToChange": "Set it to the deadline your security policy gives very high (critical) findings.",
       "advanced": true,
       "group": "Data & retention",
       "unit": "days"
@@ -3042,7 +3179,7 @@
     "SI_Pro_FindingSla_MediumDays": {
       "label": "Days to fix a medium finding",
       "purpose": "How many days a medium finding has to be fixed, counted from when it was first found (or found again after it was fixed).",
-      "defaultText": "90 days",
+      "defaultText": "60 days",
       "effect": "Sets the due date of every medium finding. A finding past its due date is shown as overdue. 0 = medium findings have no due date.",
       "whenToChange": "Set it to the deadline your security policy gives medium findings.",
       "advanced": true,
@@ -3052,9 +3189,19 @@
     "SI_Pro_FindingSla_LowDays": {
       "label": "Days to fix a low finding",
       "purpose": "How many days a low finding has to be fixed, counted from when it was first found (or found again after it was fixed).",
-      "defaultText": "180 days",
+      "defaultText": "90 days",
       "effect": "Sets the due date of every low finding. A finding past its due date is shown as overdue. 0 = low findings have no due date.",
       "whenToChange": "Set it to the deadline your security policy gives low findings.",
+      "advanced": true,
+      "group": "Data & retention",
+      "unit": "days"
+    },
+    "SI_Pro_FindingSla_ExploitedDays": {
+      "label": "Days to fix an actively exploited finding",
+      "purpose": "How many days a vulnerability (CVE) finding has to be fixed when its exploit is verified or is in an exploit kit, whatever its severity, counted from when it was first found (or found again after it was fixed). An exploit that is only known to exist does not count.",
+      "defaultText": "14 days",
+      "effect": "A finding with a verified exploit, or one in an exploit kit, is due after this many days when that is sooner than the days of its severity (or its severity has no due date). A due date set in Defender for Cloud governance is kept. 0 = off: only the days of the severity count.",
+      "whenToChange": "Set it to the deadline your security policy gives actively exploited vulnerabilities (CISA BOD 22-01 gives 14 days), or 0 to use the severity alone.",
       "advanced": true,
       "group": "Data & retention",
       "unit": "days"
@@ -3206,9 +3353,9 @@
     "SI_Identity_SignInMethodsFillMinutes": {
       "label": "Users' sign-in methods: background reading per slice (minutes)",
       "purpose": "How many minutes of each 15-minute run of its own job (caj-si-signin-methods) the background read of the users' sign-in methods may use.",
-      "defaultText": "8 minutes",
-      "effect": "More minutes fill the detail sooner (about 250-300 users a minute, depending on how much Microsoft throttles); fewer leave more of the tick idle. A slice that is still running is never started twice.",
-      "whenToChange": "Raise it to fill a large tenant faster the first time; lower it to keep the job's runs short.",
+      "defaultText": "8 minutes, and 12 while users are due (never read, or their sign-in methods changed)",
+      "effect": "More minutes fill the detail sooner (about 250-300 users a minute, depending on how much Microsoft throttles); fewer leave more of the tick idle. With the default the slice grows to 12 minutes by itself while users are due, so a first fill or a wave of changes is read sooner; any other value is used as it is, always. A slice that is still running is never started twice.",
+      "whenToChange": "Leave it at the default: it already reads longer while users are due. Lower it only to keep the job's runs short (that value is then used always).",
       "unit": "minutes",
       "advanced": true,
       "group": "Collection scope & limits",
@@ -3663,6 +3810,26 @@
       "effect": "Longer timeouts tolerate a slow service at the cost of longer runs; shorter ones fail faster, leaving that address without Shodan data for the run.",
       "whenToChange": "Only if lookups time out on a slow network.",
       "unit": "seconds",
+      "advanced": true,
+      "group": "Collection scope & limits"
+    },
+    "SI_AzureReadTimeoutSec": {
+      "label": "Azure read call timeout",
+      "purpose": "How long one Azure read call (one page of Resource Graph or Azure Resource Manager) may wait before it counts as no answer and is tried again.",
+      "defaultText": "120 seconds.",
+      "effect": "A call that waits longer is tried again (up to 4 times, each retry said in the log). Longer tolerates a slow platform at the cost of a longer step when Azure does not answer; shorter retries sooner. Nothing that was read is lost either way: a subscription whose read fails is marked unknown, never empty.",
+      "whenToChange": "Only when support asks for it, or when Azure reads time out on a slow network.",
+      "unit": "seconds",
+      "advanced": true,
+      "group": "Collection scope & limits"
+    },
+    "SI_MdcArmSubscriptionTimeoutMinutes": {
+      "label": "Defender for Cloud read per subscription",
+      "purpose": "How long the Defender for Cloud assessments read of one subscription may take.",
+      "defaultText": "15 minutes.",
+      "effect": "A subscription that runs out counts as one whose read failed: Resource Graph's rows answer for it when it has some, else its findings are unknown -- never shown as nothing there. Longer gives a very large subscription more time; shorter ends a stuck read sooner.",
+      "whenToChange": "Only when support asks for it, or when a very large subscription's read is cut off.",
+      "unit": "minutes",
       "advanced": true,
       "group": "Collection scope & limits"
     },
@@ -5136,6 +5303,15 @@
       "advanced": true,
       "group": "Advanced / diagnostics"
     },
+    "SI_VulnLoop_ChangedSet": {
+      "label": "Vulnerability connector compares only what changed",
+      "purpose": "How the vulnerability connector compares the newest results with the records it already holds. A large install has well over a million findings, and nearly all of them are the same as in the run before.",
+      "defaultText": "on -- only new, changed, reopened and absent findings are planned one by one",
+      "effect": "on: a still-reported finding whose record is unchanged is refreshed as seen without being planned one by one, and the results are read faster; closes still come from every finding of the results against every open record, and the close limits decide on the whole run. off: every finding is planned one by one, as before. shadow: both ways on every page, compared -- the full compare's result is what is applied, and any difference is a warning on the run (troubleshooting only: it doubles the work).",
+      "whenToChange": "Only when support asks for it: shadow to check the faster compare at an install, off if a difference was reported.",
+      "advanced": true,
+      "group": "Connectors & CMDB"
+    },
     "SI_VulnSync_CloseAfterRuns": {
       "label": "Runs before a vulnerability closes",
       "purpose": "How many complete runs in a row a vulnerability must be missing from an asset that was seen before the close-loop marks it fixed.",
@@ -6061,6 +6237,7 @@
         "SI_LogRetentionDays",
         "SI_Pro_DataRetentionDays",
         "SI_Data_KeepCollections",
+        "SI_Data_RetireByPartition",
         "SI_Pro_ConfigBackupRetentionDays"
       ]
     },
@@ -6080,7 +6257,10 @@
       "settings": [
         "SI_SqlPacing_Enabled",
         "SI_SqlPacing_HighPercent",
-        "SI_SqlPacing_LowPercent"
+        "SI_SqlPacing_LowPercent",
+        "SI_Data_ParseAtInsert",
+        "SI_Data_BulkLoad",
+        "SI_Data_LoadPerReport"
       ]
     },
     {
@@ -6182,7 +6362,7 @@
     {
       "name": "Protection score",
       "category": "Web app",
-      "description": "The protection score of the Executive overview, the Executive report, the management mail and the wall board: its accepted lifecycle per asset type, the tier weights and the severities that count.",
+      "description": "The protection score of the Executive overview, the Executive report, the management mail and the wall board: its accepted lifecycle per asset type, each tier's share of the score and the points each open fix costs an asset's health.",
       "settings": [
         "SI_ProtectionScore_GraceDays_Device",
         "SI_ProtectionScore_GraceDays_Identity",
@@ -6192,8 +6372,9 @@
         "SI_ProtectionScore_OtherGraceDays_Identity",
         "SI_ProtectionScore_OtherGraceDays_CloudResource",
         "SI_ProtectionScore_OtherGraceDays_PublicIp",
-        "SI_ProtectionScore_TierWeights",
-        "SI_ProtectionScore_Severities",
+        "SI_ProtectionScore_TierShares",
+        "SI_ProtectionScore_SeverityPoints",
+        "SI_ProtectionScore_MinorPointsCap",
         "SI_RA_SourceFirstSeen"
       ]
     }

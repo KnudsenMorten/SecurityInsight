@@ -105,6 +105,8 @@ function Get-DiscoveryFromEntraUsers {
     $groupRoles = Get-SIRoleAssignedGroups -Token $token -PermanentRolesByPrincipal $permRolesMap -EligibleRolesByPrincipal $eligRolesMap
     # #1192: the groups holding an Entra role AND the groups holding an Azure role are expanded (members, PIM for Groups)
     $privGroups = Get-SIPrivilegeHoldingGroupMap -RoleAssignedGroupMap $groupRoles -AzureLookup $azureLookup
+    # #1383: a group an Azure role assignment still names but the directory no longer has is gone -- not an incomplete read
+    $privGroups = Remove-SIGonePrivilegeGroups -Token $token -GroupMap $privGroups -RoleAssignedGroupMap $groupRoles
     Write-SIInfo ('[perms] {0} groups hold Entra roles, {1} hold Entra or Azure roles -- expanding transitive memberships...' -f $groupRoles.Count, $privGroups.Count)
     $memberToGroups = if ($privGroups.Count -gt 0) {
         Get-SIGroupTransitiveMembers -Token $token -RoleAssignedGroupMap $privGroups

@@ -19,8 +19,8 @@
     else
     {
         <p class="hint">@(v.Finding
-            ? "The task to perform that resolves this finding, with its state. Open a task for every finding it resolves."
-            : "One row per task to perform on this asset: the update, the software upgrade or the configuration change, with the findings it resolves. Open tasks first. Open a task for its findings.")</p>
+            ? "The task to perform that resolves this finding, with its state. Open a task for everything known about it: what to do, where, and every finding it resolves."
+            : "One row per task to perform on this asset: the update, the software upgrade or the configuration change, with the findings it resolves. Open tasks first. Open a task for everything known about it and the findings it resolves.")</p>
         <div class="table-wrap">
             <table data-sortable data-tasks-table>
                 <thead><tr><th scope="col">Task</th><th scope="col">Kind</th><th scope="col">State</th><th scope="col">Highest severity</th><th scope="col" class="num">Highest risk score</th><th scope="col" class="num">Findings</th>@if (v.Finding) { <th scope="col">Asset (CI)</th> }</tr></thead>

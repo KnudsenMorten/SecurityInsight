@@ -341,7 +341,7 @@ Describe '🔒 the identity reports filter what they mean -- now that disabled a
     }
 
     It '<name> deliberately KEEPS disabled accounts -- a privileged role or a public resource on a disabled account is still a hygiene finding' -ForEach @(
-        @{ name = 'Identity_GuestWithPrivilegedRole' }, @{ name = 'Identity_SPN_OwnsResourcePublicAccess' }
+        @{ name = 'Identity_GuestWithPrivilegedRole' }
     ) {
         foreach ($kind in 'Summary', 'Detailed') {
             $key = '{0}_{1}' -f $name, $kind
@@ -352,6 +352,13 @@ Describe '🔒 the identity reports filter what they mean -- now that disabled a
         }
     }
 
+    It 'Identity_SPN_OwnsResourcePublicAccess follows the disabled-asset setting -- a disabled service principal is handled like a disabled user (owner 2026-11-24)' {
+        foreach ($kind in 'Summary', 'Detailed') {
+            $key = 'Identity_SPN_OwnsResourcePublicAccess_{0}' -f $kind
+            $script:Reports.ContainsKey($key) | Should -BeTrue -Because "$key is in the catalog"
+            $script:Mode[$key] | Should -Be 'setting' -Because "$key leaves disabled service principals out unless the install's setting keeps them"
+        }
+    }
     It 'the NoMFA report lists only enabled, internal users' {
         $q = $script:Reports['Identity_NoMFA_Summary']
         $q | Should -Match 'where si_identity_type == "user"'

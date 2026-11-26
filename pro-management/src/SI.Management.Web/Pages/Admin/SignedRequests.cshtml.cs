@@ -81,7 +81,7 @@ public sealed class SignedRequestsModel : PageModel
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _log.LogError(ex, "the signed-request state could not be read");
-            Error = "The signed-request state could not be read from the database: " + ex.Message;
+            Error = "The signed-request state could not be read from the database. The details are in the web app's log; try again in a few minutes.";
         }
     }
 

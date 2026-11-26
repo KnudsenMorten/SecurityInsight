@@ -316,17 +316,22 @@ function Get-SIDataWriteCiFindingSql {
         $catVals = ", CASE WHEN ISJSON(x.DocJson) = 1 THEN NULLIF(LEFT(LTRIM(RTRIM(COALESCE(NULLIF(JSON_VALUE(x.DocJson, '$.si_category'), N''), JSON_VALUE(x.DocJson, '$.Category')))), 256), N'') END" +
                    ", CASE WHEN ISJSON(x.DocJson) = 1 THEN NULLIF(LEFT(LTRIM(RTRIM(COALESCE(NULLIF(JSON_VALUE(x.DocJson, '$.si_subcategory'), N''), JSON_VALUE(x.DocJson, '$.Subcategory')))), 256), N'') END"
     }
+    # #1116 (c) (SCALE-3 A): the chunk's findings are read out of @j ONCE into #x (65 GB over 270 runs re-read the large
+    # parameter at internal), then written from there -- the same columns, the same values (SELECT ... INTO keeps OPENJSON's
+    # types and the database's collation), the same lookups
     @"
 SET XACT_ABORT ON;
+SELECT x.* INTO #x FROM OPENJSON(@j) WITH (CiId nvarchar(64), AssetId nvarchar(max), FindingKey nvarchar(max), FindingType nvarchar(32), Title nvarchar(max), Severity nvarchar(16), Tier int,
+     RiskScore float, WeightedRiskScore float, RiskRating nvarchar(16), SecurityDomain nvarchar(64), DetectedBy nvarchar(max), RiskFactors nvarchar(max), ExemptionId nvarchar(64),
+     CollectionTime nvarchar(64), DocJson nvarchar(max), Component nvarchar(max)$sw) x
+WHERE x.FindingKey IS NOT NULL;
 BEGIN TRAN;
 $clear
 INSERT $table (CiId, AssetId, FindingKey, FindingType, Title, Severity, Tier, RiskScore, WeightedRiskScore, RiskRating, SecurityDomain, DetectedBy, RiskFactors, ExemptionId, CollectionTime, DocJson, Component$sc$catCols)
 SELECT COALESCE(NULLIF(mg.IntoCiId, N''), rc.CiId), LEFT(x.AssetId, 400), LEFT(x.FindingKey, 256), x.FindingType, LEFT(x.Title, 1000), x.Severity, CASE WHEN x.Tier BETWEEN 0 AND 255 THEN x.Tier END, x.RiskScore,
        x.WeightedRiskScore, x.RiskRating, x.SecurityDomain, LEFT(x.DetectedBy, 2000), LEFT(x.RiskFactors, 2000), x.ExemptionId,
        ISNULL(TRY_CONVERT(datetime2(3), x.CollectionTime, 127), SYSUTCDATETIME()), x.DocJson, NULLIF(LEFT(LTRIM(RTRIM(x.Component)), 64), N'')$sv$catVals
-FROM OPENJSON(@j) WITH (CiId nvarchar(64), AssetId nvarchar(max), FindingKey nvarchar(max), FindingType nvarchar(32), Title nvarchar(max), Severity nvarchar(16), Tier int,
-     RiskScore float, WeightedRiskScore float, RiskRating nvarchar(16), SecurityDomain nvarchar(64), DetectedBy nvarchar(max), RiskFactors nvarchar(max), ExemptionId nvarchar(64),
-     CollectionTime nvarchar(64), DocJson nvarchar(max), Component nvarchar(max)$sw) x
+FROM #x AS x
 OUTER APPLY (SELECT TOP (1) c.CiId FROM sidata.Ci c WHERE NULLIF(LTRIM(RTRIM(x.CiId)), N'') IS NULL AND LEN(x.AssetId) BETWEEN 1 AND 64 AND c.CiId = x.AssetId) ci
 OUTER APPLY (SELECT TOP (1) l.CiId FROM sidata.CiLink l
              WHERE NULLIF(LTRIM(RTRIM(x.CiId)), N'') IS NULL AND ci.CiId IS NULL AND LEN(x.AssetId) BETWEEN 1 AND 450 AND l.NativeId = LOWER(x.AssetId)
@@ -340,6 +345,7 @@ WHERE x.FindingKey IS NOT NULL;
 DECLARE @n INT = @@ROWCOUNT;
 COMMIT;
 SELECT @n;
+DROP TABLE #x;
 "@
 }
 
@@ -694,6 +700,11 @@ SET @w += @@ROWCOUNT;
     if ($markText.Length -gt 64) { $markText = $markText.Substring(0, 64) }
     $markSql = "MERGE sidata.ViewState AS v USING (SELECT N'cifinding-swap' AS Name, N'{0}' AS Value) AS x ON v.Name = x.Name WHEN MATCHED THEN UPDATE SET Value = x.Value, UpdatedAt = SYSUTCDATETIME() WHEN NOT MATCHED THEN INSERT (Name, Value) VALUES (x.Name, x.Value);" -f $markText.Replace("'", "''")
     $stopAt = $StopAfterRanges
+    # #1310 / SUP-2026-00676: the replace is one long session that logs a line per range but never moved the step's progress
+    # mark, so the run monitor took a working step for still. Its own progress (8.18 ticker): the hashes key by key, then the
+    # staged rows placed, said and recorded every few minutes -- through the step's seam (its own short call, not this session).
+    $tick = $null
+    if (Get-Command -Name New-SIStepProgressTicker -ErrorAction SilentlyContinue) { $tick = New-SIStepProgressTicker -What 'v3 model    : findings per CI: replace' -Unit 'staged ids hashed' -Total -1 -Invoke $Invoke -Log $Log }
     $onSession = {
         param($Run)
         $lock = [int](& $Run "DECLARE @l int; EXEC @l = sp_getapplock @Resource = N'si-cifinding-swap', @LockMode = N'Exclusive', @LockOwner = N'Session', @LockTimeout = 0; SELECT @l;" 'scalar')
@@ -704,6 +715,8 @@ SET @w += @@ROWCOUNT;
                             @{ Tbl = 'sidata.CiFinding'; Key = 'CiFindingId'; Into = '#tkh'; Sel = $(if ($byAll) { $mT.Expr } else { $mT.Expr }) + ' AS H'; Cols = 'H'; Apply = $mT.Apply; A = 't' })) {
             $b = @(& $Run ("SELECT ISNULL(MIN({0}), 0) AS Lo, ISNULL(MAX({0}), -1) AS Hi FROM {1};" -f $side.Key, $side.Tbl) 'reader' | ForEach-Object { $_ } | Where-Object { $null -ne $_ })[0]
             $after = [long]$b['Lo'] - 1; $hi = [long]$b['Hi']; $size = [Math]::Max(1L, $FirstSize)
+            $lo0 = $after
+            if ($tick) { Set-SIStepProgressTickerPhase -Ticker $tick -Unit $(if ($side.A -eq 's') { 'staged ids hashed' } else { 'stored ids hashed' }) -Total ([Math]::Max(0L, $hi - $lo0)) }
             while ($after -lt $hi) {
                 $upto = [long][Math]::Min([double]$hi, [double]$after + [double]$size)
                 $sw = [Diagnostics.Stopwatch]::StartNew()
@@ -719,6 +732,7 @@ SET @w += @@ROWCOUNT;
                     & $Run ("INSERT {0} ({1}, {2}) SELECT {3}.{1}, {4} FROM {5} AS {3}{6} WHERE {3}.{1} > {7} AND {3}.{1} <= {8};" -f $side.Into, $side.Key, $side.Cols, $side.A, $side.Sel, $side.Tbl, $side.Apply, $after, $upto) 'none'
                 }
                 $after = $upto
+                if ($tick) { $null = Step-SIStepProgressTicker -Ticker $tick -Done ([long]($after - $lo0)) }
                 $size = & $nextSize $size $sw.ElapsedMilliseconds
             }
         }
@@ -738,6 +752,7 @@ SELECT (SELECT COUNT_BIG(*) FROM sidata.CiFindingStage) AS Staged, (SELECT ISNUL
         & $Run $markSql 'none'
         $tot = @{ D = 0L; I = 0L; K = 0L; W = 0L }
         $take = [Math]::Max(1L, $FirstSize); $hasLo = $false; $lo = $null; $i = 0
+        if ($tick) { Set-SIStepProgressTickerPhase -Ticker $tick -Unit 'staged rows placed' -Total ([long]$exp) }
         while ($true) {
             $lop = ''; if ($hasLo) { $lop = ' WHERE u.H > ' + $lo }
             $bd = @(& $Run ("SELECT MAX(x.k) AS Hi, COUNT_BIG(*) AS N FROM (SELECT TOP ({0}) u.H AS k FROM (SELECT H FROM #skh UNION ALL SELECT H FROM #tkh) AS u{1} ORDER BY u.H) AS x;" -f $take, $lop) 'reader' | ForEach-Object { $_ } | Where-Object { $null -ne $_ })[0]
@@ -772,6 +787,7 @@ SELECT @d AS D, @i AS I, @k AS K, @w AS W;
             $ms = $sw.ElapsedMilliseconds
             foreach ($q in 'D', 'I', 'K', 'W') { $tot[$q] += [long]$r[$q] }
             & $logFn 'INFO' ('v3 model    : findings per CI: swap -- range {0}: {1:N0} removed, {2:N0} kept ({3:N0} rewritten), {4:N0} added -- {5:N1} s' -f $i, [long]$r['D'], [long]$r['K'], [long]$r['W'], [long]$r['I'], ($ms / 1000.0))
+            if ($tick) { $null = Step-SIStepProgressTicker -Ticker $tick -Done ([long]($tot.K + $tot.I)) }
             if ($last) { break }
             if ($stopAt -gt 0 -and $i -ge $stopAt) { throw ('stopped after {0} range(s) (a test of a run that ends part-way)' -f $i) }
             $hasLo = $true; $lo = $hiHex
@@ -1493,6 +1509,13 @@ SET XACT_ABORT ON;
 DECLARE @cid INT = CONVERT(int, @CollectionId);
 DECLARE @band0 FLOAT = CONVERT(float, @B0), @band1 FLOAT = CONVERT(float, @B1), @band2 FLOAT = CONVERT(float, @B2);
 DECLARE @ct DATETIME2(3) = (SELECT CollectionTime FROM sidata.Collection WHERE CollectionId = @cid);
+-- #1364 the evidence rows of the collection (sidata.FindingEvidence: a finding a meaning rule folded onto another finding of its
+-- CI, moved out of sidata.Finding): listed on the finding they are evidence on (detected by, si_finding_evidence) -- no finding
+IF OBJECT_ID('tempdb..#ev') IS NOT NULL DROP TABLE #ev;
+CREATE TABLE #ev (CanonicalKey NVARCHAR(900) COLLATE DATABASE_DEFAULT NOT NULL, EvKey NVARCHAR(256) NULL, ReportName NVARCHAR(256) NULL, Title NVARCHAR(1000) NULL, Severity NVARCHAR(32) NULL);
+IF OBJECT_ID('sidata.FindingEvidence') IS NOT NULL
+    EXEC sp_executesql N'INSERT #ev (CanonicalKey, EvKey, ReportName, Title, Severity) SELECT CanonicalKey, ConfigurationId, ReportName, Title, Severity FROM sidata.FindingEvidence WHERE CollectionId = @c', N'@c int', @c = @cid;
+CREATE CLUSTERED INDEX CX_ev ON #ev (CanonicalKey);
 IF OBJECT_ID('tempdb..#raf') IS NOT NULL DROP TABLE #raf;
 SELECT f.FindingId, f.RaSeq, f.RaFindingKey, f.AssetKey, f.RaAssetId, f.ConfigurationId, f.Title, f.AssetName, f.SecurityDomain, f.ReportName,
        f.Tier, f.RiskScore, f.ExemptionId,
@@ -1516,7 +1539,7 @@ SELECT COALESCE(k.OwnerCi, ci.CiId, ck.CiId, lk.CiId), LEFT(ISNULL(k.AssetIdK, N
                f1.AssetName AS si_asset_name, f1.SecurityDomain AS si_security_domain, rep.FirstReport AS si_report_name, JSON_QUERY(rep.ReportsJson) AS si_detected_by,
                v.Sev AS si_severity, v.Score AS si_risk_score, v.Weighted AS si_weighted_risk_score, v.Rating AS si_risk_rating,
                JSON_QUERY(fac.FactorsJson) AS si_finding_risk_factors, g.Cnt AS si_finding_rows,
-               g.Tier AS si_tier, CONVERT(nvarchar(64), g.ExemptionId) AS si_exemption_id, cp.Component AS si_component/*doc*/, N'database' AS si_finding_source
+               g.Tier AS si_tier, CONVERT(nvarchar(64), g.ExemptionId) AS si_exemption_id, cp.Component AS si_component/*doc*/, JSON_QUERY(evd.Ev) AS si_finding_evidence, N'database' AS si_finding_source
         FOR JSON PATH, WITHOUT_ARRAY_WRAPPER),
        NULLIF(LEFT(cp.Component, 64), N'')/*val*/
 FROM (SELECT RaFindingKey, MIN(Tier) AS Tier, MAX(RiskScore) AS Score, MAX(Weighted) AS Weighted, MAX(SevRank) AS SevRank, MAX(ExemptionId) AS ExemptionId, COUNT(*) AS Cnt
@@ -1536,12 +1559,22 @@ OUTER APPLY (SELECT TOP (1) x.Component FROM #raf x WHERE x.RaFindingKey = g.RaF
 OUTER APPLY (SELECT STRING_AGG(CONVERT(nvarchar(max), d.ReportName), N'; ') WITHIN GROUP (ORDER BY d.S) AS Reports,
                     N'[' + STRING_AGG(CONVERT(nvarchar(max), N'"' + STRING_ESCAPE(d.ReportName, 'json') + N'"'), N',') WITHIN GROUP (ORDER BY d.S) + N']' AS ReportsJson,
                     MIN(CASE WHEN d.Pos = 1 THEN d.ReportName END) AS FirstReport
-             FROM (SELECT x.ReportName, MIN(x.RaSeq) AS S, ROW_NUMBER() OVER (ORDER BY MIN(x.RaSeq)) AS Pos FROM #raf x
-                   WHERE x.RaFindingKey = g.RaFindingKey AND x.ReportName IS NOT NULL GROUP BY x.ReportName) d) rep
+             FROM (SELECT u.ReportName, MIN(u.S) AS S, ROW_NUMBER() OVER (ORDER BY MIN(u.S)) AS Pos
+                   FROM (SELECT x.ReportName, x.RaSeq AS S FROM #raf x WHERE x.RaFindingKey = g.RaFindingKey
+                         UNION ALL SELECT ev.ReportName, CONVERT(bigint, 9223372036854775807) FROM #ev ev WHERE ev.CanonicalKey = g.RaFindingKey) u
+                   WHERE u.ReportName IS NOT NULL GROUP BY u.ReportName) d) rep
 OUTER APPLY (SELECT STRING_AGG(CONVERT(nvarchar(max), t.Tok), N';') WITHIN GROUP (ORDER BY t.S) AS Factors,
                     N'[' + STRING_AGG(CONVERT(nvarchar(max), N'"' + STRING_ESCAPE(t.Tok, 'json') + N'"'), N',') WITHIN GROUP (ORDER BY t.S) + N']' AS FactorsJson
              FROM (SELECT LTRIM(RTRIM(s.value)) AS Tok, MIN(x.RaSeq) AS S FROM #raf x CROSS APPLY STRING_SPLIT(x.Factors, N';') s
                    WHERE x.RaFindingKey = g.RaFindingKey AND LTRIM(RTRIM(s.value)) <> N'' GROUP BY LTRIM(RTRIM(s.value))) t) fac
+-- #1364 a finding other findings are evidence on: its own entry first, then each evidence finding's (report, key, title, severity),
+-- as where the findings are published (Merge-SIFindingFolds)
+OUTER APPLY (SELECT CASE WHEN EXISTS (SELECT 1 FROM #ev ev WHERE ev.CanonicalKey = g.RaFindingKey) THEN
+                 (SELECT e.report, e.[key], e.title, e.severity FROM (
+                      SELECT 0 AS S, f1.ReportName AS report, k.FKey AS [key], f1.Title AS title, v.Sev AS severity
+                      UNION ALL
+                      SELECT DISTINCT 1, ev.ReportName, ev.EvKey, ev.Title, ev.Severity FROM #ev ev WHERE ev.CanonicalKey = g.RaFindingKey) AS e
+                  ORDER BY e.S, e.[key] FOR JSON PATH) END AS Ev) evd
 OUTER APPLY (SELECT TOP (1) c.CiId FROM sidata.Ci c WHERE k.OwnerCi IS NULL AND LEN(k.AssetIdK) BETWEEN 1 AND 64 AND c.CiId = k.AssetIdK) ci
 OUTER APPLY (SELECT TOP (1) c.CiId FROM sidata.Ci c WHERE k.OwnerCi IS NULL AND ci.CiId IS NULL AND LEN(f1.AssetKey) BETWEEN 1 AND 64 AND c.CiId = f1.AssetKey) ck
 OUTER APPLY (SELECT TOP (1) l.CiId FROM sidata.CiLink l
@@ -1549,7 +1582,7 @@ OUTER APPLY (SELECT TOP (1) l.CiId FROM sidata.CiLink l
              ORDER BY l.IsPrimary DESC, CASE WHEN l.State IN (N'active', N'frozen') THEN 0 ELSE 1 END, l.LastSeen DESC) lk;
 DECLARE @n INT = @@ROWCOUNT;
 COMMIT;
-DROP TABLE #raf;
+DROP TABLE #raf; DROP TABLE #ev;
 SELECT @n;
 '@)
     if ($FromWork) {
@@ -1789,7 +1822,11 @@ function Invoke-SIDataCiFindingFromDbRanged {
     param([Parameter(Mandatory)][scriptblock]$Invoke, [Parameter(Mandatory)][hashtable]$Params, [switch]$SubCi, [switch]$Category,
           [long]$FillTake = 100000, [int]$RangeTake = 100000, [long]$TargetMs = 5000, [int]$Workers = 0, [scriptblock]$Log,
           # how often a long fill says how far it is (seconds; a line only while rows are left)
-          [double]$ProgressSeconds = 60)
+          [double]$ProgressSeconds = 60,
+          # #1319 (SCALE-2) the data sync's SI_Data_ChangedSet: off = exactly as before; on (the default) / shadow = the work rows of
+          # the findings that did not change since the published collection are carried from its kept work rows
+          # (SI-DataChangedSet.ps1); -ChangedSetOut: a hashtable that gets the phase's result ('Result'). Seed / share: tests only
+          [string]$ChangedSet = 'off', [hashtable]$ChangedSetOut, [int]$ChangedSetSeed = 0, [int]$ChangedSetSamplePercent = -1)
     if (-not $Log) { $Log = { param($l, $m) Write-Host ('[{0}] {1}' -f $l, $m) } }
     $cid = [long]$Params.CollectionId
     # the parallel ranges and the database's cores (SI-DataViewContext.ps1; the data sync has it loaded)
@@ -1833,8 +1870,22 @@ function Invoke-SIDataCiFindingFromDbRanged {
             & $Log 'INFO' ("v3 model    : the rows kept for the findings per CI do not match their mark ({0:N0} kept, {1:N0} marked) -- collection {2} is read again" -f $have, $wm.Rows, $cid)
         }
     }
+    # #1319 on (the default) / shadow: while the work table still holds the PUBLISHED collection's rows, whole, the unchanged
+    # findings' work rows are carried from them (SI-DataChangedSet.ps1) -- the work table is then NOT emptied first: the base's
+    # rows go after the fill (and the compare). Off, or a full build: exactly as before.
+    $csWork = $null; $csWorkOn = $false
+    if (-not $kept -and $ChangedSet -in 'shadow', 'on' -and $hi -ge $lo -and (Get-Command -Name Start-SIDataCiWorkChangedSet -ErrorAction SilentlyContinue)) {
+        $csWork = Start-SIDataCiWorkChangedSet -Invoke $Invoke -CollectionId $cid -Lo $lo -Hi $hi -Mode $ChangedSet -FillText (Get-SIDataCiDbWorkFillSql) -Seed $ChangedSetSeed -SamplePercent $ChangedSetSamplePercent -Log $Log
+        $csWorkOn = $csWork -and [string]$csWork.Build -in 'shadow', 'changed-set'
+        if ($ChangedSetOut) { $ChangedSetOut['Result'] = ConvertTo-SIDataChangedSetResult -State $csWork -Check $null; $ChangedSetOut['State'] = $csWork }
+    }
     $canMark = $true
-    if (-not $kept) {
+    if (-not $kept -and $csWorkOn) {
+        # the mark says 'nothing in' until the end: a run that stops part-way is read again from the start by the next one
+        try { $null = & $Invoke (Get-SIDataCiWorkMarkClearSql) @{} 'nonquery' } catch { }
+        $after = $lo - 1; $rows = $(if ([string]$csWork.Build -eq 'changed-set') { [long]$csWork.Carried - [long]$csWork.Sampled } else { 0L })
+        try { $canMark = ([string](& $Invoke (Get-SIDataCiWorkMarkWriteSql) @{ Name = $mark; Value = ('{0};0' -f $after) } 'scalar') -eq '1') } catch { $canMark = $false }
+    } elseif (-not $kept) {
         try { $null = & $Invoke (Get-SIDataCiWorkMarkClearSql) @{} 'nonquery' } catch { }
         Clear-SIDataCiDbTable -Invoke $Invoke -Table 'sidata.CiFindingDbWork'
         $after = $lo - 1; $rows = 0L
@@ -1848,6 +1899,8 @@ function Invoke-SIDataCiFindingFromDbRanged {
             $nf = $null; try { $nf = ConvertTo-SIDataNarrowSql -Sql $fill } catch { $nf = $null }
             if ($nf -and (Use-SIDataFindingNarrow -Invoke $Invoke -CollectionId $cid -Log $Log)) { $fill = $nf }
         }
+        # #1319 on: the carried findings already have their work row -- the fill reads only the others
+        if ($csWorkOn -and [string]$csWork.Build -eq 'changed-set') { $fill = Get-SIDataCiWorkChangedSetFill -Fill $fill }
         $size = [Math]::Max(1L, $FillTake); $workersNow = $maxWorkers; $lastMs = 0L
         $total = [Math]::Max(0L, $hi - $after); $start = $after
         $clock = [Diagnostics.Stopwatch]::StartNew(); $said = [double]0
@@ -1871,7 +1924,7 @@ function Invoke-SIDataCiFindingFromDbRanged {
             }
             $lastMs = $ms; $rows += $n; $after = $from
             # the wave is whole: everything up to $after is in the work table -- the next run starts from there
-            if ($canMark) { try { $null = & $Invoke (Get-SIDataCiWorkMarkWriteSql) @{ Name = $mark; Value = ('{0};{1}' -f $after, $rows) } 'scalar' } catch { } }
+            if ($canMark -and -not $csWorkOn) { try { $null = & $Invoke (Get-SIDataCiWorkMarkWriteSql) @{ Name = $mark; Value = ('{0};{1}' -f $after, $rows) } 'scalar' } catch { } }
             $size = Get-SIDataNextSize -Current $size -ElapsedMs $ms -TargetMs $TargetMs -Minimum 1
             $now = $clock.Elapsed.TotalSeconds
             if ($after -lt $hi -and ($now - $said) -ge $ProgressSeconds) {
@@ -1879,6 +1932,31 @@ function Invoke-SIDataCiFindingFromDbRanged {
                 $left = if ($done -gt 0) { ($total - $done) * ($now / $done) } else { 0 }
                 & $Log 'INFO' ("v3 model    : the findings per CI -- collection {0} read up to {1:N0} of {2:N0} ids, about {3:N0} min left" -f $cid, $done, $total, [Math]::Ceiling($left / 60))
             }
+        }
+
+        # #1319 the quick build compared with the full one, the published collection's rows taken away and the count checked
+        # (a wrong count throws: nothing is staged); on + a difference: the collection is read in full now, before anything is
+        # published, exactly as with the setting off
+        if ($csWorkOn) {
+            $csWorkCheck = Complete-SIDataCiWorkChangedSet -Invoke $Invoke -State $csWork -CollectionId $cid -Lo $lo -Hi $hi -Rows $rows -Log $Log
+            $csWorkRes = ConvertTo-SIDataChangedSetResult -State $csWork -Check $csWorkCheck
+            if ($ChangedSetOut) { $ChangedSetOut['Result'] = $csWorkRes }
+            if ($csWorkCheck.Redo) {
+                try { $null = & $Invoke (Get-SIDataCiWorkMarkClearSql) @{} 'nonquery' } catch { }
+                Clear-SIDataCiDbTable -Invoke $Invoke -Table 'sidata.CiFindingDbWork'
+                $ok = $true
+                $nFull = Invoke-SIDataCiFindingFromDbRanged -Invoke $Invoke -Params $Params -SubCi:$SubCi -Category:$Category -FillTake $FillTake -RangeTake $RangeTake -TargetMs $TargetMs -Workers $Workers -Log $Log -ProgressSeconds $ProgressSeconds
+                if ($csWork.RunId) { try { Complete-SIDataChangedSetRun -Invoke $Invoke -RunId ([long]$csWork.RunId) -Build 'full' -Outcome 'ok' -Findings $csWork.Findings -Carried $csWorkRes.Carried -Compared $csWorkRes.Compared -Differences $csWorkRes.Differences -Detail $csWorkRes.Detail -SampleCis $csWorkRes.SampleCis -FellBack } catch { } }
+                return $nFull
+            }
+            if ($canMark) { try { $null = & $Invoke (Get-SIDataCiWorkMarkWriteSql) @{ Name = $mark; Value = ('{0};{1}' -f $hi, $rows) } 'scalar' } catch { } }
+            if ($csWork.RunId) {
+                try { Complete-SIDataChangedSetRun -Invoke $Invoke -RunId ([long]$csWork.RunId) -Build ([string]$csWork.Build) -Outcome 'ok' -Findings $csWork.Findings -Carried $csWorkRes.Carried -Compared $csWorkRes.Compared -Differences $csWorkRes.Differences -Detail $csWorkRes.Detail -SampleCis $csWorkRes.SampleCis }
+                catch { $csWorkRes.Problem = ('its record was not written: {0}' -f (Get-SIDataChangedSetSafeError $_)) }
+            }
+        } elseif ($csWork -and $csWork.RunId) {
+            # a full build of this phase (its reason recorded): a base for the next run once the collection is published
+            try { Complete-SIDataChangedSetRun -Invoke $Invoke -RunId ([long]$csWork.RunId) -Build 'full' -Outcome 'ok' -Findings $csWork.Findings } catch { }
         }
 
         # ---- 2. the staging: key ranges, a wave at a time -----------------------------------------------------------------
@@ -1963,7 +2041,9 @@ function Invoke-SIDataCiSync {
           # #829 the SI_RA_Findings value (the copy of the findings to Log Analytics; not set = off) -- the job's setting by default
           [AllowNull()]$FindingsCopy = $global:SI_RA_Findings,
           # 2026-10-25 the data sync's per-phase timing { param($Name, $Rows) } (log line + cfg.StepPhaseTime); none = not timed
-          [scriptblock]$Phase)
+          [scriptblock]$Phase,
+          # #1319 the data sync's SI_Data_ChangedSet (Read-SIDataChangedSetMode): off = exactly as before
+          [string]$ChangedSet = 'off')
     if (-not $Log) { $Log = { param($l, $m) Write-Host ('[{0}] {1}' -f $l, $m) } }
     $ph = $Phase; if (-not $ph) { $ph = { param($Name, $Rows) } }
     $issues = New-Object System.Collections.Generic.List[object]
@@ -1981,6 +2061,7 @@ function Invoke-SIDataCiSync {
             . (Join-Path $PSScriptRoot 'SI-DataSync.ps1')
         }
         if (-not (Get-Command -Name Invoke-SIDataCiLifecycle -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot 'SI-DataCiLifecycle.ps1') }
+        if (-not (Get-Command -Name Invoke-SIDataFindingFold -ErrorAction SilentlyContinue)) { try { . (Join-Path $PSScriptRoot 'SI-DataFindingFold.ps1') } catch { & $Log 'WARN' ('linked findings: the meaning rules could not be loaded -- ' + $_.Exception.Message) } }
 
         # #829 "Copy findings per CI to Log Analytics (SI_Finding_CL)" -- an optional output of Risk Analysis, OFF by default
         # (SI_RA_Findings, read by the engine's own rule: Test-SIFindingsCopyOn). Off: the findings per CI are made from the
@@ -2055,6 +2136,8 @@ function Invoke-SIDataCiSync {
 
         # ---- 2. the pages, each staged before the next is read -------------------------------------------------------
         $state = @{ Read = 0L; Staged = 0L; LcStaged = 0L; First = $true; PreCleared = $false; Snap = $null; LcStage = $false; Pages = 0L; Cuts = 0L; SubCi = $false; Category = $false }
+        # #1319 the work rows' quick build (Invoke-SIDataCiFindingFromDbRanged): its result, for the run's warnings
+        $csOut = @{}
         if (($expected -gt 0 -or $useDb) -and -not $DryRun) {
             $hasStage = $false
             try { $hasStage = ([string](& $Invoke (Get-SIDataCiFindingStageCheckSql) @{} 'scalar') -eq '1') } catch { $hasStage = $false }
@@ -2069,10 +2152,14 @@ function Invoke-SIDataCiSync {
         if ($useDb) {
             # ONE set-based statement stages the collection's findings per CI; the swap below replaces the stored set with them
             $pDb = Get-SIDataCiRatingBandParams; $pDb['CollectionId'] = [string]$dbSrc.CollectionId
+            # #1364 the meaning rules of the recommendation equivalence (fold) applied to the result first (idempotent; the data
+            # sync ran them after the view context already): a finding that restates another of the same CI is evidence on it
+            $fold = $null
+            if (Get-Command -Name Invoke-SIDataFindingFold -ErrorAction SilentlyContinue) { $fold = Invoke-SIDataFindingFold -Invoke $Invoke -CollectionId ([long]$dbSrc.CollectionId) -Log $Log }
             # #639: in key ranges through the work table where the database has it (each range its own statement); a database
             # without it (the updater adds it) takes the one statement as before. #879: the ranges run at once, as many as
             # the database has cores, and the collection's rows already read are not read again
-            if (Test-SIDataCiDbWork -Invoke $Invoke) { $nDb = Invoke-SIDataCiFindingFromDbRanged -Invoke $Invoke -Params $pDb -SubCi:([bool]$state.SubCi) -Category:([bool]$state.Category) -Log $Log }
+            if (Test-SIDataCiDbWork -Invoke $Invoke) { $nDb = Invoke-SIDataCiFindingFromDbRanged -Invoke $Invoke -Params $pDb -SubCi:([bool]$state.SubCi) -Category:([bool]$state.Category) -Log $Log -ChangedSet $ChangedSet -ChangedSetOut $csOut }
             else { $nDb = [long](& $Invoke (Get-SIDataCiFindingFromDbSql -SubCi:([bool]$state.SubCi) -Category:([bool]$state.Category)) $pDb 'scalar') }
             $state.Read = $nDb; $state.Staged = $nDb; $expected = $nDb; $state.First = $false
             $state.Snap = [string]$dbSrc.TimeText; $timeText = [string]$dbSrc.TimeText
@@ -2081,6 +2168,8 @@ function Invoke-SIDataCiSync {
             if ($state.LcStage -and $nDb -gt 0) {
                 if ($Invoke.PSObject.Properties['SIConnectionInfo'] -and $Invoke.SIConnectionInfo) { $state.LcStaged = Invoke-SIDataCiLifecycleFromStage -Invoke $Invoke }
                 else { $state.LcStaged = [long](& $Invoke (Get-SIDataCiLifecycleFromStageSql) @{} 'scalar') }
+                # #1364 an evidence finding's lifecycle row is carried onto the finding it is evidence on (never closed as fixed)
+                if ($null -ne $fold -and [string]$fold.Status -eq 'ok') { $null = & $Invoke (Get-SIDataFoldAliasStageSql) @{ CollectionId = [string]$dbSrc.CollectionId } 'scalar' }
             }
             & $ph 'findings per CI: lifecycle input' ([long]$state.LcStaged)
             if ($dbWhy) {
@@ -2125,7 +2214,15 @@ function Invoke-SIDataCiSync {
                 if (-not $state.Snap -and $pageItems.Count) { $state.Snap = [string]$pageItems[0]['CollectionTime'] }
                 if (-not $DryRun -and $pageItems.Count) {
                     $arr = $pageItems.ToArray(); $pageItems.Clear()
-                    $state.Staged += Invoke-SIDataCiChunks -Invoke $Invoke -Sql { param($first) Get-SIDataWriteCiFindingSql -First:$first -Stage -SubCi:([bool]$state.SubCi) -Category:([bool]$state.Category) } -Items $arr -ClearFirst ($state.First -and -not $state.PreCleared)
+                    $clearFirst = ($state.First -and -not $state.PreCleared)
+                    $chunked = { Invoke-SIDataCiChunks -Invoke $Invoke -Sql { param($first) Get-SIDataWriteCiFindingSql -First:$first -Stage -SubCi:([bool]$state.SubCi) -Category:([bool]$state.Category) } -Items $arr -ClearFirst $clearFirst }
+                    if (-not $clearFirst -and (Get-Command -Name Write-SIDataLoadRows -ErrorAction SilentlyContinue)) {
+                        # #1336 the staging of the swap through the bulk load: the same statement over the same items (each
+                        # one's JSON as the chunk's array carries it); a row without a finding key is never staged (the
+                        # statement's own WHERE), so it is not sent -- the batch's count is then the statement's
+                        $txt = [string[]]@(foreach ($x in $arr) { if ($null -ne $x -and $null -ne $x['FindingKey']) { ConvertTo-Json -InputObject $x -Compress -Depth 14 } })
+                        $state.Staged += [long](Write-SIDataLoadRows -Invoke $Invoke -Sql (Get-SIDataWriteCiFindingSql -Stage -SubCi:([bool]$state.SubCi) -Category:([bool]$state.Category)) -Items $txt -What 'the findings per CI staged' -Log $Log -Fallback $chunked)
+                    } else { $state.Staged += & $chunked }
                     if ($state.LcStage) { $lw = Write-SIDataCiLifecycleStage -Invoke $Invoke -Items $arr -First $state.First; $state.LcStaged += [long]$lw.Findings }
                     $state.First = $false
                     $arr = $null
@@ -2243,7 +2340,9 @@ function Invoke-SIDataCiSync {
                                   # per report: what the data out keeps as it was (the findings of reports this run could not complete)
                                   FrozenReports = [string[]]@($frozenReports); RunComplete = [bool]$cmp.Complete
                                   # #1038 (1): the collection the stored findings per CI were made from (the data-out mark's key)
-                                  CollectionTime = [string]$snap }
+                                  CollectionTime = [string]$snap
+                                  # #1319 the work rows' quick build from what changed (none = built as before)
+                                  ChangedSet = $csOut['Result'] }
     } catch {
         & $Log 'WARN' ("v3 model    : the findings per CI were not stored this run -- {0}. It is tried again on the next run; the findings load is not affected." -f $_.Exception.Message)
         & $say 'FAILED' ("the findings per CI of the newest collection were not stored -- {0}. The stored findings are kept as they are; no finding is closed this run" -f $_.Exception.Message)

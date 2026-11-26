@@ -48,10 +48,18 @@ public sealed class SummaryModel(ICollectionViews views, ILogger<SummaryModel> l
     /// #842: whether the grouping is written could not be read -- an error on the page, never "being prepared".
     public bool StateReadFailed { get; private set; }
 
+    /// #1355 the wall board's choice: "Actual Risks" (no parameter, the default) | "Within Accepted Lifecycle" (?risk=lifecycle).
+    [BindProperty(SupportsGet = true)] public string? Risk { get; set; }
+    /// The choice above the grid (null = this collection / grouping does not offer it).
+    public AcceptedLifecycleChoice? RiskChoice { get; private set; }
+    /// The grid is the grouping of the findings the "Within Accepted Lifecycle" view counts (offered and chosen).
+    public bool WithinAcceptedLifecycle { get; private set; }
+
     public override IEnumerable<(string Key, string Value)> ExtraState()
     {
         if (CurrentView is { } v) yield return ("view", v.Id);
         if (!CveView && !string.IsNullOrWhiteSpace(By) && Grouping.Id != RecommendationSql.DefaultGrouping) yield return ("by", Grouping.Id);
+        if (WithinAcceptedLifecycle) yield return (AcceptedLifecycleChoice.Parameter, AcceptedLifecycleChoice.LifecycleCode);
     }
 
     private IReadOnlyList<string> _hidden = [];
@@ -110,7 +118,15 @@ public sealed class SummaryModel(ICollectionViews views, ILogger<SummaryModel> l
             values["RiskRating"] = RecommendationSql.RatingWords;
             values["Domain"] = Options(Facets.Domain);
         }
-        return new GridPlan(RecommendationSql.Grouped(Grouping.Id), new Dictionary<string, object?> { ["CollectionId"] = Current!.CollectionId }, Current.Version + "|sum|" + Grouping.Id,
+        // #1355 "Within Accepted Lifecycle": the grouping of the findings the wall board's view counts (their own stored rows,
+        // written after the key figures) -- offered only when this collection has them for this grouping; the export follows
+        var offered = await AcceptedLifecycleChoice.OfferedAsync(HttpContext, Current!.CollectionId, Grouping.Id, AcceptedLifecycleChoice.Asked(Risk), Queries, Log, ct);
+        WithinAcceptedLifecycle = offered == true;
+        if (!forExport && offered is not null && HttpContext is not null)
+            RiskChoice = AcceptedLifecycleChoice.Of(WithinAcceptedLifecycle, (await SI.Management.Web.RiskExec.AcceptedLifecycle.ReadAsync(HttpContext.RequestServices, ct)).TableLine,
+                v => Link((AcceptedLifecycleChoice.Parameter, v)));
+        return new GridPlan(WithinAcceptedLifecycle ? AcceptedLifecycleSql.Grouped(Grouping.Id) : RecommendationSql.Grouped(Grouping.Id),
+            new Dictionary<string, object?> { ["CollectionId"] = Current!.CollectionId }, Current.Version + "|sum|" + Grouping.Id + (WithinAcceptedLifecycle ? "|risk=lifecycle" : ""),
             values, CurrentView?.Sort, CurrentView?.Desc);
     }
 
@@ -139,7 +155,10 @@ public sealed class SummaryModel(ICollectionViews views, ILogger<SummaryModel> l
             "report" when k1 is not null => [("f.ReportName", k1)],
             _ => null,
         };
-        return f is null ? null : ViewLink(NamedViews.DetailedPage, f.Where(x => !string.IsNullOrEmpty(x.Value)).ToArray());
+        // #1355 a row of the "Within Accepted Lifecycle" grouping opens the same findings in Detailed (the same choice)
+        var keys = f?.Where(x => !string.IsNullOrEmpty(x.Value)).ToList();
+        if (keys is not null && WithinAcceptedLifecycle) keys.Add((AcceptedLifecycleChoice.Parameter, AcceptedLifecycleChoice.LifecycleCode));
+        return keys is null ? null : ViewLink(NamedViews.DetailedPage, keys.ToArray());
     }
 
     /// #589: a CVE row's title names its software.

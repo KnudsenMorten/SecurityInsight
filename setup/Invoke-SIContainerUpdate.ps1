@@ -65,8 +65,10 @@
                      read back right is removed again. A job that exists is never touched. Never fails the update.
      10. PERMISSIONS -- (setup/_shared/SI-PermissionNote.ps1) read only: what SecurityInsight's collection identity holds is
                      compared with config\permissions.locked.json. Per read-only permission that is not granted yet: one
-                     line (what it is for, what stays empty without it) and the two lines that grant them. Nothing is
+                     line (what it is for, what stays empty without it) and the two lines that grant them. Nothing else is
                      granted or changed here, nothing is said when all are granted, and the update never fails on it.
+                     10a (#1390): the ONE permission DeviceManagementApps.Read.All (Intune deletion proof) is granted to the
+                     collection identity where this sign-in may, and read back; otherwise one line names the Support step.
      9c. NIGHTLY SCHEDULE -- (setup/_shared/SI-NightlySchedule.ps1) ONCE per install: the update at 23:00 and the pipeline at
                      23:30 in the time zone of the install's Azure region (an unknown region: Danish time, said in one line).
                      The updater job on a shipped timer (the old 03:00 UTC, or the Danish-time ticks '0 21,22 * * *') gets the
@@ -105,7 +107,8 @@
                      published run whose copies of the merged assets (sidata.CiPub, AssetPub, ...) are older than it
                      (CopiedAt NULL or before PublishedAt) is refreshed now in the data database by sidata.PublishedCopyCatchUp
                      (only what changed). Current copies: nothing done, nothing said. Never fails the update. -DetectOnly:
-                     only whether they are stale.
+                     only whether they are stale. #1357: a refresh says its header when it STARTS and the engine driver's
+                     own lines as they come (a progress line a minute, one per copy); every range beats the update's row.
      9g. SIGN-IN FRONT STORE -- (#852, pro-management/deploy/SI-SigninFrontStore.ps1) Pro: what the shared sign-in front
                      1.3.0 needs before it starts, as a new install gets it -- the RSA key signin-front-dp in the install's Key
                      Vault (SI_UPDATER_KEY_VAULT, else SI_KeyVaultName), "Key Vault Crypto Service Encryption User" for the
@@ -310,6 +313,9 @@ if (Test-Path -LiteralPath $customFile) {
 $nightlyLib = Join-Path $PSScriptRoot '_shared/SI-NightlySchedule.ps1'
 $script:SINightlyRegion = $null
 if (Test-Path -LiteralPath $nightlyLib) { . $nightlyLib }
+# #1344 the image check job caj-si-image-check (every 15 minutes, image-only releases only) -- kept present in 9c
+$imageCheckLib = Join-Path $PSScriptRoot '_shared/SI-ImageCheckJob.ps1'
+if (Test-Path -LiteralPath $imageCheckLib) { . $imageCheckLib }
 # #830 the report-row copy's one-time step (9e)
 $reportCopyLib = Join-Path $PSScriptRoot '_shared/SI-ReportCopyDefault.ps1'
 if (Test-Path -LiteralPath $reportCopyLib) { . $reportCopyLib }
@@ -869,7 +875,8 @@ function Invoke-SIUpdateWebAppSize {
 # THE PERMISSIONS AN EXISTING INSTALL HAS NOT GRANTED YET (setup/_shared/SI-PermissionNote.ps1; owner 2026-10-11: SecurityInsight
 # may ask for more read-only permissions, "customers grant on their next permission setup run"). Every update compares what
 # the collection identity holds with config/permissions.locked.json and says, per missing permission, ONE plain line (what
-# it is for, read-only, what stays empty) and the two lines that grant them. READ ONLY: it grants nothing, changes nothing,
+# it is for, read-only, what stays empty) and the two lines that grant them. READ ONLY (the ONE permission an update grants,
+# #1390, is the step before it: Invoke-SIUpdatePermissionGrant): it grants nothing, changes nothing,
 # never fails or holds the update, and says nothing when every permission is granted. A sign-in that may not read the
 # directory: the collection engines' own check on their newest run (exact when that run checked this very list), else one
 # line that it could not check -- never a guess.
@@ -884,6 +891,22 @@ function Invoke-SIUpdatePermissionNote {
         Step '10. PERMISSIONS (read only)'
         foreach ($l in @($n.Lines)) { Info $l }
     } catch { Info ("permissions: not checked ({0}) -- the update goes on; the next update tries again." -f $_.Exception.Message) }
+}
+# #1390 THE ONE PERMISSION AN UPDATE GRANTS (setup/_shared/SI-PermissionUpdateGrant.ps1; owner 2026-11-25 "Yes, add the right"):
+# DeviceManagementApps.Read.All (the Intune deletion proof) to the collection identity, only when missing, read back; nothing
+# else is granted or widened. A sign-in that may not grant (the updater identity) is one information line naming Invardia's
+# Support step. -DetectOnly / no -Apply: the plan. Runs before the permission note, so the note reads the result. Never fails
+# the update.
+function Invoke-SIUpdatePermissionGrant {
+    $lib = Join-Path $PSScriptRoot '_shared/SI-PermissionUpdateGrant.ps1'
+    if (-not (Test-Path -LiteralPath $lib) -or -not $rest) { return }
+    try {
+        . $lib
+        $gr = Invoke-SIPermissionUpdateGrant -Rest $rest -Jobs @($script:SISqlTierJobs) -SubscriptionId $sub -Apply:($Apply -and -not $DetectOnly)
+        if (-not @($gr.Lines).Count) { return }
+        Step '10a. PERMISSIONS -- the Intune deletion proof (DeviceManagementApps.Read.All)'
+        foreach ($l in @($gr.Lines)) { Info $l }
+    } catch { Info ("permissions: the update's grant was not checked ({0}) -- the update goes on; the next update tries again." -f $_.Exception.Message) }
 }
 # #685: THE JOBS A NEWER VERSION NEEDS (setup/_shared/SI-MissingJobs.ps1; rule: existing installs reach new-install state).
 # caj-si-verification (the verification service and the daily data health check it runs) was created by no setup and no
@@ -968,6 +991,14 @@ function Invoke-SIUpdateNightlySchedule {
                     $u9 = Invoke-SINightlyUpdaterSchedule -Rest $rest -SubscriptionId $sub -ResourceGroup $target.ResourceGroupName -JobName $name.Trim() -Region $rz.Region -WhatIf:$wi -Step '1900'
                     if (@($u9.Lines).Count) { Step '9l. NIGHTLY 19:00 (the nightly update)' }
                     foreach ($l in @($u9.Lines)) { if ($u9.Action -eq 'failed') { Warn $l } elseif (-not ($regionSaid -and $l -eq $rz.Line)) { Info $l } }
+                }
+                # 9n #1344 (owner IMAGE-30MIN-1, framework SEC-LANE-1 G5): the image check job next to the updater -- every 15 minutes
+                # ('*/15 * * * *') it installs a newer image-only (security) release of the ring at once; made from the updater job
+                # (its image, identity and settings: no new right), read back. Existing installs get it here. Never fails the update.
+                if (Get-Command -Name Invoke-SIImageCheckJobEnsure -ErrorAction SilentlyContinue) {
+                    $icArm = { param([string]$Method, [string]$Path, $Body) Invoke-SIRestJson -Rest $rest -Method $Method -Uri (Get-SIArmUri -Path $Path -ApiVersion (Get-SIImageCheckJobNames).AppApi) -Body $(if ($null -ne $Body) { ConvertTo-Json -InputObject $Body -Depth 30 -Compress } else { $null }) -Headers @{ 'Content-Type' = 'application/json' } -AllowNotFound:($Method -eq 'GET') }
+                    $ic = Invoke-SIImageCheckJobEnsure -Arm $icArm -SubscriptionId $sub -ResourceGroup $target.ResourceGroupName -UpdaterJob $name.Trim() -WhatIf:$wi
+                    if ($ic.Action -ne 'kept') { Step '9n. IMAGE CHECK (every 15 minutes)'; if ($ic.Ok) { Info $ic.Reason } else { Warn $ic.Reason } }
                 }
             }
         }
@@ -1156,7 +1187,20 @@ function Invoke-SIUpdatePublishedCopy {
         # says its progress and beats this update's own row after every range (Invoke-SIUpdaterLockBeat).
         $dataInfo = { $tok = ([string](Get-SIAzureToken -Resource 'https://database.windows.net/')).Trim(); @{ ConnectionString = "Server=tcp:$dataSrv,1433;Database=$dataDb;Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;"; AccessToken = $tok; CommandTimeout = 0 } }   # dynamic scope, as $dataSql (a closure could not see Get-SIAzureToken)
         $dataSql | Add-Member -NotePropertyName SIConnectionInfo -NotePropertyValue $dataInfo
-        $copyBeat = { if (Get-Command -Name Invoke-SIUpdaterLockBeat -ErrorAction SilentlyContinue) { $null = Invoke-SIUpdaterLockBeat -What 'the copies the pages show' } }
+        # #1357 (live 2026-11-25, the largest install: 4,520 ranges in 6,746 s with no line until the end): the step's header
+        # is said when the refresh STARTS (its first beat or its first line -- the step header beats the update's rows at
+        # once and tells the watch which step is working), and the driver's own lines (a progress line a minute, one per
+        # copy, a transient retry) are said as they come, the same lines the pipeline runner writes. The catch-up's own
+        # closing line stays the one line after the call. Copies that are current: nothing is said, as before.
+        $copySaid = @{ Header = $false }
+        $copyHeader = { if (-not $copySaid.Header) { $copySaid.Header = $true; Step '9j. PUBLISHED COPIES' } }
+        $copyLog = {
+            param([string]$Level, [string]$Message)
+            if ($Message -match "^(the merged assets' pages|the copies of the merged assets could not)") { return }   # said after the call (its Lines)
+            & $copyHeader
+            if ($Level -eq 'WARN') { Warn $Message } else { Info $Message }
+        }
+        $copyBeat = { & $copyHeader; if (Get-Command -Name Invoke-SIUpdaterLockBeat -ErrorAction SilentlyContinue) { $null = Invoke-SIUpdaterLockBeat -What '9j. PUBLISHED COPIES' } }
         # live 2026-11-12: ONE long wave of ranges (its statements run on connections of their own, the update waits for all) beat
         # only after it ended -- the wave runs under the background beat as well (a release whose engine driver takes no -Wave:
         # the call as before)
@@ -1164,8 +1208,8 @@ function Invoke-SIUpdatePublishedCopy {
         if ((Get-Command -Name Invoke-SIPublishedCopyCatchUp).Parameters.ContainsKey('Wave')) {
             $copyWave['Wave'] = { param($info, $ranges) Invoke-SIUpdateSqlBeat -What '9j. PUBLISHED COPIES' -Action { Invoke-SIPublishedCopyRangeWave -Info $info -Ranges $ranges } }
         }
-        $r = Invoke-SIPublishedCopyCatchUp -Invoke $dataSql -WhatIf:(-not $Apply -or $DetectOnly) -Beat $copyBeat @copyWave
-        if (@($r.Lines).Count) { Step '9j. PUBLISHED COPIES' }
+        $r = Invoke-SIPublishedCopyCatchUp -Invoke $dataSql -WhatIf:(-not $Apply -or $DetectOnly) -Log $copyLog -Beat $copyBeat @copyWave
+        if (@($r.Lines).Count) { & $copyHeader }
         foreach ($l in @($r.Lines)) { if ($r.Action -in @('failed', 'held')) { Warn $l } else { Info $l } }
         $global:SI_UpdatePublishedCopy = $r
     } catch { Warn ("published copies: not checked ({0}) -- the update goes on; the pipeline runner checks them on its next wake-up." -f $_.Exception.Message) }
@@ -1244,9 +1288,18 @@ function Invoke-SIUpdateKeyFigures {
             } finally { $scn.Dispose() }
         }
         $dataSql | Add-Member -NotePropertyName SISqlSession -NotePropertyValue $true
+        # #1226 (SCALE-3 A): THE SAME BUILD RULE AS THE DATA SYNC (engine/_shared/data-sql/SI-DataBuildRule.ps1) -- a collection
+        # that is not trusted, or one never built beside a newer trusted one, is never figured here either. Read once; a rule
+        # that cannot be read = off (every complete collection, as before) and said.
+        $ruleLib = Join-Path $solRoot 'engine/_shared/data-sql/SI-DataBuildRule.ps1'
+        if (Test-Path -LiteralPath $ruleLib) {
+            . $ruleLib
+            try { Set-SIDataBuildReady -Answer (& $dataSql (Get-SIDataBuildReadySql) @{} 'scalar') }
+            catch { Set-SIDataBuildReady -Answer 0; Info ("key figures: the build rule could not be read ({0}) -- every complete collection counts" -f $_.Exception.Message) }
+        }
         # the install's own protection-score settings (the Settings page's value, else the config's): a list is kept as one
         # comma-separated value, as the score's reader takes it
-        $names = @('SI_ProtectionScore_TierWeights', 'SI_ProtectionScore_Severities', 'SI_ProtectionScore_GraceDays_Device', 'SI_ProtectionScore_GraceDays_Identity',
+        $names = @('SI_ProtectionScore_TierShares', 'SI_ProtectionScore_SeverityPoints', 'SI_ProtectionScore_MinorPointsCap', 'SI_ProtectionScore_GraceDays_Device', 'SI_ProtectionScore_GraceDays_Identity',
                    'SI_ProtectionScore_GraceDays_CloudResource', 'SI_ProtectionScore_GraceDays_PublicIp', 'SI_PatchCycle_CatchUpDays',
                    # #859: the key figures' windows (Get-SIKeyFigureWindowSettings) -- figured again with the install's own values
                    'SI_KeyFigures_RecentDays', 'SI_KeyFigures_MeanTimeToFixDays', 'SI_KeyFigures_StaleAdminDays', 'SI_KeyFigures_CveAgeBands',
@@ -1684,7 +1737,7 @@ function Invoke-SIUpdateSigninStore {
         $r
     } catch { Warn ("sign-in front store: not checked ({0}) -- the update goes on; the front keeps what it runs; the next update tries again." -f $_.Exception.Message); $null }
 }
-function Complete-SIUpdate { $null = Invoke-SIUpdateSqlTier; $null = Invoke-SIUpdateJobFloor; $null = Invoke-SIUpdateJobSizing; $null = Invoke-SIUpdateUpdaterSize; $null = Invoke-SIUpdateKedaConvert; $null = Invoke-SIUpdateRaWorkers; $null = Invoke-SIUpdateOldCollectJobs; $null = Invoke-SIUpdateEngineRetryLimit; $null = Invoke-SIUpdateRaGcSetting; $null = Invoke-SIUpdateMissingJobs; $null = Invoke-SIUpdateNightlySchedule; $null = Invoke-SIUpdateReportCopy; $null = Invoke-SIUpdateOrchestration; $null = Invoke-SIUpdatePipelineLayout; $null = Invoke-SIUpdateSummaryRebuild; $null = Invoke-SIUpdatePublishedCopy; $null = Invoke-SIUpdateKeyFigures; $null = Invoke-SIUpdateOwnSqlConnector; $null = Invoke-SIUpdateSnowDataOut; $null = Invoke-SIUpdateSnowStagingStatus; $null = Invoke-SIUpdateSnowOneRoute; $null = Invoke-SIUpdateSupportGrant; $null = Invoke-SIUpdateWebAppSize; $null = Invoke-SIUpdateSigninStore; $null = Invoke-SIUpdatePermissionNote; $null = Invoke-SIUpdateDisplayNames; Install-SIUpdateDefaultTemplates }
+function Complete-SIUpdate { $null = Invoke-SIUpdateSqlTier; $null = Invoke-SIUpdateJobFloor; $null = Invoke-SIUpdateJobSizing; $null = Invoke-SIUpdateUpdaterSize; $null = Invoke-SIUpdateKedaConvert; $null = Invoke-SIUpdateRaWorkers; $null = Invoke-SIUpdateOldCollectJobs; $null = Invoke-SIUpdateEngineRetryLimit; $null = Invoke-SIUpdateRaGcSetting; $null = Invoke-SIUpdateMissingJobs; $null = Invoke-SIUpdateNightlySchedule; $null = Invoke-SIUpdateReportCopy; $null = Invoke-SIUpdateOrchestration; $null = Invoke-SIUpdatePipelineLayout; $null = Invoke-SIUpdateSummaryRebuild; $null = Invoke-SIUpdatePublishedCopy; $null = Invoke-SIUpdateKeyFigures; $null = Invoke-SIUpdateOwnSqlConnector; $null = Invoke-SIUpdateSnowDataOut; $null = Invoke-SIUpdateSnowStagingStatus; $null = Invoke-SIUpdateSnowOneRoute; $null = Invoke-SIUpdateSupportGrant; $null = Invoke-SIUpdateWebAppSize; $null = Invoke-SIUpdateSigninStore; $null = Invoke-SIUpdatePermissionGrant; $null = Invoke-SIUpdatePermissionNote; $null = Invoke-SIUpdateDisplayNames; Install-SIUpdateDefaultTemplates }
 $script:SISqlTierJobs = @()
 
 # #756 THE CODE IS CURRENT, THE SIZES STILL FOLLOW THE SETTINGS (live 2026-10-19: SI_Bootstrap_SqlServiceObjective = S2 set,

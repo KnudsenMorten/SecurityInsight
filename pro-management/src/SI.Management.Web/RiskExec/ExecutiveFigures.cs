@@ -17,7 +17,11 @@ public sealed record FigureTable(string Key, string Title, IReadOnlyList<string>
 }
 
 /// One block of the Executive report (and its topics): its lines and tables, or why it is not available.
-public sealed record ReportBlock(string Key, string Title, IReadOnlyList<FigureLine> Lines, IReadOnlyList<FigureTable> Tables, string? Unavailable = null);
+public sealed record ReportBlock(string Key, string Title, IReadOnlyList<FigureLine> Lines, IReadOnlyList<FigureTable> Tables, string? Unavailable = null)
+{
+    /// #1360: the protection score block's (i) text -- shown beside each of its two score values (null = no (i)).
+    public ProtectionScoreInfo? Info { get; init; }
+}
 
 /// <summary>
 /// THE KEY FIGURES of one collection, read ONCE and shown by BOTH Overview > Executive overview (the topics) and Overview >
@@ -129,9 +133,31 @@ public sealed class ExecutiveFigures
         var dim = key == "sla_breaches" ? "(all)" : "";
         var r = Get(h.Block, h.Figure, dim);
         var pct = key.StartsWith("protection_", StringComparison.Ordinal);
-        return new FigureLine(key, h.Label, pct ? ShowScore(r) : Show(r), Change(h.Block, h.Figure, h.Better, dim, kind: pct ? ChangeKind.Percent : ChangeKind.Count),
+        var change = Change(h.Block, h.Figure, h.Better, dim, kind: pct ? ChangeKind.Percent : ChangeKind.Count);
+        return new FigureLine(key, h.Label, pct ? ShowScore(r) : Show(r), pct ? ScoreChange(change) : change,
             TopicHref(h.Topic) + (key == "protection_technical" ? "&view=technical" : ""), r is { Available: false } ? r.Note : null, r?.Value);
     }
+
+    /// <summary>
+    /// #1382 (owner 2026-11-25: "+32.5 pp since 2026-11-24 (better)" compared a run of the old calculation with one of the new):
+    /// how a run's Protection Score was calculated -- 2 = the tier-share score of the assets' health (#1361), 1 = the earlier
+    /// one, null = not known. The key figures say it themselves from this release on (meta / protection_model, written by
+    /// SI-DataKeyFigures.ps1); a run figured before carries the version of the run (meta / run_version, the solution version
+    /// sidata.Collection keeps -- RecommendationSql.KeyFigures): from <see cref="ExecWords.NewScoreSince"/> on = the new one.
+    /// </summary>
+    public static int? ScoreModelOf(IReadOnlyList<KeyFigureRow> rows)
+    {
+        if (rows.FirstOrDefault(r => r.Block == "meta" && r.Figure == "protection_model" && r.Dim1 == "" && r.Dim2 == "") is { Value: { } m }) return (int)Math.Round(m);
+        var v = rows.FirstOrDefault(r => r.Block == "meta" && r.Figure == "run_version")?.Note;
+        if (v is null || System.Text.RegularExpressions.Regex.Match(v, @"\d+\.\d+\.\d+") is not { Success: true } vm || !Version.TryParse(vm.Value, out var ver)) return null;
+        return ver >= Version.Parse(ExecWords.NewScoreSince) ? 2 : 1;
+    }
+
+    /// The two runs' scores were calculated in different ways (both known, not the same) -- the change is then not comparable.
+    public bool ScoreModelChanged => ScoreModelOf(Now) is { } a && ScoreModelOf(Before) is { } b && a != b;
+
+    /// A Protection Score's change as shown: in points, and marked not comparable across the two calculations.
+    private ChangeSince? ScoreChange(ChangeSince? c) => c is null ? null : c with { PercentUnit = ExecWords.ScoreUnit, NotComparable = ScoreModelChanged ? ExecWords.NotComparable : null };
 
     /// A percentage figure as shown: "53.7 %" ("–" when there is none).
     public static string ShowPct(KeyFigureRow? r) => r is null ? "–" : !r.Available ? "not available yet" : r.Value is { } v ? Fmt.Pct(v, 1) : "–";
@@ -670,8 +696,6 @@ public sealed class ExecutiveFigures
 
     /// The accepted lifecycle as the reader's settings set it ("30 days", or per asset type when they differ).
     public string Grace { get; init; } = "30 days";
-    /// The tier weights as set ("Tier 0 = 8, Tier 1 = 4, Tier 2 = 2, Tier 3 = 1").
-    public string TierWeights { get; init; } = "Tier 0 = 8, Tier 1 = 4, Tier 2 = 2, Tier 3 = 1";
 
     private static readonly string[] ProtectionTypes = ["Devices", "Identities", "Cloud resources", "Public IPs"];
     private static readonly string[] ProtectionTiers = ["Tier 0", "Tier 1", "Tier 2", "Tier 3", "Unclassified"];
@@ -689,7 +713,7 @@ public sealed class ExecutiveFigures
         {
             var r = Get("headline", "protection_" + code);
             var shown = ShowScore(r) + (r is { Available: true, Total: { } t } && t > 0 ? " (" + Fmt.Int(r.Assets) + " of " + Fmt.Int(t) + " assets in good standing)" : "");
-            return new FigureLine("protection." + code, label, shown, Change("headline", "protection_" + code, Better.Higher, kind: ChangeKind.Percent),
+            return new FigureLine("protection." + code, label, shown, ScoreChange(Change("headline", "protection_" + code, Better.Higher, kind: ChangeKind.Percent)),
                 TopicHref("protection") + (code == "technical" ? "&view=technical" : ""),
                 r is null ? "Not available yet: this figure is written by the next data sync." : r is { Available: false } ? r.Note : null, r?.Value);
         }
@@ -704,8 +728,9 @@ public sealed class ExecutiveFigures
         };
         if (noDate is { Available: true })
             // #860 (owner 2026-10-21: "a risk detected can also be easy to say: we have a risk with no first seen date") -- its own count, never hidden
-            lines.Add(new FigureLine("protection.nodate", NoDateLabel, Fmt.Int((long)Math.Round(noDate.Value ?? 0)) + " of " + Fmt.Int(noDate.Total) + " Very High / High findings",
-                Note: "no fix release date, no first-seen from the source and no first detection by SecurityInsight: such a finding is a risk, in both views", Raw: noDate.Value));
+            // #1382: "of" the findings the score counts (every severity since #1361 -- the age rows count the scored findings)
+            lines.Add(new FigureLine("protection.nodate", NoDateLabel, Fmt.Int((long)Math.Round(noDate.Value ?? 0)) + " of " + Fmt.Int(noDate.Total) + " open findings the score counts",
+                Note: "no update release date, no first-seen date from the source and not seen by SecurityInsight before: we cannot tell how old they are, so they always count, in both views", Raw: noDate.Value));
         var other = v == "technical" ? "lifecycle" : "technical";
         string Words(string code) => ProtectionViews.First(p => p.Code == code).Label;
         var byType = new FigureTable("protection-types", "By asset type", ["Asset type", Words(v), Words(other), "In good standing", "Assets in scope"],
@@ -724,16 +749,19 @@ public sealed class ExecutiveFigures
                 ? (IReadOnlyList<string>)[BasisWords(b, r.Note), Fmt.Int((long)Math.Round(r.Value ?? 0)), Fmt.Int(r.Assets)] : null).Where(r => r is not null).Select(r => r!).ToList(),
             Note: "The age of a finding is the first that is known: the fix's release date, the source's own first-seen, the day SecurityInsight first saw it. A finding with none is a risk.");
         var how = new FigureLine("protection.how", "How it is counted",
-            "the share of active assets (devices, identities, cloud resources, public IPs; groups left out) with no open, non-exempted Very High / High finding, weighted by tier ("
-            + TierWeights + "). Within Accepted Lifecycle: a PATCH finding (a vulnerability with a vendor fix) younger than its asset type's grace does not count (accepted lifecycle: " + Grace
+            "the average health of the active assets (devices, identities, cloud resources, public IPs; groups left out) -- 100 less "
+            + Fmt.Int(Model.VeryHigh) + " per open Very High fix, " + Fmt.Int(Model.High) + " per High, " + Fmt.Int(Model.Medium) + " per Medium, " + Fmt.Int(Model.Low) + " per Low (Medium and Low together at most "
+            + Fmt.Int(Model.MinorCap) + ") -- each tier a fixed share of the score (" + string.Join(", ", Model.Shares.Select((s, i) => "Tier " + Fmt.Int(i) + " " + Fmt.Num(s / Model.Shares.Sum() * 100, 0) + " %"))
+            + "). Within Accepted Lifecycle: a PATCH finding (a vulnerability with a vendor fix) younger than its asset type's grace does not count (accepted lifecycle: " + Grace
             + ", per your settings); every other finding -- configuration, identity, Azure, attack paths -- counts from the day it is found unless your settings give it a grace. Actual Risks: every finding counts -- a patch released yesterday lowers it. Bands: "
             + string.Join(", ", ProtectionBands.All.Select(b => b.Name + " " + b.Min.ToString("0", CultureInfo.InvariantCulture) + "+")) + ".");
         lines.Add(how);
-        return new ReportBlock("protection", title, lines, new[] { byType, byTier, matrix, basis }.Where(t => t.Rows.Count > 0).ToList());
+        return new ReportBlock("protection", title, lines, new[] { byType, byTier, matrix, basis }.Where(t => t.Rows.Count > 0).ToList()) { Info = Info };
     }
 
-    /// #860 (owner 2026-10-21): a finding with no date at all is "a risk with no first-seen date" -- its own count.
-    public const string NoDateLabel = "A risk with no first-seen date";
+    /// #860 (owner 2026-10-21): a finding with no date at all is "a risk with no first-seen date" -- its own count. #1382 (owner
+    /// 2026-11-25: "improve the text ... people dont understand"): said in plain words (<see cref="ExecWords.NoDateLabel"/>).
+    public const string NoDateLabel = ExecWords.NoDateLabel;
 
     /// <summary>
     /// #860: an age basis in words. SI's own first detection is "first seen by SecurityInsight on &lt;date&gt;" (the first and the
@@ -754,11 +782,17 @@ public sealed class ExecutiveFigures
     /// "within Accepted Lifecycle" score on every page and mail that shows it (owner 2026-10-20).
     public AcceptedLifecycle Lifecycle { get; init; } = AcceptedLifecycle.Unknown;
 
-    /// The protection score settings as words (the grace per asset type, the tier weights) and the accepted lifecycle, from
-    /// the reader's settings -- one read of the settings.
-    public static async Task<(string Grace, string Weights, AcceptedLifecycle Lifecycle)> ProtectionWordsAsync(IServiceProvider services, CancellationToken ct)
+    /// #1361: the score's model in force (the tier shares, the points per open fix, the Medium / Low cap).
+    public ProtectionModel Model { get; init; } = ProtectionModel.Default;
+
+    /// #1360: the text of the (i) beside every Protection Score value -- the formula with the values in force.
+    public ProtectionScoreInfo Info => ProtectionScoreInfo.For(Lifecycle, Model);
+
+    /// The protection score settings (the grace per asset type in words, the model) and the accepted lifecycle, from the
+    /// reader's settings -- one read of the settings.
+    public static async Task<(string Grace, AcceptedLifecycle Lifecycle, ProtectionModel Model)> ProtectionWordsAsync(IServiceProvider services, CancellationToken ct)
     {
-        var weights = "Tier 0 = 8, Tier 1 = 4, Tier 2 = 2, Tier 3 = 1";
+        var model = ProtectionModel.Default;
         var life = AcceptedLifecycle.Unknown;
         if (services.GetService(typeof(SI.Management.Web.Settings.ISettingsStoreReader)) is SI.Management.Web.Settings.ISettingsStoreReader reader)
         {
@@ -766,17 +800,11 @@ public sealed class ExecutiveFigures
             {
                 var (rows, _) = await reader.ReadSettingsAsync(ct);
                 life = AcceptedLifecycle.From(rows);
-                string? Val(string name) => rows.FirstOrDefault(r => string.Equals(r.Name, name, StringComparison.OrdinalIgnoreCase))?.ValueJson?.Trim('"');
-                if (Val("SI_ProtectionScore_TierWeights") is { Length: > 0 } w)
-                {
-                    var parts = w.Split([',', ';', ' '], StringSplitOptions.RemoveEmptyEntries);
-                    if (parts.Length == 4 && parts.All(p => double.TryParse(p, NumberStyles.Float, CultureInfo.InvariantCulture, out var x) && x >= 0))
-                        weights = string.Join(", ", parts.Select((p, i) => "Tier " + i.ToString(CultureInfo.InvariantCulture) + " = " + p));
-                }
+                model = ProtectionModel.From(rows);
             }
             catch (Exception ex) when (ex is not OperationCanceledException) { _ = ex; }
         }
-        return (life.Words, weights, life);
+        return (life.Words, life, model);
     }
     // ---- loading ---------------------------------------------------------------------------------------------------------
 
@@ -799,9 +827,9 @@ public sealed class ExecutiveFigures
             return new ExecutiveFigures { Missing = "The key figures are not available in this installation." };
         try
         {
-            var (grace, weights, life) = await ProtectionWordsAsync(services, ct);
+            var (grace, life, model) = await ProtectionWordsAsync(services, ct);
             var cols = (await views.CollectionsAsync(ct)).Data;
-            if (cols.Count == 0) return new ExecutiveFigures { Missing = "No complete collection has been loaded into the Pro database yet.", Grace = grace, TierWeights = weights, Lifecycle = life };
+            if (cols.Count == 0) return new ExecutiveFigures { Missing = "No complete collection has been loaded into the Pro database yet.", Grace = grace, Lifecycle = life, Model = model };
             var cur = collectionId is null ? cols[0] : cols.FirstOrDefault(c => c.CollectionId == collectionId) ?? cols[0];
             // the run compared with: the chosen one (another listed run), else the run before the shown one
             var chosen = compareId is null ? null : cols.FirstOrDefault(c => c.CollectionId == compareId && c.CollectionId != cur.CollectionId);
@@ -838,7 +866,7 @@ public sealed class ExecutiveFigures
             catch (Exception ex) when (ex is not OperationCanceledException) { _ = ex; taskState = null; }
             var f = new ExecutiveFigures
             {
-                Grace = grace, TierWeights = weights, Lifecycle = life,
+                Grace = grace, Lifecycle = life, Model = model,
                 TaskState = taskState, TaskTop = taskTop, TaskSince = taskSince,
                 Current = cur, Previous = prev, Now = now.Data, Before = before, Trend = trend.Data, TopFixes = fixes, TopAssets = assets,
                 Collections = cols, Compared = chosen is not null,

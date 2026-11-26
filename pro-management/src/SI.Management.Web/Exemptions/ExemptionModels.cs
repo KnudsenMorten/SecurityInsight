@@ -63,7 +63,9 @@ public static class DomainRoles
 }
 
 /// One person in one role for one node: a security domain (Category null) or a category inside it (#283).
-public sealed record DomainRoleRow(string Domain, string Role, string Principal, DateTime? AddedAt, string? AddedBy, string? Category = null)
+/// #1370: ObjectId = the Entra object id found ONCE in the directory for the Principal address (GuestObjectIdResolver); a row
+/// with it matches that object id only, a row without it the sign-in name the directory issued for one of its own members (#995).
+public sealed record DomainRoleRow(string Domain, string Role, string Principal, DateTime? AddedAt, string? AddedBy, string? Category = null, string? ObjectId = null)
 {
     public bool IsCategory => !string.IsNullOrEmpty(Category);
 }

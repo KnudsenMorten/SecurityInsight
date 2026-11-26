@@ -6,7 +6,11 @@ using SI.Management.Web.Columns;
 namespace SI.Management.Web.Cis;
 
 /// One column a person can choose: its key, label, the group it is offered under and its hover text.
-public sealed record ColumnChoice(string Key, string Label, string Group, string? Description = null);
+public sealed record ColumnChoice(string Key, string Label, string Group, string? Description = null)
+{
+    /// #1382: the title is words, never a raw field name (DataColumnKeys.Title).
+    public string Label { get; init; } = DataColumnKeys.Title(Label);
+}
 
 /// <summary>
 /// THE column chooser of a grid (Pages/Shared/_ColumnChooser.cshtml): the columns shown now (ticked, in order), the rest

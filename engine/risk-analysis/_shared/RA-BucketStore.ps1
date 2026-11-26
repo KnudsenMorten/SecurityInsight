@@ -698,6 +698,79 @@ function Get-SIRaBucketShrinkCount {
         Why = ('its last run at {0} buckets returned {1:N0} row(s), its largest request was {2:N0} KB{4}, which {3} bucket(s) can carry; no failed query needed more' -f $Count, $rows, [long][Math]::Ceiling($req / 1024.0), [int]$need, $took) }
 }
 
+function Get-SIRaBucketFitCount {
+    <#
+        #1378 PURE. SHRINK TO FIT (owner 2026-11-25, approved option "Shrink to fit": "After each run, size the next run's
+        buckets from what this run actually returned (rows per bucket vs. the API limit) -- so a small tenant drops back to
+        1-2 at once, and a big one keeps what it needs; a throttled answer no longer raises the count permanently").
+        The count the NEXT run of a report uses, worked out from THIS run's own measured answer (-Measure, the shape of a
+        history row: ResultRows, MaxBucketRows, MaxBucketBytes, MaxRequestBytes, RequestRows / RequestBytesPerRow /
+        RequestOverheadBytes, MaxBucketSeconds, FixedSeconds, Backend, Slices) at the count its slices ran at (-RanCount):
+          * the need is Get-SIRaBucketCountFromMeasure -- rows against half the planning row limit (30,000 / 2), bytes against
+            half of 64 MB, the request against half of 1 MB, the time as the run's slices show it;
+          * the TIME, when the run cannot tell the fixed part of a slice (FixedSeconds 0), is also sized against HALF the back
+            end's documented limit per request (90 s advanced hunting, 300 s Log Analytics, 120 s the data lake) as if all of
+            it were divisible -- a count comes down only as far as the slowest slice's work fits that, never into the gateway;
+          * the next power of two of the largest need, never below -Floor (the learn floor, 1 unless the template sets one).
+        It only ever LOWERS the count (Down = $true when the fit is below -RanCount): raising stays with a slice that really
+        hit a limit in the run (Get-RACountAfterSplit). It drops to the fit AT ONCE -- not half per run.
+        A count a failed query proved for the CURRENT query (-Fingerprint; a 'raised' row, or a 'probe' that climbed above
+        -ProbeFloor) still holds, unless this run measured every slice under a quarter of every limit (-FarBelow) or the
+        report's rows have since fallen to half or less of that run's rows (the data shrank) -- then the proof no longer
+        binds, so a raise is never permanent. A throttle (429) / busy / transient answer never raises a count at all: it is
+        retried at the same size (Get-RABucketFailureAction 'Retry'), so it leaves nothing for this rule to hold.
+        Returns @{ Count; Down; Fit; Rows; Why } (Count = -RanCount and Down = $false when nothing usable was measured).
+    #>
+    param($Measure, [int]$RanCount, [int]$Floor = 1, [object[]]$History = @(), [int]$ProbeFloor = 0, [string]$Fingerprint = '', [switch]$FarBelow)
+    $keep = [pscustomobject]@{ Count = $RanCount; Down = $false; Fit = $null; Rows = 0L; Why = '' }
+    if ($RanCount -lt 1 -or $null -eq $Measure) { return $keep }
+    if ($Floor -lt 1) { $Floor = 1 }
+    if ($ProbeFloor -lt 1) { $ProbeFloor = $Floor }
+    $g = { param($n) [double]('0' + [string](Get-SIRaBucketValue $Measure $n)) }
+    if ((& $g 'Slices') -lt 1) { return $keep }
+    $rows = [long](& $g 'ResultRows')
+    $keep.Rows = $rows
+    # the request: when the run measured its SHAPE (the lookup rows split per slice, and the part no slice count shrinks),
+    # only the split part is sized (need_req); "the largest request x the count" would count the unsplit query text and
+    # lookups once per slice and keep a small report high for a request that does not shrink with the count at all
+    $m2 = @{}
+    foreach ($n in 'ResultRows', 'MaxBucketRows', 'MaxBucketBytes', 'MaxRequestBytes', 'RequestRows', 'RequestBytesPerRow', 'RequestOverheadBytes',
+                   'MaxBucketSeconds', 'FixedSeconds', 'Backend', 'Slices') { $m2[$n] = Get-SIRaBucketValue $Measure $n }
+    $m2['RanCount'] = $RanCount; $m2['BucketCount'] = $RanCount
+    if ((& $g 'RequestRows') -gt 0 -or (& $g 'RequestOverheadBytes') -gt 0) { $m2['MaxRequestBytes'] = 0 }
+    $fit = Get-SIRaBucketCountFromMeasure -Measure ([pscustomobject]$m2)
+    if ($null -eq $fit) { $fit = 1 }
+    $secs = & $g 'MaxBucketSeconds'
+    if ($secs -gt 0 -and (& $g 'FixedSeconds') -le 0) {
+        $half = (Get-SIRaSliceSecondsLimit -Measure $Measure) / 2.0
+        $fit = [Math]::Max([int]$fit, (Get-SIRaNextPowerOfTwo -Value ([Math]::Ceiling(($secs * $RanCount) / $half))))
+    }
+    $keep.Fit = [int]$fit
+    $proven = 0
+    if (-not $FarBelow) {
+        foreach ($x in @($History | Where-Object { $_ })) {
+            if ($Fingerprint) {
+                $xf = [string](Get-SIRaBucketValue $x 'Fingerprint')
+                if ($xf -and $xf -ne $Fingerprint) { continue }
+            }
+            $d = [string](Get-SIRaBucketValue $x 'Decided'); $c = [int]('0' + [string](Get-SIRaBucketValue $x 'BucketCount'))
+            if (-not ($d -eq 'raised' -or ($d -eq 'probe' -and $c -gt $ProbeFloor))) { continue }
+            $then = [double]('0' + [string](Get-SIRaBucketValue $x 'ResultRows'))
+            if ($then -gt 0 -and ($rows * [double]$script:SIRaBucketGrewFactor) -le $then) { continue }   # the data shrank since
+            if ($c -gt $proven) { $proven = $c }
+        }
+    }
+    $target = [int](@($Floor, [int]$fit, [int][Math]::Min($proven, $RanCount)) | Measure-Object -Maximum).Maximum
+    if ($target -ge $RanCount) {
+        if ($proven -ge $RanCount -and [int]$fit -lt $RanCount) { $keep.Why = ('a failed query of this report needed {0} bucket(s) before, and this run was not far below every limit' -f $proven) }
+        return $keep
+    }
+    $maxRows = [long](& $g 'MaxBucketRows')
+    $took = if ($secs -gt 0) { (', longest slice {0:N0} s' -f $secs) } else { '' }
+    [pscustomobject]@{ Count = $target; Down = $true; Fit = [int]$fit; Rows = $rows
+        Why = ('sized to fit: this run returned {0:N0} row(s) in {1} bucket(s) (largest bucket {2:N0} row(s){3}); {4} bucket(s) carry that within half of every limit' -f $rows, $RanCount, $maxRows, $took, $target) }
+}
+
 function Get-SIRaBucketCompleteLowerCount {
     <#
         #880 PURE. THE REPORT HAS RUN COMPLETE AT FEWER SLICES -- the lowest count below -Count at which an earlier run of the
@@ -776,7 +849,7 @@ function Get-SIRaBucketDownCount {
     if ($h.Count -lt 3) { return $keep }
     foreach ($x in @($h | Select-Object -First 3)) {
         if ([int]$x.BucketCount -ne $Count -or [int]$x.StartCount -ne $Count) { return $keep }
-        if ([string]$x.Decided -in @('raised', 'down', 'measured', 'probe', 'incomplete')) { return $keep }   # #880: a NOT COMPLETE run measured part of it
+        if ([string]$x.Decided -in @('raised', 'down', 'fit', 'measured', 'probe', 'incomplete')) { return $keep }   # #1378: 'fit' sized itself   # #880: a NOT COMPLETE run measured part of it
         if (-not (Test-SIRaBucketRunFarBelow -Run $x)) { return $keep }
     }
     $half = [int][Math]::Max([Math]::Max(1, $Floor), [Math]::Floor($Count / 2))

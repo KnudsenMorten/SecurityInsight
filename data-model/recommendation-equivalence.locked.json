@@ -1,7 +1,7 @@
 {
   "$comment": "The same recommendation reported by several providers becomes ONE finding on the CI, every provider kept as evidence (SI-RecommendationEquivalence.ps1). A member names the provider's recommendation id (the finding key the provider reports) or its exact title. canonicalId = the key the finding is known by: keep it the id a provider already reports, so its existing findings keep their key; a finding that changes key carries its history over (first detected kept). Only production groups merge. Customer changes: Pro = one override per group on the settings database; Community = recommendation-equivalence.custom.json, per group id. Starter set: Exposure Management reports a Defender for Cloud recommendation under its title, Defender for Cloud under its assessment key -- the pairs below carry the identical title in both providers' rows of the shipped sample (engine/risk-analysis/_samples). Defender for Endpoint: the seven security settings below whose Defender for Endpoint and Defender for Cloud recommendations check the same control on the same machines (network level authentication, minimum password length, account lockout threshold / duration / counter reset, machine inactivity limit, e-mail scanning). Weaker look-alikes (firewall profiles, SmartScreen, disk encryption) are not shipped. #693 a group may also be match=link (an operator links findings on ONE owner -- owner, members, canonicalId, linkedBy, reason, linkedAt; unlink = stage not_used) or match=fold (a meaning rule over the generic SI fields -- evidence / canonical conditions { field, pattern | equals } and on pairs; the evidence finding is folded into every canonical finding of the same CI it meets). Shipped fold rules start as testing.",
   "kind": "recommendation-equivalence",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "groups": [
     {
       "id": "mdc-update-openssl",
@@ -136,6 +136,23 @@
       ],
       "on": [
         { "evidence": "software", "canonical": "si_affected_product" }
+      ]
+    },
+    {
+      "id": "eg-restates-mdc-recommendation",
+      "match": "fold",
+      "stage": "production",
+      "description": "#1369 (owner 2026-11-25: 'Merge them'). Exposure Management (the Exposure Graph recommendations report) restates a Defender for Cloud recommendation under its title on the same resource, Defender for Cloud reports it under its assessment key: the same recommendation on the same CI with the same title (lower case, spaces made one) is ONE finding -- the Defender for Cloud one stays (the assessment owner, its own key and remediation; the convention of every key group above: canonicalId = the Defender for Cloud key, Exposure Management a member), the Exposure Management one is evidence on it. One rule for every title, so a title no key group lists merges too (e.g. 'Track all users with access to the database for SQL databases'). Compared on the generic SI fields only (si_report_name, si_title).",
+      "evidence": [
+        { "field": "si_finding_type", "equals": "recommendation" },
+        { "field": "si_report_name", "equals": "Azure_Recommendations_Detailed" }
+      ],
+      "canonical": [
+        { "field": "si_finding_type", "equals": "recommendation" },
+        { "field": "si_report_name", "equals": "Azure_DefenderRecommendations_Detailed" }
+      ],
+      "on": [
+        { "evidence": "si_title", "canonical": "si_title" }
       ]
     }
   ]

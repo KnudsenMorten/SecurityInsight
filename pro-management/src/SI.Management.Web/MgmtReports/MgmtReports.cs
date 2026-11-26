@@ -228,10 +228,14 @@ public static class MgmtSummaryComposer
                 // the name the larger words, the value balanced with it; the accepted lifecycle's actual values under it
                 sb.Append($"<div data-mail-ps-cap style=\"{Font}font-size:18px;font-weight:700;color:#1a2b3c;line-height:1.25;\">{E(SI.Management.Web.RiskExec.ExecutiveFigures.LifecycleName)}</div>");
                 sb.Append($"<div data-mail-ps-value data-band=\"{bl.Tone}\" style=\"{Font}font-size:26px;font-weight:700;color:{bl.Ink};line-height:1.2;margin:2px 0;\">{E(Pct(p.Lifecycle, culture))} &middot; {E(bl.Name)}</div>");
+                // #1382 (owner 2026-11-25: "this is for executives"): the plain words of the score tiles (ExecWords) -- the formula
+                // with the install's values (keyFigures' model; none = the words name no number) and the one difference per view
+                var model = keyFigures?.Model;
                 if ((lifecycle ?? keyFigures?.Lifecycle) is { } life)
-                    sb.Append($"<div data-lifecycle-line style=\"{Font}font-size:12px;color:#5a6a7a;margin:0 0 10px 0;\">{E(life.Line)}</div>");
+                    sb.Append($"<div data-lifecycle-line style=\"{Font}font-size:12px;color:#5a6a7a;margin:0 0 10px 0;\">{E(SI.Management.Web.RiskExec.ExecWords.LifecycleLine(life, model))}</div>");
                 sb.Append($"<div style=\"{Font}font-size:15px;color:#333;margin:4px 0;\"><strong style=\"color:#1a2b3c;\">{E(SI.Management.Web.RiskExec.ExecutiveFigures.ActualName)}:</strong> <strong data-band=\"{bt.Tone}\" style=\"color:{bt.Ink};\">{E(Pct(p.Technical, culture))} &middot; {E(bt.Name)}</strong></div>");
-                sb.Append($"<div style=\"{Font}font-size:11px;color:#8a99aa;\">higher is better &middot; the share of active assets with no open Very High / High finding, tier-weighted &middot; {N(p.NoDate)} of {N(p.Findings)} counted findings had no usable date and count as open</div>");
+                sb.Append($"<div data-actual-line style=\"{Font}font-size:12px;color:#5a6a7a;margin:0 0 8px 0;\">{E(SI.Management.Web.RiskExec.ExecWords.ActualLine(model))}</div>");
+                sb.Append($"<div style=\"{Font}font-size:11px;color:#8a99aa;\">Out of 100 &middot; higher is better &middot; {N(p.NoDate)} of {N(p.Findings)} counted findings have no start date and always count</div>");
             }
             else sb.Append(Para("The Protection Score comes with the next Detailed run (it is computed from the Detailed findings and the CIs)."));
             sb.Append("</div>");

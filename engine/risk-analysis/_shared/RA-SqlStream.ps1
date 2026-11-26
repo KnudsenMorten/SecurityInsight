@@ -35,6 +35,11 @@ if (-not (Get-Command -Name Test-SIHoldKind -ErrorAction SilentlyContinue)) { . 
 if (-not ('Newtonsoft.Json.JsonConvert' -as [type])) {
     try { $null = ConvertFrom-Json -InputObject '{}' } catch { }
 }
+# #1337 the early field fill of a complete report (pwsh 7: the field fill's file is pwsh 7 only)
+if ($PSVersionTable.PSVersion.Major -ge 7 -and -not (Get-Command -Name Invoke-SIDataReportEarlyLoad -ErrorAction SilentlyContinue)) {
+    $__early = [System.IO.Path]::Combine((Split-Path -Parent (Split-Path -Parent $PSScriptRoot)), 'pro-data', '_shared', 'SI-DataReportEarly.ps1')
+    if (Test-Path -LiteralPath $__early) { try { . $__early } catch { } }
+}
 $script:RAStreamLegalName = [regex]'^[A-Za-z][A-Za-z0-9_]*$'
 $script:RAStreamInv = [System.Globalization.CultureInfo]::InvariantCulture
 $script:RAStreamNarrowCols = @('SI_AssetId', 'AssetId', 'ConfigurationId', 'AssetDetectedInReportName', 'ReportName', 'Category', 'AssetName', 'SecurityDomain', 'ConfigurationName',
@@ -48,7 +53,8 @@ $script:RAStreamDedupTargetCols = @('TargetAssetId','LinkedAzureResourceId')
 # stored row is read back as the report's row (ConvertFrom-RAStreamJson -Columns). Where the affected software is
 # (RA-SoftwareEvidence.ps1): si_evidence_paths / si_install_kind / si_bundled_by.
 $script:RAStreamStoredOnlyCols = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
-foreach ($__c in @('si_evidence_paths', 'si_install_kind', 'si_bundled_by')) { [void]$script:RAStreamStoredOnlyCols.Add($__c) }
+# #1373 Defender's remediation type of a recommendation and its software (RA-DefenderRecommendationContext.ps1): the task's kind
+foreach ($__c in @('si_evidence_paths', 'si_install_kind', 'si_bundled_by', 'si_recommendation_remediation_type', 'si_recommendation_product', 'si_recommendation_vendor')) { [void]$script:RAStreamStoredOnlyCols.Add($__c) }
 Remove-Variable -Name __c -ErrorAction SilentlyContinue
 
 function Get-RAOutputColumns {
@@ -324,7 +330,11 @@ SELECT @@ROWCOUNT;
 
 function Get-RAStreamInsertFindingSql {
     # The data sync's finding insert (Get-SIDataInsertFindingSql, same mapping) plus Risk Analysis' own columns.
-    @'
+    # #1318 -Typed (the plan of Get-SIDataParseAtInsertPlan, SI_Data_ParseAtInsert shadow / on): in the same transaction, the
+    # data sync's own typed statement over exactly the rows just inserted (Get-SIDataTypedInsertSql), each marked -- set-based,
+    # one round trip, the same count answered. $null = the insert as before.
+    param($Typed)
+    $sql = @'
 SET XACT_ABORT ON;
 BEGIN TRAN;
 INSERT sidata.Finding (CollectionId, AssetKey, AssetName, ReportName, SecurityDomain, ConfigurationId, Cve, Title, Severity, Tier, RiskScore, DetailJson,
@@ -344,6 +354,28 @@ DECLARE @n int = @@ROWCOUNT;
 COMMIT;
 SELECT @n;
 '@
+    if ($null -eq $Typed -or -not $Typed.Ready) { return $sql }
+    Join-RAStreamTypedSql -Sql $sql -Anchor ("`r`nSELECT CONVERT(int, @CollectionId),", "`nSELECT CONVERT(int, @CollectionId),") -Output 'OUTPUT inserted.FindingId INTO @ins (id)' -Typed $Typed
+}
+
+function Join-RAStreamTypedSql {
+    <#
+        PURE. #1318 One write statement of Risk Analysis (-Sql: 'SET XACT_ABORT ON; BEGIN TRAN; <statement> DECLARE @n int =
+        @@ROWCOUNT; COMMIT; SELECT @n;') with the typed statement of the rows it wrote: the statement records their FindingId
+        (-Output, put before -Anchor), the typed statement runs over them before the COMMIT, the answer stays the statement's
+        own count.
+    #>
+    param([Parameter(Mandatory)][string]$Sql, [Parameter(Mandatory)][string[]]$Anchor, [Parameter(Mandatory)][string]$Output, [Parameter(Mandatory)]$Typed)
+    $at = -1; $a = ''
+    foreach ($x in $Anchor) { $at = $Sql.IndexOf($x); if ($at -ge 0) { $a = $x; break } }
+    if ($at -lt 0) { throw 'Join-RAStreamTypedSql: the statement has no place for the row ids' }
+    $nl = if ($a.StartsWith("`r`n")) { "`r`n" } else { "`n" }
+    $s = $Sql.Substring(0, $at) + $nl + $Output + $Sql.Substring($at)
+    $s = $s.Replace('BEGIN TRAN;', ('DECLARE @ins TABLE (id bigint NOT NULL PRIMARY KEY);' + $nl + 'BEGIN TRAN;'))
+    $s = $s.Replace('DECLARE @n int = @@ROWCOUNT;' + $nl + 'COMMIT;' + $nl + 'SELECT @n;',
+        ('DECLARE @w int = @@ROWCOUNT;' + $nl + (Get-SIDataTypedInsertSql -Plan $Typed -IdTable '@ins') + $nl + 'COMMIT;' + $nl + 'SELECT @w;'))
+    if ($s.IndexOf('SELECT @w;') -lt 0) { throw 'Join-RAStreamTypedSql: the statement does not end as expected' }
+    $s
 }
 
 function Get-RAStreamInsertSummaryRowSql {
@@ -541,7 +573,14 @@ WHERE f.$run AND f.RaReport = CONVERT(int, @Report) AND f.$cond AND f.RaTraceSuf
 }
 
 function Get-RAStreamTraceUpdateSql {
-    param([ValidateSet('Detailed', 'Summary')][string]$Grain)
+    # #1318 -Typed (Detailed): the rows whose DetailJson gets its trace id here are typed again from the new text, in the
+    # same transaction (the trace fields are no typed column, but a row's typed values always follow its stored text)
+    param([ValidateSet('Detailed', 'Summary')][string]$Grain, $Typed)
+    if ($Grain -eq 'Detailed' -and $null -ne $Typed -and $Typed.Ready) {
+        $u = (Get-RAStreamTraceUpdateSql -Grain Detailed).Replace('SELECT @@ROWCOUNT;', "DECLARE @n int = @@ROWCOUNT;`r`nCOMMIT;`r`nSELECT @n;")
+        $u = "SET XACT_ABORT ON;`r`nBEGIN TRAN;`r`n" + $u.Replace("`r`n", "`n").Replace("`n", "`r`n")
+        return (Join-RAStreamTypedSql -Sql $u -Anchor @("`r`nFROM sidata.Finding f JOIN OPENJSON(@j)") -Output 'OUTPUT inserted.FindingId INTO @ins (id)' -Typed $Typed)
+    }
     if ($Grain -eq 'Summary') {
         return @'
 UPDATE f SET RowJson = JSON_MODIFY(JSON_MODIFY(f.RowJson, '$.TraceName', j.N), '$.TraceID', j.I), RaTraceSuffixed = 1
@@ -1107,6 +1146,19 @@ function New-RAStream {
     $s.Broken = ''
     # #877: the reports HELD BACK this run (ordinal -> @{ Report; Ordinal; Cause; Why }) -- see Add-RAStreamHeldReport
     $s.Held = @{}
+    # #1318 SI_Data_ParseAtInsert (shadow / on): the Detailed rows get their view values as they are stored (the data sync's
+    # own statement, Get-RAStreamInsertFindingSql -Typed); decided once per run from the database's columns; off = as before
+    $s.Typed = $null
+    if ($Grain -eq 'Detailed' -and (Get-Command -Name Get-SIDataParseAtInsertPlan -ErrorAction SilentlyContinue)) {
+        $plan = Get-SIDataParseAtInsertPlan -Invoke $Invoke
+        if ($plan.Ready) {
+            $s.Typed = $plan
+            $how = if ($plan.Mode -eq 'shadow') { 'check mode: the data sync works them out again, compares and keeps its own' } else { 'the data sync does not work them out again' }
+            & $Log 'INFO' ("the view values of each finding are worked out as Risk Analysis stores it ({0})" -f $how)
+        } elseif ($plan.Mode -ne 'off') {
+            & $Log 'INFO' ("the view values of each finding are worked out by the data sync as before -- {0}" -f $plan.Why)
+        }
+    }
     $s
 }
 
@@ -1375,6 +1427,8 @@ function Clear-RAStreamReport {
     # #877: the whole report's rows are gone now -- a report held back earlier in this run (it runs again) is not held any more
     Remove-RAStreamHeldReport -Stream $Stream -Ordinal ([int]$r.Ordinal)
     }
+    # #1337 its early field fill no longer counts (its rows are gone)
+    Update-RAStreamEarlyLoad -Stream $Stream -State 'Cleared' -Ordinal ([int]$r.Ordinal)
     $r.Retrieved = 0L
     $r.Account = @{}
     if ($Why -and $n -gt 0) { & $Stream.Log 'INFO' ("{0} row(s) this report already stored are removed -- {1}" -f $n, $Why) }
@@ -1515,6 +1569,17 @@ function ConvertTo-RAStreamRowItems {
     [pscustomobject]@{ Items = $items.ToArray(); AssetItems = $assetItems.ToArray(); Illegal = $illegal }
 }
 
+function Write-RAStreamLoadRows {
+    <# #1336 One write of the run's rows: the bulk load (SI-DataBulkLoad.ps1 Write-SIDataLoadRows, SI_Data_BulkLoad) when it
+       is loaded, else the JSON chunks as before -- the same statement, the same rows, the same answer (rows written). #>
+    param([Parameter(Mandatory)]$Stream, [Parameter(Mandatory)][string]$Sql, [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$Items,
+          [hashtable]$Params = @{}, [ref]$ChunkChars, [string]$What = 'rows')
+    if (Get-Command -Name Write-SIDataLoadRows -ErrorAction SilentlyContinue) {
+        return (Write-SIDataLoadRows -Invoke $Stream.Invoke -Sql $Sql -Items $Items -Params $Params -ChunkChars $ChunkChars -What $What -Log $Stream.Log)
+    }
+    Write-SIDataJsonRows -Invoke $Stream.Invoke -Sql $Sql -Items $Items -Params $Params -ChunkChars $ChunkChars -What $What
+}
+
 function Write-RAStreamRows {
     <#
         Writes ONE bucket's scored rows of the current report (-Bucket names it: '3/16', 'late:3/16', 'sub:...', 'page:2'),
@@ -1562,10 +1627,10 @@ function Write-RAStreamRows {
     $chunk = [ref]$Stream.Chunk
     $what = 'Risk Analysis rows of {0} (bucket {1})' -f $r.Name, $Bucket
     if ($Stream.Grain -eq 'Detailed') {
-        $n = Write-SIDataJsonRows -Invoke $Stream.Invoke -Sql (Get-RAStreamInsertFindingSql) -Items $items -Params @{ CollectionId = [string]$Stream.CollectionId } -ChunkChars $chunk -What $what
+        $n = Write-RAStreamLoadRows -Stream $Stream -Sql (Get-RAStreamInsertFindingSql -Typed $Stream.Typed) -Items $items -Params @{ CollectionId = [string]$Stream.CollectionId } -ChunkChars $chunk -What $what
     } else {
-        $n = Write-SIDataJsonRows -Invoke $Stream.Invoke -Sql (Get-RAStreamInsertSummaryRowSql) -Items $items -Params @{ CollectionTime = $Stream.TimeText } -ChunkChars $chunk -What $what
-        if ($assetItems.Count) { $null = Write-SIDataJsonRows -Invoke $Stream.Invoke -Sql (Get-SIDataSummaryInsertAssetSql) -Items $assetItems -Params @{ CollectionTime = $Stream.TimeText } -ChunkChars $chunk -What ($what + ', impacted assets') }
+        $n = Write-RAStreamLoadRows -Stream $Stream -Sql (Get-RAStreamInsertSummaryRowSql) -Items $items -Params @{ CollectionTime = $Stream.TimeText } -ChunkChars $chunk -What $what
+        if ($assetItems.Count) { $null = Write-RAStreamLoadRows -Stream $Stream -Sql (Get-SIDataSummaryInsertAssetSql) -Items $assetItems -Params @{ CollectionTime = $Stream.TimeText } -ChunkChars $chunk -What ($what + ', impacted assets') }
     }
     $Stream.Chunk = $chunk.Value
     Add-RAStreamTime -Stream $Stream -Phase 'insert' -Seconds $insSw.Elapsed.TotalSeconds -Rows ([long]$n)
@@ -1596,7 +1661,7 @@ function Add-RAStreamStage {
     }
     if ($items.Count -eq 0) { return 0L }
     $chunk = [ref]$Stream.Chunk
-    $n = Write-SIDataJsonRows -Invoke $Stream.Invoke -Sql (Get-RAStreamInsertStageSql) -Items $items.ToArray() -Params @{ RunKey = $Stream.RunKey } -ChunkChars $chunk -What ('staged rows of ' + $r.Name)
+    $n = Write-RAStreamLoadRows -Stream $Stream -Sql (Get-RAStreamInsertStageSql) -Items $items.ToArray() -Params @{ RunKey = $Stream.RunKey } -ChunkChars $chunk -What ('staged rows of ' + $r.Name)
     $Stream.Chunk = $chunk.Value
     [long]$n
 }
@@ -1667,7 +1732,7 @@ function Complete-RAStreamReport {
     $traces = 0L
     if ($fix.Count) {
         $chunk = [ref]$Stream.Chunk
-        $traces = Write-SIDataJsonRows -Invoke $Stream.Invoke -Sql (Get-RAStreamTraceUpdateSql -Grain $Stream.Grain) -Items $fix.ToArray() -Params $p -ChunkChars $chunk -What 'trace names'
+        $traces = Write-SIDataJsonRows -Invoke $Stream.Invoke -Sql (Get-RAStreamTraceUpdateSql -Grain $Stream.Grain -Typed $Stream.Typed) -Items $fix.ToArray() -Params $p -ChunkChars $chunk -What 'trace names'
         & $Stream.Log 'INFO' ("{0} finding(s) share a trace name with another asset's finding in another query slice -- the asset id is added to theirs" -f $traces)
     }
     Add-RAStreamTime -Stream $Stream -Phase 'trace' -Seconds $phSw.Elapsed.TotalSeconds; $phSw.Restart()
@@ -1687,6 +1752,77 @@ function Set-RAStreamReportStatus {
             Expected = $(if ($null -ne $Expected) { [string][long]$Expected } else { '' }); Retrieved = $(if ($null -ne $Retrieved) { [string][long]$Retrieved } else { '' })
             Stored = $(if ($null -ne $Stored) { [string][long]$Stored } else { '' }) }
     $null = Invoke-RAStreamSql -Stream $Stream -Sql (Get-RAStreamStatusSql) -Params $p
+    # #1337 a Detailed report that is complete: the data sync's field fill of its rows starts now, beside the run
+    Update-RAStreamEarlyLoad -Stream $Stream -ReportName $ReportName -State $State
+}
+
+# =====================================================================================================================
+#  #1337 THE DATA SYNC'S FIELD FILL STARTS PER REPORT (engine\pro-data\_shared\SI-DataReportEarly.ps1). A Detailed report
+#  that is complete hands its rows to the early fill (a worker beside the run, or at once on a seam without a connection to
+#  hand out); a report that is not complete, or is cleared to run again, loses its mark; the run's end stops the worker.
+#  Nothing here publishes or marks the collection: the one trusted run (#780) is unchanged. Never throws, never changes a
+#  row of the result or a verdict.
+# =====================================================================================================================
+function Get-RAStreamEarlyFiles {
+    <# The engine files the early fill's worker loads. #>
+    $eng = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+    @([IO.Path]::Combine($eng, '_shared', 'data-sql', 'SI-DataModel.ps1'), [IO.Path]::Combine($eng, 'pro-data', '_shared', 'SI-DataViewContext.ps1'), [IO.Path]::Combine($eng, 'pro-data', '_shared', 'SI-DataReportEarly.ps1'))
+}
+
+function Import-RAStreamEarlyLoad {
+    <# SI-DataReportEarly.ps1 is loaded (with this file, below its header). Never throws. #>
+    [bool](Get-Command -Name Invoke-SIDataReportEarlyLoad -ErrorAction SilentlyContinue)
+}
+
+function Update-RAStreamEarlyLoad {
+    <# #1337 one report's verdict: Complete = its early fill is started (Detailed, SI_Data_LoadPerReport not off, the view
+       values worked out at insert by the run's statement); anything else = its mark goes. -Ordinal: the report's number
+       (else from the stream by name). Never throws. #>
+    param($Stream, [string]$ReportName = '', [string]$State = '', [int]$Ordinal = 0)
+    try {
+        if ($null -eq $Stream -or $Stream.Grain -ne 'Detailed' -or [int]$Stream.CollectionId -le 0) { return }
+        if (-not (Import-RAStreamEarlyLoad)) { return }
+        $mode = Get-SIDataLoadPerReportMode
+        if ($mode -eq 'off') { return }
+        $ord = $Ordinal
+        if ($ord -le 0 -and $ReportName -and $Stream.Reports -and $Stream.Reports.Contains($ReportName)) { $ord = [int]$Stream.Reports[$ReportName].Ordinal }
+        if ($ord -le 0) { return }
+        if (-not $Stream.ContainsKey('EarlyRevoked')) { $Stream.EarlyRevoked = New-Object 'System.Collections.Generic.HashSet[int]' }
+        if ($State -ne 'Complete') {
+            [void]$Stream.EarlyRevoked.Add($ord)
+            Remove-SIDataReportEarlyLoad -Invoke $Stream.Invoke -CollectionId ([long]$Stream.CollectionId) -Report $ord
+            return
+        }
+        [void]$Stream.EarlyRevoked.Remove($ord)
+        $print = ''; if ($null -ne $Stream.Typed -and $Stream.Typed.Ready -and [string]$Stream.Typed.Mode -eq 'on') { $print = [string]$Stream.Typed.Print }
+        if (-not $print) { return }
+        $ciP = $Stream.Invoke.PSObject.Properties['SIConnectionInfo']
+        if ($ciP -and $ciP.Value -is [scriptblock]) {
+            if (-not $Stream.ContainsKey('EarlyWorker') -or $null -eq $Stream.EarlyWorker) { $Stream.EarlyWorker = Start-SIDataEarlyLoadWorker -Files (Get-RAStreamEarlyFiles) }
+            $ci = & $ciP.Value
+            $null = Submit-SIDataEarlyLoad -Worker $Stream.EarlyWorker -CollectionId ([long]$Stream.CollectionId) -Report $ord -Print $print -ReportName $ReportName -Mode $mode -ConnectionString ([string]$ci.ConnectionString) -AccessToken ([string]$ci.AccessToken)
+            Read-SIDataEarlyLoadLines -Worker $Stream.EarlyWorker -Log $Stream.Log
+        } else {
+            $null = Invoke-SIDataReportEarlyLoad -Invoke $Stream.Invoke -CollectionId ([long]$Stream.CollectionId) -Report $ord -Print $print -ReportName $ReportName -Mode $mode -Log $Stream.Log
+        }
+    } catch { }
+}
+
+function Stop-RAStreamEarlyLoad {
+    <# #1337 the run's end: the early fill's worker stops (after the range in hand), the reports that are not complete lose
+       their marks once more (a mark the worker wrote after the verdict changed). Never throws. #>
+    param($Stream)
+    try {
+        if ($null -eq $Stream -or -not ($Stream -is [System.Collections.IDictionary])) { return }
+        if ($Stream.ContainsKey('EarlyWorker') -and $null -ne $Stream.EarlyWorker) {
+            $n = Stop-SIDataEarlyLoadWorker -Worker $Stream.EarlyWorker -Log $Stream.Log
+            $Stream.EarlyWorker = $null
+            if ($n -gt 0 -and $Stream.Log) { & $Stream.Log 'INFO' ("the views' prepared context of {0} report(s) was filled as each report was complete" -f $n) }
+        }
+        if ($Stream.ContainsKey('EarlyRevoked') -and $Stream.EarlyRevoked.Count -gt 0 -and (Get-Command -Name Remove-SIDataReportEarlyLoad -ErrorAction SilentlyContinue)) {
+            foreach ($o in @($Stream.EarlyRevoked)) { Remove-SIDataReportEarlyLoad -Invoke $Stream.Invoke -CollectionId ([long]$Stream.CollectionId) -Report ([int]$o) }
+        }
+    } catch { }
 }
 
 function Get-RAStreamLastGoodSql {
@@ -1725,7 +1861,7 @@ function Set-RAStreamReportNotComplete {
     # #741 (3): the reason that MADE it not complete comes FIRST, the report's own (complete) verdict text after it. It was
     # appended after that text, so a 2,000-character column and every list that shows the start of the reason (live
     # 2026-10-16: "every one of the report's 2 slices answered below the row limit ... (the w...") hid the cause.
-    # -HoldKind (#901): a kind of THE list (#902, data-model/hold-kinds.locked.json: 'silent-source' | 'role-read') -- the
+    # -HoldKind (#901): a kind of THE list (#902, data-model/hold-kinds.locked.json: 'silent-source' | 'role-read' | 'unreadable-slices') -- the
     # report was DELIBERATELY held at its last complete result, so it does not make the run partial for the publish
     # (sidata.CollectionHeldOnly). Set only when the report turns NotComplete here (a report already NotComplete for its own
     # reason keeps no kind); a database without the column ignores it. A kind that is not in the list is NOT written: the
@@ -1733,17 +1869,23 @@ function Set-RAStreamReportNotComplete {
     # #902 (4): with a kind, -HeldRuns (the runs of this grain in a row it is held, Get-RAHoldStreak), -KeptResultAt (the
     # collection time of its kept, last complete result; '' = none) and -HoldNames (the silent tables, ';'-separated) are
     # stored with it -- each only where the database has its column.
+    # #1323 -OwnVerdict: the report is ALREADY NotComplete by its own verdict and that verdict IS the hold ('unreadable-slices':
+    # its lost slices, Add-RAUnreadableSliceHolds) -- the kind and its facts are written on that row; its reason is kept as it is.
     param([Parameter(Mandatory)]$Stream, [Parameter(Mandatory)][string]$ReportName, [string]$Reason = '', [string]$HoldKind = '',
-          [int]$HeldRuns = 0, [string]$KeptResultAt = '', [string]$HoldNames = '')
+          [int]$HeldRuns = 0, [string]$KeptResultAt = '', [string]$HoldNames = '', [switch]$OwnVerdict)
     if ($HoldKind -and -not (Test-SIHoldKind -Kind $HoldKind)) { $HoldKind = '' }
     if (-not $HoldKind) { $HeldRuns = 0; $KeptResultAt = ''; $HoldNames = '' }
     if ($HoldNames.Length -gt 400) { $HoldNames = $HoldNames.Substring(0, 400) }
+    # #1337 a report that is not complete after all: its early field fill no longer counts
+    Update-RAStreamEarlyLoad -Stream $Stream -ReportName $ReportName -State 'NotComplete'
     $null = Invoke-RAStreamSql -Stream $Stream -Sql @'
 DECLARE @t datetime2(3) = CONVERT(datetime2(3), @CollectionTime, 126);
 DECLARE @n int = 0;
 UPDATE sidata.RaReportStatus SET State = N'NotComplete', Reason = LEFT(COALESCE(NULLIF(@Reason, N'') + COALESCE(N' | ' + NULLIF(Reason, N''), N''), Reason), 2000)
 WHERE CollectionTime = @t AND Grain = @Grain AND ReportName = @ReportName AND State <> N'NotComplete';
 SET @n = @@ROWCOUNT;
+IF @n = 0 AND @OwnVerdict = 1 AND EXISTS (SELECT 1 FROM sidata.RaReportStatus WHERE CollectionTime = @t AND Grain = @Grain AND ReportName = @ReportName AND State = N'NotComplete')
+    SET @n = 1;
 IF @n = 0 AND NOT EXISTS (SELECT 1 FROM sidata.RaReportStatus WHERE CollectionTime = @t AND Grain = @Grain AND ReportName = @ReportName)
 BEGIN
     INSERT sidata.RaReportStatus (CollectionTime, Grain, ReportName, State, Reason) VALUES (@t, @Grain, @ReportName, N'NotComplete', NULLIF(LEFT(@Reason, 2000), N''));
@@ -1763,7 +1905,7 @@ IF @n = 1 AND NULLIF(@HoldKind, N'') IS NOT NULL AND COL_LENGTH('sidata.RaReport
          N'@k nvarchar(400), @t datetime2(3), @g nvarchar(16), @r nvarchar(256)', @k = @HoldNames, @t = @t, @g = @Grain, @r = @ReportName;
 SELECT 1;
 '@ -Params @{ CollectionTime = $Stream.TimeText; Grain = $Stream.Grain; ReportName = $ReportName; Reason = [string]$Reason; HoldKind = [string]$HoldKind
-              HeldRuns = [int]$HeldRuns; KeptResultAt = [string]$KeptResultAt; HoldNames = [string]$HoldNames }
+              HeldRuns = [int]$HeldRuns; KeptResultAt = [string]$KeptResultAt; HoldNames = [string]$HoldNames; OwnVerdict = $(if ($OwnVerdict -and $HoldKind) { 1 } else { 0 }) }
 }
 
 function Get-RAStreamHoldStreakSql {
@@ -2165,6 +2307,8 @@ function Complete-RAStream {
     # when the database has the column; the data sync and the closes act per report only on 'reports'.
     param([Parameter(Mandatory)]$Stream, [string]$Partial = '', [ValidateSet('', 'reports', 'run')][string]$Scope = '')
     $p = @{ CollectionTime = $Stream.TimeText; CollectionId = [string]$Stream.CollectionId }
+    # #1337 the early field fill stops first (after the range in hand); a report not complete loses its mark
+    Stop-RAStreamEarlyLoad -Stream $Stream
     $rows = [long](Invoke-RAStreamSql -Stream $Stream -Sql (Get-RAStreamCountSql -Grain $Stream.Grain -Source All) -Params $p)
     $p['Rows'] = [string]$rows; $p['Partial'] = [string]$Partial
     $n = [int](Invoke-RAStreamSql -Stream $Stream -Sql (Get-RAStreamCompleteSql -Grain $Stream.Grain) -Params $p)
@@ -2526,21 +2670,26 @@ function Get-RAStreamCiSql {
         own day count (SI_ActiveStaleDays) only decides for a CI without a lifecycle. Risk Analysis keeps producing the
         findings; the views count the lifecycle.
     #>
+    # #1116 (c) (SCALE-3 A): the ids and names loaded ONCE into keyed #temp tables (statistics: the plan seeks the CI and link
+    # keys by the real number of ids; a table variable is planned as one row), in the database's collation as the table
+    # variables were -- the same predicate, the same CIs
     @'
--- (table variables named apart from the parameters: T-SQL names are case-insensitive)
-DECLARE @idList TABLE (v nvarchar(450) PRIMARY KEY);
-INSERT @idList SELECT DISTINCT LEFT(value, 450) FROM OPENJSON(@Ids) WHERE value IS NOT NULL AND value <> '';
-DECLARE @nameList TABLE (v nvarchar(400) PRIMARY KEY);
-INSERT @nameList SELECT DISTINCT LEFT(value, 400) FROM OPENJSON(@Names) WHERE value IS NOT NULL AND value <> '';
+-- (temp tables named apart from the parameters: T-SQL names are case-insensitive)
+SET NOCOUNT ON;
+CREATE TABLE #idList (v nvarchar(450) COLLATE DATABASE_DEFAULT NOT NULL PRIMARY KEY);
+INSERT #idList (v) SELECT DISTINCT LEFT(value, 450) FROM OPENJSON(@Ids) WHERE value IS NOT NULL AND value <> '';
+CREATE TABLE #nameList (v nvarchar(400) COLLATE DATABASE_DEFAULT NOT NULL PRIMARY KEY);
+INSERT #nameList (v) SELECT DISTINCT LEFT(value, 400) FROM OPENJSON(@Names) WHERE value IS NOT NULL AND value <> '';
 SELECT c.CiId, c.DocJson,
        CASE WHEN NULLIF(c.Lifecycle, '') IS NOT NULL THEN CASE WHEN c.Lifecycle = 'not_seen' THEN 1 ELSE 0 END
             WHEN c.LastSeen IS NOT NULL AND c.LastSeen < DATEADD(day, -CONVERT(int, @StaleDays), SYSUTCDATETIME()) THEN 1 ELSE 0 END AS Stale
 FROM sidata.Ci c
 WHERE ISNULL(c.Lifecycle, '') <> 'retired' AND c.DocJson IS NOT NULL
-  AND (c.CiId IN (SELECT v FROM @idList)
-       OR c.CiId IN (SELECT l.CiId FROM sidata.CiLink l WHERE l.NativeId IN (SELECT v FROM @idList))
-       OR (c.Name IN (SELECT v FROM @nameList)
+  AND (c.CiId IN (SELECT v FROM #idList)
+       OR c.CiId IN (SELECT l.CiId FROM sidata.CiLink l WHERE l.NativeId IN (SELECT v FROM #idList))
+       OR (c.Name IN (SELECT v FROM #nameList)
            AND (SELECT COUNT(*) FROM sidata.Ci c2 WHERE c2.Name = c.Name AND ISNULL(c2.Lifecycle, '') <> 'retired') = 1));
+DROP TABLE #idList; DROP TABLE #nameList;
 '@
 }
 
@@ -2549,26 +2698,67 @@ function Get-RAStreamCiIndex {
         The CI index (New-RACiIndex) of ONE bucket's rows, read from sidata.Ci: only the CIs these rows can match. A name
         is only used when exactly one current CI in the WHOLE tenant has it (as the whole-tenant index did). -Invoke: the seam.
     #>
-    param([Parameter(Mandatory)][scriptblock]$Invoke, [AllowEmptyCollection()][object[]]$Rows = @(), [int]$StaleDays = 30)
+    # #1250 / #1321: the slice's ids and names are asked IN PARTS (-PartKeys of the row ids at a time, each with SI's prefixes;
+    # the same number of names) -- never every id x 10 prefixes and every CI answer at once (live: "OutOfMemoryException" on
+    # a 4 CPU / 8 GiB worker, the slice then scored WITHOUT its CI context). A part the worker has no memory for is asked
+    # again in halves, and the smaller size is kept for the rest of the run ($script:RAStreamCiPartKeys: measured, it paces
+    # the reads and never limits how many CIs are read). A CI two parts both answer is kept once -- the same set of CIs as one
+    # read, so the same index (a name two CIs share still identifies nothing). A slice within one part: one read, exactly as
+    # before.
+    param([Parameter(Mandatory)][scriptblock]$Invoke, [AllowEmptyCollection()][object[]]$Rows = @(), [int]$StaleDays = 30, [int]$PartKeys = 0)
     $prefixes = @('', 'az:', 'eg:az:', 'eg:dev:', 'eg:', 'mde:', 'entra-user:', 'entra-sp:', 'entra-device:', 'aad:')
-    $ids = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
-    $names = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    # the row ids (without prefixes) and names, in the order first met -- the order the one read listed them in
+    $keySet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $keys = [System.Collections.Generic.List[string]]::new()
+    $nameSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $names = [System.Collections.Generic.List[string]]::new()
     foreach ($row in $Rows) {
         if ($null -eq $row) { continue }
-        foreach ($k in (Get-RAStreamCiIdsOfRow -Row $row)) { foreach ($px in $prefixes) { [void]$ids.Add($px + $k) } }
-        foreach ($col in 'SI_AssetName', 'AssetName', 'DeviceName') { $p = $row.PSObject.Properties[$col]; if ($p -and $p.Value) { [void]$names.Add(([string]$p.Value).Trim()) } }
+        foreach ($k in (Get-RAStreamCiIdsOfRow -Row $row)) { if ($keySet.Add($k)) { $keys.Add($k) } }
+        foreach ($col in 'SI_AssetName', 'AssetName', 'DeviceName') { $p = $row.PSObject.Properties[$col]; if ($p -and $p.Value) { $nm = ([string]$p.Value).Trim(); if ($nameSet.Add($nm)) { $names.Add($nm) } } }
     }
-    if ($ids.Count -eq 0 -and $names.Count -eq 0) { return (New-RACiIndex -Cis @()) }
-    $res = @(& $Invoke (Get-RAStreamCiSql) @{ Ids = (ConvertTo-Json -InputObject @($ids) -Compress); Names = (ConvertTo-Json -InputObject @($names) -Compress); StaleDays = [string]$StaleDays } 'reader')
+    $keySet = $null; $nameSet = $null
+    if ($keys.Count -eq 0 -and $names.Count -eq 0) { return (New-RACiIndex -Cis @()) }
+    $part = $PartKeys
+    if ($part -le 0) { $part = [int]$script:RAStreamCiPartKeys }
+    if ($part -le 0) { $part = 5000 }
     $cis = [System.Collections.Generic.List[object]]::new()
-    foreach ($x in $res) {
-        foreach ($h in @($x)) {
-            if (-not $h -or -not $h['DocJson'] -or $h['DocJson'] -is [System.DBNull]) { continue }
-            $c = ConvertFrom-RAStreamJson -Json ([string]$h['DocJson'])
-            if (-not $c.PSObject.Properties['si_ci_id']) { Add-Member -InputObject $c -NotePropertyName 'si_ci_id' -NotePropertyValue ([string]$h['CiId']) }
-            Add-Member -InputObject $c -NotePropertyName 'si_stale_' -NotePropertyValue $(if ([int]$h['Stale'] -eq 1) { 'true' } else { 'false' }) -Force
-            $cis.Add($c)
+    $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $multi = ($keys.Count -gt $part -or $names.Count -gt $part)
+    $i = 0; $j = 0
+    while ($i -lt $keys.Count -or $j -lt $names.Count) {
+        $ids = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+        for ($x = $i; $x -lt [Math]::Min($i + $part, $keys.Count); $x++) { foreach ($px in $prefixes) { [void]$ids.Add($px + $keys[$x]) } }
+        $nm = [System.Collections.Generic.List[string]]::new()
+        for ($x = $j; $x -lt [Math]::Min($j + $part, $names.Count); $x++) { $nm.Add($names[$x]) }
+        $res = $null
+        try {
+            $res = @(& $Invoke (Get-RAStreamCiSql) @{ Ids = (ConvertTo-Json -InputObject @($ids) -Compress); Names = (ConvertTo-Json -InputObject @($nm) -Compress); StaleDays = [string]$StaleDays } 'reader')
+        } catch {
+            $oom = $false
+            if (Get-Command -Name Test-RABucketOutOfMemory -ErrorAction SilentlyContinue) { $oom = [bool](Test-RABucketOutOfMemory -Err $_) }
+            else { for ($e = $_.Exception; $null -ne $e; $e = $e.InnerException) { if ($e -is [System.OutOfMemoryException] -or [string]$e.Message -match '(?i)OutOfMemoryException|Insufficient memory') { $oom = $true; break } } }
+            if (-not $oom -or $part -le 1) { throw }
+            $ids = $null; $nm = $null; $res = $null
+            [System.GC]::Collect(); [System.GC]::WaitForPendingFinalizers(); [System.GC]::Collect()
+            $part = [int][Math]::Max(1, [Math]::Floor($part / 2))
+            $script:RAStreamCiPartKeys = $part
+            $multi = $true
+            continue
         }
+        $ids = $null; $nm = $null
+        foreach ($x in $res) {
+            foreach ($h in @($x)) {
+                if (-not $h -or -not $h['DocJson'] -or $h['DocJson'] -is [System.DBNull]) { continue }
+                if ($multi -and -not $seen.Add([string]$h['CiId'])) { continue }   # answered by an earlier part already
+                $c = ConvertFrom-RAStreamJson -Json ([string]$h['DocJson'])
+                if (-not $c.PSObject.Properties['si_ci_id']) { Add-Member -InputObject $c -NotePropertyName 'si_ci_id' -NotePropertyValue ([string]$h['CiId']) }
+                Add-Member -InputObject $c -NotePropertyName 'si_stale_' -NotePropertyValue $(if ([int]$h['Stale'] -eq 1) { 'true' } else { 'false' }) -Force
+                $cis.Add($c)
+            }
+        }
+        $res = $null
+        $i = [Math]::Min($i + $part, $keys.Count); $j = [Math]::Min($j + $part, $names.Count)
     }
     New-RACiIndex -Cis $cis.ToArray()
 }

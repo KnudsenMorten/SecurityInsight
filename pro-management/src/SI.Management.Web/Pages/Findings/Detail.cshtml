@@ -80,6 +80,24 @@
         }
     </section>
 
+    @* #1364 what else reported the same weakness on this CI: evidence on this finding, never a finding or a task of its own *@
+    @if (Model.Evidence.Count > 0)
+    {
+        <section class="card" aria-labelledby="h-ev" data-finding-evidence>
+            <h2 id="h-ev">Also reported by</h2>
+            <p class="hint">The same weakness on this asset, reported by another source. It is part of this finding (one finding, one task) and is not counted again.</p>
+            <table class="grid" data-sortable>
+                <thead><tr><th>Report</th><th>As</th><th>Their key</th><th>Their severity</th></tr></thead>
+                <tbody>
+                @foreach (var e in Model.Evidence)
+                {
+                    <tr data-evidence="@e.Key"><td>@e.Report</td><td>@e.Title</td><td class="mono">@e.Key</td><td>@e.Severity</td></tr>
+                }
+                </tbody>
+            </table>
+        </section>
+    }
+
     @* #693 the findings this one is linked with (one finding), and the links undone (history) *@
     <section class="card" aria-labelledby="h-ln" data-finding-links>
         <h2 id="h-ln">Linked findings</h2>

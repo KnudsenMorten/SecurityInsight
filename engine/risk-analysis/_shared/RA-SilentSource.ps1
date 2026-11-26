@@ -427,7 +427,7 @@ function Invoke-RASilentSourceCheck {
 # =====================================================================================================================
 function Add-RADeliberateHold {
     <# A report SI holds ON PURPOSE at its last complete result, with the exact reason it was given (Add-RAReportFailure):
-       -Kind: a kind of THE list (#902, data-model/hold-kinds.locked.json -- 'silent-source' #900, 'role-read' #899); a kind
+       -Kind: a kind of THE list (#902, data-model/hold-kinds.locked.json -- 'silent-source' #900, 'role-read' #899, 'unreadable-slices' #1323); a kind
        that is not in it is NOT kept, so the report stays a real failure (the safe direction). -Names: what the hold is about
        (the silent tables), kept for the stored HoldNames, the uplink item's MissingName and the Admin's acceptance.
        Kept in -Store (report -> @{ Kind; Whys; Names }). Returns nothing. #>
@@ -446,16 +446,77 @@ function Get-RADeliberateHoldKind {
         ONLY when the report was held on purpose (-Holds, Add-RADeliberateHold) AND nothing else is wrong with it: every
         failure the run recorded for it (-Failures @{ Report; Why }) is one of those holds, the row-count guard did not flag
         it (-Flagged), no query slice of it was lost (-BucketLoss, 'report :: ...'), and it was not held back (#877, -HeldBack).
+        #1323: a report held for 'unreadable-slices' (Add-RAUnreadableSliceHolds) is held BECAUSE slices of it were lost --
+        for that kind alone the lost slices are the hold, not something else wrong with it.
     #>
     param([Parameter(Mandatory)][string]$Report, [hashtable]$Holds = @{}, [AllowEmptyCollection()][object[]]$Failures = @(),
           [AllowEmptyCollection()][string[]]$Flagged = @(), [AllowEmptyCollection()][string[]]$BucketLoss = @(), [AllowEmptyCollection()][string[]]$HeldBack = @())
     if (-not $Holds.ContainsKey($Report)) { return '' }
     if (@($Flagged) -contains $Report -or @($HeldBack) -contains $Report) { return '' }
-    if (@($BucketLoss | Where-Object { $_ -and ((([string]$_) -split ' :: ', 2)[0]) -eq $Report }).Count) { return '' }
+    if ([string]$Holds[$Report].Kind -ne 'unreadable-slices' -and @($BucketLoss | Where-Object { $_ -and ((([string]$_) -split ' :: ', 2)[0]) -eq $Report }).Count) { return '' }
     $mine = @($Failures | Where-Object { $_ -and [string]$_.Report -eq $Report } | ForEach-Object { [string]$_.Why })
     if (-not $mine.Count) { return '' }
     foreach ($w in $mine) { if (-not $Holds[$Report].Whys.Contains($w)) { return '' } }
     [string]$Holds[$Report].Kind
+}
+
+# #1323: the lead of the verdict a report gets when query slices of it could not be read (Get-RALostSliceVerdict, recorded
+# by Add-RAReportFailure as 'not complete: <reason>'). PURE. A test holds the two together.
+function Test-RALostSliceWhy {
+    param([AllowNull()][AllowEmptyString()][string]$Why)
+    [bool]("$Why" -match '^not complete: \d+ query slice\(s\) of the report could not be read \(')
+}
+
+function Test-RALostSlicePlatform {
+    <#
+        PURE. #1323 review (owner rule: a query defect fails on attempt 1 and says the query must be fixed -- it is never held
+        quietly). Is ONE lost-slice reason (Add-RABucketLoss, the text after 'report :: ') a PLATFORM failure -- the source
+        did not answer in time or in size (a timeout, a 5xx, a 429 / throttling, a slice too large or too slow at the finest
+        split, the worker's memory, the recovery budget spent)? A query defect (a 400 / BadRequest, "Fix syntax" / "Fix
+        semantic", a syntax / semantic error, "Failed to resolve ..."), a result SI could not convert, a short answer, or
+        anything not recognised: NO (the safe direction -- the report stays a real failure). A number in a slice name ('bucket
+        500/512') or a time ('timed out after 400 s') is never read as a status code: a 400 counts only in an HTTP shape
+        ('(400)', '400 Bad Request', 'StatusCode: 400', 'status code 400', 'BadRequest').
+    #>
+    param([AllowNull()][AllowEmptyString()][string]$Reason)
+    $t = "$Reason"
+    if (-not $t.Trim()) { return $false }
+    if ($t -match '(?i)Fix syntax errors|Fix semantic errors|SyntaxError|SemanticError|\bSEM\d{4}\b|\bSYN\d{4}\b|Failed to resolve|return types are not compatible|\(400\)|\b400 \(?Bad Request|StatusCode"?\s*[:=]\s*"?400\b|status code (?:does not indicate success: )?400\b|HTTP(?:/[\d.]+)? 400\b|BadRequest|Bad Request|conversion threw|returned \d+ of the \d+ row') { return $false }
+    [bool]($t -match '(?i)not split further|still too large or too slow|too large for this worker''s memory|recovery time budget of this report|escalation cap \d+ reached|skipped as futile|timed? ?out|timeout|(?<![/\d])\b429\b(?!/)|throttl|(?<![/\d])\b5\d\d\b(?!/)|ServiceUnavailable|Service Unavailable|Bad Gateway|Gateway Time-?out|InternalServerError|Internal Server Error|OutOfMemory|out of memory')
+}
+
+function Add-RAUnreadableSliceHolds {
+    <#
+        #1323 (owner: "a report fails alone, the job completes ... we use last known good data"). A report that is NOT
+        COMPLETE only because query slices of it could not be read is held ON PURPOSE at its last complete result, kind
+        'unreadable-slices' (THE list, data-model/hold-kinds.locked.json) -- exactly like a silent source (#900) or a short
+        role read (#899): the run may publish (sidata.CollectionHeldOnly), the report shows its last complete result and
+        nothing of it closes. Only when:
+          * it lost a slice this run (-BucketLoss 'report :: ...') and EVERY lost reason of it is a platform failure
+            (Test-RALostSlicePlatform: timeout / 5xx / 429 / the finest split exhausted) -- a query defect never is;
+          * EVERY failure the run recorded for it (-Failures @{ Report; Why }) is that lost-slice verdict
+            (Test-RALostSliceWhy) -- any other failure keeps it a real failure;
+          * it is not held for another reason already (-Store; that hold's own rule decides), not flagged by the row-count
+            guard (-Flagged), not held back (#877, -HeldBack).
+        Whether it HAS a last complete result is not known here: the database decides it (CollectionHeldOnly requires the
+        data sync's carry FROM a last complete result; without one the run stays unpublished, as before). Adds to -Store
+        (Add-RADeliberateHold); outputs the reports it held.
+    #>
+    param([Parameter(Mandatory)][hashtable]$Store, [AllowEmptyCollection()][object[]]$Failures = @(), [AllowEmptyCollection()][string[]]$BucketLoss = @(),
+          [AllowEmptyCollection()][string[]]$Flagged = @(), [AllowEmptyCollection()][string[]]$HeldBack = @())
+    $held = New-Object System.Collections.Generic.List[string]
+    $lost = @(@($BucketLoss) | Where-Object { $_ } | ForEach-Object { ((([string]$_) -split ' :: ', 2)[0]).Trim() } | Where-Object { $_ } | Select-Object -Unique)
+    foreach ($r in $lost) {
+        if ($Store.ContainsKey($r) -or @($Flagged) -contains $r -or @($HeldBack) -contains $r) { continue }
+        $whys = @(@($Failures) | Where-Object { $_ -and [string]$_.Report -eq $r } | ForEach-Object { [string]$_.Why } | Select-Object -Unique)
+        if (-not $whys.Count) { continue }
+        $why = @(@($BucketLoss) | Where-Object { $_ -and ((([string]$_) -split ' :: ', 2)[0]).Trim() -eq $r } | ForEach-Object { (([string]$_) -split ' :: ', 2)[1] })
+        if (@($why | Where-Object { -not (Test-RALostSlicePlatform $_) }).Count) { continue }
+        if (@($whys | Where-Object { -not (Test-RALostSliceWhy $_) }).Count) { continue }
+        foreach ($w in $whys) { Add-RADeliberateHold -Store $Store -Report $r -Kind 'unreadable-slices' -Why $w }
+        if ($Store.ContainsKey($r)) { $held.Add($r) }
+    }
+    $held.ToArray()   # pipeline output: none = nothing (callers wrap it in @())
 }
 
 function Split-RAReportFailures {

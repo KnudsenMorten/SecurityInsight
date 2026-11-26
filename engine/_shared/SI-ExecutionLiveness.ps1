@@ -19,7 +19,10 @@
     A DEAD RUNNER's install lock is released in the same step as its stop (Exit-SIExecutionInstallLockOf: only while that
     execution is still its holder), so the next runner takes the queue at once.
     GRACE: an execution that beat before is DEAD 15 minutes after its last beat; one that has NEVER beaten is dead only 30
-    minutes after it started (nothing runs before the image pull). An execution with neither a start time nor a beat is never
+    minutes after it started (nothing runs before the image pull). #1357: an update writes the END MARK of its run (row
+    'updater-ended', Holder = it) right before it lets its own row go -- while Azure still shows it running (its container
+    stops), it is FINISHING, not dead, for 10 minutes after the mark; after that it is judged as before (live 2026-11-25: a
+    finished update was stopped as "never reported that it was working" 27 s after its end). An execution with neither a start time nor a beat is never
     judged dead. When the lock rows cannot be read the old rule holds (everything Running counts; nothing is stopped).
     A DEAD execution is STOPPED (ARM executions/<name>/stop), said in one plain WARNING line, and raised to Invardia as the
     alert si.execution.stopped-dead; the queued work goes on in the same wake-up. A stop that fails is a WARNING and the
@@ -39,6 +42,10 @@ function Get-SIExecutionLivenessContract {
         UpdaterLock           = 'updater'
         HousekeepingLock      = 'housekeeping'
         WakeupLock            = 'wakeup'
+        # #1357: the end mark of an update's run (written at its end, before its own row is let go): the execution is
+        # FINISHING -- Azure may still show it running for a moment -- and is not judged dead for EndedGraceMinutes after it
+        UpdaterEndedLock      = 'updater-ended'
+        EndedGraceMinutes     = 10
         StopApi               = '2024-03-01'
         UpdaterHolderPrefix   = 'caj-si-updater:'
         ActionTextMax         = 500
@@ -129,7 +136,10 @@ function Get-SIExecutionLiveness {
     $since = if ($beat) { [Math]::Max(0, ($now - $beat.LastBeatUtc).TotalMinutes) } else { $null }
     $k = $Kind
     if ($k -eq 'flow' -and $beat -and $beat.LockName -in @($c.HousekeepingLock, $c.WakeupLock)) { $k = 'housekeeping' }
-    $alive = if ($beat) { $since -lt $c.BeatStaleMinutes } elseif ($null -ne $age) { $age -lt $c.NeverBeatGraceMinutes } else { $true }
+    # #1357: its freshest sign of life is the end mark of its run -- it is finishing (its container ends), alive for the
+    # short grace after the mark; past it, a still-running execution is judged by the mark like any last beat
+    $ended = [bool]($beat -and $beat.LockName -eq $c.UpdaterEndedLock)
+    $alive = if ($ended) { $since -lt $c.EndedGraceMinutes } elseif ($beat) { $since -lt $c.BeatStaleMinutes } elseif ($null -ne $age) { $age -lt $c.NeverBeatGraceMinutes } else { $true }
     [pscustomobject]@{
         Name = $name; Kind = $k; StartedUtc = $start
         AgeMin = $(if ($null -ne $age) { [int][Math]::Floor($age) } else { $null })
@@ -137,6 +147,7 @@ function Get-SIExecutionLiveness {
         MinutesSinceBeat = $(if ($null -ne $since) { [int][Math]::Floor($since) } else { $null })
         LockName = $(if ($beat) { $beat.LockName } else { '' })
         Alive = [bool]$alive
+        Ended = $ended
         PastFallback = [bool]($null -ne $age -and $age -gt ($c.FallbackHours * 60))
         Execution = $Execution
     }
@@ -195,7 +206,9 @@ function Get-SIExecutionLifeText {
     <# PURE. Its last sign of life, in plain words. #>
     param([Parameter(Mandatory)]$Dead)
     $st = if ($Dead.StartedUtc) { (' (started {0:yyyy-MM-dd HH:mm}Z)' -f ([datetime]$Dead.StartedUtc)) } else { '' }
-    $life = if ($Dead.LastBeatUtc) { ('last reported that it was working at {0:yyyy-MM-dd HH:mm}Z, {1} minutes ago' -f ([datetime]$Dead.LastBeatUtc), $Dead.MinutesSinceBeat) }
+    $isEnded = ($Dead.PSObject.Properties['Ended'] -and $Dead.Ended)
+    $life = if ($isEnded -and $Dead.LastBeatUtc) { ('reported that it had ended at {0:yyyy-MM-dd HH:mm}Z, {1} minutes ago, but still showed as running' -f ([datetime]$Dead.LastBeatUtc), $Dead.MinutesSinceBeat) }
+            elseif ($Dead.LastBeatUtc) { ('last reported that it was working at {0:yyyy-MM-dd HH:mm}Z, {1} minutes ago' -f ([datetime]$Dead.LastBeatUtc), $Dead.MinutesSinceBeat) }
             else { ('never reported that it was working, {0} minutes after it started' -f $Dead.AgeMin) }
     ('{0}{1} {2}' -f $Dead.Name, $st, $life)
 }
@@ -262,6 +275,7 @@ function ConvertTo-SIExecutionStoppedAlert {
         'updater'      { 'its last beat was on the update''s own lock' }
         'housekeeping' { 'its last beat was on the clean-up''s own lock' }
         'wakeup'       { 'its last beat was on the wake-up''s own lock' }
+        'updater-ended' { 'its run had ended (its end mark) but its container did not stop' }
         default        { 'it never beat a lock' }
     }
     $at = ('SecurityInsight stopped the {0} execution {1}: Azure still showed it running, but {2}{3} -- {4}.' -f [string]$Event.Kind, [string]$Event.Execution, $lockWords,
@@ -364,8 +378,19 @@ function Get-SIExecutionStopPath {
 function Get-SIExecutionLockSql {
     <# PURE. The T-SQL of the lock rows. Read: every row (a row LockId '-' = no lock table). Take / Beat / Release: one NAMED row
        (never 'install' -- that one belongs to the run gate and the runner). #>
-    param([Parameter(Mandatory)][ValidateSet('Read', 'Take', 'Beat', 'Release')][string]$Name)
+    param([Parameter(Mandatory)][ValidateSet('Read', 'Take', 'Beat', 'Release', 'Ended')][string]$Name)
     switch ($Name) {
+        # #1357: the END MARK of an update's run -- the one 'updater-ended' row, written by whichever update ends last (no
+        # take rule: it holds nothing back; it only says "this execution has ended its run" while its container stops)
+        'Ended' { @'
+SET NOCOUNT ON; SET XACT_ABORT ON;
+IF OBJECT_ID(N'cfg.PipelineLock') IS NULL BEGIN SELECT CAST(0 AS int) AS Held; RETURN; END
+BEGIN TRAN;
+IF NOT EXISTS (SELECT 1 FROM cfg.PipelineLock WITH (UPDLOCK, HOLDLOCK) WHERE LockId = N'updater-ended') INSERT cfg.PipelineLock (LockId) VALUES (N'updater-ended');
+UPDATE cfg.PipelineLock SET Holder = @Holder, What = @What, FlowRunId = NULL, AcquiredUtc = SYSUTCDATETIME(), HeartbeatUtc = SYSUTCDATETIME() WHERE LockId = N'updater-ended';
+COMMIT;
+SELECT CAST(1 AS int) AS Held;
+'@ }
         'Read' { "SET NOCOUNT ON; IF OBJECT_ID(N'cfg.PipelineLock') IS NULL BEGIN SELECT CAST(N'-' AS nvarchar(32)) AS LockId, CAST(NULL AS nvarchar(128)) AS Holder, CAST(NULL AS datetime2) AS HeartbeatUtc; RETURN; END SELECT LockId, Holder, HeartbeatUtc FROM cfg.PipelineLock WHERE Holder IS NOT NULL;" }
         'Take' { @'
 SET NOCOUNT ON; SET XACT_ABORT ON;
@@ -433,7 +458,7 @@ function Read-SIExecutionLocks {
         return [pscustomobject]@{ Known = $true; Rows = $out.ToArray() }
     }
     $c = Get-SIExecutionLivenessContract
-    $docs = @(foreach ($n in @($c.InstallLock, $c.UpdaterLock, $c.HousekeepingLock, $c.WakeupLock)) { Read-SIExecLiveDoc -Store $Store -Lock $n })
+    $docs = @(foreach ($n in @($c.InstallLock, $c.UpdaterLock, $c.HousekeepingLock, $c.WakeupLock, $c.UpdaterEndedLock)) { Read-SIExecLiveDoc -Store $Store -Lock $n })
     [pscustomobject]@{ Known = $true; Rows = @($docs | Where-Object { $_ -and $_.Holder }) }
 }
 
@@ -470,6 +495,23 @@ function Update-SIExecutionLockBeat {
         if (-not $cur -or $cur.Holder -ne $Holder) { return $false }
         $now = ([datetime](& $Store.Now)).ToUniversalTime()
         $Store.Docs.Write((Get-SIExecLiveDocName $Lock), (ConvertTo-Json -Compress -InputObject ([ordered]@{ Holder = $Holder; What = $What; HeartbeatUtc = $now.ToString('o', [Globalization.CultureInfo]::InvariantCulture) })))
+        return $true
+    } catch { return $false }
+}
+
+function Set-SIExecutionLockEnded {
+    <# #1357: writes the END MARK of -Holder's run (the 'updater-ended' row / document), right before its own row is let go:
+       while its container stops, the rule judges it finishing, not dead. Never throws; $true when written. #>
+    param($Store, [string]$Holder, [string]$What = 'an update of SecurityInsight: ended')
+    if (-not $Store -or -not "$Holder".Trim()) { return $false }
+    $lock = (Get-SIExecutionLivenessContract).UpdaterEndedLock
+    try {
+        if ($Store.Kind -eq 'sql') {
+            $r = ConvertTo-SIExecLiveRows (& $Store.Invoke (Get-SIExecutionLockSql 'Ended') @{ Holder = $Holder; What = $What } 'reader')
+            return [bool]($r.Count -and [int](Get-SIExecLiveField $r[0] 'Held') -gt 0)
+        }
+        $now = ([datetime](& $Store.Now)).ToUniversalTime()
+        $Store.Docs.Write((Get-SIExecLiveDocName $lock), (ConvertTo-Json -Compress -InputObject ([ordered]@{ Holder = $Holder; What = $What; HeartbeatUtc = $now.ToString('o', [Globalization.CultureInfo]::InvariantCulture) })))
         return $true
     } catch { return $false }
 }

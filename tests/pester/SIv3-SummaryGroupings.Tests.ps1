@@ -133,6 +133,24 @@ Describe '#812 tokens and bands: the named views Risk rating / MITRE ATT&CK / Co
         @(ConvertTo-SISummaryGroupingTokens -Field $t -Value '').Count | Should -Be 0
         @(ConvertTo-SISummaryGroupingTokens -Field $t -Value $null).Count | Should -Be 0
         @(ConvertTo-SISummaryGroupingTokens -Field $script:Plan.Fields['complianceTag'] -Value 'CIS 1.1, extended; NIST') | Should -Be @('CIS 1.1, extended', 'NIST')
+        # #1358 one spelling, whatever the order: the ordinal-first (the SQL's MIN under a binary collation)
+        @(ConvertTo-SISummaryGroupingTokens -Field $t -Value 'persistence, Persistence') | Should -BeExactly @('Persistence')
+    }
+    It '#1358 A KEY SPELLED TWO WAYS IS ONE GROUP STORED UNDER ONE SPELLING, whatever order the findings come in (the row path; the SQL: MIN under a binary collation)' {
+        $mk = { param($id, $cat) [pscustomobject]@{ SI_AssetId = "a$id"; AssetName = "A$id"; ConfigurationId = 'r1'; ConfigurationName = 'R1'; CriticalityTier = '1'; SecuritySeverity = 'High'; SecurityDomain = 'Identity'; Category = $cat; Subcategory = 'x'; RiskRating = 'High'; SI_DepartmentId = '0'; ReportName = 'Rep'; RiskScoreTotal = 1 } }
+        $a = @(& $mk 1 'user'; & $mk 2 'User'; & $mk 3 'user')
+        $b = @(& $mk 3 'user'; & $mk 1 'user'; & $mk 2 'User')
+        foreach ($rows in @(, $a) + @(, $b)) {
+            $g = @(Invoke-SISummaryGrouping -Rows $rows -Grouping 'domain-category' | Where-Object { -not $_.Counted })
+            $g.Count | Should -Be 1
+            $g[0].Key2 | Should -BeExactly 'User'
+            $g[0].Findings | Should -Be 3
+        }
+        $sql = Invoke-SISummaryGrouping -AsSql -Grouping 'domain-category'
+        $sql | Should -Match ([regex]::Escape("SELECT N'domain-category', v.Counted, MIN(f.x_domain COLLATE Latin1_General_100_BIN2), MIN(f.x_category COLLATE Latin1_General_100_BIN2), N''"))
+        $sql | Should -Match 'GROUP BY v\.Counted, f\.x_domain, f\.x_category;' -Because 'the grouping itself is unchanged: ignoring case, as the database groups'
+        Get-SISummaryGroupingKeySql -Expr "N''" -Field $script:Plan.Fields['domain'] | Should -Be "N''"
+        Get-SISummaryGroupingKeySql -Expr 'f.x_tierNumber' -Field $script:Plan.Fields['tierNumber'] | Should -Be 'f.x_tierNumber'
     }
     It 'a finding counts once under each of its tokens; no token = not in the grouping; the counted variant leaves the exempted out' {
         $ia = Pick $script:TokRes 'mitre-tactic' 'Initial Access'
@@ -157,8 +175,8 @@ Describe '#812 tokens and bands: the named views Risk rating / MITRE ATT&CK / Co
         $sql = Invoke-SISummaryGrouping -AsSql
         $sql | Should -Match ([regex]::Escape("REPLACE(ISNULL(CONVERT(nvarchar(4000), f.MitreTactics), N''), N',', N';')"))
         $sql | Should -Match ([regex]::Escape("ISNULL(CONVERT(nvarchar(4000), f.ComplianceTags), N'')"))
-        @([regex]::Matches($sql, 'CROSS APPLY \(SELECT DISTINCT LEFT\(LTRIM\(RTRIM\(ts\.\[value\]\)\), 400\) AS V FROM STRING_SPLIT\(f\.x_')).Count | Should -Be 3
-        $sql | Should -Match "SELECT N'mitre-tactic', v\.Counted, tk\.V, N'', N''"
+        @([regex]::Matches($sql, 'CROSS APPLY \(SELECT MIN\(t\.V COLLATE Latin1_General_100_BIN2\) COLLATE DATABASE_DEFAULT AS V FROM \(SELECT LEFT\(LTRIM\(RTRIM\(ts\.\[value\]\)\), 400\) AS V FROM STRING_SPLIT\(f\.x_')).Count | Should -Be 3
+        $sql | Should -Match "SELECT N'mitre-tactic', v\.Counted, MIN\(tk\.V COLLATE Latin1_General_100_BIN2\), N'', N''"
         $sql | Should -Match 'GROUP BY v\.Counted, tk\.V;'
         $sql | Should -Match "x_mitreTactic nvarchar\(4000\) COLLATE DATABASE_DEFAULT NOT NULL"
         $sql | Should -Match "N';recommendation-tier;recommendation;asset;.*;mitre-tactic;mitre-technique;compliance-control;cvss-band;'"

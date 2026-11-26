@@ -1,0 +1,20 @@
+@model SI.Management.Web.RiskExec.ProtectionScoreInfo
+@* #1360 (owner 2026-11-25: "can you include formula for protection score. people ask how it is calc. add to gui" -- "Info box on
+   score"; #1361: "show formula in gui so customers see how they impact it"): the (i) beside a Protection Score value. A
+   <details> like the settings' (i) (.set-info): a click, Enter or Space opens it, no script; beside a tile it sits OUTSIDE the
+   tile's link (a link may not hold a control), in the tile's .ps-host. The text: ProtectionScoreInfo, with the install's values. *@
+<details class="ps-info@(Model.Inline ? " inline" : "")" data-ps-info>
+    <summary title="@Model.Title"><span aria-hidden="true">i</span><span class="sr-only">@Model.Title</span></summary>
+    <div class="ps-info-pop">
+        <p class="ps-info-head" data-ps-headline><strong>@Model.Headline</strong></p>
+        <p class="ps-info-title"><strong>@Model.Title</strong></p>
+        <ul data-ps-formula>
+            @foreach (var f in Model.Formula) { <li>@f</li> }
+        </ul>
+        <ul>
+            @foreach (var b in Model.Bullets) { <li>@b</li> }
+        </ul>
+        @foreach (var p in Model.Paragraphs) { <p>@p</p> }
+        @if (Model.Note is not null) { <p class="muted" data-ps-info-note>@Model.Note</p> }
+    </div>
+</details>

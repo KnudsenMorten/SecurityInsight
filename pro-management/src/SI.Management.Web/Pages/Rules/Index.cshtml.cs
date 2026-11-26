@@ -28,6 +28,35 @@ public sealed class IndexModel : PageModel
         }
     }
 
+    /// The section of the rules that use no condition kind at all (a rule whose text holds no 'kind:').
+    public const string NoKind = "(no condition kind)";
+
+    public sealed record KindGroup(string Kind, IReadOnlyList<RuleEntry> Rules);
+
+    /// <summary>
+    /// #1351 (owner 2026-11-24: "a collapsed sorting per KIND (grouped)" / "i said the kind method"): the rules table in one
+    /// section per condition kind -- the values of the Condition kinds column. A rule with several kinds is under each of
+    /// them; a rule with none under <see cref="NoKind"/> (last). The sections in kind order, the rules in each in the
+    /// catalog's order (by rule, as the table was before). PURE: built from the catalog the page already read.
+    /// </summary>
+    public static IReadOnlyList<KindGroup> ByKind(IEnumerable<RuleEntry> rules)
+    {
+        var groups = new SortedDictionary<string, List<RuleEntry>>(StringComparer.OrdinalIgnoreCase);
+        var none = new List<RuleEntry>();
+        foreach (var r in rules)
+        {
+            if (r.Summary.Kinds.Count == 0) { none.Add(r); continue; }
+            foreach (var k in r.Summary.Kinds.Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                if (!groups.TryGetValue(k, out var list)) groups[k] = list = new List<RuleEntry>();
+                list.Add(r);
+            }
+        }
+        var outList = groups.Select(g => new KindGroup(g.Key, g.Value)).ToList();
+        if (none.Count > 0) outList.Add(new KindGroup(NoKind, none));
+        return outList;
+    }
+
     public static string OriginLabel(RuleOrigin o) => o switch
     {
         RuleOrigin.Vendor => "vendor",

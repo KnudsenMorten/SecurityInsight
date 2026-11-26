@@ -45,9 +45,10 @@
         sql-identity         the in-network SQL identity id-si-sql (user-assigned) and its membership of the database
                              server's admin group, read back from the member's side. No job carries it: only the one-time
                              job of setup\Invoke-SISupportSqlAccessJob.ps1 does, while it runs (PIM: id-pim-sql-<token>)
-        support-sql          the Invardia Support app's own database user (db_owner) in every database on the server and
-                             its membership of the admin group -- made NOW, while the database still has its public
-                             endpoint, and read back (framework 4.1b). Never removed by anything here.
+        support-sql          the Invardia Support app's own database user in the READ-ONLY role si_support_read in every
+                             database on the server -- made NOW, while the database still has its public endpoint, and read
+                             back. Never db_owner, never the admin group (framework SECAUDIT-1a: admin only just in time,
+                             through the signed support grant procedures). Never removed by anything here.
         public-access-off    the public endpoints of the database server and the storage account closed (Disabled), the
                              Key Vault's firewall Deny with trusted Microsoft services allowed. Only after the private
                              endpoints read back, AND only when the Support app's database access reads back (support-sql)
@@ -397,11 +398,12 @@ if (-not $ids.SqlServerId) { $plan['support-sql'] = @{ Action = 'skip'; Reason =
 elseif (-not $SupportAppId) { $plan['support-sql'] = @{ Action = 'skip'; Reason = 'no Support app is named (-SupportAppId; the Support session names none)' } }
 elseif (-not $dbNames.Count) { $plan['support-sql'] = @{ Action = 'skip'; Reason = 'no database was found on the server' } }
 else {
-    $supportRows = @(Invoke-SISupportAppDatabaseAccess -Sql $sqlScalarRead -Databases $dbNames -ClientId $SupportAppId -UserName $SupportDbUserName)
+    # #1374 SECAUDIT-1a: the Support app's own READ-ONLY user (si_support_read) only -- never db_owner, never the admin group
+    $supportRows = @(Invoke-SISupportAppReadOnlyAccess -Sql $sqlScalarRead -Databases $dbNames -ClientId $SupportAppId -UserName $SupportDbUserName)
     $unread = @($supportRows | Where-Object { $_.State -eq 'unchecked' })
-    $plan['support-sql'] = if (-not @($supportRows | Where-Object { $_.State -ne 'present' }).Count) { @{ Action = 'none'; Reason = ('the Support app has its own database user with db_owner in {0}' -f ($dbNames -join ', ')) } }
-        elseif ($unread.Count -and (Test-SIPublicAccessClosed -Kind 'sql' -Resource $shape.SqlServer)) { @{ Action = 'skip'; Reason = 'the database is private already -- the Support app''s database user is given FROM INSIDE: setup\the support SQL access job' } }
-        else { @{ Action = 'change'; Reason = ('the Support app''s own database user with db_owner made in {0} and its membership of the admin group, while the public endpoint is still there (read back)' -f ((@($supportRows | Where-Object { $_.State -ne 'present' } | ForEach-Object { $_.Database })) -join ', ')) } }
+    $plan['support-sql'] = if (-not @($supportRows | Where-Object { $_.State -ne 'present' }).Count) { @{ Action = 'none'; Reason = ('the Support app has its own read-only database user (si_support_read) in {0}' -f ($dbNames -join ', ')) } }
+        elseif ($unread.Count -and (Test-SIPublicAccessClosed -Kind 'sql' -Resource $shape.SqlServer)) { @{ Action = 'skip'; Reason = 'the database is private already -- the Support app''s read-only database user is given FROM INSIDE: setup\the support SQL access job' } }
+        else { @{ Action = 'change'; Reason = ('the Support app''s own read-only database user (si_support_read; no db_owner, no admin group -- admin only just in time) made in {0}, while the public endpoint is still there (read back)' -f ((@($supportRows | Where-Object { $_.State -ne 'present' } | ForEach-Object { $_.Database })) -join ', ')) } }
 }
 $pools = @(); if ($registry) { $pools = @(Get-SIPnArmList -Arm $A -Path ('{0}/agentPools?api-version={1}' -f $ids.RegistryId, $script:SIPnAcrTasksApi)) }
 $poolIn = @($pools | Where-Object { Test-SIAcrAgentPoolInNetwork -Pool $_ -VnetId $tgt.VnetId })
@@ -594,18 +596,18 @@ foreach ($k in $want) {
                 if ($x.Created) { $bf['created'] = $x.Id; & $save }
                 $lines.Add($x.Line); if (-not $x.Ok) { throw ('the in-network SQL identity {0} is not ready' -f $names.SqlIdentity) }
                 $was = $false; try { $was = Test-SISupportAppGroupMember -Graph $seams.Graph -GroupId $adminGroupId -ServicePrincipalId $x.PrincipalId } catch { $was = $false }
-                $m = Set-SISupportAppGroupMember -Graph $seams.Graph -GroupId $adminGroupId -ServicePrincipalId $x.PrincipalId -Apply -Sleep $Sleep
+                $m = Set-SISqlAdminGroupMember -Graph $seams.Graph -GroupId $adminGroupId -ServicePrincipalId $x.PrincipalId -Apply -Sleep $Sleep
                 if ($m.State -eq 'added' -or ($m.State -eq 'unchecked' -and -not $was)) { $bf['memberAdded'] = $x.PrincipalId; & $save }
                 $lines.Add(('{0}, the admin group: {1}' -f $names.SqlIdentity, $m.Detail)); if ($m.State -notin 'present', 'added') { $okAll = $false }
             }
             'support-sql' {
-                # framework 4.1b, made while the public endpoint is still there: its own user with db_owner in every
-                # database, and its membership of the admin group -- each read back; NOTHING is ever removed
+                # framework SECAUDIT-1a (#1374), made while the public endpoint is still there: its own user in the READ-ONLY
+                # role si_support_read in every database, read back -- NEVER db_owner, NEVER the admin group (admin comes only
+                # just in time, through the signed support grant procedures). Nothing is removed here.
                 $sp = & $seams.Graph 'GET' ("https://graph.microsoft.com/v1.0/servicePrincipals?`$filter=appId eq '{0}'&`$select=id" -f $SupportAppId) $null
                 $spId = [string](Get-SIPnProp @(Get-SIPnProp $sp @('value') | Where-Object { $_ })[0] @('id'))
                 if (-not $spId) { throw ('the Support app {0} is not in this tenant' -f $SupportAppId) }
-                if ($adminGroupId) { $m = Set-SISupportAppGroupMember -Graph $seams.Graph -GroupId $adminGroupId -ServicePrincipalId $spId -Apply -Sleep $Sleep; $lines.Add(('the Support app, the admin group: {0}' -f $m.Detail)); if ($m.State -notin 'present', 'added') { $okAll = $false } }
-                foreach ($row in @(Invoke-SISupportAppDatabaseAccess -Sql $sqlScalar -Databases $dbNames -ClientId $SupportAppId -UserName $SupportDbUserName -Apply)) {
+                foreach ($row in @(Invoke-SISupportAppReadOnlyAccess -Sql $sqlScalar -Databases $dbNames -ClientId $SupportAppId -UserName $SupportDbUserName -Apply)) {
                     $lines.Add(('{0}: {1}' -f $row.Database, $row.Detail)); if ($row.State -notin 'present', 'granted') { $okAll = $false }
                 }
             }
@@ -628,10 +630,10 @@ foreach ($k in $want) {
                     # ... nor before the Support app's database access reads back (after the close it is reached only from inside)
                     if ($ids.SqlServerId -and -not $WithoutSupportSqlAccess) {
                         if (-not $SupportAppId) { throw 'no Support app is named, so its database access cannot be read back -- nothing was closed. Give -SupportAppId, or -WithoutSupportSqlAccess (support then reaches the database only from inside).' }
-                        $now = @(Invoke-SISupportAppDatabaseAccess -Sql $sqlScalarRead -Databases $dbNames -ClientId $SupportAppId -UserName $SupportDbUserName)
+                        $now = @(Invoke-SISupportAppReadOnlyAccess -Sql $sqlScalarRead -Databases $dbNames -ClientId $SupportAppId -UserName $SupportDbUserName)
                         $short = @($now | Where-Object { $_.State -ne 'present' } | ForEach-Object { '{0} ({1})' -f $_.Database, $_.State })
                         if (-not $dbNames.Count -or $short.Count) { throw ('the Support app''s database access does not read back ({0}) -- nothing was closed. Run support-sql first, or -WithoutSupportSqlAccess (support then reaches the database only from inside: setup\the support SQL access job).' -f $(if ($short.Count) { $short -join ', ' } else { 'no database found' })) }
-                        $lines.Add(('the Support app''s own database user with db_owner reads back in {0}' -f ($dbNames -join ', ')))
+                        $lines.Add(('the Support app''s own read-only database user (si_support_read) reads back in {0}' -f ($dbNames -join ', ')))
                     } elseif ($WithoutSupportSqlAccess) { $lines.Add('-WithoutSupportSqlAccess: closed without reading back the Support app''s database access -- support reaches the database only from inside (setup\the support SQL access job)') }
                     # #866 (PIM's verify-inside): the names resolve to private addresses from inside -- from this machine, else a
                     # one-time job in the environment the apps run in -- or the operator confirms it. Otherwise nothing closes.

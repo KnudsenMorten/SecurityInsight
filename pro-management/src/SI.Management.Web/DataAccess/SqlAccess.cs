@@ -104,6 +104,20 @@ public sealed class AzureSqlExecutor : ISqlExecutor
                 ctx.Parameters.AddWithValue(param, c.TryGetValue(key, out var v) && v is not null ? v : DBNull.Value);
             await ctx.ExecuteNonQueryAsync(ct);
         }
+        // #1332 the readers on the finding history: a READ of the findings goes to the served view (a collection's history once
+        // every compare of its run was the same, else its stored rows) while the database serves any collection from its
+        // history; a statement that writes the findings goes exactly as written, and so does every statement while none is
+        sql = await SI.Management.Core.ProData.FindingSource.RouteAsync(sql, cn.DataSource + "|" + cn.Database, async t =>
+        {
+            await using var p = cn.CreateCommand();
+            p.CommandText = SI.Management.Core.ProData.FindingSource.ListsSql;
+            p.Transaction = tx;
+            await using var r = await p.ExecuteReaderAsync(t);
+            if (!await r.ReadAsync(t)) return SI.Management.Core.ProData.FindingSource.Lists.None;
+            var row = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+            for (var i = 0; i < r.FieldCount; i++) row[r.GetName(i)] = r.IsDBNull(i) ? null : r.GetValue(i);
+            return SI.Management.Core.ProData.FindingSource.Lists.From(row);
+        }, ct);
         await using var cmd = cn.CreateCommand();
         cmd.CommandText = sql;
         // #881 no ceiling of our own: the caller's time (Estate:QueryTimeoutSeconds for the pages; 0 = none, for work that is

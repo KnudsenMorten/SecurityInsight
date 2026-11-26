@@ -434,7 +434,8 @@ Describe 'PIM''s support path: the in-network SQL identity, the Support app''s a
         $global:SIPnTestUsers = @{}
         $script:SqlFake = { param($srv, $db, $q, $why, $ro)
             if ($q -match 'CREATE USER') { if ($ro) { throw 'a read-only call sent a statement' }; $global:SIPnTestUsers[$db] = $true }
-            , @([pscustomobject]@{ Value = $(if ($global:SIPnTestUsers[$db]) { 'invardia-support-app|1' } else { '' }) }) }
+            # #1374: the read-only form '<user>|<db_owner>|<si_support_read>' -- support-sql makes the read-only user only
+            , @([pscustomobject]@{ Value = $(if ($global:SIPnTestUsers[$db]) { if ($q -match 'si_support_read') { 'invardia-support-app|0|1' } else { 'invardia-support-app|1' } } else { '' }) }) }
         $global:SIArmStore.Writes.Clear()
         $script:Full = @{ Apply = $true; AppsSubnetPrefix = '10.20.0.0/27'; EndpointsSubnetPrefix = '10.20.0.32/28'; SupportAppId = '0a0a0a0a-1111-2222-3333-444455556666'; Sql = $script:SqlFake }
     }
@@ -456,14 +457,15 @@ Describe 'PIM''s support path: the in-network SQL identity, the Support app''s a
         ($pa.Lines -join ' ') | Should -Match 'Support app''s database access does not read back'
         (Get-SIArmStoreItem "$script:Rg/providers/Microsoft.Sql/servers/sql-si-x").properties.publicNetworkAccess | Should -Be 'Enabled'
     }
-    It 'sql-identity + support-sql, then the close: id-si-sql and the Support app members of the admin group, its own user, closed' {
+    It 'sql-identity + support-sql, then the close: id-si-sql a member of the admin group, the Support app NOT (#1374), its own read-only user, closed' {
         $a = $script:Full.Clone(); $a.Steps = @('subnets', 'registry-premium', 'private-endpoints', 'private-dns', 'sql-identity', 'support-sql', 'public-access-off')
         $r = Run $a
         @($r.Results | Where-Object { -not $_.Ok } | ForEach-Object { $_.Step + ': ' + ($_.Lines -join '; ') }) | Should -BeNullOrEmpty
         Get-SIArmStoreItem "$script:Rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-si-sql" | Should -Not -BeNullOrEmpty
         @($global:SIArmStore.Members['gid-admins']) | Should -Contain 'pid-id-si-sql'
-        @($global:SIArmStore.Members['gid-admins']) | Should -Contain 'sp-support'
+        @($global:SIArmStore.Members['gid-admins']) | Should -Not -Contain 'sp-support' -Because 'SECAUDIT-1a: the private-network move never adds the Support app to the admin group'
         $global:SIPnTestUsers['sqldb-si-pro'] | Should -BeTrue
+        (($r.Results | Where-Object { $_.Step -eq 'support-sql' }).Lines -join ' ') | Should -Match 'read-only role si_support_read'
         $global:SIPnTestUsers.ContainsKey('master') | Should -BeFalse
         (Get-SIArmStoreItem "$script:Rg/providers/Microsoft.Sql/servers/sql-si-x").properties.publicNetworkAccess | Should -Be 'Disabled'
         @((Get-SIArmStoreItem "$script:Rg/providers/Microsoft.App/jobs/caj-si-flow").identity.userAssignedIdentities.Keys) -join ' ' | Should -Not -Match 'id-si-sql' -Because 'no standing job carries the in-network SQL identity'
@@ -473,7 +475,7 @@ Describe 'PIM''s support path: the in-network SQL identity, the Support app''s a
         @(Writes) | Should -BeNullOrEmpty
         $null = Run @{ Rollback = $r.RecordPath; Apply = $true; ReopenPublicAccess = $true }
         @($global:SIArmStore.Members['gid-admins']) | Should -Not -Contain 'pid-id-si-sql'
-        @($global:SIArmStore.Members['gid-admins']) | Should -Contain 'sp-support' -Because 'framework 4.1b: never removed'
+        @($global:SIArmStore.Members['gid-admins']) | Should -Not -Contain 'sp-support' -Because 'never added (#1374)'
         Get-SIArmStoreItem "$script:Rg/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-si-sql" | Should -BeNullOrEmpty
     }
     It 'registry-public-off is REFUSED until its builds run on an agent pool in the network; then it closes' {
@@ -494,7 +496,7 @@ Describe 'PIM''s support path: the in-network SQL identity, the Support app''s a
         $i = $gi.IndexOf("'Invoke-SIPrivateNetworkSqlIdentity'"); $j = $gi.IndexOf("-Command 'Invoke-SIPrivateNetworkEndpoints'")
         $i | Should -BeGreaterThan 0
         $i | Should -BeLessThan $j
-        $gi | Should -Match 'Set-SISupportAppGroupMember -Graph \$graph -GroupId \$gid -ServicePrincipalId \(\[string\]\$mi\.Value\.PrincipalId\) -Apply'
+        $gi | Should -Match 'Set-SISqlAdminGroupMember -Graph \$graph -GroupId \$gid -ServicePrincipalId \(\[string\]\$mi\.Value\.PrincipalId\) -Apply'
     }
 }
 

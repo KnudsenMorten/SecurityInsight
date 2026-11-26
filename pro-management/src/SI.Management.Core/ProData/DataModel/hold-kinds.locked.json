@@ -4,6 +4,7 @@
   "escalateAfterDetailedRuns": 3,
   "kinds": [
     { "kind": "silent-source", "code": "si-ra-0911", "escalationCode": "si-ra-0913", "acceptEmpty": true },
-    { "kind": "role-read", "code": "si-ra-0912", "escalationCode": "si-ra-0914", "acceptEmpty": false }
+    { "kind": "role-read", "code": "si-ra-0912", "escalationCode": "si-ra-0914", "acceptEmpty": false },
+    { "kind": "unreadable-slices", "code": "si-ra-0916", "escalationCode": "si-ra-0917", "acceptEmpty": false }
   ]
 }

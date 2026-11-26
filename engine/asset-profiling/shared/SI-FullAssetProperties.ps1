@@ -192,7 +192,7 @@ function Add-SIFullSourceObject {
     param([Parameter(Mandatory)][string]$SourceSystem, [AllowNull()]$Object, [string]$AnchorColumn = '', [AllowNull()][AllowEmptyString()][string]$AnchorValue = '')
     # v3 data model (V3-DATA-MODEL part 2, P1): EVERY source object is also a part of an SI record, at every level --
     # the record capture maps it through data-model/mappings. Never throws.
-    if ($null -ne $Object -and (Get-Command -Name Add-SIRecordPartFromSource -ErrorAction SilentlyContinue)) { Add-SIRecordPartFromSource -SourceSystem $SourceSystem -Object $Object -AnchorValue $AnchorValue }
+    if ($null -ne $Object -and (Test-Path -Path 'function:Add-SIRecordPartFromSource')) { Add-SIRecordPartFromSource -SourceSystem $SourceSystem -Object $Object -AnchorValue $AnchorValue }
     if (-not (Test-SIFullAssetPropertiesOn)) { return }
     if ($null -eq $Object) { return }
     $global:SIFullAssetPropertiesState.Entries.Add([pscustomobject]@{

@@ -85,11 +85,19 @@ function Read-SIIndexBuildJobInput {
     $tab = (& $e 'SI_INDEXBUILD_TABLE').Trim(); $ix = (& $e 'SI_INDEXBUILD_INDEX').Trim()
     if (($tab -or $ix) -and -not (Test-SIIndexBuildName -Table $tab -Index $ix)) { $tab = ''; $ix = '' }
     $exec = (& $e 'CONTAINER_APP_JOB_EXECUTION_NAME').Trim()
+    $keepN = 0; if (-not [int]::TryParse((& $e 'SI_INDEXBUILD_KEEP').Trim(), [ref]$keepN) -or $keepN -lt 2) { $keepN = 2 }
     [pscustomobject]@{ Ok = $true; Reason = ''; Server = $server; Database = $db; MiClientId = $mi
                        SubscriptionId = (& $e 'SI_INDEXBUILD_SUBSCRIPTION_ID').Trim(); ResourceGroup = (& $e 'SI_INDEXBUILD_RESOURCE_GROUP').Trim()
                        UpdaterJob = $(if ((& $e 'SI_INDEXBUILD_UPDATER_JOB').Trim()) { (& $e 'SI_INDEXBUILD_UPDATER_JOB').Trim() } else { 'caj-si-updater' })
                        Execution = $exec
-                       Request = [pscustomobject]@{ Table = $tab; Index = $ix; Minutes = [Math]::Max(0, $min); Force = ((& $e 'SI_INDEXBUILD_FORCE').Trim() -match '^(?i)(1|true|yes|on)$') } }
+                       Request = [pscustomobject]@{ Table = $tab; Index = $ix; Minutes = [Math]::Max(0, $min); Force = ((& $e 'SI_INDEXBUILD_FORCE').Trim() -match '^(?i)(1|true|yes|on)$')
+                                                    # #1317: the runner's start for the collection partitions (SI_Data_RetireByPartition on) and the keep count
+                                                    Partitions = ((& $e 'SI_INDEXBUILD_PARTITIONS').Trim() -match '^(?i)(1|true|yes|on)$')
+                                                    # review item 6: a build in the GAP before a run is capped at its minutes, even a forced one
+                                                    Cap = ((& $e 'SI_INDEXBUILD_CAP').Trim() -match '^(?i)(1|true|yes|on)$')
+                                                    Keep = $keepN
+                                                    # #1316 x #1317: the runner's SI_Data_RetireByPartition (not set = ON, the default)
+                                                    PartitionSwitch = (Test-SIIndexBuildPartitionSwitch -Value $(if ((& $e 'SI_INDEXBUILD_PARTITIONSWITCH').Trim()) { (& $e 'SI_INDEXBUILD_PARTITIONSWITCH').Trim() } else { $null })) } }
 }
 
 function Get-SIIndexBuildJobHolder {
@@ -158,15 +166,21 @@ function Invoke-SIIndexBuildJob {
           Build { param($Sql, $Interrupt, $OnInterrupt) } -> seconds; throws the SQL error, or the interrupt
           Pause { param($Sql) }                    -> ALTER INDEX ... PAUSE on a second connection
           Rate { param($Table, $Seconds) }         -> the measured rate recorded
+          ColumnstoreSetting { }                   -> @{ Known; On } (#1316: Read-SIColumnstoreSetting)
+          RemoveRow { param($Table, $Index) }      -> a columnstore row removed while the setting is off
         Returns @{ ExitCode (0; 1 = failed / stopped); Outcome; Line; Index }. Every path logs exactly one outcome and the
         closing line INDEX-BUILD outcome=... -- also when the run is STOPPED from outside (the finally).
     #>
     param([Parameter(Mandatory)]$Store, [Parameter(Mandatory)][string]$Holder, $Request, [hashtable]$Seams = @{}, [scriptblock]$Log = { param($m) Write-Host $m },
           [datetime]$NowUtc = [datetime]::UtcNow)
+    # #1317: a start for the collection partitions (the runner's SI_INDEXBUILD_PARTITIONS) is its own run -- no index is built
+    if ($Request -and $Request.PSObject.Properties['Partitions'] -and [bool]$Request.Partitions) {
+        return (Invoke-SIIndexBuildPartitionRun -Store $Store -Holder $Holder -Request $Request -Seams $Seams -Log $Log -NowUtc $NowUtc)
+    }
     # ONE context, read by the plain scriptblocks below through PowerShell's dynamic scope (never GetNewClosure: a closure
     # does not see the functions dot-sourced into the caller); a distinct name, so no callee's variable hides it
     $siIxJobCtx = [pscustomobject]@{ Store = $Store; Holder = $Holder; Seams = $Seams; C = (Get-SIIndexBuildContract); Log = $Log
-                                     Outcome = ''; Line = ''; Step = 'start'; Row = $null; LockTaken = $false; Started = $false; Resumable = $false; Forced = $false }
+                                     Outcome = ''; Line = ''; Step = 'start'; Row = $null; LockTaken = $false; Started = $false; Resumable = $false; Forced = $false; Aligned = $false }
     if (-not $Request) { $Request = [pscustomobject]@{ Table = ''; Index = ''; Minutes = 0; Force = $false } }
     $say = { param([string]$m) try { $null = & $siIxJobCtx.Log ('index build: ' + $m) } catch { } }
     $seam = { param([string]$n) if ($siIxJobCtx.Seams.ContainsKey($n) -and $siIxJobCtx.Seams[$n]) { $siIxJobCtx.Seams[$n] } else { $null } }
@@ -199,6 +213,35 @@ function Invoke-SIIndexBuildJob {
         $row = Select-SIIndexBuildJobRow -Rows $rows -Table ([string]$Request.Table) -Index ([string]$Request.Index)
         if (-not $row) { & $end 'nothing' 'no index waits -- nothing to build'; return }
         $siIxJobCtx.Row = $row
+        # ---- 1b. #1316 a COLUMNSTORE index is built only while its setting (SI_Data_ColumnstoreIndexes) is on, and only one
+        # of SI's own list -- off = its waiting row is removed and nothing is built (the updater drops a built one) ----
+        if (Test-SIIndexBuildColumnstore -Statement ([string]$row.Statement)) {
+            $siIxJobCtx.Step = 'read the columnstore setting'
+            if (-not (Test-SIColumnstoreIndexName -Table ([string]$row.Table) -Index ([string]$row.Name))) {
+                $null = & $save 'failed' 'a columnstore index that is not one of SecurityInsight''s own -- never built'
+                & $end 'failed' ('WARNING: {0} on {1} is a columnstore index that is not one of SecurityInsight''s own -- nothing built' -f $row.Name, $row.Table); return
+            }
+            $cs = & $seam 'ColumnstoreSetting'
+            $set = if ($cs) { & $cs } else { Read-SIColumnstoreSetting -Invoke $Store.Invoke }
+            if (-not $set -or -not $set.Known) { & $end 'not-now' ('{0} on {1}: the columnstore setting could not be read -- nothing built; the next idle window looks again' -f $row.Name, $row.Table); return }
+            if (-not $set.On) {
+                $rm = & $seam 'RemoveRow'
+                try { if ($rm) { $null = & $rm $row.Table $row.Name } else { $null = & $Store.Invoke (Get-SIColumnstoreRemoveRowSql) ([ordered]@{ T = [string]$row.Table; I = [string]$row.Name }) 'nonquery' } } catch { }
+                & $end 'nothing' ('{0} on {1}: the columnstore setting is off -- its waiting row is removed, nothing built' -f $row.Name, $row.Table); return
+            }
+            # #1316 x #1317 (SI-IndexBuild.ps1 "COLUMNSTORE x PARTITIONS"): while the table's move onto the collection
+            # partitions is pending the index waits; once the table is on them it is built ALIGNED
+            $siIxJobCtx.Step = 'read the collection partitions'
+            $pss = & $seam 'PartitionState'
+            $pst = if ($pss) { & $pss } else { Read-SIColumnstorePartitionState -Invoke $Store.Invoke -Table ([string]$row.Table) }
+            $psw = if ($Request.PSObject.Properties['PartitionSwitch'] -and $null -ne $Request.PartitionSwitch) { [bool]$Request.PartitionSwitch } else { Get-SIColumnstorePartitionSwitch }
+            $hold = Get-SIColumnstorePartitionHold -Index $row -SwitchOn $psw -State $pst
+            if ($hold.Hold) {
+                if ([string]$row.State -ne 'waiting') { $null = & $save 'waiting' $hold.Why }
+                & $end 'waiting' ('{0} on {1} {2}' -f $row.Name, $row.Table, $hold.Why); return
+            }
+            $siIxJobCtx.Aligned = [bool]$hold.Aligned
+        }
         # ---- 2. THE UPDATE GOES FIRST: before anything is taken ----
         $siIxJobCtx.Step = 'look for an update'
         $u = ''
@@ -224,7 +267,7 @@ function Invoke-SIIndexBuildJob {
         $now0 = & $op $row.Table $row.Name
         if ($now0 -and [string]$now0.State -eq 'RUNNING') { & $end 'not-now' ('{0} on {1} is being built elsewhere ({2}%) -- nothing started' -f $row.Name, $row.Table, $now0.Percent); return }
         $minutes = if ([int]$Request.Minutes -gt 0) { [int]$Request.Minutes } else { 1440 }
-        $run = Get-SIIndexBuildRunSql -Row $row -ResumableState $(if ($now0) { [string]$now0.State } else { '' }) -Minutes $minutes
+        $run = Get-SIIndexBuildRunSql -Row $row -ResumableState $(if ($now0) { [string]$now0.State } else { '' }) -Minutes $minutes -OnPartitionScheme:([bool]$siIxJobCtx.Aligned)
         if (-not $run.Sql) {
             $null = & $save 'failed' 'its stored statement is not a CREATE INDEX this job builds -- the next update records it again'
             & $end 'failed' ('WARNING: {0} on {1}: its stored statement is not a CREATE INDEX this job builds -- nothing built' -f $row.Name, $row.Table); return
@@ -232,7 +275,10 @@ function Invoke-SIIndexBuildJob {
         $siIxJobCtx.Resumable = [bool]$run.Resumable
         $since = if ($row.SinceUtc) { ([datetime]$row.SinceUtc).ToUniversalTime() } else { $NowUtc.ToUniversalTime() }
         $force = [bool]$Request.Force -or ((-not $row.ForcedUtc) -and (($NowUtc.ToUniversalTime() - $since).TotalDays -ge $siIxJobCtx.C.WaitDays))
-        if (-not $run.Resumable) { $siIxJobCtx.Forced = $force }
+        # a capped build (the gap before a run) never uses up the one-time forced build: stopped at its limit, it stays a
+        # candidate for an idle window, where it may take as long as it needs
+        $capped = [bool]($Request.PSObject.Properties['Cap'] -and $Request.Cap -and [int]$Request.Minutes -gt 0)
+        if (-not $run.Resumable -and -not $capped) { $siIxJobCtx.Forced = $force }
         $est = if ($row.EstMinutes) { 'about ' + (Format-SIIndexDuration ([int]$row.EstMinutes)) } else { 'its time is not known' }
         if (-not $run.Resumable -and -not $force -and [int]$Request.Minutes -gt 0 -and $row.EstMinutes -and [int]$row.EstMinutes -gt [int]$Request.Minutes) {
             & $end 'not-now' ('{0} on {1}: {2}, more than the {3} before the next run -- it waits for a longer window' -f $row.Name, $row.Table, $est, (Format-SIIndexDuration ([int]$Request.Minutes))); return
@@ -247,6 +293,8 @@ function Invoke-SIIndexBuildJob {
         $interrupt = {
             param($Minutes)
             $why = ''
+            # review item 6: a build in the gap before a run stops at its limit (a resumable one pauses, any other is cancelled)
+            if ($capped -and [double]$Minutes -ge [double]$Request.Minutes) { return ('the gap''s limit of {0} before the run is reached' -f (Format-SIIndexDuration ([int]$Request.Minutes))) }
             try { $why = [string](& $updateFirst) } catch { $why = '' }
             if (-not "$why".Trim()) {
                 $b = & $seam 'Beat'
@@ -293,7 +341,7 @@ function Invoke-SIIndexBuildJob {
             & $end 'paused' ('{0} on {1}: {2} -- it resumes in the next idle window' -f $row.Name, $row.Table, $why); return
         }
         if ($stopWhy) {
-            $why = 'stopped for an update ({0}): a filtered index cannot pause, so it was cancelled -- it is built again in the next idle window' -f $stopWhy
+            $why = 'stopped for an update ({0}): {1} cannot pause, so it was cancelled -- it is built again in the next idle window' -f $stopWhy, $(if (Test-SIIndexBuildColumnstore -Statement ([string]$row.Statement)) { 'a columnstore index' } else { 'a filtered index' })
             $null = & $save 'waiting' $why
             & $end 'waiting' ('{0} on {1}: {2}' -f $row.Name, $row.Table, $why); return
         }
@@ -326,6 +374,88 @@ function Invoke-SIIndexBuildJob {
     }
     [pscustomobject]@{ ExitCode = (& $code $siIxJobCtx.Outcome); Outcome = $siIxJobCtx.Outcome; Line = $siIxJobCtx.Line
                        Index = $(if ($siIxJobCtx.Row) { $siIxJobCtx.Row.Name } else { '' }) }
+}
+
+function Invoke-SIIndexBuildPartitionRun {
+    <#
+        #1317 ONE run of the job for THE COLLECTION PARTITIONS (engine\pro-settings\SI-ProPartitionMove.ps1
+        Invoke-SIPartitionHousekeeping): started by the pipeline runner's idle wake-up only while SI_Data_RetireByPartition is
+        on (SI_INDEXBUILD_PARTITIONS=1, the window's minutes, the keep count). The same rules as an index build: THE UPDATE
+        GOES FIRST (asked before anything and every CheckSeconds while it works -- an update waiting or running, or the
+        install's lock taken by the updater, stops it at the next range), the install's lock held while it works (a pipeline
+        run waits; the window ends LeadMinutes before the next run), one outcome line whatever ends it:
+            INDEX-BUILD outcome=<built|paused|nothing|not-now|failed|stopped> index=collection-partitions
+        built = everything that waited is done; paused = it goes on in the next idle window; nothing = nothing waited.
+        -Seams as Invoke-SIIndexBuildJob's (UpdateFirst, OtherRunning, Gate, Beat, ExitGate) plus
+          Partitions { param($DeadlineUtc, $ShouldStop, $Keep) } -> Invoke-SIPartitionHousekeeping's result (tests); AskSeconds (int)
+        Returns @{ ExitCode; Outcome; Line; Index }.
+    #>
+    param([Parameter(Mandatory)]$Store, [Parameter(Mandatory)][string]$Holder, $Request, [hashtable]$Seams = @{}, [scriptblock]$Log = { param($m) Write-Host $m },
+          [datetime]$NowUtc = [datetime]::UtcNow)
+    $siPtCtx = [pscustomobject]@{ Store = $Store; Holder = $Holder; Seams = $Seams; C = (Get-SIIndexBuildContract); Log = $Log
+                                  Outcome = ''; Line = ''; Step = 'start'; LockTaken = $false; LastAsk = [datetime]::MinValue; LastWhy = ''; AskEvery = 15 }
+    # how often the update / the lock is read while it works: CheckSeconds (a test seam AskSeconds may shorten it)
+    $siPtCtx.AskEvery = [Math]::Max(1, $(if ($Seams.ContainsKey('AskSeconds') -and $Seams['AskSeconds']) { [int]$Seams['AskSeconds'] } else { [int]$siPtCtx.C.CheckSeconds }))
+    $say = { param([string]$m) try { $null = & $siPtCtx.Log ('index build: ' + $m) } catch { } }
+    $seam = { param([string]$n) if ($siPtCtx.Seams.ContainsKey($n) -and $siPtCtx.Seams[$n]) { $siPtCtx.Seams[$n] } else { $null } }
+    $end = { param([string]$Outcome, [string]$Line) $siPtCtx.Outcome = $Outcome; $siPtCtx.Line = $Line; & $say $Line }
+    $updateFirst = { $u = & $seam 'UpdateFirst'; if (-not $u) { return 'whether an update waits is not known to this run' }; [string](& $u) }
+    try { $null = & {
+        $siPtCtx.Step = 'look for an update'
+        $u = ''; try { $u = & $updateFirst } catch { $u = ('whether an update waits could not be read ({0})' -f $_.Exception.Message) }
+        if ("$u".Trim()) { & $end 'not-now' ('not now -- {0}; the update goes first, the collection partitions wait for the next idle window' -f $u); return }
+        $siPtCtx.Step = 'look for another index build'
+        $other = ''; try { $o = & $seam 'OtherRunning'; if ($o) { $other = [string](& $o) } } catch { $other = '' }
+        if ("$other".Trim()) { & $end 'not-now' ('not now -- another index build runs ({0})' -f $other); return }
+        $siPtCtx.Step = 'take the install''s lock'
+        $gs = & $seam 'Gate'
+        $g = if ($gs) { & $gs $Holder } else { Invoke-SIUpdaterRunGate -Store $Store -Holder $Holder -What 'the collection partitions of SecurityInsight' -BusyRetries 0 -TakeFrom '' }
+        if (-not $g -or -not $g.Go) { & $end 'not-now' ('not now -- {0}; the pipeline runner starts it again at its next idle wake-up' -f $(if ($g) { $g.Reason } else { 'the install''s lock could not be asked for' })); return }
+        $siPtCtx.LockTaken = [bool]$g.LockTaken
+        $minutes = if ([int]$Request.Minutes -gt 0) { [int]$Request.Minutes } else { 60 }
+        $deadline = $NowUtc.ToUniversalTime().AddMinutes($minutes)
+        # asked before every range; the update / the lock read at most every CheckSeconds (the answer kept in between)
+        $shouldStop = {
+            if (([datetime]::UtcNow - $siPtCtx.LastAsk).TotalSeconds -lt $siPtCtx.AskEvery) { return $siPtCtx.LastWhy }
+            $siPtCtx.LastAsk = [datetime]::UtcNow
+            $why = ''
+            try { $why = [string](& $updateFirst) } catch { $why = '' }
+            if (-not "$why".Trim() -and $siPtCtx.LockTaken) {
+                $b = & $seam 'Beat'; $held = $true
+                try { $held = if ($b) { [bool](& $b $siPtCtx.Holder 'the collection partitions') } else { [bool](@(Get-SIIndexReaderRows (& $siPtCtx.Store.Invoke (Get-SIIndexBuildLockBeatSql) ([ordered]@{ Holder = $siPtCtx.Holder; What = 'the collection partitions of SecurityInsight' }) 'reader'))[0].N -gt 0) } } catch { $held = $true }
+                if (-not $held) { $why = 'the updater took the install''s lock' }
+            }
+            $siPtCtx.LastWhy = "$why".Trim()
+            $siPtCtx.LastWhy
+        }
+        $siPtCtx.Step = 'collection partitions'
+        & $say ('the collection partitions -- in an idle window, up to {0}' -f (Format-SIIndexDuration $minutes))
+        $ps = & $seam 'Partitions'
+        $r = if ($ps) { & $ps $deadline $shouldStop ([int]$Request.Keep) }
+             else { Invoke-SIPartitionHousekeeping -Invoke $Store.Invoke -DeadlineUtc $deadline -ShouldStop $shouldStop -Keep ([int]$Request.Keep) -Log { param($m) & $say $m } -Holder $Holder }
+        $removed = @($r.Removed).Count; $left = @($r.Left).Count
+        $sum = '{0} retired collection(s) left by their partition, {1} left to the paced removal' -f $removed, $left
+        switch ([string]$r.Status) {
+            'done'     { & $end 'built' ('the collection partitions: everything that waited is done -- ' + $sum) }
+            'progress' { & $end 'paused' ('the collection partitions: the next idle window goes on -- ' + $sum) }
+            'nothing'  { & $end 'nothing' 'the collection partitions: nothing waits' }
+            default    { & $end 'failed' ('WARNING: the collection partitions: a part did not finish -- ' + $sum + '; the paced removal goes on as before') }
+        }
+    } } catch {
+        $null = & $end 'failed' ('WARNING: the collection partitions failed at "{0}" ({1}) -- the paced removal goes on as before' -f $siPtCtx.Step, $_.Exception.Message)
+    } finally {
+        if (-not $siPtCtx.Outcome) {
+            $siPtCtx.Outcome = 'stopped'
+            $siPtCtx.Line = ('WARNING: the run ended at "{0}" without an outcome (the job was stopped) -- the next idle window goes on' -f $siPtCtx.Step)
+            $null = & $say $siPtCtx.Line
+        }
+        if ($siPtCtx.LockTaken) {
+            try { $x = & $seam 'ExitGate'; if ($x) { $null = & $x $Holder } else { $null = Exit-SIUpdaterRunGate -Store $Store -Holder $Holder } } catch { }
+            $null = & $say 'the install''s lock is released'
+        }
+        try { $null = & $siPtCtx.Log ('INDEX-BUILD outcome={0} index=collection-partitions' -f $siPtCtx.Outcome) } catch { }
+    }
+    [pscustomobject]@{ ExitCode = $(if ($siPtCtx.Outcome -in @('failed', 'stopped')) { 1 } else { 0 }); Outcome = $siPtCtx.Outcome; Line = $siPtCtx.Line; Index = 'collection-partitions' }
 }
 
 # =====================================================================================================================

@@ -6,7 +6,11 @@ using SI.Management.Web.Cis;
 namespace SI.Management.Web.Columns;
 
 /// One column a view has of its own: its key (also the layout entry), its label, and whether the view shows it out of the box.
-public sealed record ViewColumn(string Key, string Label, bool Shown = true, string? Description = null, string? Group = null);
+public sealed record ViewColumn(string Key, string Label, bool Shown = true, string? Description = null, string? Group = null)
+{
+    /// #1382: the title is words, never a raw field name (DataColumnKeys.Title).
+    public string Label { get; init; } = SI.Management.Core.ProData.DataColumnKeys.Title(Label);
+}
 
 /// What one row is tied to: its CI key (a CI id or an asset key, by <see cref="DataViewLayout.Ci"/>), its finding id, its CVE.
 public readonly record struct RowRef(string? Ci, long? Finding = null, string? Cve = null);
@@ -31,6 +35,9 @@ public sealed class DataViewLayout
     public IReadOnlySet<string>? OwnCiFields { get; init; }
     /// The shipped layout (own + extra keys, in order); null = the own columns the view shows out of the box.
     public IReadOnlyList<string>? Shipped { get; init; }
+    /// The view's column ORDER rule, applied to whichever layout is shown (shipped, tenant, own, named) -- the columns it
+    /// shows are the layout's, only their order is kept (<see cref="DataViewDefaults.TaskOrder"/>); null = the layout's order.
+    public Func<IReadOnlyList<string>, IReadOnlyList<string>>? Order { get; init; }
     public IReadOnlyList<string> Layout { get; private set; } = Array.Empty<string>();
     public string Source { get; private set; } = ColumnLayout.FromDefault;
     public bool StoreReady { get; private set; }
@@ -164,6 +171,7 @@ public sealed class DataViewLayout
             }
             catch (Exception ex) when (ex is not OperationCanceledException) { log.LogWarning(ex, "the promoted columns of {View} could not be read; the layout is shown without them", View); }
         }
+        if (Order is not null) Layout = Order(Layout);
         if (catalog is not null && await catalog is { } read) Catalog = read;
         return this;
     }

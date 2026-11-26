@@ -32,6 +32,7 @@ function Get-SIDataFindingPivotsPendingSql {
         asset merge or a repair derived the collection again; the services are derived with it). Newest first. Never retired.
     #>
     $live = ''; if (Get-Command -Name Get-SIDataLiveFilter -ErrorAction SilentlyContinue) { $live = Get-SIDataLiveFilter -Alias 'c' }
+    if (Get-Command -Name Get-SIDataBuildFilter -ErrorAction SilentlyContinue) { $live += Get-SIDataBuildFilter -Alias 'c' }   # #1226
     "SELECT c.CollectionId, c.CollectionTime FROM sidata.Collection AS c LEFT JOIN sidata.FindingPivotState AS s ON s.CollectionId = c.CollectionId WHERE c.Status = 'Complete' AND c.Kind = 'Detailed' AND c.DerivedAt IS NOT NULL AND (s.CollectionId IS NULL OR s.BuiltAt < c.DerivedAt)$live ORDER BY c.CollectionTime DESC"
 }
 

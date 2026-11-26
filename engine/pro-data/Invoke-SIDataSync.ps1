@@ -74,6 +74,9 @@ $siRoot = Split-Path -Parent (Split-Path -Parent $here)
 . (Join-Path $here '_shared\SI-DataCi.ps1')
 # what the data views show by default, prepared as columns (the finding / issue context per collection, the CI context)
 . (Join-Path $here '_shared\SI-DataViewContext.ps1')
+. (Join-Path $here '_shared\SI-DataChangedSet.ps1')
+# #1332 / #1334 the finding history model (states + membership beside the rows, checked row for row every run)
+. (Join-Path $here '_shared\SI-DataHistory.ps1')
 # #812: What changed per collection pair and the wall board's top tier-0 assets, stored per collection
 . (Join-Path $here '_shared\SI-DataChanges.ps1')
 # #812: the findings browser's order and pivot cells and the Weighted risk pivot's cube, stored per collection
@@ -85,6 +88,8 @@ $siRoot = Split-Path -Parent (Split-Path -Parent $here)
 # #1277: the remediation tasks per CI (one task per thing to do on one CI, with its own lifecycle)
 . (Join-Path $here '_shared\SI-DataRemediationTask.ps1')
 . (Join-Path $here '_shared\SI-DataFindingNarrow.ps1')
+# #1365: the duplicate check -- findings / tasks still two where the merge rules make one (a warning, never a block)
+. (Join-Path $here '_shared\SI-DataDuplicateCheck.ps1')
 . (Join-Path $here '_shared\SI-DataKeyFigures.ps1')
 # what two pages open with, written by the data sync: the column chooser's lists and the open vulnerabilities by severity and tier
 . (Join-Path $here '_shared\SI-DataPageLists.ps1')
@@ -616,6 +621,18 @@ if (-not $DryRun) {
     } catch { Write-DataWarn ("tenant    : the tenant's name was not refreshed -- {0}. The header keeps what is recorded." -f $_.Exception.Message) }
 }
 
+# ---- #1365 THE DUPLICATE CHECK (#693 (6) / (9)): after the findings per CI and the remediation tasks are written, what is
+# still TWO where the merge rules make ONE -- counted per rule with examples (sidata.DuplicateCheck), a WARN line, the
+# data-quality key numbers dup.* and a WARNING of the run (counts only). Never blocks; a failure is said and ignored.
+$global:SI_DuplicateCheckResult = $null
+try {
+    if (Get-Command -Name Invoke-SIDataDuplicateCheck -ErrorAction SilentlyContinue) {
+        $global:SI_DuplicateCheckResult = Invoke-SIDataDuplicateCheck -Invoke $invoke -DryRun:$DryRun -Log $log
+        $dupIssue = [string]$global:SI_DuplicateCheckResult.Issue
+        if ($dupIssue) { Add-SIRunIssue -Issues $runIssues -Level WARNING -Text $dupIssue }
+    }
+} catch { Write-DataWarn ("duplicates  : not checked this run -- {0}. Nothing was blocked." -f $_.Exception.Message) }
+
 # ---- #577 step 2: DATA-QUALITY WARNINGS from a three-run fingerprint -------------------------------------------------
 # The ONE point that measures the run's key numbers (assets per source, rows per Risk Analysis report, fill of the key
 # columns, CIs per tier, active / to-retire CIs, CI owner fill) -- here, because this is the last Deliver step after every
@@ -630,7 +647,7 @@ try {
     # a plain block (no closure): it sees this script's functions and $dqSmtp when Invoke-SIDataQuality calls it
     $dqSend = { param([string[]]$to, [string]$subject, [string]$html) if (-not $dqSmtp) { return $false }; $r = Send-SIMail -Settings $dqSmtp -To $to -Subject $subject -BodyHtml $html; [bool]$r.Sent }
     $global:SI_DataQualityResult = Invoke-SIDataQuality -Query $query -Invoke $invoke -SettingsInvoke $auditInvoke -Send $dqSend -RunId $runContext.RunId `
-        -LookbackDays ([int]$settings.LookbackDays) -DryRun:$DryRun -Log $log -CorrelationSuspects $global:SI_CorrelationSuspectsResult
+        -LookbackDays ([int]$settings.LookbackDays) -DryRun:$DryRun -Log $log -CorrelationSuspects $global:SI_CorrelationSuspectsResult -DuplicateCheck $global:SI_DuplicateCheckResult
     $dqLines = @($global:SI_DataQualityResult.Lines)
     if ($dqLines.Count) { $rhEnd.Message = (@([string]$rhEnd.Message) + $dqLines | Where-Object { $_ }) -join ' | ' }
     # classification incomplete (owner 2026-10-19): a WARNING of the run -- counts only -- that the telemetry carries to Invardia

@@ -124,6 +124,42 @@ $script:SISourceDiscoveryPermissions = @{
     'entra|service_principal|sp|customsecurityattributes'   = 'CustomSecAttributeAssignment.Read.All'
 }
 
+# #1379 (owner 2026-11-25: "if we control it, why dont you fill out these fields and activate them ?"): the properties
+# SecurityInsight WRITES ITSELF (the level inside Tier 0 the privilege tier classifier writes, its own install tags) are on
+# the records like any source property, but they are no new context: they ship mapped or internal
+# (data-model/si-written-properties.locked.json). Discovery keeps them as KNOWN (Baseline = 1, Everything known), never as new.
+$script:SISourceDiscoverySiWrittenPath = [System.IO.Path]::Combine((Split-Path -Parent (Split-Path -Parent $PSScriptRoot)), 'data-model', 'si-written-properties.locked.json')
+$script:SISourceDiscoverySiWritten = $null
+
+function Get-SISourceDiscoverySiWritten {
+    <# The shipped list of the properties SecurityInsight writes itself (read once). -Path (tests): another file. An unreadable file = an empty list (nothing is held back -- as before). #>
+    param([string]$Path = '')
+    if (-not $Path -and $null -ne $script:SISourceDiscoverySiWritten) { return $script:SISourceDiscoverySiWritten }
+    $p = $Path; if (-not $p) { $p = $script:SISourceDiscoverySiWrittenPath }
+    $list = @()
+    try {
+        if (Test-Path -LiteralPath $p) { $list = @(@(([System.IO.File]::ReadAllText($p) | ConvertFrom-Json).properties) | Where-Object { $_ -and $_.source -and $_.part -and $_.property }) }
+    } catch { Write-Verbose ('continuous discovery: the list of the properties SecurityInsight writes itself could not be read -- ' + $_.Exception.Message); $list = @() }
+    if (-not $Path) { $script:SISourceDiscoverySiWritten = $list }
+    return $list
+}
+
+function Test-SISourceDiscoverySiWritten {
+    <# PURE. Does SecurityInsight write this property itself (-List: Get-SISourceDiscoverySiWritten)? A trailing * on the listed property matches every property that starts with the text before it; recordTypes '*' = every record type. #>
+    param([AllowNull()][object[]]$List, [string]$Source, [string]$RecordType, [string]$Part, [string]$Property)
+    foreach ($e in @($List)) {
+        if ($null -eq $e) { continue }
+        if (-not ([string]$e.source).Equals($Source, [StringComparison]::OrdinalIgnoreCase)) { continue }
+        if (-not ([string]$e.part).Equals($Part, [StringComparison]::OrdinalIgnoreCase)) { continue }
+        $rts = @(@($e.recordTypes) | ForEach-Object { [string]$_ } | Where-Object { $_ })
+        if ($rts.Count -gt 0 -and -not ($rts -contains '*') -and -not ($rts -contains $RecordType)) { continue }
+        $pp = [string]$e.property
+        if ($pp.EndsWith('*')) { if ($Property.StartsWith($pp.Substring(0, $pp.Length - 1), [StringComparison]::OrdinalIgnoreCase)) { return $true } }
+        elseif ($Property.Equals($pp, [StringComparison]::OrdinalIgnoreCase)) { return $true }
+    }
+    return $false
+}
+
 $script:SISourceDiscoveryMaxProperty = 256
 $script:SISourceDiscoveryMaxSample = 200
 # Measure, then adapt (Add-SISourceDiscoveryObject): every object of a part is walked until the part was seen this many
@@ -457,6 +493,7 @@ function ConvertTo-SISourceDiscoveryRows {
     #>
     param([Parameter(Mandatory)]$State, [AllowNull()]$Model)
     $ix = Get-SISourceMappingIndex -Model $Model
+    $own = @(Get-SISourceDiscoverySiWritten)
     $props = New-Object System.Collections.Generic.List[object]
     foreach ($p in $State.Props.Values) {
         $mapped = @(Get-SISourceMappedFields -Index $ix -Source $p.Source -RecordType $p.RecordType -Part $p.Part -Property $p.Property)
@@ -480,6 +517,8 @@ function ConvertTo-SISourceDiscoveryRows {
             Origin          = [string]$p.Origin
             MappedFields    = $mf
             NeedsPermission = $perm
+            # #1379 a property SecurityInsight writes itself: kept as known, never as new context
+            SiOwned         = [int][bool](Test-SISourceDiscoverySiWritten -List $own -Source $p.Source -RecordType $p.RecordType -Part $p.Part -Property $p.Property)
         })
     }
     $types = New-Object System.Collections.Generic.List[object]
@@ -544,13 +583,13 @@ DECLARE @now DATETIME2(0) = CONVERT(DATETIME2(0), @at, 126);
 DECLARE @r NVARCHAR(64) = LEFT(@run, 64);
 DECLARE @p TABLE (KeyHash VARBINARY(32) PRIMARY KEY, TypeHash VARBINARY(32), Source NVARCHAR(32), RecordType NVARCHAR(64), ResourceType NVARCHAR(128), Part NVARCHAR(64),
     Property NVARCHAR(256), SourceSystem NVARCHAR(32), ValueType NVARCHAR(16), SampleValue NVARCHAR(400), Records INT, Collected BIT, Origin NVARCHAR(16),
-    MappedFields NVARCHAR(400), NeedsPermission NVARCHAR(128));
+    MappedFields NVARCHAR(400), NeedsPermission NVARCHAR(128), SiOwned BIT);
 INSERT @p SELECT CONVERT(VARBINARY(32), KeyHash, 2), MAX(CONVERT(VARBINARY(32), TypeHash, 2)), MAX(Source), MAX(RecordType), MAX(ISNULL(ResourceType, N'')), MAX(Part), MAX(Property),
     NULLIF(MAX(SourceSystem), N''), NULLIF(MAX(ValueType), N''), NULLIF(MAX(SampleValue), N''), SUM(ISNULL(Records, 0)), CAST(MAX(CAST(ISNULL(Collected, 1) AS INT)) AS BIT), MAX(Origin),
-    NULLIF(MAX(MappedFields), N''), NULLIF(MAX(NeedsPermission), N'')
+    NULLIF(MAX(MappedFields), N''), NULLIF(MAX(NeedsPermission), N''), CAST(MAX(CAST(ISNULL(SiOwned, 0) AS INT)) AS BIT)
 FROM OPENJSON(@props) WITH (KeyHash VARCHAR(64), TypeHash VARCHAR(64), Source NVARCHAR(32), RecordType NVARCHAR(64), ResourceType NVARCHAR(128), Part NVARCHAR(64),
     Property NVARCHAR(256), SourceSystem NVARCHAR(32), ValueType NVARCHAR(16), SampleValue NVARCHAR(400), Records INT, Collected BIT, Origin NVARCHAR(16),
-    MappedFields NVARCHAR(400), NeedsPermission NVARCHAR(128))
+    MappedFields NVARCHAR(400), NeedsPermission NVARCHAR(128), SiOwned BIT)
 WHERE KeyHash IS NOT NULL GROUP BY KeyHash;
 DECLARE @t TABLE (TypeHash VARBINARY(32) PRIMARY KEY, Source NVARCHAR(32), RecordType NVARCHAR(64), ResourceType NVARCHAR(128), Part NVARCHAR(64), Origin NVARCHAR(16),
     Records INT, Error NVARCHAR(400), NeedsPermission NVARCHAR(128));
@@ -573,12 +612,14 @@ WHEN MATCHED THEN UPDATE SET
     ValueType       = COALESCE(s.ValueType, t.ValueType),
     SourceSystem    = COALESCE(s.SourceSystem, t.SourceSystem),
     MappedFields    = CASE WHEN s.Collected = 1 OR s.MappedFields IS NOT NULL THEN s.MappedFields ELSE t.MappedFields END,
-    NeedsPermission = COALESCE(s.NeedsPermission, t.NeedsPermission)
+    NeedsPermission = COALESCE(s.NeedsPermission, t.NeedsPermission),
+    -- a property SecurityInsight writes itself is known, never new context (one listed as new before is moved to known)
+    Baseline        = CASE WHEN s.SiOwned = 1 THEN 1 ELSE t.Baseline END
 WHEN NOT MATCHED THEN INSERT (KeyHash, Source, RecordType, ResourceType, Part, Property, SourceSystem, ValueType, SampleValue, Records, Collected, CollectedSince, Origin,
     Baseline, MappedFields, NeedsPermission, FirstSeen, LastSeen, RunId)
     VALUES (s.KeyHash, s.Source, s.RecordType, s.ResourceType, s.Part, s.Property, s.SourceSystem, s.ValueType, s.SampleValue, s.Records, s.Collected,
         CASE WHEN s.Collected = 1 THEN @now END, s.Origin,
-        CASE WHEN EXISTS (SELECT 1 FROM sidata.SourceDiscoveryState AS d WHERE d.TypeHash = s.TypeHash AND d.FirstRunId <> @r) THEN 0 ELSE 1 END,
+        CASE WHEN s.SiOwned = 1 THEN 1 ELSE CASE WHEN EXISTS (SELECT 1 FROM sidata.SourceDiscoveryState AS d WHERE d.TypeHash = s.TypeHash AND d.FirstRunId <> @r) THEN 0 ELSE 1 END END,
         s.MappedFields, s.NeedsPermission, @now, @now, CASE WHEN s.Collected = 1 THEN @r END)
 OUTPUT $action, inserted.Baseline INTO @o;
 MERGE sidata.SourceDiscoveryState WITH (HOLDLOCK) AS t

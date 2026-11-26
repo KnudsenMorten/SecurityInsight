@@ -584,7 +584,7 @@ SELECT N'Saved' AS Outcome;
         var value = valueObj.ToJsonString();
         var why = string.IsNullOrWhiteSpace(reason) ? $"{mode} of template pack {version} accepted" : reason.Trim();
         await _sql.QueryAsync(RequestSql, new Dictionary<string, object?> { ["Value"] = value, ["By"] = by.Length > 256 ? by[..256] : by, ["Reason"] = why.Length > 400 ? why[..400] : why }, ct);
-        return new WriteResult(WriteStatus.Saved, $"the template {mode} job started ({execution}); the release is recorded when the job has written and verified it -- see Template releases");
+        return new WriteResult(WriteStatus.Saved, $"the template {mode} job {(QueuedStartJobsClient.IsRequested(execution) ? "was " + execution : "started (" + execution + ")")}; the release is recorded when the job has written and verified it -- see Template releases");
     }
 
     /// Is the release job one of this installation's jobs? null when the jobs view is not configured (nothing to say).

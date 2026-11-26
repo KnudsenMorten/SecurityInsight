@@ -82,6 +82,10 @@ if (Test-Path -LiteralPath $siHungStep) { . $siHungStep }
 . (Join-Path $PSScriptRoot '_shared/SI-UpdaterRollSteps.ps1')
 # IMAGE-PRUNE (owner 2026-11-12): after a healthy update, the install's own registry keeps only this release + the one before
 . (Join-Path $PSScriptRoot '_shared/SI-UpdaterImagePrune.ps1')
+# #1344 (owner IMAGE-30MIN-1, framework SEC-LANE-1 G5): the image check every 15 minutes (SI_UPDATER_MODE = image-check, job
+# caj-si-image-check) -- image-only releases of the ring only, applied at once; the job kept present by every run
+$siImgChk = Join-Path $PSScriptRoot '_shared/SI-UpdaterImageCheck.ps1'
+if (Test-Path -LiteralPath $siImgChk) { . $siImgChk }
 # the web app + MCP server roll (both editions have the web app)
 $siWebRoll = Join-Path $PSScriptRoot '_shared/SI-UpdaterWebApp.ps1'
 if (Test-Path -LiteralPath $siWebRoll) { . $siWebRoll }
@@ -194,6 +198,9 @@ function Invoke-SIUpdaterInstallNames {
 }
 
 function Write-UpdLog([string]$m) {
+    # #1344: an image check HOLDS its lines until it knows there is work (SI-UpdaterImageCheck.ps1 Start-SIUpdaterQuiet) --
+    # one that finds nothing writes one line only
+    if ($global:SI_UpdaterQuiet -is [System.Collections.Generic.List[string]]) { $global:SI_UpdaterQuiet.Add(("[{0:u}] {1}" -f [datetime]::UtcNow, $m)); return }
     Write-Host ("[{0:u}] {1}" -f [datetime]::UtcNow, $m)
     # #506: a log line after the step moved = the stage moved (silent when no run is tracked)
     if (Get-Command -Name Step-SIUpdateTrack -ErrorAction SilentlyContinue) { Step-SIUpdateTrack }
@@ -389,6 +396,36 @@ function Invoke-SIUpdaterKeyVaultPurgeStep {
         }
         $r
     } catch { Write-UpdLog ('WARNING: Key Vault purge protection: not checked ({0}) -- the next update tries again' -f $_.Exception.Message); $null }
+}
+
+function Invoke-SIUpdaterJobRequestsStep {
+    <#
+        #1252 (SECURE-WEB-1 part 2): the web app's buttons (Run now, Stop, schedule changes' apply, template release, mail send
+        now) put a request on the queue si-job-requests; caj-si-job-requests, started by that queue as the engine identity,
+        starts the job. On every update run (both editions, an apply-settings run and the post-roll run too): the queue, the
+        job's queue trigger, the web app's ONE right ("Storage Queue Data Message Sender" on that queue only) and -- only when
+        all three read back -- cfg.InstallState 'JobRequestQueue', the switch the web app reads (setup\_shared\
+        SI-JobRequestsUpdate.ps1, Invoke-SIJobRequestsConverge). Removes no right. NEVER throws, never fails or holds the
+        update; a refusal is one line and the next run tries again. Seams (tests): -Arm, -Lib, -Sleep. Returns the result or $null.
+    #>
+    param([hashtable]$Env = @{}, $Store, [Parameter(Mandatory)][string]$SubscriptionId, [Parameter(Mandatory)][string]$ResourceGroup,
+          [scriptblock]$Arm, [string]$Lib = '', [scriptblock]$Sleep)
+    try {
+        $file = if ($Lib) { $Lib } elseif ($siAutoRoot) { [IO.Path]::Combine($siAutoRoot, 'setup', '_shared', 'SI-JobRequestsUpdate.ps1') } else { '' }
+        if (-not $file -or -not (Test-Path -LiteralPath $file)) { return $null }
+        # dot-sourced and called HERE, in this scope (never from a .GetNewClosure() block: see Invoke-SIUpdaterSupportQueue)
+        . $file
+        if (-not $Arm) { $Arm = { param([string]$Method, [string]$Path, $Body) Invoke-SIUpdaterArm -Method $Method -Path $Path -Body $Body -AllowNotFound:($Method -eq 'GET') } }
+        $sql = $null
+        if ($Store -and $Store.Invoke) { $sql = { param($Query, $Params, $Mode) & $Store.Invoke $Query $Params $Mode | ForEach-Object { if ($_ -is [System.Collections.IDictionary]) { [pscustomobject]$_ } else { $_ } } } }
+        $web = if (Get-Command -Name Get-SIUpdaterInstallName -ErrorAction SilentlyContinue) { [string](Get-SIUpdaterInstallName -Role web -Env $Env) } else { 'ca-si-management' }
+        $a = @{ Arm = $Arm; Sql = $sql; SubscriptionId = $SubscriptionId; ResourceGroup = $ResourceGroup; WebApp = $web }
+        if ($Sleep) { $a.Sleep = $Sleep }
+        $global:SI_UpdaterStep = 'job-requests'
+        $r = Invoke-SIJobRequestsConverge @a
+        foreach ($l in @($r.Lines)) { Write-UpdLog $(if ($l.Level -eq 'warn') { 'WARNING: ' + $l.Text } else { $l.Text }) }
+        $r
+    } catch { Write-UpdLog ('WARNING: job requests: not checked ({0}) -- the web app''s buttons work as before; the next run tries again' -f $_.Exception.Message); $null }
 }
 
 function Invoke-SIUpdaterWebJobRightsStep {
@@ -758,12 +795,14 @@ function New-SIUpdaterProStore {
     $tokenFn = if ($FreshToken) { ${function:Get-SIUpdaterSqlToken} } else { $null }
     $cs = 'Server=tcp:{0},1433;Database={1};Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;' -f $Server, $Database
     $invoke = {
-        param([string]$sql, $p, [string]$mode)
+        # -TimeoutSeconds (optional, #1317): a statement time limit for the bounded work that asks for one (the collection
+        # partitions); 0 / not given = no limit, as before
+        param([string]$sql, $p, [string]$mode, [int]$TimeoutSeconds = 0)
         $cn = New-Object System.Data.SqlClient.SqlConnection($cs)
         $cn.AccessToken = if ($tokenFn) { $t = [string](& $tokenFn); if ($t) { $t } else { $token } } else { $token }
         try {
             $cn.Open()
-            $cmd = $cn.CreateCommand(); $cmd.CommandText = $sql; $cmd.CommandTimeout = 0
+            $cmd = $cn.CreateCommand(); $cmd.CommandText = $sql; $cmd.CommandTimeout = [Math]::Max(0, $TimeoutSeconds)
             if ($p) { foreach ($k in $p.Keys) { [void]$cmd.Parameters.AddWithValue('@' + $k, $(if ($null -eq $p[$k]) { [System.DBNull]::Value } else { $p[$k] })) } }
             if ($mode -eq 'reader') {
                 $rd = $cmd.ExecuteReader()
@@ -1398,6 +1437,8 @@ function Invoke-SIUpdaterCore {
     # THE ONE UPDATE CLIENT (framework PRO-COMMUNITY-SAME): Pro and Community installs both run SI-UpdaterInvardia.ps1; the
     # manifest address it asks (the install route with the install key, or the anonymous Community route) is decided inside
     # it, by the licence and the install's recorded edition -- never by which files the image carries.
+    # #1344: an image check holds its lines from the start (one line when it finds nothing)
+    if ((& $get 'SI_UPDATER_MODE') -ieq 'image-check' -and (Get-Command -Name Start-SIUpdaterQuiet -ErrorAction SilentlyContinue)) { Start-SIUpdaterQuiet }
     $hook = Join-Path $PSScriptRoot '_shared/SI-UpdaterInvardia.ps1'
     if (-not (Test-Path -LiteralPath $hook)) { throw 'this updater image carries no update client -- re-run setup/Install-SIUpdaterJob.ps1 to rebuild it.' }
     . $hook
@@ -1421,6 +1462,11 @@ function Invoke-SIUpdaterCore {
     # 2026-10-23: the second update (SI_UPDATER_MODE = second-pass, started by the update that installed the release) waits
     # for that update to end first -- two updates never change the install at once. #1262: the post-roll run (SI_UPDATER_MODE
     # = post-roll, started by an update that moved the updater onto the release's image) waits the same way.
+    # #1344 THE IMAGE CHECK (SI_UPDATER_MODE = image-check, every 15 minutes): its own short run -- BEFORE the overlap check
+    # (which may stop a dead update; the check never stops anything) and before every step of a normal update run
+    if ((& $get 'SI_UPDATER_MODE') -ieq 'image-check' -and (Get-Command -Name Invoke-SIUpdaterImageCheckRun -ErrorAction SilentlyContinue)) {
+        return (Invoke-SIUpdaterImageCheckRun -Env $Env -Store $proStore -StoreError $proStoreError -SubscriptionId $sub -ResourceGroup $rg -AcrName $acrName -Blocked $blocked)
+    }
     if ((& $get 'SI_UPDATER_MODE') -in @('second-pass', 'post-roll')) {
         $selfExec = & $get 'CONTAINER_APP_JOB_EXECUTION_NAME'
         $updJobName = Get-SIUpdaterInstallName -Role updater -Env $Env
@@ -1440,6 +1486,12 @@ function Invoke-SIUpdaterCore {
                            -Stop { param($n) $null = Invoke-SIUpdaterArm -Method POST -Path (Get-SIExecutionStopPath -Base (Get-SIUpdaterRgPath -SubscriptionId $sub -ResourceGroup $rg -Provider 'Microsoft.App/jobs') -Job $updJobName -Execution $n) -Body @{} }
             if ($earlier) { Write-UpdLog (Get-SIUpdaterStepAsideText -Earlier $earlier); return 0 }
         } catch { Write-UpdLog ("WARNING: whether an earlier update still runs could not be read ({0}) -- this update goes on" -f $_.Exception.Message) }
+        # #1344: an image check that runs now ends first (it steps aside at this update's own slot: seconds; or it finishes
+        # a swap) -- two runs never change the install at once; nothing is stopped
+        if (Get-Command -Name Wait-SIUpdaterImageCheckEnded -ErrorAction SilentlyContinue) {
+            $icLine = Wait-SIUpdaterImageCheckEnded -Executions { @(Invoke-SIUpdaterArm -Path (Get-SIUpdaterRgPath -SubscriptionId $sub -ResourceGroup $rg -Provider ('Microsoft.App/jobs/{0}/executions' -f (Get-SIImageCheckJobNames).Job)) -List) }
+            if ($icLine) { Write-UpdLog $icLine }
+        }
     }
     # NO FRESH BEAT = DEAD (d): this update's own sign of life from here on -- its 'updater' lock row, beaten at once and with
     # every log line (Invoke-SIUpdaterLockBeat), released at the end of the run
@@ -1557,6 +1609,8 @@ function Invoke-SIUpdaterCore {
     # SECURE-WEB-1: the internet-facing identities lose any job / owner / contributor / role-assignment right, read back --
     # on EVERY run, before anything else may return (an apply-settings run included). Never fails or holds the update.
     $null = Invoke-SIUpdaterWebJobRightsStep -SubscriptionId $sub -ResourceGroup $rg
+    # #1252: the web app's job buttons through the queue si-job-requests (queue, trigger, the web app's one right, the switch), read back
+    $null = Invoke-SIUpdaterJobRequestsStep -Env $Env -Store $proStore -SubscriptionId $sub -ResourceGroup $rg
     # #1257: AI without a key -- the database's AI settings to the web chat (Chat__*) and the engine jobs (OPENAI_*), read
     # back; then the engine's (and the web chat's) right on the configured Azure OpenAI resource CHECKED (read only: the
     # customer or Invardia grants it; missing = a support step). Also in an apply-settings run (a saved setting arrives
@@ -1574,6 +1628,9 @@ function Invoke-SIUpdaterCore {
     # #1151 (6) SEC-03: the install's Key Vault to purge protection ON (both editions; read, PATCH only when off, read back with
     # retries; one-way, said). Never fails or holds the update.
     $null = Invoke-SIUpdaterKeyVaultPurgeStep -Env $Env -SubscriptionId $sub -ResourceGroup $rg
+    # #1344: the image check job caj-si-image-check ('*/15 * * * *') kept present and on this updater's image, read back --
+    # existing installs get it on their next update, no manual step. Never fails or holds the update; quiet when it is right.
+    if (Get-Command -Name Invoke-SIUpdaterImageCheckJob -ErrorAction SilentlyContinue) { $global:SI_UpdaterStep = 'settings'; $null = Invoke-SIUpdaterImageCheckJob -SubscriptionId $sub -ResourceGroup $rg -UpdaterJob (Get-SIUpdaterInstallName -Role updater -Env $Env) -Quiet }
     # framework SEC-LANE-1 (owner 2026-11-14 "things must work automatically"): the image clean-up switch set off by hand on
     # this job is taken away by the updater itself once it runs 3.1.14+ (read back; one line) -- never by hand again
     if (Get-Command -Name Invoke-SIUpdaterPruneSwitchClear -ErrorAction SilentlyContinue) {
@@ -1682,6 +1739,9 @@ function Invoke-SIUpdaterWebAppStepsAfter {
     } catch { try { Write-UpdLog ('web app: its sign-in app owner and name could not be checked ({0}) -- the update goes on' -f $_.Exception.Message) } catch { } }
     # Microsoft's built-in sign-in (after the web app steps: the web app then runs this release under its standard name)
     $null = Invoke-SIUpdaterBuiltInAuthStep -Rc $Rc -Env $Env -Store $Store -SubscriptionId $SubscriptionId -ResourceGroup $ResourceGroup
+    # #1252: once more after the update (and in the post-roll run, in the release's own code): the missing-jobs step of this
+    # update has just made caj-si-job-requests, so the queue switch can be set in this same update
+    $null = Invoke-SIUpdaterJobRequestsStep -Env $Env -Store $Store -SubscriptionId $SubscriptionId -ResourceGroup $ResourceGroup
 }
 
 function Invoke-SIUpdaterBuiltInAuthStep {
@@ -1763,13 +1823,14 @@ function Invoke-SIUpdaterBuiltInAuthStep {
         }
         # SECURE-WEB-1 "no leftovers" (Invardia never touches an install's SQL): ONLY after a switch that read back, the
         # earlier sign-in front's database tables go -- the database setup job drops them (Invoke-SIUpdaterSigninSchemaDrop,
-        # which reads the web app back switched itself first). A refusal is a warning and a support step, never a failure.
+        # which reads the web app back switched itself first). SecurityInsight removes the tables itself: whatever is left is
+        # ONE information line (the next update tries again) -- never a warning, never a support step, never a failure
+        # (live 2026-11-23: an early 'Failed' execution status became a warning and an arm-403 support step at four installs).
         if ($mode -eq 'apply' -and $r.Ok -and $r.State -in @('applied', 'in-place')) {
             if (-not $SigninDrop -and (Get-Command -Name Invoke-SIUpdaterSigninSchemaDrop -ErrorAction SilentlyContinue)) { $SigninDrop = { param($a) Invoke-SIUpdaterSigninSchemaDrop @a } }
             if ($SigninDrop) {
                 $sd = & $SigninDrop @{ SIRoot = $(if ("$SIRoot".Trim()) { "$SIRoot" } else { "$siAutoRoot" }); Store = $Store; Arm = $Arm; SubscriptionId = $SubscriptionId; ResourceGroup = $ResourceGroup; WebAppId = $appId }
-                if ($sd -and "$($sd.Line)".Trim()) { Write-UpdLog $(if ([string]$sd.State -in 'kept', 'refused') { 'WARNING: ' + "$($sd.Line)" } else { "$($sd.Line)" }) }
-                if ($sd -and "$($sd.Support)".Trim() -and (Get-Command -Name Add-SIUpdaterCustomerAction -ErrorAction SilentlyContinue)) { Add-SIUpdaterCustomerAction -Step 'post-roll' -Text ('Support-app step: ' + "$($sd.Support)") -Class 'arm-403' }
+                if ($sd -and "$($sd.Line)".Trim()) { Write-UpdLog "$($sd.Line)" }
                 $r | Add-Member -NotePropertyName SigninDrop -NotePropertyValue $sd -Force
             }
         }
@@ -1935,7 +1996,7 @@ if (-not $DefineOnly) {
         # the update's own sign of life ends with it (a later update or the pipeline never waits 15 minutes for a finished one)
         if (Get-Command -Name Unregister-SIUpdaterExecutionBeat -ErrorAction SilentlyContinue) { Unregister-SIUpdaterExecutionBeat }
         # (Write-Host, not Write-UpdLog: the run's lock and its watch are already let go -- this line must not touch them)
-        Write-Host ("[{0:u}] the update run has ended" -f [datetime]::UtcNow)
+        if (-not $global:SI_ImageCheckIdle) { Write-Host ("[{0:u}] the update run has ended" -f [datetime]::UtcNow) }
     } finally {
         Complete-SIUpdaterOutput
     }

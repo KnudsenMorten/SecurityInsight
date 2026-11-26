@@ -617,7 +617,7 @@ ExposureGraphNodes
         }
 
         # v3 data model: the Shodan host answer (live or cached) is the 'host' part of the address's Shodan record
-        if ($rawJson -and (Get-Command -Name Add-SIRecordPart -ErrorAction SilentlyContinue)) {
+        if ($rawJson -and (Test-Path -Path 'function:Add-SIRecordPart')) {
             try { Add-SIRecordPart -Provider 'shodan' -RecordType 'public_ip' -Key $ip -Part 'host' -Object ($rawJson | ConvertFrom-Json) } catch { }
         }
 

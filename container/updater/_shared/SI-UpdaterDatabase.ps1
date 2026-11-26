@@ -262,6 +262,62 @@ ELSE INSERT cfg.InstallState (Name, Value, [Version], UpdatedBy) VALUES (N'Grant
     } catch { Write-UpdLog ('WARNING: the grant procedure''s result could not be recorded: {0}' -f $_.Exception.Message) }
 }
 
+# #1317: the minutes an update may spend on the collection partitions -- small when it applied new schema (its code still
+# has to roll), larger when the schema was current. The next pipeline run waits for the update, so it may start up to this
+# much later; said in the log.
+# STABILITY (review item 1): the pipeline runner takes an install lock whose heartbeat is 15 minutes old (SI-UpdaterRunGate
+# LockStaleMinutes) -- so the step beats the lock before every range (Invoke-SIUpdaterLockBeat -Force) and its whole budget,
+# INCLUDING the longest overrun (one statement's time limit, SIPartitionStatementSeconds = 2 min), stays near 10 minutes.
+$script:SIUpdaterPartitionMinutes = @{ Applied = 4; Current = 8 }
+
+function Get-SIUpdaterPartitionSwitch {
+    <# SI_Data_RetireByPartition for the updater: $global:, else SI_CFG_SI_Data_RetireByPartition; not set = ON (the default). #>
+    param([scriptblock]$Get)
+    $g = $null; try { $g = Get-Variable -Name 'SI_Data_RetireByPartition' -Scope Global -ValueOnly -ErrorAction Stop } catch { $g = $null }
+    if ($null -eq $g -or ("$g".Trim() -eq '' -and $g -isnot [bool])) { $g = if ($Get) { [string](& $Get 'SI_CFG_SI_Data_RetireByPartition') } else { [string][Environment]::GetEnvironmentVariable('SI_CFG_SI_Data_RetireByPartition') } }
+    if ($null -eq $g -or ($g -isnot [bool] -and "$g".Trim() -eq '')) { return $true }
+    if ($g -is [bool]) { return $g }
+    -not (("$g".Trim().ToLowerInvariant()) -in @('0', 'false', 'off', 'no', '$false'))
+}
+
+function Invoke-SIUpdaterPartitionStep {
+    <#
+        #1317 THE COLLECTION PARTITIONS IN THE GAP AFTER AN UPDATE (owner 2026-11-23: the large installs run almost back to back,
+        so an idle window may never come there). After the schema and the grants, while the update holds the install's lock
+        (no pipeline run starts meanwhile -- nothing writes the tables): the boundaries ahead, a BOUNDED part of the move of an
+        existing install's large tables (resumable: the next update or idle window goes on from the range it stopped at), and
+        the retired collections a partition can take, under the same guard and counts as in the idle window
+        (engine\pro-settings\SI-ProPartitionMove.ps1 Invoke-SIPartitionHousekeeping, the release's own copy). At most
+        -Minutes (default: 4 when this update applied schema, 8 when it was current -- $script:SIUpdaterPartitionMinutes) -- the next run may start that much
+        later, and the log says so. NEVER fails the update; SI_Data_RetireByPartition off = nothing.
+        Returns the housekeeping result, or $null when nothing ran.
+    #>
+    param([Parameter(Mandatory)][string]$SIRoot, $Store, [bool]$SchemaCurrent = $false, $Minutes = $null, $DeadlineUtc = $null,
+          [scriptblock]$Log = { param($m) Write-UpdLog $m }, [long]$BatchSize = 5000, [int]$Keep = 0)
+    try {
+        if (-not $Store) { return $null }
+        $mf = [IO.Path]::Combine($SIRoot, 'engine', 'pro-settings', 'SI-ProPartitionMove.ps1')
+        if (-not (Get-SIUpdaterPartitionSwitch)) {
+            # switched off mid-move (review item 5): the move's copy and trigger are removed -- nothing current changes
+            if (Test-Path -LiteralPath $mf) { . $mf; foreach ($l in @(Invoke-SIPartitionMoveStop -Invoke (New-SIPartitionBoundedInvoke -Invoke $Store.Invoke))) { & $Log $l } }
+            & $Log 'partitions: SI_Data_RetireByPartition is off -- nothing done (old collections are removed a little at a time)'; return $null
+        }
+        if (-not (Test-Path -LiteralPath $mf)) { return $null }
+        . $mf
+        $min = if ($null -ne $Minutes) { [int]$Minutes } elseif ($SchemaCurrent) { $script:SIUpdaterPartitionMinutes.Current } else { $script:SIUpdaterPartitionMinutes.Applied }
+        $dl = if ($null -ne $DeadlineUtc) { ([datetime]$DeadlineUtc).ToUniversalTime() } else { [datetime]::UtcNow.AddMinutes([Math]::Max(1, $min)) }
+        $kp = $Keep
+        if ($kp -lt 2) { $kp = 3; try { $g = Get-Variable -Name 'SI_Data_KeepCollections' -Scope Global -ValueOnly -ErrorAction Stop; $n = 0; if ([int]::TryParse("$g", [ref]$n) -and $n -ge 2) { $kp = $n } } catch { } }
+        & $Log ('partitions: the collection partitions get up to {0} min in this update, while it holds the install''s lock -- the next pipeline run may start up to {0} min later' -f [Math]::Max(1, $min))
+        # the install's lock beaten before every range (the stop seam is asked there); a beat that fails never stops the step
+        # by itself -- the deadline does
+        $beat = { if (Get-Command -Name Invoke-SIUpdaterLockBeat -ErrorAction SilentlyContinue) { $null = Invoke-SIUpdaterLockBeat -What 'the collection partitions' -Force }; '' }
+        $r = Invoke-SIPartitionHousekeeping -Invoke $Store.Invoke -DeadlineUtc $dl -Keep $kp -Log $Log -BatchSize $BatchSize -ShouldStop $beat -Holder ('caj-si-updater:' + [guid]::NewGuid().ToString('n').Substring(0, 8))
+        & $Log ('partitions: {0} in this update -- {1} retired collection(s) left by their partition{2}' -f $(switch ([string]$r.Status) { 'done' { 'everything that waited is done' } 'progress' { 'a part done, the next update or idle window goes on' } 'nothing' { 'nothing waited' } default { 'a part did not finish' } }), @($r.Removed).Count, $(if ($r.Status -eq 'failed') { ' (the update goes on; the paced removal goes on as before)' } else { '' }))
+        return $r
+    } catch { & $Log ('partitions: not run in this update ({0}) -- the update goes on; old collections are removed a little at a time' -f $_.Exception.Message); return $null }
+}
+
 function Invoke-SIUpdaterDatabase {
     <#
         The database step of one update, from an EXTRACTED, verified release (-SIRoot) to the install's Pro database (-Store:
@@ -348,6 +404,8 @@ function Invoke-SIUpdaterDatabase {
         'noop' { $null = Invoke-SIUpdaterEngineDatabaseGrant -SIRoot $SIRoot -Store $Store; $null = Invoke-SIUpdaterEngineAccessCheck -SIRoot $SIRoot -Store $Store -Exclude $principals.ToArray()
                  # SEC-08: asset tagging's database access, also on an update whose schema is current (idempotent: current = nothing said)
                  $null = Invoke-SIUpdaterTaggingDatabaseAccess -SIRoot $SIRoot -Store $Store -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId -UseProcedure:([bool]$proc.Use)
+                 # #1317: the collection partitions in the gap before the next run (bounded; a busy install gets no idle window)
+                 $null = Invoke-SIUpdaterPartitionStep -SIRoot $SIRoot -Store $Store -SchemaCurrent $true
                  return (& $res $true 'noop' $apply.Reason $apply.Hash $principals) }
     }
 
@@ -387,6 +445,9 @@ function Invoke-SIUpdaterDatabase {
 
     # ---- #672: the engine identity's rights CHECKED (never changed here: framework §12.23 P8) -- a warning, never a stop ----
     $null = Invoke-SIUpdaterEngineAccessCheck -SIRoot $SIRoot -Store $Store -Exclude $principals.ToArray()
+
+    # ---- #1317: the collection partitions, a bounded part in the gap before the next run (never fails the update) ----
+    $null = Invoke-SIUpdaterPartitionStep -SIRoot $SIRoot -Store $Store -SchemaCurrent $false
 
     # ---- 3. the record (visibility; a failure here is reported, the next run applies again -- idempotent) ----
     $recorded = $true
@@ -507,14 +568,21 @@ function Invoke-SIUpdaterSigninSchemaDrop {
         and read back from its own row (DbJobSigninDrop, this run's id). Called from the updater's built-in sign-in step right
         after the switch reads back. When THIS update's database setup run already did it (the web app was switched before
         the update), its result is said and no second run is started. One plain line: "the earlier sign-in's database tables
-        are removed" / "... none left". NEVER a failure of the update: a refusal is a warning and a support step.
+        are removed" / "... none left". NEVER a failure of the update, and never a step for anyone else: SecurityInsight
+        removes the tables itself, so whatever is left is an information line saying the next update tries again.
+        THE RESULT IS THIS RUN'S OWN ROW (live 2026-11-23, four installs): Azure can report the execution Failed while the run
+        is still going (a first replica retried) -- that run then recorded "none" a minute later. So the execution's early
+        status never decides: the row with this run's id does, read until the execution has really ended and then for up to
+        -LateResultSeconds more (a run whose execution reads as running again is waited for, up to -TimeoutSeconds).
         -Arm / -Sleep are test seams. Returns @{ State (not-switched | removed | none | kept | refused | not-run | unknown);
-        Line; Support ('' or the support step) }. Never throws.
+        Line; Support (always '': kept for the callers' shape) }. Never throws.
     #>
     param([Parameter(Mandatory)][string]$SIRoot, $Store, [Parameter(Mandatory)][scriptblock]$Arm, [Parameter(Mandatory)][string]$SubscriptionId,
           [Parameter(Mandatory)][string]$ResourceGroup, [Parameter(Mandatory)][string]$WebAppId, $Switched = $null,
-          [scriptblock]$Sleep = { param($s) Start-Sleep -Seconds $s }, [int]$TimeoutSeconds = 1500)
-    $res = { param($st, $line, $sup) [pscustomobject]@{ State = $st; Line = [string]$line; Support = [string]$sup } }
+          [scriptblock]$Sleep = { param($s) Start-Sleep -Seconds $s }, [int]$TimeoutSeconds = 1500,
+          # how long an ENDED execution's run may still write its own row (as Invoke-SIUpdaterDbJob)
+          [int]$LateResultSeconds = 300, [int]$LateResultPollSeconds = 15)
+    $res = { param($st, $line, $sup) [pscustomobject]@{ State = $st; Line = [string]$line; Support = '' } }
     try {
         $sw = if ($null -ne $Switched) { $Switched } else { Test-SIUpdaterWebSwitched -Arm $Arm -WebAppId $WebAppId }
         if ($sw.Switched -ne $true) {
@@ -526,12 +594,7 @@ function Invoke-SIUpdaterSigninSchemaDrop {
         . $file
         $n = Get-SIDbInitNames
         if (-not $n.Contains('SigninDropRecord')) { return (& $res 'unknown' 'the earlier sign-in''s database tables: not checked -- this release''s database setup job does not remove them' '') }
-        $judge = {
-            param($st, $why)
-            $line = Get-SIDbInitSigninDropLine -State $st -Why $why
-            $sup = if ($st -in 'kept', 'refused') { 'the support partner removes the earlier sign-in''s database tables (the schema signin) through the Support app' } else { '' }
-            & $res $st $line $sup
-        }
+        $judge = { param($st, $why) & $res $st (Get-SIDbInitSigninDropLine -State $st -Why $why) '' }
         # this update's database setup run (before the roll) already did it: no second run
         $pre = $global:SI_UpdaterSigninDrop
         if ($pre -and [string]$pre.State -in 'removed', 'none') { return (& $judge ([string]$pre.State) '') }
@@ -539,17 +602,41 @@ function Invoke-SIUpdaterSigninSchemaDrop {
         $job = & $Arm 'GET' ('{0}?api-version={1}' -f $jobId, $n.AppApi) $null
         if (-not $job) { return (& $res 'not-run' 'the earlier sign-in''s database tables: the database setup job is not there yet -- the next update makes it and removes them' '') }
         $r = Start-SIDbInitRun -Arm $Arm -JobId $jobId -Job $job -By 'updater' -TimeoutSeconds $TimeoutSeconds -Sleep $Sleep -Extra @{ SI_DBINIT_SIGNIN_DROP = '1' }
-        $row = $null
-        try { $x = @(& $Store.Invoke (Get-SIDbInitRecordReadSql -Name $n.SigninDropRecord) @{} 'reader' | ForEach-Object { $_ } | Where-Object { $null -ne $_ }) | Select-Object -First 1; $row = ConvertFrom-SIDbInitRecordValue -Value ([string](Get-SIDbInitProp $x @('Value'))) } catch { $row = $null }
-        if (-not ($row -and $row.PSObject.Properties['run'] -and [string]$row.run -eq $r.Run)) {
-            if (-not $r.Ok) { return (& $judge 'refused' ('the database setup job did not complete (execution {0}: {1})' -f $(if ($r.Execution) { $r.Execution } else { 'not started' }), $r.Status)) }
+        # THIS run's own row ($null = none yet); a row of another run is never taken
+        $readMine = {
+            try {
+                $x = @(& $Store.Invoke (Get-SIDbInitRecordReadSql -Name $n.SigninDropRecord) @{} 'reader' | ForEach-Object { $_ } | Where-Object { $null -ne $_ }) | Select-Object -First 1
+                $v = ConvertFrom-SIDbInitRecordValue -Value ([string](Get-SIDbInitProp $x @('Value')))
+                if ($v -and $v.PSObject.Properties['run'] -and [string]$v.run -eq $r.Run) { $v } else { $null }
+            } catch { $null }
+        }
+        $row = & $readMine
+        $status = [string]$r.Status
+        if (-not $row -and $r.Execution -and $status -notin 'TimedOut', 'Succeeded' -and $LateResultSeconds -gt 0) {
+            # the execution's status said it ended, but its run has not written its row: read the row (and the execution --
+            # a replica that is started again reads as running) until the run ends and then up to -LateResultSeconds more
+            $poll = [Math]::Max(1, $LateResultPollSeconds); $waited = 0; $endedFor = 0
+            Write-UpdLog ('the earlier sign-in''s database tables: Azure reports execution {0} {1} before this run wrote its result -- its own result is waited for (only a result of this run counts)' -f $r.Execution, $status)
+            while (-not $row -and $endedFor -lt $LateResultSeconds -and $waited -lt $TimeoutSeconds) {
+                & $Sleep $poll; $waited += $poll
+                $e = $null
+                try { $e = & $Arm 'GET' ('{0}/executions/{1}?api-version={2}' -f $jobId, $r.Execution, $n.AppApi) $null } catch { $e = $null }
+                $now = [string](Get-SIDbInitProp $e @('properties', 'status'))
+                if ($now) { $status = $now }
+                if ($status -in 'Succeeded', 'Failed', 'Stopped', 'Degraded') { $endedFor += $poll } else { $endedFor = 0 }
+                $row = & $readMine
+            }
+        }
+        if (-not $row) {
+            if (-not $r.Ok -and $status -ne 'Succeeded') {
+                return (& $res 'not-run' ('the earlier sign-in''s database tables: this update''s database setup job did not finish removing them (execution {0}: {1}) -- the next update removes them' -f $(if ($r.Execution) { $r.Execution } else { 'not started' }), $status) '')
+            }
             return (& $res 'not-run' 'the earlier sign-in''s database tables: this release''s database setup job did not report them -- the next update removes them' '')
         }
         & $judge ([string]$row.state) $(if ($row.PSObject.Properties['why']) { [string]$row.why } else { '' })
     } catch {
         $m = [string]$_.Exception.Message -replace '\s+', ' '
-        $line = if (Get-Command -Name Get-SIDbInitSigninDropLine -ErrorAction SilentlyContinue) { Get-SIDbInitSigninDropLine -State 'refused' -Why $m } else { 'the earlier sign-in''s database tables could not be removed ({0}) -- the update goes on' -f $m }
-        & $res 'refused' $line 'the support partner removes the earlier sign-in''s database tables (the schema signin) through the Support app'
+        & $res 'unknown' ('the earlier sign-in''s database tables: not checked in this update ({0}) -- the next update removes them' -f $m) ''
     }
 }
 
@@ -696,7 +783,9 @@ function Invoke-SIUpdaterDbJob {
           [scriptblock]$Arm, [scriptblock]$Lists, [scriptblock]$Sleep = { param($s) Start-Sleep -Seconds $s }, [int]$TimeoutSeconds = 1500,
           [scriptblock]$Graph, [scriptblock]$GraphRoles, [int[]]$SettleWaits = @(300, 600, 900), [scriptblock]$Now = { [datetime]::UtcNow },
           # the job's environment read before the process's own (a test seam: SI_UPDATER_SQL_LEAST_PRIVILEGE, the switches)
-          [hashtable]$Env = @{})
+          [hashtable]$Env = @{},
+          # how long a Failed execution's run may still write its own result (0 = not waited for)
+          [int]$LateResultSeconds = 300, [int]$LateResultPollSeconds = 15)
     $res = { param($ok, $a, $why) [pscustomobject]@{ Ok = $ok; Action = $a; Reason = $why } }
     try {
         if (-not $Store -or -not $Store.Invoke) { return (& $res $true 'skipped' 'no Pro database on this install') }
@@ -823,6 +912,30 @@ function Invoke-SIUpdaterDbJob {
             }
             if (-not $after) { $after = $other }
             $mine = [bool]($after -and $after.PSObject.Properties['run'] -and [string]$after.run -eq $r.Run)
+            # Azure can mark the execution Failed (BackoffLimitExceeded) while its pod is still
+            # pulling the image; the container then runs and exits 0 a minute later. So a Failed execution whose run has not
+            # written its result yet is given a BOUNDED wait (-LateResultSeconds) for THIS run's own row -- the job's proof
+            # (#1146). Only a row with this run's id and state ok counts; another run's row never does; nothing in time = held.
+            # A NEW membership ($fresh) keeps its own path: a run that could not sign in is started again after -SettleWaits.
+            if (-not $r.Ok -and [string]$r.Status -eq 'Failed' -and $r.Execution -and -not $mine -and -not $fresh -and $LateResultSeconds -gt 0) {
+                $poll = [Math]::Max(1, $LateResultPollSeconds); $waited = 0
+                Write-UpdLog ('the database setup job {0}: Azure reports execution {1} Failed before this run wrote its result -- waiting up to {2} s for this run''s own result (only a result of this run counts)' -f $n.Job, $r.Execution, $LateResultSeconds)
+                while ($waited -lt $LateResultSeconds) {
+                    & $Sleep $poll; $waited += $poll
+                    $late = $null
+                    foreach ($nm in @($(if (Get-Command -Name Get-SIDbInitCallerRecordName -ErrorAction SilentlyContinue) { Get-SIDbInitCallerRecordName -By 'updater' }), '') | Select-Object -Unique) {
+                        $cand = & $readRow $nm
+                        if ($cand -and $cand.PSObject.Properties['run'] -and [string]$cand.run -eq $r.Run) { $late = $cand; break }
+                    }
+                    if ($late) { $after = $late; $mine = $true; break }
+                }
+                if ($mine -and [string]$after.state -eq 'ok') {
+                    Write-UpdLog ('the database setup job {0}: this run wrote its result (ok) {1} s after Azure reported execution {2} Failed -- the run''s own result is taken' -f $n.Job, $waited, $r.Execution)
+                    $r.Ok = $true
+                } elseif (-not $mine) {
+                    Write-UpdLog ('the database setup job {0}: no result of this run within {1} s after Azure reported execution {2} Failed' -f $n.Job, $LateResultSeconds, $r.Execution)
+                }
+            }
             if ($r.Ok -and $mine -and [string]$after.state -eq 'ok') {
                 Write-UpdLog ('the database setup job {0}: every identity read back ({1}; execution {2})' -f $n.Job, [string]$after.n, $r.Execution)
                 if ($extra.Contains('SI_DBINIT_SIGNIN_DROP')) {
@@ -830,7 +943,8 @@ function Invoke-SIUpdaterDbJob {
                     if ($sdRow -and $sdRow.PSObject.Properties['run'] -and [string]$sdRow.run -eq $r.Run) {
                         $global:SI_UpdaterSigninDrop = [pscustomobject]@{ Run = $r.Run; State = [string]$sdRow.state }
                         $sdLine = Get-SIDbInitSigninDropLine -State ([string]$sdRow.state) -Why $(if ($sdRow.PSObject.Properties['why']) { [string]$sdRow.why } else { '' })
-                        Write-UpdLog $(if ([string]$sdRow.state -in 'removed', 'none') { $sdLine } else { 'WARNING: ' + $sdLine })
+                        # an information line in every state: SecurityInsight removes the tables itself (the next update tries again)
+                        Write-UpdLog $sdLine
                     }
                 }
                 if ($so.ClientId) { $null = Invoke-SIUpdaterSupportStanding -Store $Store -Graph $Graph -Arm $Arm -SubscriptionId $SubscriptionId -ResourceGroup $ResourceGroup -Server $server -ClientId $so.ClientId -Run $r.Run -NowUtc (& $Now) -SIRoot $SIRoot }
@@ -970,19 +1084,47 @@ function Invoke-SIUpdaterIndexBuildJob {
           [scriptblock]$Arm, [scriptblock]$Lists, [scriptblock]$Sleep = { param($s) Start-Sleep -Seconds $s })
     try {
         if (-not $Store) { return [pscustomobject]@{ Ok = $true; Action = 'skipped'; Reason = 'no Pro database on this install' } }
-        foreach ($rel in @('engine/_shared/SI-IndexBuild.ps1', 'setup/_shared/SI-DbInitJob.ps1', 'engine/index-build/SI-IndexBuildJob.ps1')) {
-            $f = if ($SIRoot) { [IO.Path]::Combine($SIRoot, $rel) } else { '' }
-            if (-not $f -or -not (Test-Path -LiteralPath $f)) { return [pscustomobject]@{ Ok = $true; Action = 'skipped'; Reason = 'this release carries no index build job' } }
-            . $f
+        # #1385 (owner 2026-11-25: "are the indexes done" / "and statistics"): live at internal (3.1.50) the updater image did
+        # not carry engine/index-build/SI-IndexBuildJob.ps1, so this step returned 'skipped' WITHOUT A LINE -- the job
+        # caj-si-index-build was never made AND the two steps below (which need only SI-IndexBuild.ps1) never ran: cfg.IndexBuild
+        # stayed empty and the history's page indexes were never even queued. Now: the steps' own library is the only file they
+        # need; a missing job file is a WARNING line (never silent) and the steps still record what waits.
+        $ixLib = if ($SIRoot) { [IO.Path]::Combine($SIRoot, 'engine', '_shared', 'SI-IndexBuild.ps1') } else { '' }
+        if (-not $ixLib -or -not (Test-Path -LiteralPath $ixLib)) {
+            $why = 'WARNING: the index build job could not be checked -- this updater image carries no engine/_shared/SI-IndexBuild.ps1; checked again at the next update'
+            Write-UpdLog $why
+            return [pscustomobject]@{ Ok = $false; Action = 'skipped'; Reason = $why }
         }
-        $api = (Get-SIIndexBuildJobNames).AppApi
-        # (the paths carry their api-version, as the database setup job's do)
-        if (-not $Arm) { $Arm = { param([string]$Method, [string]$Path, $Body) Invoke-SIUpdaterArm -Method $Method -Path $Path -Body $Body -AllowNotFound:($Method -eq 'GET') } }
-        if (-not $Lists) { $Lists = { param([string]$Kind) @(Invoke-SIUpdaterArm -Path (Get-SIUpdaterRgPath -SubscriptionId $SubscriptionId -ResourceGroup $ResourceGroup -Provider 'Microsoft.App/jobs') -ApiVersion $api -List | Where-Object { $_ }) } }
-        $server = if ($Store.PSObject.Properties['Server'] -and $Store.Server) { [string]$Store.Server } else { '' }
-        $db = if ($Store.PSObject.Properties['Database'] -and $Store.Database) { [string]$Store.Database } else { '' }
-        $r = Invoke-SIIndexBuildJobEnsure -Arm $Arm -Lists $Lists -SubscriptionId $SubscriptionId -ResourceGroup $ResourceGroup -Server $server -Database $db -UpdaterJob $UpdaterJob -Sleep $Sleep
+        . $ixLib
+        $missing = New-Object System.Collections.Generic.List[string]
+        foreach ($rel in @('setup/_shared/SI-DbInitJob.ps1', 'engine/index-build/SI-IndexBuildJob.ps1')) {
+            $f = [IO.Path]::Combine($SIRoot, $rel)
+            if (Test-Path -LiteralPath $f) { . $f } else { $missing.Add($rel) }
+        }
+        if ($missing.Count) {
+            $r = [pscustomobject]@{ Ok = $false; Action = 'skipped'; Reason = ('WARNING: the index build job caj-si-index-build could not be checked -- this updater image carries no {0}; the waiting indexes are still recorded below, and the job is made at the next update whose image carries it' -f ($missing -join ', ')) }
+        } else {
+            $api = (Get-SIIndexBuildJobNames).AppApi
+            # (the paths carry their api-version, as the database setup job's do)
+            if (-not $Arm) { $Arm = { param([string]$Method, [string]$Path, $Body) Invoke-SIUpdaterArm -Method $Method -Path $Path -Body $Body -AllowNotFound:($Method -eq 'GET') } }
+            if (-not $Lists) { $Lists = { param([string]$Kind) @(Invoke-SIUpdaterArm -Path (Get-SIUpdaterRgPath -SubscriptionId $SubscriptionId -ResourceGroup $ResourceGroup -Provider 'Microsoft.App/jobs') -ApiVersion $api -List | Where-Object { $_ }) } }
+            $server = if ($Store.PSObject.Properties['Server'] -and $Store.Server) { [string]$Store.Server } else { '' }
+            $db = if ($Store.PSObject.Properties['Database'] -and $Store.Database) { [string]$Store.Database } else { '' }
+            $r = Invoke-SIIndexBuildJobEnsure -Arm $Arm -Lists $Lists -SubscriptionId $SubscriptionId -ResourceGroup $ResourceGroup -Server $server -Database $db -UpdaterJob $UpdaterJob -Sleep $Sleep
+        }
         Write-UpdLog $r.Reason
+        # #1316: the columnstore indexes of the read-heavy tables (SI_Data_ColumnstoreIndexes, on by default) recorded for
+        # THIS job when on, undone when off -- never built here; its own try: it never costs the job's check
+        if ((Get-Command -Name Invoke-SIColumnstoreIndexStep -ErrorAction SilentlyContinue) -and $Store.Invoke) {
+            try { $null = Invoke-SIColumnstoreIndexStep -Invoke $Store.Invoke -Log { param($m) Write-UpdLog $m } }
+            catch { Write-UpdLog ('WARNING: columnstore indexes: not checked ({0}) -- the next update looks again' -f $_.Exception.Message) }
+        }
+        # #1332: the finding history's page indexes recorded for THIS job (never built here; until they are there the stored
+        # rows serve the pages)
+        if ((Get-Command -Name Invoke-SIHistoryIndexStep -ErrorAction SilentlyContinue) -and $Store.Invoke) {
+            try { $null = Invoke-SIHistoryIndexStep -Invoke $Store.Invoke -Log { param($m) Write-UpdLog $m } }
+            catch { Write-UpdLog ('WARNING: finding history indexes: not checked ({0}) -- the next update looks again' -f $_.Exception.Message) }
+        }
         $r
     } catch {
         $why = 'WARNING: the index build job could not be checked ({0}) -- checked again at the next update' -f $_.Exception.Message

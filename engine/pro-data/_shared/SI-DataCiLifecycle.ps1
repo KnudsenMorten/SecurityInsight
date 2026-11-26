@@ -31,6 +31,34 @@
     Every statement is guarded: a database without the tables answers zeros, never an error. PS 5.1: no ?. / ??.
 #>
 
+# ---------------------------------------------------------------------------------------------------------------------
+#  #1334 THE LIFECYCLE'S OWN CHANGE MARKS (owner 2026-11-23: no trigger -- the every-run update of LastSeen must cost nothing)
+#  Every statement of this file that changes a column the key figures or the remediation tasks read (OwnerKey, FindingKey,
+#  CiId, State, FirstDetected, ClosedAt, CloseReason) sets sidata.CiFindingState.ChangedAt in the same statement -- where the
+#  column moves -- and a row that leaves (a DELETE, a key moved) is written to sidata.CiFindingStateGone by its OUTPUT. The
+#  marks are written between /*M{*/ and /*}M*/: on a database that has the mark (the schema apply adds it) they are kept, on
+#  one that does not yet they are taken out and the statement is exactly the one of before. A guard test
+#  (SIv3-LifecycleChangeSignal) lists every write statement here that touches those columns and requires its mark.
+# ---------------------------------------------------------------------------------------------------------------------
+$script:SIDataLifecycleMarks = $false
+
+function ConvertTo-SIDataLifecycleMarkText {
+    <# PURE. -Sql with its marks kept (marks on: $script:SIDataLifecycleMarks) or taken out (off, the default). #>
+    param([Parameter(Mandatory, Position = 0)][AllowEmptyString()][string]$Sql)
+    if ($script:SIDataLifecycleMarks) { return $Sql.Replace('/*M{*/', '').Replace('/*}M*/', '') }
+    [regex]::Replace($Sql, '/\*M\{\*/.*?/\*\}M\*/', '', [System.Text.RegularExpressions.RegexOptions]::Singleline)
+}
+
+function Set-SIDataLifecycleMarks {
+    <# The marks on when this database has them (the column and the tombstone table), off otherwise. Answers the state. #>
+    param([Parameter(Mandatory)][scriptblock]$Invoke)
+    $on = $false
+    try { $on = ([string](& $Invoke "SELECT CASE WHEN COL_LENGTH('sidata.CiFindingState', 'ChangedAt') IS NOT NULL AND OBJECT_ID('sidata.CiFindingStateGone') IS NOT NULL THEN 1 ELSE 0 END" @{} 'scalar') -eq '1') } catch { $on = $false }
+    $script:SIDataLifecycleMarks = $on
+    # the first run that writes the marks says so: the build from the changes trusts them only for what came after
+    if ($on) { try { $null = & $Invoke "IF OBJECT_ID('sidata.CiBuildState') IS NOT NULL AND NOT EXISTS (SELECT 1 FROM sidata.CiBuildState WHERE Name = N'LifecycleMarksSince') INSERT sidata.CiBuildState (Name, Value) VALUES (N'LifecycleMarksSince', CONVERT(nvarchar(30), SYSUTCDATETIME(), 127));" @{} 'nonquery' } catch { } }
+    $on
+}
 function ConvertTo-SIDataFindingStateItems {
     <# PURE. The stored-finding items (Invoke-SIDataCiSync's) -> the lifecycle input: owner key, finding key, CI, severity, detectors. #>
     param([AllowEmptyCollection()][object[]]$Items = @())
@@ -108,8 +136,8 @@ BEGIN
     DECLARE @missing INT = 0;
     IF @t IS NOT NULL AND @t = @last
     BEGIN
-        INSERT sidata.CiFindingState (OwnerKey, FindingKey, CiId, State, FirstDetected, LastSeen, LastSnapshot, AbsentRuns, Severity, DetectedBy, ExemptionId)
-        SELECT LEFT(x.OwnerKey, 450), LEFT(x.FindingKey, 256), NULLIF(MAX(x.CiId), N''), N'open', @t, @t, @t, 0, MAX(x.Severity), LEFT(MAX(x.DetectedBy), 2000), NULLIF(MAX(x.ExemptionId), N'')
+        INSERT sidata.CiFindingState (OwnerKey, FindingKey, CiId, State, FirstDetected, LastSeen, LastSnapshot, AbsentRuns, Severity, DetectedBy, ExemptionId/*M{*/, ChangedAt/*}M*/)
+        SELECT LEFT(x.OwnerKey, 450), LEFT(x.FindingKey, 256), NULLIF(MAX(x.CiId), N''), N'open', @t, @t, @t, 0, MAX(x.Severity), LEFT(MAX(x.DetectedBy), 2000), NULLIF(MAX(x.ExemptionId), N'')/*M{*/, SYSUTCDATETIME()/*}M*/
         FROM OPENJSON(@j) WITH (OwnerKey NVARCHAR(MAX), FindingKey NVARCHAR(MAX), CiId NVARCHAR(64), Severity NVARCHAR(16), DetectedBy NVARCHAR(MAX), ExemptionId NVARCHAR(64)) x
         WHERE x.OwnerKey IS NOT NULL AND x.FindingKey IS NOT NULL/*R:x.OwnerKey*/
           AND NOT EXISTS (SELECT 1 FROM sidata.CiFindingState s WHERE s.OwnerKey = LEFT(x.OwnerKey, 450) AND s.FindingKey = LEFT(x.FindingKey, 256))
@@ -225,7 +253,7 @@ UPDATE s SET LastSeen = @t, LastSnapshot = @t, AbsentRuns = 0
 FROM sidata.CiFindingState s JOIN #lcf f ON f.OwnerKey = s.OwnerKey AND f.FindingKey = s.FindingKey
 WHERE s.State <> N'closed' AND NOT EXISTS (SELECT 1 FROM @ret r WHERE r.CiId = ISNULL(NULLIF(f.CiId, N''), s.CiId));
 SET @seen = @@ROWCOUNT;
-UPDATE s SET CiId = ISNULL(f.CiId, s.CiId), Severity = f.Severity, DetectedBy = f.DetectedBy, ExemptionId = NULLIF(f.ExemptionId, N'') /* one-statement-ok: the second half of the one seen-again update of before (same rows, only where a value differs), inside the lifecycle's one transaction */
+UPDATE s SET CiId = ISNULL(f.CiId, s.CiId), Severity = f.Severity, DetectedBy = f.DetectedBy, ExemptionId = NULLIF(f.ExemptionId, N'')/*M{*/, ChangedAt = CASE WHEN EXISTS (SELECT CAST(s.CiId AS varbinary(200)) EXCEPT SELECT CAST(ISNULL(f.CiId, s.CiId) AS varbinary(200))) THEN SYSUTCDATETIME() ELSE s.ChangedAt END/*}M*/ /* one-statement-ok: the second half of the one seen-again update of before (same rows, only where a value differs), inside the lifecycle's one transaction */
 FROM sidata.CiFindingState s JOIN #lcf f ON f.OwnerKey = s.OwnerKey AND f.FindingKey = s.FindingKey
 WHERE s.State <> N'closed' AND NOT EXISTS (SELECT 1 FROM @ret r WHERE r.CiId = ISNULL(NULLIF(f.CiId, N''), s.CiId))
   AND EXISTS (SELECT s.CiId COLLATE Latin1_General_BIN2, DATALENGTH(s.CiId), s.Severity COLLATE Latin1_General_BIN2, DATALENGTH(s.Severity),
@@ -234,32 +262,32 @@ WHERE s.State <> N'closed' AND NOT EXISTS (SELECT 1 FROM @ret r WHERE r.CiId = I
               SELECT ISNULL(f.CiId, s.CiId) COLLATE Latin1_General_BIN2, DATALENGTH(ISNULL(f.CiId, s.CiId)), f.Severity COLLATE Latin1_General_BIN2, DATALENGTH(f.Severity),
                      f.DetectedBy COLLATE Latin1_General_BIN2, DATALENGTH(f.DetectedBy), NULLIF(f.ExemptionId, N'') COLLATE Latin1_General_BIN2, DATALENGTH(NULLIF(f.ExemptionId, N'')));
 UPDATE s SET State = N'reopened', ReopenedAt = @t, ReopenCount = s.ReopenCount + 1, ClosedAt = NULL, CloseReason = NULL, LastSeen = @t, LastSnapshot = @t, AbsentRuns = 0,
-       CiId = ISNULL(f.CiId, s.CiId), Severity = f.Severity, DetectedBy = f.DetectedBy, ExemptionId = NULLIF(f.ExemptionId, N'')
+       CiId = ISNULL(f.CiId, s.CiId), Severity = f.Severity, DetectedBy = f.DetectedBy, ExemptionId = NULLIF(f.ExemptionId, N'')/*M{*/, ChangedAt = SYSUTCDATETIME()/*}M*/
 OUTPUT inserted.OwnerKey, inserted.FindingKey, deleted.CloseReason INTO @reo (OwnerKey, FindingKey, WasReason)
 FROM sidata.CiFindingState s JOIN #lcf f ON f.OwnerKey = s.OwnerKey AND f.FindingKey = s.FindingKey
 WHERE s.State = N'closed' AND NOT EXISTS (SELECT 1 FROM @ret r WHERE r.CiId = ISNULL(NULLIF(f.CiId, N''), s.CiId));
 SET @reopened = @@ROWCOUNT;
-INSERT sidata.CiFindingState (OwnerKey, FindingKey, CiId, State, FirstDetected, LastSeen, LastSnapshot, AbsentRuns, Severity, DetectedBy, ExemptionId)
-SELECT f.OwnerKey, f.FindingKey, NULLIF(f.CiId, N''), N'open', @t, @t, @t, 0, f.Severity, f.DetectedBy, NULLIF(f.ExemptionId, N'')
+INSERT sidata.CiFindingState (OwnerKey, FindingKey, CiId, State, FirstDetected, LastSeen, LastSnapshot, AbsentRuns, Severity, DetectedBy, ExemptionId/*M{*/, ChangedAt/*}M*/)
+SELECT f.OwnerKey, f.FindingKey, NULLIF(f.CiId, N''), N'open', @t, @t, @t, 0, f.Severity, f.DetectedBy, NULLIF(f.ExemptionId, N'')/*M{*/, SYSUTCDATETIME()/*}M*/
 FROM #lcf f WHERE NOT EXISTS (SELECT 1 FROM sidata.CiFindingState s WHERE s.OwnerKey = f.OwnerKey AND s.FindingKey = f.FindingKey)
   AND NOT EXISTS (SELECT 1 FROM @ret r WHERE r.CiId = f.CiId);
 SET @opened = @@ROWCOUNT;
 -- a NEW finding on a retired CI gets its record, closed as asset_retired at once (it is known, never counted open)
-INSERT sidata.CiFindingState (OwnerKey, FindingKey, CiId, State, FirstDetected, LastSeen, LastSnapshot, AbsentRuns, Severity, DetectedBy, ExemptionId, ClosedAt, CloseReason)
-SELECT f.OwnerKey, f.FindingKey, f.CiId, N'closed', @t, @t, @t, 0, f.Severity, f.DetectedBy, NULLIF(f.ExemptionId, N''), @t, ISNULL((SELECT r.Why FROM @ret r WHERE r.CiId = f.CiId), N'asset_retired')
+INSERT sidata.CiFindingState (OwnerKey, FindingKey, CiId, State, FirstDetected, LastSeen, LastSnapshot, AbsentRuns, Severity, DetectedBy, ExemptionId, ClosedAt, CloseReason/*M{*/, ChangedAt/*}M*/)
+SELECT f.OwnerKey, f.FindingKey, f.CiId, N'closed', @t, @t, @t, 0, f.Severity, f.DetectedBy, NULLIF(f.ExemptionId, N''), @t, ISNULL((SELECT r.Why FROM @ret r WHERE r.CiId = f.CiId), N'asset_retired')/*M{*/, SYSUTCDATETIME()/*}M*/
 FROM #lcf f WHERE EXISTS (SELECT 1 FROM @ret r WHERE r.CiId = f.CiId)
   AND NOT EXISTS (SELECT 1 FROM sidata.CiFindingState s WHERE s.OwnerKey = f.OwnerKey AND s.FindingKey = f.FindingKey);
 SET @retiredClosed = @@ROWCOUNT;
 -- every open finding of a retired CI closes now as asset_retired -- still reported or not; a still-reported one records
 -- that this collection saw it (LastSeen) -- whatever the run's completeness: the retirement is the CI's decision, not an absence
-UPDATE s SET State = N'closed', ClosedAt = @t, CloseReason = ISNULL(r.Why, N'asset_retired'), LastSnapshot = @t, AbsentRuns = 0,
+UPDATE s SET State = N'closed', ClosedAt = @t, CloseReason = ISNULL(r.Why, N'asset_retired'), LastSnapshot = @t, AbsentRuns = 0,/*M{*/ ChangedAt = SYSUTCDATETIME(),/*}M*/
        LastSeen = CASE WHEN EXISTS (SELECT 1 FROM #lcf f WHERE f.OwnerKey = s.OwnerKey AND f.FindingKey = s.FindingKey) THEN @t ELSE s.LastSeen END
 FROM sidata.CiFindingState s JOIN @ret r ON r.CiId = s.CiId
 WHERE s.State <> N'closed'/*R:s.OwnerKey*/;
 SET @retiredClosed = @retiredClosed + @@ROWCOUNT;
 IF @complete = N'1'
 BEGIN
-    UPDATE s SET AbsentRuns = s.AbsentRuns + 1, LastSnapshot = @t,
+    UPDATE s SET AbsentRuns = s.AbsentRuns + 1, LastSnapshot = @t,/*M{*/ ChangedAt = CASE WHEN s.AbsentRuns + 1 >= @after THEN SYSUTCDATETIME() ELSE s.ChangedAt END,/*}M*/
            State = CASE WHEN s.AbsentRuns + 1 >= @after THEN N'closed' ELSE s.State END,
            ClosedAt = CASE WHEN s.AbsentRuns + 1 >= @after THEN @t ELSE s.ClosedAt END,
            CloseReason = CASE WHEN s.AbsentRuns + 1 < @after THEN s.CloseReason
@@ -346,7 +374,7 @@ BEGIN
         SELECT m.OwnerKey, m.Alias, m.Canonical, ROW_NUMBER() OVER (PARTITION BY m.OwnerKey, m.Canonical ORDER BY s.FirstDetected, m.Alias) AS rn
         FROM @mv m JOIN sidata.CiFindingState s ON s.OwnerKey = m.OwnerKey AND s.FindingKey = m.Alias
         WHERE NOT EXISTS (SELECT 1 FROM sidata.CiFindingState c WHERE c.OwnerKey = m.OwnerKey AND c.FindingKey = m.Canonical))
-    UPDATE s SET FindingKey = p.Canonical
+    UPDATE s SET FindingKey = p.Canonical/*M{*/, ChangedAt = SYSUTCDATETIME() OUTPUT deleted.OwnerKey, deleted.FindingKey, deleted.CiId INTO sidata.CiFindingStateGone (OwnerKey, FindingKey, CiId)/*}M*/
     FROM sidata.CiFindingState s JOIN pick p ON p.OwnerKey = s.OwnerKey AND p.Alias = s.FindingKey
     WHERE p.rn = 1;
     SET @carried = @@ROWCOUNT;
@@ -359,13 +387,14 @@ BEGIN
                  AbsentRuns = CASE WHEN c.State = N'closed' AND a.OpenN > 0 THEN a.MinAbsent ELSE c.AbsentRuns END,
                  ClosedAt = CASE WHEN c.State = N'closed' AND a.OpenN > 0 THEN NULL ELSE c.ClosedAt END,
                  CloseReason = CASE WHEN c.State = N'closed' AND a.OpenN > 0 THEN NULL ELSE c.CloseReason END,
-                 State = CASE WHEN c.State = N'closed' AND a.OpenN > 0 THEN N'open' ELSE c.State END
+                 State = CASE WHEN c.State = N'closed' AND a.OpenN > 0 THEN N'open' ELSE c.State END/*M{*/,
+                 ChangedAt = CASE WHEN a.FirstDetected < c.FirstDetected OR (c.State = N'closed' AND a.OpenN > 0) THEN SYSUTCDATETIME() ELSE c.ChangedAt END/*}M*/
     FROM sidata.CiFindingState c
     JOIN (SELECT m.OwnerKey, m.Canonical, MIN(s.FirstDetected) AS FirstDetected, MAX(s.LastSeen) AS LastSeen, MAX(s.ReopenCount) AS ReopenCount,
                  SUM(CASE WHEN s.State <> N'closed' THEN 1 ELSE 0 END) AS OpenN, MIN(CASE WHEN s.State <> N'closed' THEN s.AbsentRuns END) AS MinAbsent
           FROM @mv m JOIN sidata.CiFindingState s ON s.OwnerKey = m.OwnerKey AND s.FindingKey = m.Alias
           GROUP BY m.OwnerKey, m.Canonical) a ON a.OwnerKey = c.OwnerKey AND a.Canonical = c.FindingKey;
-    DELETE s FROM sidata.CiFindingState s JOIN @mv m ON m.OwnerKey = s.OwnerKey AND m.Alias = s.FindingKey;
+    DELETE s/*M{*/ OUTPUT deleted.OwnerKey, deleted.FindingKey, deleted.CiId INTO sidata.CiFindingStateGone (OwnerKey, FindingKey, CiId)/*}M*/ FROM sidata.CiFindingState s JOIN @mv m ON m.OwnerKey = s.OwnerKey AND m.Alias = s.FindingKey;
     SET @carried = @carried + @@ROWCOUNT;
 END
 '@
@@ -385,7 +414,7 @@ END
         $out = $out.Replace("OPENJSON(ISNULL(@equivalence, N'[]')) WITH (o NVARCHAR(MAX), a NVARCHAR(MAX), c NVARCHAR(MAX)) x",
                             "(SELECT OwnerKey AS o, FindingKey AS a, Canonical AS c FROM sidata.CiFindingLifecycleStage$hint WHERE Kind = N'a') x")
     }
-    $out
+    ConvertTo-SIDataLifecycleMarkText $out
 }
 
 function Convert-SIDataFindingStateRangeText {
@@ -581,7 +610,7 @@ INSERT @o SELECT DISTINCT LEFT(z.k, 450) FROM OPENJSON(ISNULL(@owners, N'[]')) W
 DECLARE @r TABLE (CiId NVARCHAR(64) NULL, FindingKey NVARCHAR(256) NOT NULL, DetectedBy NVARCHAR(2000) NULL);
 DECLARE @n INT = 0;
 BEGIN TRANSACTION;
-UPDATE s SET State = CASE WHEN s.ReopenedAt IS NOT NULL THEN N'reopened' ELSE N'open' END, ClosedAt = NULL, CloseReason = NULL, AbsentRuns = 0
+UPDATE s SET State = CASE WHEN s.ReopenedAt IS NOT NULL THEN N'reopened' ELSE N'open' END, ClosedAt = NULL, CloseReason = NULL, AbsentRuns = 0/*M{*/, ChangedAt = SYSUTCDATETIME()/*}M*/
 OUTPUT inserted.CiId, inserted.FindingKey, inserted.DetectedBy INTO @r (CiId, FindingKey, DetectedBy)
 FROM sidata.CiFindingState s JOIN @o o ON o.OwnerKey = s.OwnerKey
 WHERE s.State = N'closed' AND s.CloseReason IN (N'remediated', N'report changed') AND s.ClosedAt >= @from;
@@ -594,7 +623,7 @@ IF OBJECT_ID('sidata.CiChange') IS NOT NULL
 INSERT sidata.CiBuildState (Name, Value) VALUES (N'FindingFreezeRepair', CONVERT(NVARCHAR(400), SYSUTCDATETIME(), 127));
 COMMIT TRANSACTION;
 SELECT @n AS Reopened, 0 AS Skipped;
-'@).Replace('/*ownstage:@o:@owners*/', (Get-SIDataCiOwnerStageFillSql -Table '@o' -Column 'OwnerKey' -Param '@owners'))
+'@).Replace('/*ownstage:@o:@owners*/', (Get-SIDataCiOwnerStageFillSql -Table '@o' -Column 'OwnerKey' -Param '@owners')) | ForEach-Object { ConvertTo-SIDataLifecycleMarkText $_ }
 }
 
 function Get-SIDataFindingFrozenOwners {
@@ -671,18 +700,23 @@ SELECT @@ROWCOUNT;'/*RP*/;
 function Get-SIDataFindingSlaDays {
     <#
         PURE. #494 the SLA in days per severity from the settings SI_Pro_FindingSla_CriticalDays / _HighDays / _MediumDays /
-        _LowDays (defaults 15 / 30 / 90 / 180; 0 = no due date for that severity; anything not a whole number 0-3650 = the
-        default). Answers @{ critical; high; medium; low }.
+        _LowDays (defaults 15 / 30 / 60 / 90 -- #1388 owner 2026-11-25 "Stricter: 15/30/60/90", medium was 90, low 180; 0 = no
+        due date for that severity; anything not a whole number 0-3650 = the default). The critical days are the days of a
+        Very High finding too (SI's top severity; the Rating column says Critical).
+        #1388 SI_Pro_FindingSla_ExploitedDays (default 14, 0 = off -- owner 2026-11-25 "Exploit verified/kit only", then
+        "Verified/kit, build now"): the days a CVE finding whose exploit is VERIFIED or IN AN EXPLOIT KIT has to be fixed,
+        whatever its severity -- its due date is the first detection + the smaller of the two (CISA BOD 22-01).
+        Answers @{ critical; high; medium; low; exploited }.
     #>
     param($Critical = $global:SI_Pro_FindingSla_CriticalDays, $High = $global:SI_Pro_FindingSla_HighDays, $Medium = $global:SI_Pro_FindingSla_MediumDays,
-          $Low = $global:SI_Pro_FindingSla_LowDays)
+          $Low = $global:SI_Pro_FindingSla_LowDays, $Exploited = $global:SI_Pro_FindingSla_ExploitedDays)
     $one = {
         param($v, [int]$d)
         $x = 0
         if ($null -ne $v -and "$v".Trim() -ne '' -and [int]::TryParse(([string]$v).Trim(), [ref]$x) -and $x -ge 0 -and $x -le 3650) { return $x }
         $d
     }
-    [ordered]@{ critical = (& $one $Critical 15); high = (& $one $High 30); medium = (& $one $Medium 90); low = (& $one $Low 180) }
+    [ordered]@{ critical = (& $one $Critical 15); high = (& $one $High 30); medium = (& $one $Medium 60); low = (& $one $Low 90); exploited = (& $one $Exploited 14) }
 }
 
 function Get-SIDataFindingModelSql {
@@ -694,7 +728,12 @@ function Get-SIDataFindingModelSql {
                                  CI's CMDB owner (si_cmdb_owner, 'cmdb'), else the CI's own owner (si_owner, 'ci')
           ServiceKeys, ServiceCriticality   the services that own the CI (sidata.CiService) and the criticality it inherits
           SlaDays, DueAt         the SLA of the severity (@crit / @high / @med / @low days; 0 = none) from the first detection,
-                                 or from the last reopen
+                                 or from the last reopen. #1388 a CVE whose exploit is VERIFIED or IN AN EXPLOIT KIT
+                                 (sidata.CveSummary.ExploitVerified / InExploitKit of the newest collection that has them,
+                                 Get-SIDataCveExploitSql -- never the mere "exploit available"; owner 2026-11-25 "Verified/kit,
+                                 build now") gets @exp days when that is fewer (or its severity has none); @exp 0 = off. The remediation
+                                 tasks, their pages and the ticket fields (u_due_date) take the provider's own due date
+                                 (si_fix_due_date) where it is set ("Provider's date wins if set") and DueAt for the rest.
           ExemptionReason, ExemptedUntil    the exemption in force (cfg.Exemption, Pro)
           TicketState / ClosedAt / CloseReason   the vulnerability close-loop's record (vuln.VulnerabilityItem, Pro)
           Excluded               #533: the asset is disabled and left out by a setting (@dis = its owner keys) -- its findings
@@ -713,6 +752,14 @@ BEGIN
 END
 DECLARE @n INT = 0, @ne INT = 0, @nt INT = 0;
 DECLARE @cr INT = TRY_CONVERT(INT, @crit), @hi INT = TRY_CONVERT(INT, @high), @me INT = TRY_CONVERT(INT, @med), @lo INT = TRY_CONVERT(INT, @low);
+-- #1388 the days of an actively exploited CVE (verified / in a kit; 0 = off) and the newest collection whose per-CVE rows say
+-- which are (named through dynamic SQL: the statement compiles on a database the updater has not updated yet)
+DECLARE @ex INT = ISNULL(TRY_CONVERT(INT, @exp), 0);
+CREATE TABLE #xc (Cve NVARCHAR(100) COLLATE DATABASE_DEFAULT NOT NULL PRIMARY KEY);
+IF @ex > 0 AND OBJECT_ID('sidata.CveSummary') IS NOT NULL AND COL_LENGTH('sidata.CveSummary', 'ExploitVerified') IS NOT NULL AND COL_LENGTH('sidata.CveSummary', 'InExploitKit') IS NOT NULL
+    EXEC sp_executesql N'
+DECLARE @o INT = (SELECT TOP (1) c.CollectionId FROM sidata.Collection c WHERE EXISTS (SELECT 1 FROM sidata.CveSummary cv WHERE cv.CollectionId = c.CollectionId AND cv.ExploitVerified IS NOT NULL) ORDER BY c.CollectionTime DESC);
+INSERT #xc (Cve) SELECT cv.Cve FROM sidata.CveSummary cv WHERE cv.CollectionId = @o AND (cv.ExploitVerified = 1 OR cv.InExploitKit = 1);';
 DECLARE @last DATETIME2(3) = (SELECT TOP 1 TRY_CONVERT(DATETIME2(3), Value, 127) FROM sidata.CiBuildState WHERE Name = N'FindingStateSnapshot');
 IF @last IS NULL SET @last = '19000101';
 CREATE TABLE #fz (OwnerKey NVARCHAR(450) NOT NULL PRIMARY KEY);
@@ -755,7 +802,13 @@ OUTER APPLY (SELECT TOP (1) u.FindingType, u.Title FROM (
              ORDER BY u.CollectionTime DESC) f
 CROSS APPLY (SELECT CASE LOWER(REPLACE(REPLACE(ISNULL(s.Severity, N''''), N'' '', N''''), N''-'', N''''))
                         WHEN N''critical'' THEN @crit WHEN N''veryhigh'' THEN @crit WHEN N''high'' THEN @high
-                        WHEN N''mediumhigh'' THEN @med WHEN N''medium'' THEN @med WHEN N''moderate'' THEN @med WHEN N''low'' THEN @low ELSE NULL END AS Sla) x
+                        WHEN N''mediumhigh'' THEN @med WHEN N''medium'' THEN @med WHEN N''moderate'' THEN @med WHEN N''low'' THEN @low ELSE NULL END AS Sla) x0
+-- #1388 an ACTIVELY EXPLOITED CVE -- its exploit VERIFIED or IN AN EXPLOIT KIT (sidata.CveSummary.ExploitVerified / InExploitKit
+-- of the newest collection that has them; never the exploit-available flag): the exploited days when they are fewer than its
+-- severity''s (or it has none) -- a seek per state, only when @exp > 0
+CROSS APPLY (SELECT CASE WHEN @exp > 0 AND (x0.Sla IS NULL OR x0.Sla = 0 OR x0.Sla > @exp) AND s.FindingKey LIKE N''CVE-%''
+                          AND EXISTS (SELECT 1 FROM #xc xc WHERE xc.Cve = s.FindingKey)
+                         THEN @exp ELSE x0.Sla END AS Sla) x
 WHERE (s.State <> N''closed'' OR s.ClosedAt >= @last)/*R:s.OwnerKey*/
   AND (ISNULL(s.Owner, N'''') <> ISNULL(o.Owner, N'''') OR ISNULL(s.OwnerSource, N'''') <> ISNULL(o.OwnerSource, N'''')
        OR ISNULL(s.ServiceKeys, N'''') <> ISNULL(o.ServiceKeys, N'''') OR ISNULL(s.ServiceCriticality, N'''') <> ISNULL(o.ServiceCriticality, N'''')
@@ -764,8 +817,8 @@ WHERE (s.State <> N''closed'' OR s.ClosedAt >= @last)/*R:s.OwnerKey*/
        OR s.Excluded <> CASE WHEN s.State <> N''closed'' AND EXISTS (SELECT 1 FROM #fz z WHERE z.OwnerKey = s.OwnerKey) THEN 1 ELSE 0 END
        OR (f.Title IS NOT NULL AND ISNULL(s.Title, N'''') <> LEFT(f.Title, 400)) OR (f.FindingType IS NOT NULL AND ISNULL(s.FindingType, N'''') <> LEFT(f.FindingType, 32)));
 SET @n = @@ROWCOUNT;',
-    N'@crit INT, @high INT, @med INT, @low INT, @last DATETIME2(3), @n INT OUTPUT/*RPL*/',
-    @crit = @cr, @high = @hi, @med = @me, @low = @lo, @last = @last, @n = @n OUTPUT/*RPV*/;
+    N'@crit INT, @high INT, @med INT, @low INT, @exp INT, @last DATETIME2(3), @n INT OUTPUT/*RPL*/',
+    @crit = @cr, @high = @hi, @med = @me, @low = @lo, @exp = @ex, @last = @last, @n = @n OUTPUT/*RPV*/;
 -- the exemption in force (Pro: cfg.Exemption)
 IF OBJECT_ID('cfg.Exemption') IS NOT NULL
     EXEC sp_executesql N'
@@ -835,10 +888,10 @@ SET NOCOUNT ON;
 DECLARE @n INT = 0;
 IF OBJECT_ID('sidata.CiChange') IS NOT NULL BEGIN DELETE TOP (50000) FROM sidata.CiChange WHERE ChangedAt < DATEADD(day, -TRY_CONVERT(INT, @change), SYSUTCDATETIME()); SET @n += @@ROWCOUNT; END
 IF OBJECT_ID('sidata.CiDaily') IS NOT NULL BEGIN DELETE TOP (50000) FROM sidata.CiDaily WHERE [Day] < DATEADD(day, -TRY_CONVERT(INT, @daily), CONVERT(date, SYSUTCDATETIME())); SET @n += @@ROWCOUNT; END
-IF OBJECT_ID('sidata.CiFindingState') IS NOT NULL BEGIN DELETE TOP (50000) FROM sidata.CiFindingState WHERE State = N'closed' AND ClosedAt < DATEADD(day, -TRY_CONVERT(INT, @state), SYSUTCDATETIME()); SET @n += @@ROWCOUNT; END
+IF OBJECT_ID('sidata.CiFindingState') IS NOT NULL BEGIN DELETE TOP (50000) FROM sidata.CiFindingState/*M{*/ OUTPUT deleted.OwnerKey, deleted.FindingKey, deleted.CiId INTO sidata.CiFindingStateGone (OwnerKey, FindingKey, CiId)/*}M*/ WHERE State = N'closed' AND ClosedAt < DATEADD(day, -TRY_CONVERT(INT, @state), SYSUTCDATETIME()); SET @n += @@ROWCOUNT; END
 SELECT @n;
 '@
-    $text.Replace('TOP (50000)', ('TOP ({0})' -f $b))
+    ConvertTo-SIDataLifecycleMarkText ($text.Replace('TOP (50000)', ('TOP ({0})' -f $b)))
 }
 
 function Invoke-SIDataCiRetention {
@@ -994,12 +1047,12 @@ BEGIN
     -- not open any more); the mark that it ran is written only after both
     WHILE 1 = 1
     BEGIN
-        UPDATE TOP (50000) sidata.CiFindingState SET CiId = NULL WHERE CiId = N'';
+        UPDATE TOP (50000) sidata.CiFindingState SET CiId = NULL/*M{*/, ChangedAt = SYSUTCDATETIME()/*}M*/ WHERE CiId = N'';
         IF @@ROWCOUNT < 50000 BREAK;
     END
     WHILE 1 = 1
     BEGIN
-        UPDATE TOP (50000) s SET State = N'closed', ClosedAt = @last, CloseReason = N'rekeyed'
+        UPDATE TOP (50000) s SET State = N'closed', ClosedAt = @last, CloseReason = N'rekeyed'/*M{*/, ChangedAt = SYSUTCDATETIME()/*}M*/
         FROM sidata.CiFindingState s JOIN #rk k ON k.OwnerKey = s.OwnerKey AND k.FindingKey = s.FindingKey
         WHERE s.State <> N'closed';
         IF @@ROWCOUNT < 50000 BREAK;
@@ -1010,7 +1063,7 @@ BEGIN
 END
 DROP TABLE #rk; DROP TABLE #o; DROP TABLE #m;
 SELECT 0 AS Skipped, N'' AS Note, @empty AS EmptyCiId, @rekeyed AS Rekeyed, @linked AS LinkedOpen, @unlinked AS UnlinkedOpen, @nodet AS NoDetectedBy, @applied AS Applied;
-'@
+'@ | ForEach-Object { ConvertTo-SIDataLifecycleMarkText $_ }
 }
 
 function Invoke-SIDataLifecycleStaleOpenRepair {
@@ -1121,6 +1174,8 @@ function Invoke-SIDataFindingModel {
        range one command, written only where a value differs), the one statement otherwise. Answers ONE row: Updated,
        Exempted, Tickets summed; Skipped = 1 on a database without the model's columns. #>
     param([Parameter(Mandatory)][scriptblock]$Invoke, [Parameter(Mandatory)][hashtable]$Params, [scriptblock]$Log)
+    # #1388 a caller that does not name the exploited days runs without them (0 = off: the severity's days alone)
+    if (-not $Params.ContainsKey('exp')) { $Params = @{} + $Params; $Params['exp'] = '0' }
     if (-not (Test-SIDataLifecycleRanged $Invoke)) { return @(Get-SIDataSeamRows -Invoke $Invoke -Sql (Get-SIDataFindingModelSql) -Params $Params) | Select-Object -First 1 }
     $sql = Get-SIDataFindingModelSql -Ranged; $inv = $Invoke; $prm = $Params
     $ans = Invoke-SIDataKeyRanges -Invoke $Invoke -Table 'sidata.CiFindingState' -Column 'OwnerKey' -What 'v3 model    : the finding model' -Log $Log -FirstTake 50000 -Step {
@@ -1159,6 +1214,8 @@ function Invoke-SIDataCiLifecycle {
           # (a database without it -- not updated yet -- is sent the input as before)
           [switch]$Staged)
     if (-not $Log) { $Log = { param($l, $m) Write-Host ('[{0}] {1}' -f $l, $m) } }
+    # #1334 the lifecycle's own change marks, where the database has them (read once per run)
+    $null = Set-SIDataLifecycleMarks -Invoke $Invoke
     $out = [ordered]@{ Opened = 0; Seen = 0; Reopened = 0; Closed = 0; Absent = 0; Frozen = 0; Carried = 0; Skipped = $true; Daily = 0; Purged = 0; FrozenOwners = 0
                        Repaired = 0; RetiredClosed = 0; Reactivated = 0; Rekeyed = 0; StaleRepair = $null; Unclosed = 0; Answered = $false; ModelUpdated = 0; ModelExempted = 0; ModelTickets = 0; DailyGraph = 0
                        # #639 what kept the lifecycle from being updated this run ('' = nothing) -- the data sync's run record says it
@@ -1237,7 +1294,7 @@ function Invoke-SIDataCiLifecycle {
         # #494 the one finding model: owner, services, SLA and due date, exemption, ticket, excluded
         $sla = Get-SIDataFindingSlaDays
         $fm = @(Invoke-SIDataFindingModel -Invoke $Invoke -Log $Log -Params @{ dis = (ConvertTo-SIDataCiOwnerParam -Stage $ownStage -Kind 'o' -Keys ([string[]]@($frozenOwners))); crit = [string]$sla.critical; high = [string]$sla.high
-                                                          med = [string]$sla.medium; low = [string]$sla.low }) | Select-Object -First 1
+                                                          med = [string]$sla.medium; low = [string]$sla.low; exp = [string]$sla.exploited }) | Select-Object -First 1
         if ($fm -and [int](Get-SIItemValueOrNull $fm 'Skipped') -ne 1) { $out.ModelUpdated = [int](Get-SIItemValueOrNull $fm 'Updated'); $out.ModelExempted = [int](Get-SIItemValueOrNull $fm 'Exempted'); $out.ModelTickets = [int](Get-SIItemValueOrNull $fm 'Tickets') }
         if (Test-SIDataLifecycleRanged $Invoke) {
             $out.Daily = [int](Invoke-SIDataCiRangedStatement -Invoke $Invoke -Sql (Get-SIDataCiDailyDetailSql -Ranged) -What 'v3 model    : today''s trend row of the CIs' -Log $Log)

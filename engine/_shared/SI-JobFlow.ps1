@@ -76,6 +76,9 @@ $script:SIJobFlow = @{
 if (-not (Get-Command -Name Get-SIThrottleText -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot 'SI-Throttle.ps1') }
 # the failed step's class + first error lines for the pipeline's report (Get-SIJobFlowStepFailure)
 if (-not (Get-Command -Name Get-SIErrorLines -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot 'SI-ErrorClass.ps1') }
+# #475 the collect parts' manifest readers -- at FILE level (#1383): Add-SIJobFlowCollectParts returns seams whose Poll calls
+# them by name later; loaded inside that function they would live only in its scope ("is not recognized" at the first Poll)
+if (-not (Get-Command -Name Get-SICollectProgress -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot 'SI-CollectParts.ps1') }
 
 # =====================================================================================================================
 #  The map (config\job-flow.locked.json) and the definition
@@ -1492,6 +1495,16 @@ function New-SIJobFlowStepLogReader {
     }
 }
 
+function Test-SIJobFlowStepFailed {
+    <# PURE. #1392: did this step FAIL (Failed / TimedOut / Interrupted)? A step a person's cancel closed (Interrupted, class
+       'cancelled') did not: the run was cancelled on purpose, and the step's execution may well have succeeded. #>
+    param([AllowNull()]$Step)
+    if ($null -eq $Step) { return $false }
+    if ([string]$Step.State -notin @('Failed', 'TimedOut', 'Interrupted')) { return $false }
+    $cls = ''; try { $cls = [string]$Step.ErrorClass } catch { $cls = '' }
+    -not ([string]$Step.State -eq 'Interrupted' -and $cls -eq 'cancelled')
+}
+
 function Get-SIJobFlowStepFailure {
     <#
         PURE. What the pipeline reports for its failed step (owner 2026-10-10: "the report names the failed step and carries
@@ -1502,7 +1515,10 @@ function Get-SIJobFlowStepFailure {
     #>
     param([Parameter(Mandatory)]$Step, [AllowNull()][AllowEmptyCollection()][string[]]$LogLines)
     $rec = "$($Step.Error)".Trim()
-    $log = if ($LogLines) { Get-SIErrorLines -Lines @($LogLines) } else { '' }
+    # #1392: a step a cancel closed is said by its own record ("stopped: the run was cancelled by ..."), never by a line of
+    # its log -- the log of a step that was cut off (or had already ended well) does not say why it stopped
+    $byCancel = ([string]$Step.State -eq 'Interrupted' -and [string]$Step.ErrorClass -eq 'cancelled' -and $rec)
+    $log = if ($LogLines -and -not $byCancel) { Get-SIErrorLines -Lines @($LogLines) } else { '' }
     $text = if ($log) { $log } else { $rec }
     $cls = if ($text) { Get-SIErrorClass -Message $text } else { 'unknown' }
     if ($cls -eq 'unknown' -and $rec -and $rec -ne $text) { $cls = Get-SIErrorClass -Message $rec }
@@ -3162,7 +3178,6 @@ function Add-SIJobFlowCollectParts {
         -Store: the collect state store (New-SICollectBlobStore); -ProducerJobs: test seam (the job names), else List().
     #>
     param([Parameter(Mandatory)]$Seams, [Parameter(Mandatory)]$Store, [int]$TimeoutMinutes = 180, [string[]]$ProducerJobs, [scriptblock]$Now)
-    if (-not (Get-Command -Name Get-SICollectProgress -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot 'SI-CollectParts.ps1') }
     if (-not $Now) { $Now = { [datetime]::UtcNow } }
     $names = if ($PSBoundParameters.ContainsKey('ProducerJobs')) { @($ProducerJobs) } else { @($Seams.List()) }
     $keda = @{}

@@ -307,7 +307,10 @@ function Merge-SIFindingFolds {
         foreach ($rule in @($Folds)) {
             $canon = @(foreach ($i in $ix) { if ($folded.Contains($i)) { continue }; $c = Test-SIFindingFoldSide -Finding $Findings[$i] -Conditions $rule.Canonical; if ($null -ne $c) { $i } })
             if ($canon.Count -eq 0) { continue }
-            $canon = @($canon | Sort-Object { [string](Get-SIEqValue $Findings[$_] 'si_finding_key') })
+            # #1364 by key, ORDINAL on the lower-cased key: the first canonical is the same one the database fold names (SQL
+            # MIN over the lower-cased database key) -- never a culture's order, which sorts '-' differently
+            $ck = [string[]]@($canon | ForEach-Object { ([string](Get-SIEqValue $Findings[$_] 'si_finding_key')).ToLowerInvariant() })
+            $ca = [int[]]@($canon); [Array]::Sort($ck, $ca, [StringComparer]::Ordinal); $canon = @($ca)
             foreach ($i in $ix) {
                 if ($folded.Contains($i) -or $target.Contains($i)) { continue }
                 $caps = Test-SIFindingFoldSide -Finding $Findings[$i] -Conditions $rule.Evidence

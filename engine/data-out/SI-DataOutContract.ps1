@@ -51,8 +51,14 @@ $script:SIDataOutClearable = @{
     # the remediation task outputs (#1277, review 3.1.30): the values a task or a link can LOSE run to run -- a reopened task's
     # close reason and close time first (ServiceNow must clear them; the Import Set API cannot tell empty from not sent). The
     # SQL hand-off views list the same columns, in this order (sql\si-data-schema.sql).
-    'servicenow-remediation-task'         = @('u_cmdb_ci', 'u_application_paths', 'u_severity', 'u_risk_score', 'u_tier', 'u_owner', 'u_department', 'u_close_reason', 'u_closed_at')
-    'servicenow-remediation-task-finding' = @('u_title', 'u_severity', 'u_product_version')
+    # #1367 the task's context for a ticket: appended, in the views' order (a value a task can lose is cleared in ServiceNow)
+    'servicenow-remediation-task'         = @('u_cmdb_ci', 'u_application_paths', 'u_severity', 'u_risk_score', 'u_tier', 'u_owner', 'u_department', 'u_close_reason', 'u_closed_at',
+                                              'u_application_version', 'u_detected_paths', 'u_recommended_update', 'u_remediation', 'u_cve_ids', 'u_risk_rating', 'u_weighted_risk',
+                                              'u_security_domain', 'u_exploit_available', 'u_end_of_support', 'u_end_of_support_date', 'u_due_date', 'u_first_detected',
+                                              'u_within_accepted_lifecycle', 'u_asset_type', 'u_os', 'u_ip_address', 'u_environment', 'u_internet_exposed', 'u_also_reported_by',
+                                              'u_si_more_info')
+    'servicenow-remediation-task-finding' = @('u_title', 'u_severity', 'u_product_version',
+                                              'u_cvss', 'u_risk_score', 'u_risk_rating', 'u_weighted_risk', 'u_exploit_available', 'u_first_detected', 'u_due_date', 'u_si_more_info')
 }
 # the fixed columns of a vulnerable item an out_of_scope row carries (the hand-off database's values, #279 decision 3)
 $script:SIDataOutOutOfScopeState = 'Closed'

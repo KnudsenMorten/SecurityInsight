@@ -44,7 +44,7 @@ public sealed class ReviewModel : PageModel
             if (!await _flow.ReadyAsync(ct)) { Error = "This database does not have the exemption review columns yet: run the Pro settings setup (it only adds)."; return; }
             var roster = await _flow.RosterAsync(ct);
             // #283: both levels -- the domains and the categories I own
-            MyDomains = roster.OwnedBy(User.ChangeName()).Select(n => DomainRoles.Label(n.Domain, n.Category)).ToList();
+            MyDomains = roster.OwnedBy(SI.Management.Web.Exemptions.RosterWho.Of(User)).Select(n => DomainRoles.Label(n.Domain, n.Category)).ToList();
             var all = await _flow.ExemptionsAsync(ct);
             var mine = all.Where(e => e.State(Now) != ExemptionStates.Ended && ExemptionWorkflow.CanReview(User, roster, e.DomainKey, e.CategoryKey));
             if (!string.IsNullOrWhiteSpace(Domain)) mine = mine.Where(e => string.Equals(e.DomainKey, Domain, StringComparison.OrdinalIgnoreCase));

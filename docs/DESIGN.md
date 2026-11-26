@@ -1160,6 +1160,18 @@ counted per run (`sidata.CollectionLeftOut`, the Data health page "Left out by y
 out retires with a reason naming the setting, and its findings close as asset retired, never as fixed. Accounts synced
 to Entra ID, AD-only groups, devices and findings are never affected; turned off, the next run records them again.
 
+**The never-synced accounts are left out in the query itself, so they are never fetched.** With either never-synced
+setting on, the Exposure Graph user read asks the hunting service only for the nodes SI keeps: the count probe and every
+page carry the same filter (never synced to Entra ID, an on-premises AD account, disabled for certain -- for the narrower
+setting -- and no privilege signal), every test leaning the safe way (anything the filter cannot decide is fetched and
+decided after the read, as before). The buckets follow the smaller count, and the log says how many were not fetched. At
+the largest tenant measured the Exposure Graph listed about 9 never-synced, disabled on-premises AD accounts for every
+Entra-linked user (1.57 million user nodes for about 157,000 users; no node twice -- the size came from those accounts,
+not from duplicate rows); the read now fetches about one node per user. Groups Entra ID no longer has cannot be decided
+in the query (that needs Entra ID's own group list); they are still fetched and left out after the read. If the count
+probe fails, the label is read without the filter and every node is decided after the read -- the same records either
+way.
+
 **Memory follows a page, not the tenant** (#702, 2026-10-15). The users and service principals are streamed page by page
 into the collection's parts (#475); the tenant-wide lookups every record reads are built the same way: the MFA
 registration rows, the service principal index (permission names, application ids) and the Exposure Graph identity nodes
@@ -1197,12 +1209,38 @@ SI_Identity_Profile_CL
 ```
 
 **Passwordless-only accounts** — `IsPasswordlessCapable` above says a user *could* sign in without a password; it does
-not say the password is gone. `si_passwordless_only` is read, not guessed: Identity Discovery reads each kept user's
-sign-in methods (`GET /users/{id}/authentication/methods`, Microsoft Graph application permission
+not say the password is gone. `si_passwordless_only` is read, not guessed: each kept user's sign-in methods are read
+per user by the background job `caj-si-signin-methods` (see *Two sources*), never by the collection (`GET /users/{id}/authentication/methods`, Microsoft Graph application permission
 `UserAuthenticationMethod.Read.All`, read only) through Graph `$batch`, 20 users per request
 (`engine/asset-profiling/shared/SI-AuthMethodsRead.ps1`). Users read: the members the identity profile keeps -- not
 guests or external accounts (their sign-in methods live in their home tenant), not soft-deleted users, and disabled
 accounts only while disabled accounts are collected.
+
+**Two sources, and the collection never waits for the slow one.** The identity collection reads ONE tenant-wide report
+for every user, Microsoft Graph's registration report (`reports/authenticationMethods/userRegistrationDetails`, paged,
+about 94,000 users in about 3 minutes on a large tenant): MFA registered / capable, passwordless capable, SSPR
+registered / capable / enabled, the registered methods, the default / preferred / system-preferred methods, admin, the
+last update. It makes **no per-user call**. The per-user read is made only for what the report does not carry, by its
+own background job (`caj-si-signin-methods`, every 15 minutes, a time-boxed slice; privileged users first, then users
+whose report entry changed, then users never read, then reads older than the maximum age -- setting
+`SI_Identity_SignInMethodsPerUser` all / privileged / off): every property of every method (`si_auth_methods`: phone
+numbers, security-key model, Authenticator app version, Windows Hello key strength, Temporary Access Pass lifetime),
+the device behind each Windows Hello for Business / Microsoft Authenticator method, `si_auth_method_types`,
+`si_has_password` and `si_passwordless_only` -- the report says which methods are registered but not their detail,
+their device, nor whether a password exists. The collection takes the saved detail with its read date
+(`si_auth_methods_read`); a user not read yet shows these fields as unknown, never as no. On a large tenant the
+per-user read takes hours (about 8.5 hours for 145,000 users, mostly waiting on Microsoft's throttling); it runs beside
+the pipeline, not in it.
+
+**The background read goes as fast as Microsoft allows.** Users are read 20 per Graph `$batch` request, only when due
+(never read, their report entry changed -- its last update or its registered methods -- or the periodic refresh after
+`SI_Identity_SignInMethodsMaxAgeDays`). Each run starts at the number of requests in flight the last run ended on (kept
+with the job's claim, at most 48 hours old), doubles it after every wave Microsoft answers cleanly until Microsoft first
+asks to slow down, then adds one per clean wave and halves after a throttled one, waiting the Retry-After once per wave
+and per answer; while Microsoft says the tenant is above 0.8 of its limit (`x-ms-throttle-limit-percentage`) it holds
+its pace instead of adding more. There is no fixed ceiling: Microsoft's answers decide. With the default slice a run
+reads for 12 of its 15 minutes while users are due and 8 once only the periodic refresh is left; an install's own
+slice (any value other than 8, the shipped one) is used as it is. The run's pace line says where it started and how often it held.
 
 The rule, from Microsoft's documented method types:
 
@@ -1456,7 +1494,9 @@ lists left out, as Log Analytics' `pack_all(true)`), plus Risk Analysis' own col
 (`3/16`, `late:3/16`, `sub:<index>/<count>`, `whole`, `page:N`), `RaSeq` (write order), `RaDedup`, `RaSort` (the weighted
 score), `RaInView` (the workbook / mail view: exemptions + output scope, decided per row as before), the trace parts,
 `RaFindingKey` (SI_Finding_CL), `RaAssetId` / `RaAssetTier` (for the data sync). Written in chunks of OPENJSON (the data
-sync's `Write-SIDataJsonRows`, chunk size from the measured time) -- not SqlBulkCopy, because the mapping is the data sync's.
+sync's `Write-SIDataJsonRows`, chunk size from the measured time) -- or, with `SI_Data_BulkLoad` on (the default), the same
+texts through SqlBulkCopy into a session table read by the SAME statement, a batch per transaction, counted and hashed back
+(#1336, `Write-SIDataLoadRows`; the mapping stays the data sync's).
 **A retried bucket never doubles**: its rows are deleted by bucket, then inserted. A report that runs again with more buckets
 (escalation), a bucket that returned the complete result (#401), a report that cannot be sent or fails: the report's rows are
 removed (`Clear-RAStreamReport`). A passing SQL failure is retried (3 attempts); a write that keeps failing fails the report.
@@ -1541,7 +1581,20 @@ request's timing and retries are verbose-only lines.
 
 **The CI context of a bucket** (`Get-RAStreamCiIndex`): the bucket's ids (with and without SI's id prefixes) and names looked
 up in `sidata.Ci` / `sidata.CiLink`; a name only when ONE current CI in the whole tenant has it. Where Risk Analysis builds the
-CIs itself (Community) they are built once at the start, into the database.
+CIs itself (Community) they are built once at the start, into the database. **In parts (#1250):** the ids and names of a
+large slice are asked a part at a time (5,000 row ids per part, each with SI's prefixes, and as many names), never every id
+times every prefix and every answer at once; a CI two parts both answer is kept once, so the index is the one a single read
+gives. A part the worker has no memory for is asked again in halves and the smaller size is kept for the rest of the run (it
+paces the reads, it never limits how many CIs are read). A slice within one part is one read, exactly as before.
+
+**The answer of a slice, read with little memory (#1321, `SI_RA_HuntingStreamRead`, default ON since owner 2026-11-23; off =
+the older read).** With the switch on (or not set), an advanced hunting answer is read as it arrives (see "The advanced hunting reader" below):
+never held as one text and one parsed tree. The slice's rows are then converted a part at a time (`ConvertFrom-RAHuntingResults`,
+2,000 rows per part -- per row exactly `ConvertTo-PSObjectDeep -StripOData -CastPrimitiveArrays`, as before), each part's value
+bags let go as it goes, so the answer is held about once instead of twice. The slice is still scored and written as ONE slice
+(the scoring de-duplicates within it, a slice's rows replace what the slice wrote before, and the row-limit and short-slice
+checks need its whole count). The worker keeps its producer's size: 4 CPU / 8 GiB is the largest size Container Apps
+consumption offers, so a larger answer is met by these reads and by splitting the slice, not by a larger worker.
 
 **After the reports** (every step reads pages, `New-RARowPager`, in the final order: `RaSort` desc, then `RaSeq`):
 the workbook (up to its 1,000,000-row ceiling, the highest-risk rows; above it an **'Extract' sheet says so** -- the large-size
@@ -1585,7 +1638,41 @@ in the background, so no engine state is shared between threads and the stored r
 at a time. Only advanced-hunting requests are asked ahead (the lake and Log Analytics routes are refused in the hunting
 layer); the late retry and the split parts run one at a time. How many at a time adapts: 2 to start, one more after a round
 of quick answers the engine had to wait for, half on 429 / 503 / 504 with nothing asked ahead until Retry-After has passed;
-`SI_RA_PartsInParallel_Max` (default 6, at most 4 per core; 1 = one at a time).
+`SI_RA_PartsInParallel_Max` (not set = no fixed number since 2026-11-23, was 6; at most 4 per core; a number = the
+ceiling; 1 = one at a time).
+
+**The CVE report on Kusto, faster with the same rows (2026-11-23, #1341; owner "Drop #1333, stay on Kusto" then "push
+harder, get it all out").** Three changes, each held to: the same rows as before (row for row, every column), and a slice
+that stays failed after its retries is UNKNOWN (its loss recorded, the report NOT COMPLETE), never short.
+1. *The exposed-devices count reads the slice's own CVEs first.* `Device_Missing_CVEs_Detailed` counted the devices exposed
+   to EVERY CVE of the tenant in every query slice (`_cveExposedDevices`, the whole-tenant grouping each of 512 slices
+   repeated). It now takes the CVEs the slice's rows can carry first (`_sliceCves`: the graph's findings of the slice's
+   assets + the vulnerability-management CVEs of the slice's devices -- exactly the two sources of the report's union) and
+   counts every device of the tenant for those only, so each CVE's count is unchanged. Shipped content: the report
+   templates are `fix` templates (`config/template-classification.locked.json`), which ride the code version -- no
+   template pack bump (the shipped pack stays 1.17); the query-text change is declared in
+   `data-model/report-fingerprint-carry.locked.json` (`report-slice-cves-2026-11-23`) so no finding closes as "report
+   changed".
+2. *The run's measured budget.* The queue workers of a run keep ONE budget in the run's storage
+   (`collect/<engine>/<run>/budget/run.json`): it starts at one request per worker, is halved for every worker when ANY of
+   them is throttled (429 / 503 / 504; once per Retry-After window, and nobody asks ahead until it has passed), and grows by
+   one when a worker's full round of quick answers at its share finds no throttle in the run for two minutes. Each worker's
+   share is the budget weighted by the slices its report still has to ask (`budget/item-NNNNN.json`, renewed at least every
+   `SI_RA_PartsBudgetSeconds`, 60 s; a claim not renewed for 10 minutes holds nothing): a worker with nothing queued holds
+   no claim, so its share goes to the reports still running -- at the end of a run, to the CVE report. A store that cannot
+   be read = the static share of #831 A (safe). The producer's own worker in its container keeps the whole budget.
+3. *A small slice merges with its untouched partner.* Slice b of N and its partners b + j*N/D are exactly slice b of N/D
+   (h % N in {b + j*N/D} <=> h % (N/D) == b), so the query, the inline lookups (`_CurrentBucketCount` / `_Index`) and the
+   lookups cut per slice all stay exact. Once an answer is small (a doubled width still under half the planned rows, the
+   answer under a quarter of the time limit) the next slice is asked with its partners, wider while answers stay small,
+   narrower after a large or slow one; only partners no request has touched, inside the slices this process runs
+   (`New-RASliceMerge` / `Get-RASliceRequest`, decided once, so a slice asked ahead is the same request). The merged answer
+   is split back per slice (`Split-RASliceRows`: the slice key the filter hashed, read back from the row -- `MdeDeviceId`,
+   or the asset id of an asset without a Defender id), each partner's rows are written in the partner's own turn under its
+   own name: the write order -- and with it which copy of a finding two slices both returned is kept -- is the one of
+   one-slice-at-a-time. A merged request the service does not answer is asked again at once as its own slice; any later
+   failure gives the partners back (each asked in its own turn) and the slice goes the way any slice does; a row nothing
+   places is kept with the slice and merging stops for the report. `SI_RA_SliceMerge = off` asks every slice alone.
 
 **#674 -- a lookup a report needs that cannot be read: that report is NOT COMPLETE (fail closed).** A report that joins
 SI's own Log Analytics tables (SI_*_CL) with the Exposure Graph gets those lookups read from Log Analytics and sent with the
@@ -1821,6 +1908,38 @@ is loaded as soon as it is in; every report that IS complete is current. Per rep
   which reports show their last complete result ("from <date> -- this run's report could not be completed"; badge "some
   reports earlier"); with any other scope it is marked partial as a whole, as before. The data sync's run carries a warning
   per such collection -- never a hold. A database the updater has not updated yet is said once and marked as a whole.
+- *A report held at its last complete result does not hold the run's publish (#901, #1323; owner: "a report fails alone,
+  the job completes ... we use last known good data").* Every page shows ONE published run (`sidata.PublishedRun`); a run
+  in which a report fell back to an earlier result is not published (`SI_Pro_PublishPartialRun` off, the default) -- EXCEPT
+  when every such report was HELD on purpose: its verdict carries a hold kind of the one list
+  (`data-model/hold-kinds.locked.json`: `silent-source` #900, `role-read` #899, `unreadable-slices` #1323) and the data sync
+  carried it FROM a last complete result (`sidata.CollectionHeldOnly`). Then the run publishes, not partial, with the note
+  "N report(s) held at their last complete result: names". `unreadable-slices` is a report NOT COMPLETE only because query
+  slices of it could not be read (e.g. "not split further -- splitting did not reduce the failure"): nothing else wrong
+  with it (no other failure, not flagged by the row-count guard, not a #877 hold-back, not held for another reason --
+  `Add-RAUnreadableSliceHolds`, after every other hold) and EVERY lost reason is a PLATFORM failure (a timeout, a 5xx, a
+  429 / throttling, the finest split or the worker's memory exhausted, the recovery budget spent -- `Test-RALostSlicePlatform`);
+  a query defect (a 400, "Fix syntax" / "Fix semantic", "Failed to resolve"), a result SI could not convert or a short answer
+  is never held -- the report stays a real failure and the query must be fixed. The kind is written on the report's own
+  verdict row with the date of its kept result. A report with NO earlier complete result keeps the run unpublished, as
+  before. For such a held report the data sync REMOVES this run's rows of it (the slices that did answer, in batches)
+  before it carries, so the report shows EXACTLY its last complete result, row for row -- never part of today mixed in, never
+  fewer rows than that result; every other not-complete report keeps this run's rows as before. The carry is never one
+  large statement (a held report can be ~1 M rows with their documents): the data sync first records the INTENT
+  (`sidata.ViewState` 'carry:<collection>' -- the collection is never marked Complete while it is there -- and per report a
+  mark that pins the source collection and the last source row carried), clears an exactly-shown report's rows of this run
+  in batches, then copies the source rows in FindingId ranges, each range in its own transaction with its mark (in exactly
+  once; sized from each range's measured time), and finally reads the rows back (carried = the source's) before the
+  per-report record is written and the marks go, in one transaction. A failure anywhere leaves the marks: the collection
+  stays Loading and the next data sync finishes the same carry. A 400 counts as a query defect only in an HTTP shape
+  ("(400)", "400 Bad Request", "StatusCode: 400", "BadRequest") -- never a time such as "timed out after 400 s".
+  Nothing of a held report closes (the per-report freeze); no page mixes runs except the named held report. The run record
+  still counts a lost slice as a partial cause (report-incomplete to Invardia from the first run), and the held report rides
+  on it as information (si-ra-0916; si-ra-0917, a support ticket, after 3 Detailed runs in a row). The web app marks the held
+  report quietly on the pages its rows feed (`_PartialNotice`, only where the report feeds the page): "1 report shows its
+  last complete result from <date> (this run could not finish it): name" -- the date in the viewer's own format; no
+  warning box and no "older data" badge (owner 2026-11-19). Run health > Reports shows it as Held with "Kept result from
+  <date>".
 - *The closes*: the vulnerability close-loop and the finding lifecycle read the verdicts of the collection
   (`Resolve-SIReportScopedComplete`). A run that ended `success-partial` with scope `reports` is complete for every other
   report: what is gone from them closes as usual. An open record or finding that an incomplete report found -- or that names
@@ -2136,6 +2255,86 @@ per CI, in this order: rules → manual overrides → the owning CMDB's record �
     finding row (zero differences) and both facet tables row for row; `SIv3-DeriveTypedScale.Tests.ps1` (Tag `Scale`, on
     demand) measures both paths on a large synthetic collection. Additive schema (two nullable columns on the findings,
     one on the collection, no index).
+  - **The view values worked out once, as Risk Analysis stores a finding (#1318, setting `SI_Data_ParseAtInsert`, ON by
+    default since owner 2026-11-23: not set or unknown = `on`; `off` = the older way; `shadow` = troubleshooting only).** The typed columns the derive writes depend only on the finding's stored row (DetailJson) and its CVE, so
+    they can be worked out when the row is inserted instead of by the data sync re-reading every stored row afterwards.
+    **Insert**: with the setting `shadow` or `on`, Risk Analysis' finding insert (`Get-RAStreamInsertFindingSql -Typed`)
+    records the FindingIds it inserts (`OUTPUT ... INTO @ins`) and, in the same transaction, runs THE SAME typed
+    statement the derive runs (`Get-SIDataDeriveTypedSql`, here over exactly those rows: `Get-SIDataTypedInsertSql`) --
+    one source of truth for the mapping, set-based, one round trip, the insert's own row count answered as before. The
+    switches are the derive's own, read once per run from the same database (`Get-SIDataParseAtInsertPlan`: the views'
+    columns, the Services tables, the fix columns, RaCategory, the row values, the risk score's parts); each row is marked
+    with them (`sidata.Finding.TypedOnInsert` = their mask: 1 base, 2 services, 4 fix, 8 category, 16 row values, 32
+    parts, for reading) and with the EXACT statement that typed it (`sidata.Finding.TypedStatement` = its fingerprint,
+    `Get-SIDataTypedFingerprint`: the first 16 bytes of the SHA-256 of the statement's text for that switch set, line ends
+    made one). A pass skips a row ONLY when its fingerprint equals the one of the pass's own CURRENT statement; a row
+    typed by a release whose statement differed in any expression (or by another switch set) is worked out again. A trace-name update (`Get-RAStreamTraceUpdateSql -Typed`, the asset id added to a shared trace name) works its
+    rows out again from the new text in its own transaction. **What stays in the data sync**: everything that depends on
+    more than the row -- the asset key on adopt, the tier fill, the CI lifecycle, the carried reports, the facets (asset,
+    tier, lifecycle, department, category) and the services (CMDB) -- and every row without the mark: rows carried in
+    from an earlier collection (the carry never copies the mark), rows loaded from Log Analytics, rows written before the
+    setting, rows typed with a different switch set. **Derive** (`Invoke-SIDataDeriveCollection -ParseAtInsert`): `off` =
+    exactly as before; `on` = the ranges leave alone the rows typed by exactly the derive's own current statement (`-SkipPrint`), and
+    a collection whose every row carries it runs no range at all -- the derive then only stamps (TypedAt, RaRowsAt, the
+    parts), builds the facets and the services; its line says how many rows came typed from the insert; `shadow` = every
+    row is derived as before, and each range first keeps aside the typed columns of its marked rows and compares them
+    after the derive column by column, byte for byte (`Get-SIDataParseAtInsertShadowSql`): the derive's values are what
+    stays, a difference is ONE warning line with the count and the first five FindingIds and column names -- never a value
+    -- and the run goes on. The vulnerability step's row-value fill (`Invoke-SIDataRowColumnsFill`, before the data sync)
+    follows the same setting: `on` leaves alone the rows typed by exactly the statement Risk Analysis types with in that
+    database (its fingerprint), `shadow` fills them as before and compares. The views show the same values in every mode.
+    Schema: two nullable columns on the findings (the mask and the fingerprint, added -- never altered) and a filtered index
+    over the marked rows only (`IX_Finding_TypedStatement`), so the setting costs nothing while it is off. Default
+    `on` (owner 2026-11-23: new features ship on); the prio-1 safety stays active in it: a row is left alone only when its
+    TypedStatement equals the current statement's fingerprint, and carried and Log Analytics rows are always derived.
+    `shadow` stays for troubleshooting; `off` stays as the way back. Proof: `SIv3-ParseAtInsert.Tests.ps1` (also: rows typed
+    by an earlier statement are typed again by the current one and equal a fresh derive).
+  - **The large writes load in bulk (#1336, setting `SI_Data_BulkLoad`, ON by default; `shadow` / `off`).** Risk Analysis'
+    findings, Summary rows and their impacted assets, the Summary stage, the findings per CI staged for the swap (the Log
+    Analytics path) and the data out's summary stage go through `Write-SIDataLoadRows` (`engine/_shared/data-sql/SI-DataBulkLoad.ps1`).
+    ONE MAPPING: the rows are the same JSON object texts the JSON path sends, copied with SqlBulkCopy (TABLOCK) into a session
+    table `#SIBulkRows (Seq, J)` in tempdb, and read by the writer's own statement, rewritten only at its source
+    (`ConvertTo-SIDataBulkSql`: `FROM OPENJSON(@j) WITH (...) x` -> `FROM #SIBulkRows AS sib CROSS APPLY OPENJSON(sib.J) WITH
+    (...) x`, an INSERT `ORDER BY sib.Seq` so the rows keep their order); a statement not in that shape is written the JSON way.
+    ONE TRANSACTION PER BATCH: copied, then COUNT and a content hash read back (the sum of the first 4 bytes of SHA-256 over
+    "<seq>|<text>" per row, the database's HASHBYTES of the same UTF-16 text -- the client's from a compiled helper, C# by
+    Add-Type from SI's own source, a PowerShell twin where it cannot be compiled), then the statement, whose count must equal
+    the batch's; only then committed. A batch that differs is rolled back and loaded again once; a second difference fails
+    the load (the step fails, never a part of a batch). A batch writes its KEY in its own transaction (`sidata.ViewState 'bulk:<key>'`): after a commit that did not answer (a connection dropped after the server committed), the key says whether that batch is stored before it is loaded again -- never twice; without the mark table such an error stops the load. Every command takes the seam's time limit. The batch size follows the measured time (characters per batch, at
+    most double, smaller at once when slow, the pacing of the database's load) -- no fixed size. A passing Azure SQL answer
+    reconnects and loads the batch again. The seam hands out its own open connection (`New-SIDataSqlInvoke`: `SIBulkOpen`,
+    the same open-with-retry and token); a seam without it (a test's fake) writes the JSON way. `shadow`: every batch is
+    copied and checked, then rolled back, and the rows are written the JSON way (a difference is one warning line).
+  - **The views' prepared context is filled report by report (#1337, setting `SI_Data_LoadPerReport`, ON by default (owner 2026-11-23: new features ship on);
+    `shadow` / `off`).** The field fill (`SI-DataViewContext.ps1`, every finding's prepared context from its row) no longer has
+    to wait for the whole Risk Analysis: when a Detailed report's verdict is Complete (`Set-RAStreamReportStatus`), the same
+    field fill statement runs over that report's rows (`SI-DataReportEarly.ps1 Invoke-SIDataReportEarlyLoad`) -- beside the
+    run, in a worker of its own (a runspace with its own connection per report, the run's connection string and a current
+    token handed over), so Risk Analysis goes on with its next report at once. Only when the rows carry the view values of
+    the run's #1318 statement (`SI_Data_ParseAtInsert` on) and the report's FindingId range is its own. Then a mark per
+    report (`sidata.ViewState 'ectx:<collection>:<report>:<list>'` = range, rows, id checksum, statement). A report that is
+    not complete, judged not complete at the end, or cleared to run again loses its mark; the run's end stops the worker (it takes nothing more, the reports still queued are let go and said, every command has a limit, and the stop is waited for a bounded time -- a worker that has not stopped then is left behind with a warning)
+    after the range in hand and removes those marks again, BEFORE the collection is marked in. The data sync takes a report
+    as filled only when, at its own fill, the report holds exactly those rows (range, count, id checksum), nothing else lies
+    in its range, every row carries the current statement's values and the list of columns is the same
+    (`Get-SIDataReportEarlyIntervals`); any other report is filled as before and said in a warning line (the run's report opens a fix request), so nothing unverified is published. `on`: on a full build (#1319) the matching ranges are left
+    out of the data sync's fill; a changed-set build does not use the marks (it fills only what changed, as #1319 says). `shadow` (troubleshooting): the data sync fills every row as before and FIRST counts, per matching report, the findings whose
+    stored context differs from what its fill works out (`Get-SIDataFindingContextDiffSql`, the fill's own expressions,
+    reading only) -- a difference is one warning line (the run's report opens a fix request) and the data sync's values are
+    stored. The marks go once the collection is prepared. NOTHING PUBLISHES EARLY: the early fill writes no collection
+    state and never the published-run pointer (#780 unchanged).
+  - **The database tier sized per install (#1335).** `engine/_shared/SI-DatabaseTierAdvice.ps1` works out, from the
+    database's own load of the last 24 hours (Azure Monitor, a value per minute, Maximum: data IO, log write, CPU, DTU) and
+    the heartbeat's largest table (#1306), the tier that keeps the run's read-bound phases below the limit: busy minutes =
+    load >= 20 %, at the limit = >= 99 %, the busy time's 95th percentile grown by the share at the limit (a minute at the
+    limit hides more demand), at 80 % of the new tier, the smallest step of Azure's ladder that covers it (Standard S0-S12,
+    then vCore General Purpose, then Hyperscale; 100 DTU = 1 vCore, Business Critical 125), never below S4 at a large install
+    (its largest table 1 million rows or more -- #1133's approved step-up), never a step down while a minute was at the
+    limit, keep when nothing was busy. Sent as the LAST key of the heartbeat's Database, `tierAdvice { recommended,
+    capacityNow, capacityNeeded, p95LoadPct, minutesAtLimit24h, busyMinutes24h, boundBy, change }` (one metrics read every
+    6 hours; every key always set: p95LoadPct 0-100, the minutes 0-1440 -- the newest 1,440 minutes of the read; nothing measured or only the DTU percent = the key is left out), checked before it goes out -- behind `DatabaseSendTierAdvice`, ON since Invardia accepted the key (its wire
+    contract is closed). A recommendation only: SecurityInsight never changes a database's tier; the change is the owner's
+    cost decision through Invardia.
   - **Existing installs** reach the new-install state once (the update's step "report row copy",
     `setup/_shared/SI-ReportCopyDefault.ps1`, marker `cfg.InstallState 'ReportRowCopyDefault'`; a new install writes the
     marker itself): until now every guided install carried the copy on without anyone choosing it (the generated config
@@ -2303,9 +2502,15 @@ SecurityInsight's own database and its own Log Analytics table -- no system outs
   exposure, services, inherited criticality, relations, overdue and exempted findings.
 - **One finding model** (`Get-SIDataFindingModelSql`, after the lifecycle): `sidata.CiFindingState` gets type, title, owner
   (service owner, else CMDB owner, else the CI's owner), services, SLA days and due date by severity
-  (`SI_Pro_FindingSla_<Critical|High|Medium|Low>Days`, 15 / 30 / 90 / 180, 0 = none; from the first detection or the last
-  reopen), exemption reason / expiry (`cfg.Exemption`), the close-loop ticket's state (`vuln.VulnerabilityItem`) and
-  `Excluded` (#533). Read: `sidata.vCiFindingModel` (status open / reopened / exempted / fixed / closed; overdue never for an
+  (`SI_Pro_FindingSla_<Critical|High|Medium|Low>Days`, 15 / 30 / 60 / 90 since #1388 -- was 15 / 30 / 90 / 180 -- 0 = none;
+  Critical = SI's Very High; from the first detection or the last reopen; #1388 `SI_Pro_FindingSla_ExploitedDays`, default 14, 0 =
+  off: a CVE whose exploit is verified or in a kit (`sidata.CveSummary.ExploitVerified` / `InExploitKit` of the newest
+  collection, filled by `Get-SIDataCveExploitSql` from the findings' si_exploit_verified / IsExploitVerified /
+  si_in_exploit_kit / IsInExploitKit -- never `HasExploit`) gets the smaller of the two), exemption reason / expiry (`cfg.Exemption`), the close-loop ticket's state (`vuln.VulnerabilityItem`) and
+  `Excluded` (#533). #1388 the remediation task's DueDate, the task page's findings and the ticket hand-off (`u_due_date`, task
+  and finding) take the provider's own due date (`si_fix_due_date`, Defender for Cloud governance) where it is set and `DueAt`
+  for the rest (owner 2026-11-25 "Provider's date wins if set").
+  Read: `sidata.vCiFindingModel` (status open / reopened / exempted / fixed / closed; overdue never for an
   excluded or exempted finding), `sidata.vServiceFinding`, `sidata.vServiceCi`, `sidata.vCiUnowned`, `sidata.vCiRelation`.
 - **Web app** (`CiGraphViews.cs`, read-only): the CI page shows Business services, Relations (to / from, ended ones kept),
   Findings and their lifecycle, What changed; the CMDB service page lists the CIs the service owns with their open /
@@ -2462,11 +2667,13 @@ subscription), other clouds, management groups, the Azure context -- each have a
 an assessments-API page waits at most 120 s (`$global:SI_AzureReadTimeoutSec`) and is tried 4 times; a Resource Graph page
 inside `Invoke-SIArgPaged` waits 120 s, 2 tries in the REST client, then the pager's own 4 (5 / 15 / 45 s); every retry is
 a log line (`Invoke-SIAzRestRequest -OnRetry`), not `Write-Verbose`. One subscription's assessments read times out after
-15 min (`$global:SI_MdcArmSubscriptionTimeoutMinutes`), the Resource Graph assessments read after 30 min (`-TimeoutMinutes`).
+15 min (`$global:SI_MdcArmSubscriptionTimeoutMinutes`), the Resource Graph assessments read after 30 min (`-TimeoutMinutes`);
+both are checked between pages, so one page can still take its own 4 tries of 120 s first.
 A repeated next link, a page of only items already read, and a repeated Resource Graph next-page token stop the read with
 a clear error. A read that stops is a FAILED read with the rule it always had: Resource Graph's rows answer for a
 subscription when it has some, otherwise it is UNKNOWN and the pull is recorded incomplete -- never "nothing there". A
-progress line comes at least every minute ("Defender for Cloud assessments: subscription i of n, page p ..."). Time-outs
+progress line comes after each page (and at most once a minute) ("Defender for Cloud assessments: subscription i of n, page p
+..."); inside one slow page the retry lines are what the log shows. Time-outs
 only; no count caps. An answer whose body stops arriving times out where the stream allows it and counts as "no answer".
 
 **Resources in AWS and GCP** (`Get-SIMulticloudResources.ps1`, in the Azure discover after the Defender for Cloud
@@ -4098,6 +4305,18 @@ before. The bucketing gate is unchanged: a report is bucketed when its configure
   includes the slice time. A report far inside every limit (rows, bytes, request AND time) therefore comes down to 1,
   half a step per run (8 → 4 → 2 → 1). A report with few rows but slow slices stays where its time needs it. Example: one
   slice of 400 s at 2 slices needs 2.
+- **Step 6 — shrink to fit** (#1378, owner 2026-11-25, `Get-SIRaBucketFitCount`). At the end of every complete run with
+  no split slice, the next run's count is sized from **this run's own answer** and taken **at once** when it is lower
+  (not half per run). The need is step 4's rule on this run's measure: rows against half the 30,000 planning target,
+  bytes against half of 64 MB, the split part of the request against half of 1 MB (the query text and lookups sent whole
+  are not counted once per slice), and the slice time. When the run cannot tell a slice's fixed part, the time is also
+  sized against **half the back end's documented limit** (90 s advanced hunting, 300 s Log Analytics, 120 s the data
+  lake) as if all of it were divisible, so a count never comes down into the gateway's time limit. The next power of two,
+  never below the learn floor. It only lowers: raising stays with a slice that really hit a limit (`Get-RACountAfterSplit`).
+  A raise of the same query still holds, unless this run measured every slice far below every limit or the report's rows
+  have since fallen to half -- so no raise is permanent. A throttled / busy answer is retried at the same size and never
+  raises a count. The history records it as `fit`; the page says "Last run: sized to fit (N rows -> M buckets)". Where the
+  fit does not lower the count, the halving rules (steps 3 and 5, #880's complete-at-fewer) apply as before.
 - **Step 3 — sizing down.** The count is halved only after **3 runs in a row** at that count in which every bucket stayed
   under 25 % of every limit, and none of them raised or resized it. It never goes down to the count that last overflowed
   (`Get-SIRaBucketDownCount`).
@@ -4477,8 +4696,11 @@ summarize and the extends after it (verified for all 56 Summary reports).
 
 **The disabled part** is one decision through `Resolve-SIDisabledAssetsRaFilter` (`engine/_shared/SI-DisabledAssets.ps1`):
 `setting` follows SI_DisabledAssets_RiskAnalysis, `exclude` never shows a disabled asset (the report asks about usable
-accounts -- no MFA, stale password ...), `include` always does (the disabled state is part of the finding, and the two hygiene
-reports GuestWithPrivilegedRole / SPN_OwnsResourcePublicAccess). The CI predicate is
+accounts -- no MFA, stale password ...), `include` always does (the disabled state is part of the finding, and the guest
+hygiene report GuestWithPrivilegedRole). **No report always shows a disabled service principal or managed identity** (#1353,
+owner 2026-11-24): a disabled SP is handled exactly like a disabled user, even when it holds a Tier 0 role --
+SPN_OwnsResourcePublicAccess, `include` until then, follows the setting; the SP's open findings freeze (never closed,
+never counted absent) and come back when it is enabled again. The CI predicate is
 `coalesce(tobool(si_account_enabled), true)`: only a KNOWN disabled asset leaves; users, service principals and Entra
 devices alike (a device finding of a disabled computer follows the same setting -- decided on this branch). A legacy marked
 line (a customer query written for #533) is still rewritten from the same decision.
@@ -4497,7 +4719,7 @@ side mirrors the shape checks; it does not run the Kusto dry run yet.
 
 | Setting | How it reaches the query | Reports that apply it | Changed on this branch |
 |---|---|---|---|
-| SI_DisabledAssets_RiskAnalysis | `Get-SIDisabledAssetPolicy` -> `Resolve-SIDisabledAssetsRaFilter` (report mode) -> the CI-block predicate | 54 reports follow it (devices, Azure, attack paths, logon reports, the seven #533 identity reports); 58 never show disabled accounts; 12 always do | was 14 marker lines (7 reports) + 58 hard-coded enabled lines; device reports were never filtered -- now every report's CI block |
+| SI_DisabledAssets_RiskAnalysis | `Get-SIDisabledAssetPolicy` -> `Resolve-SIDisabledAssetsRaFilter` (report mode) -> the CI-block predicate | 70 reports follow it (devices, Azure, attack paths, logon reports, the seven #533 identity reports, SPN_OwnsResourcePublicAccess since #1353); 58 never show disabled accounts; 10 always do (none on a service principal) | was 14 marker lines (7 reports) + 58 hard-coded enabled lines; device reports were never filtered -- now every report's CI block |
 | SI_InternetExposedRanges | `Merge-SIRiskFactorRanges` -> the internet_exposed factor on the CI -> the fed set | every report whose factor set holds internet_exposed (device, Azure, the attack paths' targets) | none needed -- no report computes ranges itself |
 | SI_CVE_MinSeverity / MinCvssScore / MaxPublishedAgeDays / RequireExploit | `Resolve-CveFilterBlock` (`//__CVE_FILTER_BEGIN__`, the TVM twin) | Device_Missing_CVEs (2), the Public IP to VM attack paths (2) | the 2 attack paths get a CVE scope let. Not applicable: the device-insight reports (no per-CVE data) and Shodan (no severity) |
 | Exclusions -- ExcludedAssetTags (+ the shipped list excluded_asset_tags) | scope block + CI predicate (assetTags) | 122 (not the two excluded-assets reports, which list them) | was 12 reports + 10 attack paths with a hard-coded tag |
@@ -5191,7 +5413,7 @@ The producer drops shard messages onto `si-<engine>-shards` Storage Queue. KEDA 
 * **One unit, as before.** After the hand-overs the producer runs what spans reports exactly as the single job did: the run-level guards (row drop, emptied column, bucket jump), the hand-off between the Azure and Defender recommendation reports (a giver whose list read empty is NOT COMPLETE when a receiver that ran after it found rows -- decided over the whole run in the single job's order), the Log Analytics post (the whole run ONCE, read from SQL after every report is in -- the same post, the same rows in the same order, the same checks as the single job), the verdicts-final marker, the completion, the workbook, the AI summary and the mail.
 * **Same method for every size.** A small tenant's run is the same items, taken by one worker. Without a worker job (no managed identity, queue scaling switched off) the producer runs the worker in its own container, and again after a crashed attempt's hold has ended. The Summary reports still run in their own job.
 * **Setup and update (on by default).** A new install gets the worker (Bootstrap step 4c: the producer's image, settings, secrets, identity and size; up to `SI_Bootstrap_RaMaxWorkers`, default 4, at once; `SI_RA_WORKERS` tells each worker that count) and the producer's switches (`SI_RA_SCALE_OUT=on`, `SI_RA_WORKER_JOB`). Every update gives an existing install the same (`setup/_shared/SI-RaWorkerJobs.ps1`, update step 9b, `Invoke-SIUpdateRaWorkers`): the worker is created from the Risk Analysis job, read back, and only then the Risk Analysis job is told; a second update finds it present and changes nothing; any failure leaves it running its reports itself and the next update tries again -- never fatal. Switched off (`$false`): no worker is made and no role granted; a Risk Analysis job still told it is a producer is told it is not (its two switches removed, read back) and the idle worker job is left; setup with `$false` also removes the worker.
-* **Workers and Defender's limits.** A Risk Analysis job asks the next query parts of a report ahead while it processes one, up to `SI_RA_PartsInParallel_Max` (default 6) at a time, adapting to Defender's answers. A worker runs the same report loop, so left alone four workers could ask four times that. The setting is therefore what ONE job may ask at a time and the queue workers SHARE it: each worker gets `floor(Max / SI_RA_WORKERS)`, at least 1 (`Get-RAPartsInParallelShare`) -- with the defaults one part at a time per worker, four in flight against the single job's six. Together the workers never ask Defender for more at a time than one job would (more workers than the budget = one request per worker, the reviewed worker design), and each worker's own adaptive rule still halves its share at once on a 429 / 503 / 504. A static share was chosen over one adaptive rule shared between the containers: it needs no cross-container state on every part (a blob or SQL round trip, a new failure mode) and its bound is provable offline. The producer's own worker in its container (no worker job) is the only one and keeps the whole budget. The Summary job beside it keeps its own budget, as without workers, and every writer still paces itself on the database's own load.
+* **Workers and Defender's limits.** A Risk Analysis job asks the next query parts of a report ahead while it processes one, up to `SI_RA_PartsInParallel_Max` at a time when the install sets it, adapting to Defender's answers. Not set (the default since #1341): no fixed number -- the run's workers keep one measured budget in the run's storage, weighted by the slices each report still has to ask, at most 4 per core (*The CVE report on Kusto, faster with the same rows*); the static share below applies only when the setting is set. A worker runs the same report loop, so left alone four workers could ask four times that. The setting is therefore what ONE job may ask at a time and the queue workers SHARE it: each worker gets `floor(Max / SI_RA_WORKERS)`, at least 1 (`Get-RAPartsInParallelShare`) -- with the defaults one part at a time per worker, four in flight against the single job's six. Together the workers never ask Defender for more at a time than one job would (more workers than the budget = one request per worker, the reviewed worker design), and each worker's own adaptive rule still halves its share at once on a 429 / 503 / 504. A static share was chosen over one adaptive rule shared between the containers: it needs no cross-container state on every part (a blob or SQL round trip, a new failure mode) and its bound is provable offline. The producer's own worker in its container (no worker job) is the only one and keeps the whole budget. The Summary job beside it keeps its own budget, as without workers, and every writer still paces itself on the database's own load.
 * **The last workers share the free budget.** Measured at a large install: the queue was empty after 50 minutes, three of four workers stopped, and the last one ran its report alone for almost five hours at one request at a time -- its static share. Now a worker divides the budget by the number of the run's items that are still open (items without a marker -- its own included, read with ONE listing of the run's markers at the start of every report and every 5 minutes, `SI_RA_PartsShareRecheckSeconds`), never by more than the worker count: alone it gets the whole budget, two get half each. No lease, heartbeat or new shared state is read. The open count only falls during a run, so a worker that read it earlier holds a smaller share, never a larger one: together the workers still never ask Defender for more at a time than one job. When its share rises the worker's adaptive count climbs from 2 again; the halving on 429 / 503 / 504 is unchanged. A worker that cannot read the markers keeps its static share; the producer's own worker keeps the whole budget. This changes only how many Defender requests are on their way: each worker still writes to the database one slice at a time on its own thread, paced by the database's own load.
 * **A big report in several parts.** A work item used to be a whole report, so the last big report ran on one worker while the others had nothing to do. The producer now reads each report's remembered query-slice count (the bucket counts, `cfg.RaBucketState` / the AutoBucket cache) and splits a report that is large against the run into parts by ranges of its slices: with W workers and R slices remembered for the whole run, a fair share is R / W slices per worker, and a report of N slices above that share becomes ceil(N / share) parts -- never more than the workers and never a part of fewer than 2 slices; one worker (or the producer's own) never splits. Only a report the single job asks in remembered slices is split (its query has the slice block, slicing is not off, it is not staged, the on-demand bucket proof is off); a report without remembered state runs as one item, as before. Every part asks the SAME slice count (the remembered one, never sized again in a part) and only its own range, writes its rows with the report's ordinal in its own write-number bands (the main pass of part 1, 2, ..., then the late retries of part 1, 2, ..., then the sub-slices of part 1, 2, ... -- the single job's order), and removes only its own rows when it starts again. When its slices are in it writes its PARTIAL (`partial/item-NNNNN.json`: its list entries, rows retrieved, slice accounts, columns, row count, column fill, retry answers, lost slices and the bucket learning's evidence). The LAST part to finish (all partials there; a create-only claim `finish/report-NNNNN.json`, so exactly one) takes every partial into its process and finishes the report exactly as the single job does: the bucket learning once over all parts' slices (one coherent state written back), the lost-slice verdict, the findings two slices returned kept once, the shared trace names, the count, the completeness check and the verdict; its hand-over is the report's one hand-over. The other parts hand over only their counters and columns. A part never waits for another. The queue hands out the largest items first (by the query slices each asks: a part's range, a whole report's remembered count), so a big report or the parts of a split one start at once; only the order the workers take the items changes -- ordinals and write numbers, and so the result's order, stay the single job's. The producer knows the real worker count: setup and every update give the Risk Analysis job the same `SI_RA_WORKERS` its workers get (read back with its other switches; a producer made before is told it again); without it the producer falls back to `SI_Bootstrap_RaMaxWorkers` (default 4). The report is complete ONLY when every part has its marker and one part has put it together: a lost, failed or parked part, or parts that do not add up (a later part returned the whole result in one slice when the first did not), make the whole report NOT COMPLETE with no rows kept, named once. A retry of a part whose partial is already written runs no slice again. More parts never mean more writers than workers: at most `SI_RA_WORKERS` processes write at once, as before, each paced by the database's load -- on a small database the pacing slows every writer while it is saturated; on a large one the parts finish the run's tail on every worker.
 * **The heartbeat signs in.** The heartbeat that renews a worker's hold on its report runs in its own runspace, which does not see the sign-in the worker recorded; it is now handed the worker's sign-in (as the collection workers do) -- every renewal failed before and the workers fell back to the one long hold.
@@ -5231,7 +5453,7 @@ example the ServiceNow connector where ServiceNow is not configured).
 | `caj-si-signin-methods` | Reads users' sign-in methods in the background | Timer every 15 minutes |
 | `caj-si-updater` | Updates the install (section 12f) | Timer, 18:30 local time of the install's Azure region. Also started for an expedited update, by the pipeline runner when an update waited for a run, by itself for its second pass, and by the web app for a short apply-settings run |
 | `caj-si-dbinit` | The database work that needs the SQL admin group | Manual: started by the install, by every update and by a support repair |
-| `caj-si-index-build` | Builds large indexes that did not fit in an update, in idle time | Manual: started by the pipeline runner's idle wake-up; it hands over at once when an update needs the install |
+| `caj-si-index-build` | Builds large indexes that did not fit in an update, in idle time (and, with SI_Data_ColumnstoreIndexes on -- the default -- the columnstore indexes of the largest tables) | Manual: started by the pipeline runner's idle wake-up; it hands over at once when an update needs the install |
 | `caj-si-support-grant` | Opens and closes time-limited support access ([A4b](#a4b-time-limited-support-access)) | The storage queue `si-support-requests` |
 | `caj-si-supportsql`, `caj-si-insidecheck` | One-time jobs of a private install: support's database user, and the name check from inside the network | Created, run once and removed by the support or setup step |
 
@@ -5475,7 +5697,14 @@ execution counts as running only while a lock row that names it (its Holder is t
   log line per beat, `<step>: SQL statement running <N> min`. Only while a statement runs: a hang anywhere else still goes
   dead 15 minutes after its last beat. Never for ever: the beat stops at the rule's own 6-hour outer fallback (said in one
   line), and the summary views' statements (9f) stop after 2 hours (a warning; the update goes on). One wave of the
-  published copies' ranges (9j, each range on a connection of its own) runs under the same beat;
+  published copies' ranges (9j, each range on a connection of its own) runs under the same beat, and 9j says its header
+  when the refresh starts and the engine driver's progress lines as they come, beating the rows after every range (#1357).
+  **At its end** the update first writes the END MARK of its run (the one row `updater-ended`, Holder = it, written by
+  whichever update ends last) and only then lets its own row go (a successor takes it at once). While Azure still shows the
+  ended execution running (its container stops -- found live 2026-11-25: a finished update was stopped 27 s after its end
+  as "never reported that it was working"), the rule judges it **finishing, not dead, for 10 minutes after the mark**; past
+  that it is judged by the mark like any last beat and stopped as before (its line: "reported that it had ended at ...,
+  but still showed as running"). The mark holds nothing else back (a support start of the database job ignores it);
 - **the pipeline runner** of a run beats the install lock (`install`), as it always has;
 - **the clean-up pass** (a wake-up during a run) takes a lock of its OWN (LockId `housekeeping`; an install without a
   database: the document `sistate/flow/housekeeping.lock` beside `pipeline.lock`) as the container entry's first act,
@@ -6548,7 +6777,7 @@ What setup and the updater give each identity. A right marked *(option)* exists 
 
 | Identity | Azure | Microsoft Graph and Defender (application permissions) | Database, Key Vault and mail |
 |---|---|---|---|
-| `id-si-engine` | Reader at the collection scope (a subscription by default, or the management group or tenant root you chose). Monitoring Metrics Publisher on the data collection rules' resource group; With the guided install also Monitoring Contributor there and Log Analytics Contributor on the workspace, so the first run can create its tables and rules. Log Analytics Reader on SecurityInsight's workspace and on the Defender workspace when that is another one. Storage Blob, Queue and Table Data Contributor on SecurityInsight's storage account. AcrPull on the registry. Container Apps Jobs Contributor on the install's resource group, to start and follow the jobs. | Graph, read only: `User.Read.All`, `Group.Read.All`, `Directory.Read.All`, `Device.Read.All`, `Application.Read.All`, `AuditLog.Read.All`, `Policy.Read.All`, `RoleManagement.Read.All`, `RoleManagement.Read.Directory`, `RoleManagementPolicy.Read.Directory`, `RoleEligibilitySchedule.Read.Directory`, `RoleAssignmentSchedule.Read.Directory`, `PrivilegedAccess.Read.AzureADGroup`, `IdentityRiskyUser.Read.All`, `IdentityRiskEvent.Read.All`, `IdentityRiskyServicePrincipal.Read.All`, `ThreatHunting.Read.All`, `UserAuthenticationMethod.Read.All`, `DeviceManagementManagedDevices.Read.All`, `DeviceManagementConfiguration.Read.All`, `AccessReview.Read.All`, `SecurityAlert.Read.All`, `SecurityEvents.Read.All`. Defender, read only: `Machine.Read.All`, `Vulnerability.Read.All`, `SecurityRecommendation.Read.All`, `Score.Read.All`; Microsoft Threat Protection `AdvancedHunting.Read.All`. | Pro database: role `si_engine` (object-level grants and denies), plus read and write on the identity ledger. May run the support grant procedures. Key Vault Secrets User on the vaults that hold its secrets. *(option)* `Application Mail.Send` limited to the sender mailbox, with shared-mailbox mail. |
+| `id-si-engine` | Reader at the collection scope (a subscription by default, or the management group or tenant root you chose). Monitoring Metrics Publisher on the data collection rules' resource group; With the guided install also Monitoring Contributor there and Log Analytics Contributor on the workspace, so the first run can create its tables and rules. Log Analytics Reader on SecurityInsight's workspace and on the Defender workspace when that is another one. Storage Blob, Queue and Table Data Contributor on SecurityInsight's storage account. AcrPull on the registry. Container Apps Jobs Contributor on the install's resource group, to start and follow the jobs. | Graph, read only: `User.Read.All`, `Group.Read.All`, `Directory.Read.All`, `Device.Read.All`, `Application.Read.All`, `AuditLog.Read.All`, `Policy.Read.All`, `RoleManagement.Read.All`, `RoleManagement.Read.Directory`, `RoleManagementPolicy.Read.Directory`, `RoleEligibilitySchedule.Read.Directory`, `RoleAssignmentSchedule.Read.Directory`, `PrivilegedAccess.Read.AzureADGroup`, `IdentityRiskyUser.Read.All`, `IdentityRiskEvent.Read.All`, `IdentityRiskyServicePrincipal.Read.All`, `ThreatHunting.Read.All`, `UserAuthenticationMethod.Read.All`, `DeviceManagementManagedDevices.Read.All`, `DeviceManagementConfiguration.Read.All`, `DeviceManagementApps.Read.All` (Intune deletion proof, #1390), `AccessReview.Read.All`, `SecurityAlert.Read.All`, `SecurityEvents.Read.All`. Defender, read only: `Machine.Read.All`, `Vulnerability.Read.All`, `SecurityRecommendation.Read.All`, `Score.Read.All`; Microsoft Threat Protection `AdvancedHunting.Read.All`. | Pro database: role `si_engine` (object-level grants and denies), plus read and write on the identity ledger. May run the support grant procedures. Key Vault Secrets User on the vaults that hold its secrets. *(option)* `Application Mail.Send` limited to the sender mailbox, with shared-mailbox mail. |
 | `id-si-web` | AcrPull. Log Analytics Reader on the workspace. Container Apps Jobs Reader on the resource group. With Microsoft's built-in sign-in: Storage Blob Data Contributor on the one blob container of the sign-in token store. *(option)* Cognitive Services OpenAI User on your Azure OpenAI resource (the chat's questions to the model). | `User.ReadBasic.All`, `GroupMember.Read.All`, `Application.Read.All`. A federated credential on the web app's sign-in registration. | Pro database: read, the listed writes the web app needs, the audit trail, and the sign-in front's own schema. Key Vault Crypto Service Encryption User on two keys only (`SI-Web-KeyRing`, `signin-front-dp`). *(option)* Key Vault Secrets User for magic-link sign-in. No mail right. |
 | `id-si-mcp` | AcrPull. Log Analytics Reader on the workspace. | None. | Pro database: read only, the sign-in key table refused. |
 | `id-si-updater` | Contributor on the install's resource group and the registry. AcrPull. | `Directory.Read.All`, `GroupMember.Read.All` and `Application.Read.All` -- read only; the last two let it check that the database setup job is still a member of the SQL admin group. It holds no PIM-for-Groups permission: an update takes off any it still has. | Key Vault Secrets Officer and Crypto Officer on the install's vault. Pro database: read, write, `db_ddladmin` and the signed grant procedure, or `db_securityadmin` where signed grants are not on. *(option)* `Application Mail.Send` limited to the sender mailbox, for the licence notice. |
@@ -6850,7 +7079,7 @@ into a connector (`cfg.CollectionSend`). Not checked, each with its reason in `$
 authorization (access, domain / category roles), saved views, guard acknowledgements, the web app's own management reports,
 and the department roster (also kept from department sign-in-link sessions, which carry no Entra token).
 
-**Why job trigger / start requests and Run now are not signed one by one**: they make no outside change themselves -- a
+**Why job trigger / start requests and Run now carry no signature of their own**: they make no outside change themselves -- a
 Run now or a job start only starts SecurityInsight's own named jobs (allow-listed by name, SECURE-WEB-1), and a trigger
 request only changes when SecurityInsight's own jobs run; a run then acts only on the configuration whose changes were
 verified (an unsigned change holds every new run); and while a hold is on, the job trigger and job start requests wait
@@ -7340,6 +7569,49 @@ rings follow once the platform has verified that only base images changed and th
 release is then watched for a limited time; if an install reports a failed update or an app that stops answering on it,
 every ring it reached is switched back to the version that ran before -- the same code on the previous base image, never
 a code rollback and never more than one version -- and a new base image update waits until the cause is fixed.
+Everything a later step needs (the internal helper files, the full id of the platform's task) is checked before anything
+is built or released, and a release that was switched back is never the starting point of the next update: that is the
+release the rings run. The web app and the MCP server are tagged by a hash of their own sources, and those sources include
+their Dockerfile -- so a new base digest alone always gives a new image, which the install builds and runs. The first
+rings' proof is that each of them runs exactly the image the update's code makes (the same source hash, on the new base),
+healthy; the switch-back is read back by the same rule. Every Dockerfile the update moves must belong to a component that
+proof checks this way -- the web app, the MCP server (their source hash), the engine jobs and the updater (the tag of the
+update's build) -- or the update is refused before anything is built; a component that cannot be read back is a failed
+proof, never a pass.
+
+**A base image update per ring build.** The customer rings may run an older build than the first rings (newer code the
+owner has not yet approved for them). Then one base image update becomes two releases: the first rings get the update on
+the newest build, exactly as above -- that release is the proof -- and the customer rings get the same new base digests on
+the build they already run, numbered on that build (3.1.5 -> 3.1.5.1), so no unapproved code reaches them. That second
+release is checked before anything is released: its changes are digests and version strings only, and every base image
+line it adds is one the first release added (the same image, tag, build stage and digest). It goes through the same test
+gate and is registered with the update platform, but is never installed on the internal environment or the first rings;
+its customer-ring release names the first-rings release that proved those base images. Each release is watched on its own
+rings and switched back on its own: a problem on the customer rings never moves the first rings, and the other way round.
+When every ring runs the same build, it stays one release.
+
+**Every ring call is checked before it is sent (#1327).** Before the release tooling asks the update platform to release a
+version to a ring -- the first rings or the customer rings, Pro or Community, a normal release, a base image update or a
+switch-back -- it sends exactly the same request to the platform's check, which answers what the real call would do and
+changes nothing. The call goes out only when the check gives the answer that ring should give: the first rings release at
+once; a base image update to the customer rings is approved on the standing decision, now or once the first rings proved it;
+a code release to the customer rings goes to the owner's decision as it always has. Any other answer -- refused, an answer the
+tooling does not know, no answer -- stops the tool before that call and prints the answer with the platform's reasons. A
+version is checked once it is registered (the check refuses a version the platform does not hold yet), so a publish checks its
+ring call right after the upload; a refused check leaves the version registered and released to no ring.
+
+**A switch-back is recorded where releases are recorded (#1326).** When a base image update is switched back, each ring it
+stepped down is also written into the release tooling's own record of what each ring runs (as the normal release's own
+switch-back does), so no later release, approval or base image update takes the switched-back version as that ring's release.
+Its number stays used. The machine-local files later steps read (the ring settings, the sign-in settings, the release record)
+are checked with the other inputs before anything is built or released.
+
+**Base image notices are queued, never released by the reader (#1325).** When the update platform announces a new Microsoft
+base image, SecurityInsight's events reader checks the Dockerfiles of the release the first ring runs. If SecurityInsight
+builds on that image, the notice is queued for the image update and then confirmed as received; otherwise it is confirmed as
+not used. A notice that cannot be queued is not confirmed, so it comes back. The reader never releases anything and asks
+nobody anything; the image update (`Release-SIImagePatch.ps1 -FromQueue`) takes the oldest queued notice as its instruction
+and takes it off the queue once the update is out -- an update that stopped or was switched back stays queued.
 
 **Guided install as a command.** `setup/Install-SecurityInsight.psd1` exports `Install-SecurityInsight`, which forwards every parameter unchanged to `setup/Install-SecurityInsight.ps1` and leaves its exit code in `$LASTEXITCODE` (0 installed, 1 a step failed, 2 a check failed, 3 config.json not valid). Every event's action carries both a text and a command; a note without a command is part of the message, and a failure without a command of its own gets the resume command. Paths are built for Linux (Azure Cloud Shell) as well as Windows.
 
@@ -7822,6 +8094,14 @@ A vulnerability is closed as fixed only when it has been missing for several com
 
 **The work done once per finding runs as compiled code.** Each page pass handles every finding of its CIs: it copies the row into the CI key's space, turns it into the finding the plan compares (its key, type, title, report, component, sub-CI, OS family, patch cycle, affected software), keys it on the CI's current id, and sorts the page's findings into those to plan and those set aside (retired, not seen, frozen, another page's). On a large install that is close to a million findings, twice per run, and most of the time went into the scripting language's own cost per step, not into the database. These steps now run in a small helper written in C# and compiled once when the run starts (`engine/asset-cmdb/_shared/SI-VulnFast.ps1`; plain .NET, nothing installed). Every decision about a value stays where it was: the finding key, the type, the fields taken from a row's multi-value columns, the affected software and the CI key are still worked out by the same functions as before, once for each distinct value (the run already remembered them per page); the helper only reads the fields, builds the same entries in the same order and filters the same lists. Where the helper meets a shape it does not handle exactly (a list where one value is expected, an empty slot in a list, a set of another kind), that one call runs the previous code; where the helper cannot be built at all, the whole run does. Nothing it produces differs: each function was run old against new on the same varied input with every value, type, key order and dictionary compared, and the whole paged block old against new on real SQL, run after run, with every record, event and item change identical (`SIv3-VulnFastSame`, `SIv3-VulnFastPagesSame`).
 
+**Only what changed is planned one by one, and the page fold is compiled (setting `SI_VulnLoop_ChangedSet`: `on` by default, `off`, `shadow`).** Nearly every finding of a run is the same as in the run before, yet each page read every finding into groups in the scripting language (the fold: the first severity, name and title, the highest risk score, the lowest tier, the distinct values of each field -- the larger part of a page pass) and then planned every finding one by one. With the setting on:
+- *The fold is compiled.* The same helper folds a page's rows into the same groups, with the same dictionaries, values and order, and turns them into the same rows (`engine/asset-cmdb/_shared/SI-VulnFast.ps1`, `FoldRows` / `FoldComplete`). A set of more than one distinct value is still sorted by the previous function (it sorts with the language's own culture). A page the helper does not read exactly -- a list where one value is expected, a text a culture compare would read as empty, a tier the language would refuse as a number -- is folded by the previous code; where the helper cannot be built at all, every page is. The helper first checks every row of the page without keeping it, then folds one row at a time into the page's own copy and puts it in only at the end: an error while folding leaves the run's state as it was and the page is folded by the previous code.
+- *Only what changed goes through the plan.* On each page, a finding and the one record its key matches are set aside when the plan could only decide "still reported, nothing sent changed": the key appears once on each side, the record is open, belongs to this source, is not stored under a previous id, is not counted absent, was not released by an Admin, and every field the connector sends is the same (compared trimmed and case-sensitively; an empty value keeps the stored one). Such a pair is added to the plan's result as exactly the item the plan makes for it -- a "seen" refresh with the same fields sent, no change logged -- and every count the plan keeps for it is added (desired, records, seen; for the guards: desired, open, still reported). The plan works out everything else as before: new, changed, reopened and absent findings, frozen and held records. Anything in doubt stays with the plan.
+- *Closes come only from every key.* On every page the open records whose key is not among the page's findings are worked out from the full lists (keys only) and compared with the records the plan judged absent (closes, held, counted). They must be the same; if not, that page is planned in full, and -- found in the first pass -- the second pass plans every page in full; the run warns. A close is therefore never inferred from what changed.
+- *The guards decide once, on the whole run.* The close limits, the absolute cap, the collapse floor and the empty-result check are decided once over every page's totals, exactly as before -- the set-aside pairs are counted in them as the plan would have counted them -- and a data-health hold still makes the run plan-only.
+- *Shadow (troubleshooting).* Each page is planned both ways: first the faster way, plan only (what it would do and send is read at once: every open, update, seen refresh, reopen, close with its reason, absence count and held record), then in full -- the full result is what is applied. The two are compared, and so are the two folds of each page and the guards' totals and decision after the first pass. Any difference is a warning on the run (it reaches the data-problem report); nothing of the faster way is sent. The warning says only the action, the record's id (for an open, a hash of its finding key), the position of a folded row and the NAMES of the fields that differ -- never a value: no asset name, title, finding id or CI key leaves the run. It doubles the work.
+`off` plans every page in full, as before; a run read in one piece (not paged) is planned in full whatever the setting. What the connector sends (to the SecurityInsight vulnerability table or ServiceNow), and so what the CMDB and data-out connectors read afterwards, is the same either way (`SIv3-VulnLoopChangedSet`: the compiled fold against the previous one on every row shape, the faster plan against the full plan action by action, and the connector's own paged block with the setting off against on and shadow on real SQL, run after run). The fold is not spread over several containers: the guards stay with the one connector run that sees every page.
+
 **The compare in the database does each record's work once (2026-11-16).** Measured statement by statement (Query Store,
 the scale bench `tests/fixtures/vuln-sqlphases/bench.ps1`), the compare's time was spread over its per-row work, not one
 read: telling a finding's field values apart counted the distinct values of seven fields (seven sorts of the range's rows),
@@ -8061,7 +8341,7 @@ and view that replaced it. The menu since 2026-10-19 (#636):
 | Remediations | Top 10 assets to fix · Top 10 fixes by reach · All remediations | -- |
 | Changes & trends | Trends · What changed · Vulnerabilities over time | -- / Opened and closed · Per collection |
 | Operations | Tasks · Departments · Review & commit · Jobs · ... · Connectors · Audit trail · Commits (undo) · Deviations | as before |
-| Configuration | Settings · Backups · Environment report · Reports & outputs · Risk index · Risk factors · ... · Templates | as before |
+| Configuration | Settings · Backups · System Documentation · Reports & outputs · Risk index · Risk factors · ... · Templates | as before |
 | Help | Help + glossary · Documentation | -- |
 
 **The menu restructure (#636, owner 2026-10-13, approved; decisions 2026-10-19).** SecurityInsight holds ASSETS and
@@ -8112,18 +8392,45 @@ collection built before it (the base); the task rows of older collections are re
   and its kind -- the same rule the ServiceNow grouping column uses), worked out once per distinct finding signature (the
   fields the rule reads): a CVE on the OS = its update ("(Last updated at ...)" cut), else "Security update KB<id>"; another
   CVE = "Update <product> <version> (<vendor>)" -- a finding naming several versions is split, one task per version (several
-  products of one version: one per product; several of both cannot be paired and stay one task with the rule's own text); a
+  products of one version: one per product). #1384 A finding naming SEVERAL PRODUCTS (one CVE in nodejs and .net: the source's
+  product, version and vendor lists are filled independently, in any order, never paired) is ONE TASK PER PRODUCT AND VERSION,
+  the pairs read from the finding's own affected software (`si_affected_software`, "<name> <version> (<vendor>)" per copy, the
+  same source row; the item's product must be one of the finding's), each task with its own product / version / vendor -- so
+  the software evidence gives its paths like any plain upgrade -- and never a ';'-joined name (whose order moved run to run and
+  closed the task as "task changed" every run). No pairs = one task per product, its version not named ("Update <product>
+  (<vendor>)", every installed version of it on the CI, as #1373). A plain upgrade whose evidence of that version is a
+  registry row only shows that registry key as its Paths / Detected paths (where it was found; nothing is split or closed
+  on it). The units come out in key order (ordinal); a
   configuration, Azure recommendation, attack path or identity rule = its title; an identity object = "Identity risk review:
   <category>"; no known fix = no task. A name equal to the finding's asset or CMDB name is never a task. An EXEMPTED finding never
   opens or keeps open a task (it stays visible on the asset).
 - *A library bundled in another product*: the software evidence (`Get-SISoftwareEvidence`, the CI's Defender devices) of the
   product and version on the CI; every copy whose install kind is bundled gives ONE TASK PER APPLICATION that bundles it --
   "Update <application> (bundles <product> <version>)", with every path of that copy -- the fix comes from that product's
-  vendor. The product's own task stays only when a copy is not bundled (or only the registry knows it); no evidence = the
+  vendor. *The application is the folder it is installed in* (`Get-SIEvidenceFolderApplication`, owner 2026-11-24): Program
+  Files[ (x86)]\<vendor>\<app>, Program Files\<app>, ProgramData / AppData ...\<app>, WindowsApps, the driver store, plus ONE
+  table of further path shapes (`$script:SIEvInstallFolders`): an Azure VM extension -- C:\Packages\Plugins\<Publisher.Type>\
+  <version>, /var/lib/waagent/<Publisher.Type>-<version> -- is named after the extension (well-known ones from
+  `$script:SIEvExtensionNames`: microsoft.azure.monitor.azuremonitorwindowsagent -> "Azure Monitor Windows Agent"; any other its
+  type, split into words when its case is known), never its version folder; an OEM recovery copy (C:\Recovery\OEM\<drive>\...)
+  as on that drive. A copy whose application cannot be named is NOT bundled: it keeps the product's own task (never dropped).
+  The product's own task stays only when a copy is not bundled (or only the registry knows it), and carries the paths of the
+  copies that are not bundled (`RemediationTaskSplit.PlainPaths` on the unit's read row); no evidence = the
   product's own task -- except where the base already has that copy as a bundled task: then no plain task is guessed (where the
   copy is is not known this run; the bundled task is kept). The task's identity is the application's NAME, never its version (an
-  application updated from 1.2 to 1.3 that still bundles the library keeps the same task; the name shows the version), and a folder
-  named after its version (jdk-17.0.1 -> jdk-17.0.2) keeps the same task (the key leaves versions out of the application name). A page
+  application updated from 1.2 to 1.3 that still bundles the library keeps the same task), and a folder
+  named after its version (jdk-17.0.1 -> jdk-17.0.2) keeps the same task (the key leaves versions out of the application name).
+  *The name shown is tidied by ONE rule* (`Format-SIEvApplicationName`, owner 2026-11-24 "make title tidied consistent"), for the
+  task name and its Application column alike, whether the folder or Defender's inventory named it: the known-name table
+  (`$script:SIEvApplicationNames`: acrobat_reader_dc -> "Adobe Acrobat Reader DC", imyfone lockwiper -> "iMyFone LockWiper"), else
+  Title Case words with spaces for underscores; no version in the name ("Update Adobe Acrobat Reader DC (bundles openssl
+  3.6.3.0)"). The key is unchanged (the name as it came, versions left out). *The application's version is its own column*
+  (owner 2026-11-24 "Yes, separate column": `RemediationTask.ApplicationVersion`, page and exports "Application version", next to
+  "Application (bundles it)"; `Get-SIEvidenceApplicationVersion`): Defender's version where its inventory names the application,
+  else the version folder (an Azure VM extension's <version>, a folder that is a version, a version the folder name ends in);
+  none known = empty. Several versions in one task (a key that merges them: jdk-17.0.1 + jdk-21.0.2) = all, sorted as versions,
+  ", " between. Two versions of one application the inventory names apart (Python 2.7, Python 3.11) stay two tasks and differ by
+  this column; an application updated (1.47.1.0 -> 1.48.0.0) keeps its task and shows the new version. A page
   of the evidence read that fails does not stop the build: the CIs of that page are unknown this run and every task of theirs
   is kept exactly as it was; the other CIs are built.
 - *Paths in full*: evidence paths are kept in full, user names included (owner 2026-11-17) -- on a task, the pages, the
@@ -8140,7 +8447,7 @@ collection built before it (the base); the task rows of older collections are re
   report or carried, a CI not seen or frozen, a bundled copy whose evidence was not read or was read with a registry row only,
   a CI whose evidence page failed -- keeps the task exactly as it was. Closed tasks are carried for
   `SI_Pro_FindingStateRetentionDays` (365).
-- *Tables*: `sidata.RemediationTask` (per collection x CI x task: key, name, kind, product / version / application and its
+- *Tables*: `sidata.RemediationTask` (per collection x CI x task: key, name, kind, product / version / application, its version and its
   paths, findings, CVEs, highest severity and risk, tier, the CI's owner / department / CMDB id, the CI's own department id (a task belongs to ONE CI: scoped like the CI's views), the security
   domain when every finding has the same one, first / last seen, state, closed at, closed because, reopened, whether it was
   worked out from this collection, a row hash and when its values last changed), `sidata.RemediationTaskFinding` (task <->
@@ -8163,7 +8470,12 @@ collection built before it (the base); the task rows of older collections are re
   links 37 s at 300,000, 236 s at 600,000): until it also runs a range of CIs at a time, the tasks stay OFF at the very large
   installs (decision 2026-11-17).
 - *Web app*: Remediations > Tasks per asset (`/Remediations/Tasks`) and Task findings (`/Remediations/TaskFindings`, opened
-  from a task, with the paths of a bundled copy); CSV / Excel exports.
+  from a task, with the paths of a bundled copy); CSV / Excel exports. *Detected paths* (owner 2026-11-24: "detected paths is
+  cut off and it mentions multiple paths") = the task's own paths when it has them (a bundled task: its application's copy
+  only; the product's own task: its copies that are not bundled), else the CI's evidence of the task's product AND version
+  (`RemediationTaskSql.DetectedPaths`) -- every path, never the first ten. Both path columns are list columns
+  (`GridColumn.Lines`, `Columns/CellLines.cs`): every path in full, one per line; more than three fold into "N paths" that
+  opens -- never cut with "...".
   *Where tasks are reachable from (owner 2026-11-18: "why are tasks not shown on the asset ci view", "it isnt linked
   everywhere")*: the asset page (`/Collection/Asset`) and the CI page (`/Cis/Detail`) each have a "Remediation tasks"
   section -- the asset's tasks, open first, the highest risk first, the total said, paged in SQL (25 a page, every page
@@ -8357,7 +8669,8 @@ score's accepted-lifecycle view follows (a no-update CVE now aged by first-seen 
 % from 0-100. a higher number is good"). The share of the in-scope ACTIVE CIs -- devices, identities (groups left out),
 cloud resources, public IPs -- in GOOD STANDING: no open, non-exempted finding of a counted severity
 (`SI_ProtectionScore_Severities`, default Very High / Critical / High), each CI weighted by its tier
-(`SI_ProtectionScore_TierWeights`, default 8 / 4 / 2 / 1; unclassified = Tier 3). Two views, both always shown: *technical*
+(`SI_ProtectionScore_TierWeights`, default 8 / 4 / 2 / 1; unclassified = Tier 3) -- *until 3.1.46; since #1361 (below) the
+score is the tier-share score of the assets' health*. Two views, both always shown: *technical*
 -- every such finding counts (a patch released yesterday lowers it); *within accepted lifecycle* -- a finding younger than
 its asset type's grace (`SI_ProtectionScore_GraceDays_Device | _Identity | _CloudResource | _PublicIp`, default 30 days)
 does not count. A finding's AGE is the first that is known: the fix's release (`si_fix_release_date`, else the 2nd Tuesday
@@ -8378,6 +8691,50 @@ tiles in place and drives the wall board's domain x severity table: the data syn
 collection (block `protection`, figures `findings_technical` = every open finding, `findings_lifecycle` = on an active
 in-scope CI and past its grace, Dim1 the Risk Analysis domain, Dim2 the severity bucket); a run without them shows the kept
 Risk Analysis table for Actual Risks and "not computed for this run" for the lifecycle view.
+**#1361 (owner 2026-11-25) -- THE MODEL: the tier-share score of the assets' health** ("tier 0 must impact harder where
+tier 3 less" -- "Fixed share per tier"; "it must combine vulnerability on the tiers weight. vulnerability must also be
+weighted" -- points VH 25 / H 10 / M 3 / L 1, "Per fix", "Severity points only"; "Yes, this model" -- "easy to explain, easy
+to impact"). It replaces the tier-weighted share of assets in good standing above, from the next run (stored collections
+keep their score). An ITEM is one open, non-exempted thing to fix on an in-scope asset: a patch finding joins its fix -- one
+recommended update (its id, else its name) per asset, however many CVEs it closes, at the highest severity of its findings;
+every other finding is one item. An asset's HEALTH = max(0, 100 - its Very High / High items' points - min(the Medium + Low
+cap, its Medium / Low items' points)), an asset without items = 100 (`SI_ProtectionScore_SeverityPoints`, default
+`Very High=25,High=10,Medium=3,Low=1`, a severity at 0 does not count; `SI_ProtectionScore_MinorPointsCap`, default 20, 0 =
+Medium / Low do not count). A TIER % = its in-scope assets' average health; the SCORE = sum of share x tier %
+(`SI_ProtectionScore_TierShares`, default `40,30,20,10`, unclassified = Tier 3), a tier with no asset handing its share to the
+others pro rata; rounded to 0.1. The rows: a tier (and type x tier) = the average health, an asset type = the same formula
+within the type; Assets = in good standing (no open Very High / High item), kept as the secondary "N of M" figure. Views: Actual
+Risks = every item; Within Accepted Lifecycle = an item counts when one of its findings counts under the grace above.
+ONE place for an item's points per side (`Get-SIProtectionItemPoints` / `Get-SIProtectionPointsSql`); counted, never kept
+(per asset its points so far and, per fix, its highest severity -- the SQL by GROUP BY); the twin test holds engine and SQL to
+the same rows (shipped model, other shares / points / cap, a 2-CVE fix, asset types with empty tiers).
+`SI_ProtectionScore_TierWeights` and `SI_ProtectionScore_Severities` are retired (the catalog's "retired" list and
+`SI-ContainerConfig.ps1`: a value left is ignored). `diagnostics/New-SIProtectionScoreCompareSql.ps1` writes a read-only
+batch (the engine's own statement without its write step) that sets one stored collection's old score beside the new one,
+overall and per tier.
+**#1360 (owner 2026-11-25) -- the formula on screen** ("show formula in gui so customers see how they impact it"). Every
+Protection Score value (the Executive overview and report headline tiles, the Protection Score block's two values, the wall
+board's tiles) has an (i) (a `<details>`, no script; beside a tile in `.ps-host`, outside its link) that opens "Every fix raises
+the score; Tier 0 counts most." and "How the Protection Score is calculated": the health formula, the Medium / Low cap, tier %,
+the score with the shares, the scope, both views with the grace per asset type, the age rule, good standing, two examples
+computed from the install's values and the bands from `ProtectionBands` -- built by `RiskExec/ProtectionScoreInfo` from the
+settings in force (`ProtectionModel`), in the viewer's number format; a settings store that cannot be read shows the defaults
+and says so.
+**The same choice on Security recommendations > Detailed and Summary (owner 2026-11-24).** Both views carry the wall
+board's choice, in its words and order ("The table below shows": *Within Accepted Lifecycle* | *Actual Risks*); *Actual
+Risks* is the default and shows every open finding exactly as before (no parameter). *Within Accepted Lifecycle*
+(`?risk=lifecycle`; the named views keep `view`) shows only the findings the wall board's lifecycle view counts, and the
+wall board's sentence of the accepted lifecycle in force is shown under the choice while it is chosen. ONE CALCULATION: the
+key figures' own build stores, in the same transaction as the figures, each finding its `findings_lifecycle` counts
+(`sidata.FindingLifecycleRisk (CollectionId, FindingId)`, from the same per-finding verdict) and a marker (`meta` /
+`lifecycle_rows`). Detailed narrows its grid with one `EXISTS` on that table's clustered key (the opening page still pages off
+the index; its total counts the stored rows); Summary reads its own grouped rows, `sidata.SummaryGroupLifecycle` (the same
+columns), built right after the key figures by the same grouping statement over the stored findings
+(`Invoke-SISummaryGrouping -AsSql -Lifecycle`, state in `SummaryGroupLifecycleState`). No page works the rule out per row or
+reads the source record. The choice is in the URL, carried by the forms, the Summary's drill-down into Detailed and the
+exports. A collection whose figures were made before the rows were stored has no marker: the views do not offer the choice
+for it (no back-fill); a Summary grouping whose lifecycle rows are not written from the collection's current figures does
+not offer it either. The retention removes the rows with the collection.
 ONE ENGINE FUNCTION, BOTH EDITIONS (owner 2026-10-19: "replace it with the Protection score everywhere ... retire the old
 KPI ... same core functionality"): `engine/_shared/SI-ProtectionScore.ps1` (`New-` / `Add-` / `Complete-SIProtectionTally`,
 the settings reader `Get-SIProtectionScoreSettings`). Risk Analysis runs it in the Detailed run over its findings and the run's
@@ -8575,6 +8932,16 @@ pages fixed one by one:
   update waits for the run. It refreshes one table at a time, only statistics past the database's own staleness threshold, with
   the database's default sampling (never a full read of a large table). It changes no row. A failure is one warning line; the
   run completes. The procedure runs as the identity that applied the schema, so no job identity needs rights on the tables.
+- **The tables the data sync rewrote, refreshed at its end (3.1.50, #1372; owner 2026-11-25 "Refresh stats in the run").**
+  Measured at an S2 install on 3.1.47: right after the data sync rewrote its large tables, the first page reads set off the
+  database's own refresh of their statistics (up to 59 s each), the disk reads sat at 88-100 % and the first click on a
+  Remediations page took about 20 s -- the refresh after the run came too late, a wake-up after the publish. So the data sync's
+  last step before the views' mark moves the pages refreshes the statistics of the `sidata` tables past the staleness threshold
+  (the tables it just rewrote, by the database's own change counter), largest change first, one table per call, default
+  sampling, inside a budget of a tenth of the data sync's own time (at least 60 s). **Why this does not undo the 2026-11-05
+  decision above:** the 640 s that held the pages back was the FULL refresh of every stale table before the publish, with no
+  budget. This step is targeted (only the rewritten tables) and budgeted (no new table once a tenth of the sync is spent);
+  what it does not reach is left to the refresh after the run, which stays as it was. It never fails the data sync.
 - **A page never waits for a statistic.** The database is set to update a stale statistic in the background
   (`AUTO_UPDATE_STATISTICS_ASYNC`). Without it, the first page read after a run waited for SQL to rebuild a statistic at the
   storage limit, and a page that timed out cancelled that rebuild, so the next page waited again. Setup turns it on for a new
@@ -8789,7 +9156,11 @@ rule now.
     (one scheduled task, no entry guard) always reached the clean-up.
     **The clean-up finishes before the next run (2026-11-10).** The owner: *"data sync is prio 1, and data clean-up happens
     when idle"* / *"the data clean-up can be millions of rows"* / *"just make sure that it finishes before next runs so we
-    dont get to far behind"*. One Azure SQL database cannot reserve cores per caller, so the clean-up controls WHEN it runs
+    dont get to far behind"*. What "when idle" means in practice (#1063, kept by the owner 2026-11-23 until per-collection
+    partitions land, #1317): during a run the wake-ups DO remove old rows -- only of collections marked before the run
+    began, one key range at a time, paced by the database's load, and they give way at once to the data sync and a data
+    out (none is removed while either runs); with nothing going they remove them at the width and pace below. The data
+    sync's own line and the flow guard's line say exactly that (#1315 fixed their wording). One Azure SQL database cannot reserve cores per caller, so the clean-up controls WHEN it runs
     and HOW HARD it pushes -- inside the pipeline runner's own wake-ups (no job of its own: no updater, rights or setup
     change at any install):
     * *The budget* (`Get-SIDataHousekeepingWindow`): a wake-up removes up to almost its NEXT wake-up -- the runner's own
@@ -8817,7 +9188,138 @@ rule now.
       nothing is left. The progress record also carries `ranges`, `rate`, `need` and `tail` (under its 400 characters).
       The heartbeat's Pipeline still sends only `housekeepingRowsLeft`: the paces are not keys of the closed wire contract.
     * *The data sync always first*: before every wave the clean-up asks again whether a data sync or a data out started,
-      and gives way between two waves; during a run it removes nothing while either runs (unchanged).
+      and gives way between two waves; during a run it removes nothing while either runs (unchanged) -- between them it
+      removes what was marked before the run began, one range at a time (#1063).
+    * *Retention by partition* (#1317, SCALE-2 #1314 (6f); first built 2026-11-01 as #1038 part 2) -- **ONE switch,
+      `SI_Data_RetireByPartition`, ON by default** (owner 2026-11-23: a feature that adds value ships on). On: a retired
+      collection's rows in the three large tables leave in seconds instead of in paced key ranges (~7,000 rows per wake-up
+      before). Off: only everything above -- nothing partition-related runs (the tables of a new install stay on their one
+      partition, which reads as an unpartitioned table):
+      - *The tables.* `sidata.Finding`, `sidata.Recommendation` and `sidata.IssueContext` (the tables keyed by
+        CollectionId that the clean-up removes per collection) live on the partition scheme `PS_SICollection`
+        (`PF_SICollection`, int, RANGE RIGHT, created EMPTY -- one partition, which reads and writes exactly as an
+        unpartitioned table). A new install creates them there (`sql\si-data-schema.sql`); every later index is aligned
+        by default. Not partitioned: RaStage / RaDefenderKey (keyed by run), the Summary grain, FindingChange & co. (a row
+        names two collections), the per-collection aggregates. A columnstore index (#1316) must be aligned too; the move
+        below refuses a table that carries a non-row-store index -- EXCEPT SI's own `NCCI_Finding_Load` (see *Columnstore x
+        partitions* next).
+      - *Columnstore x partitions* (#1316 x #1317, both ON by default). ONE
+        rule, in `engine\_shared\SI-IndexBuild.ps1` (`Get-SIColumnstorePartitionHold`) and the move:
+        1. ORDER. While `sidata.Finding`'s move is PENDING -- the switch on, `sidata.PartitionMove` there, the table not on
+           `PS_SICollection` yet, its move not `blocked` -- `NCCI_Finding_Load` WAITS: the runner's wake-up leaves its row
+           out (`Select-SIColumnstoreRowsNotHeld`; the next index or the partition work goes instead), the job does not
+           build it (outcome `waiting`, one line "... waits until sidata.Finding is on the collection partitions"), and
+           the update still records it and says the same in its line. Once the table is on the scheme it is built
+           ALIGNED: `CREATE NONCLUSTERED COLUMNSTORE INDEX ... WITH (ONLINE = ON) ON PS_SICollection ([CollectionId])`
+           (`Get-SIIndexBuildRunSql -OnPartitionScheme`). On the scheme = the catalog says so, or -- for the runner's
+           reader, which may not see the scheme -- `sidata.PartitionMove` says swapped / checked / done. Switch off, a
+           move blocked for another reason, or a database without the partition tables = built on the table as it is
+           (today). An unreadable state = it waits (nothing on a guess). `NCCI_CiFindingState_Load` is never held
+           (CiFindingState is not partitioned).
+        2. AN INDEX BUILT BEFORE on the old table (before this rule, or with the switch off): the preflight does not
+           block it; right before the copy the move DROPS it (`Get-SIPartitionMoveColumnstoreDropSql`: only that name,
+           only type 6, only while the table is not on the scheme, 30 s lock timeout) and sets its `cfg.IndexBuild` row
+           back to `waiting`; rule 1 then builds it aligned after the swap. Chosen over carrying it on the copy: the copy,
+           its added columns and the swap stay row-store only (as proven), the build goes through the one proven path
+           (estimate, window, gap), and nothing is held or blocked. Only an index: the row-store indexes stay, no result
+           changes; the read phases are as fast as before #1316 for the conversion's duration.
+        3. TRUNCATE ... WITH (PARTITIONS) and the boundaries (cut only in empty partitions) work with the aligned
+           columnstore index there (real SQL, `SIv3-ColumnstorePartitions`).
+      - *Who does it.* The index build job `caj-si-index-build` (`engine\pro-settings\SI-ProPartitionMove.ps1`
+        `Invoke-SIPartitionHousekeeping`), as the UPDATER's identity (db_ddladmin + reader + writer: ALTER PARTITION,
+        TRUNCATE ... WITH (PARTITIONS), CREATE TABLE / INDEX / TRIGGER, sp_rename; catalog views only) -- never the engine's
+        identity, whose rights are unchanged (no procedure that runs as the owner, no grant). The pipeline runner's idle
+        wake-up reads, with the engine's own read rights, whether partition work waits (`Get-SIPartitionWorkSql`: a table
+        not moved yet, fewer than 4 empty boundaries left, a retired collection with rows the job has not already left to
+        the paced removal) and -- only when no index starts -- starts the job with `SI_INDEXBUILD_PARTITIONS=1`, the
+        window's minutes and the keep count, by the same window rule as a resumable index: never while a run is due, a
+        data sync or data out goes, or an update waits or runs. The job holds the install's lock, gives way to an update at
+        once (asked every 15 s while it works), stops at the window's end, and ends with ONE line
+        `INDEX-BUILD outcome=<built|paused|nothing|not-now|failed|stopped> index=collection-partitions`.
+      - *Boundaries ahead.* The job keeps 16 empty boundaries above the collection identity's current value, each cut only
+        where no row of any table on the scheme has an id at or above it -- a metadata change, no row moves. So every new
+        collection lands alone in its own partition; no one cuts a partition while a run writes. The highest boundary is
+        recorded (`sidata.PartitionMove` '(boundaries)').
+      - *A retired collection leaves by its partition* (`Get-SIPartitionRemoveSql`), in ONE transaction under the
+        publisher's app lock, only under THE GUARD of today's marking, read again inside it: marked retired; never the
+        published run's collection (`sidata.PublishedRun`, `sidata.vPublishedCollection`); never the newest complete
+        collection or the one before it (two complete, unmarked collections newer than it); never one of the kept
+        collections (the newest N complete ones -- the data sync's own decision, `sidata.ViewState` 'keep-collections',
+        else `SI_Data_KeepCollections`); never one a kept collection's report carries rows from. COUNTS READ BEFORE AND
+        AFTER: the collection's rows must equal its partition's rows in each table (else it shares the partition --
+        `not-alone`, left to the paced removal); after the three TRUNCATEs the partition holds no row and every other
+        partition holds what it held -- any difference rolls back and keeps every row (`mismatch`). The emptied range is
+        then folded into the one before it (only an empty partition is ever folded, never one an id still to come falls
+        in). The collection row, its staged and summary rows are removed by the paced removal as before, which then finds
+        the three tables empty. Whatever a partition cannot take (not-alone, refused, busy, a table not moved yet) is the
+        paced removal's, unchanged -- the fallback.
+      - *Converting an existing install* (tens of millions of rows): never one statement. Per table, smallest first
+        (IssueContext, Recommendation, Finding): preflight (clustered key (CollectionId, one key), no own trigger, no
+        foreign key pointing at it, no grant on the table itself, no schema-bound object, row-store only (SI's own
+        `NCCI_Finding_Load` excepted: dropped before the copy, built again aligned after the swap -- see above) -- else
+        `blocked` with why); a copy `<T>_Partitioned` beside it (the same columns, identity, primary key and every index aligned, the
+        documents out of the row as on the table) and a trigger on the old table that notes every collection a run changes
+        (`sidata.PartitionMoveTouched`); the copy collection by collection in key ranges sized for ~5 s, slowed when the
+        database slows, ONLY the kept collections (a retired one's rows are not copied), each collection given its own
+        partition first; resumable at any range (the copy is in the database) after a lost connection, a stop (an update
+        wants to go) or the window's end; a collection changed after its copy is copied again. MEASURED: rows per second
+        and the time left are said every window and kept in `sidata.PartitionMove`. The SWAP, one short transaction when
+        every kept collection is copied and none changed: both tables held, the rows per kept collection compared (old =
+        copy, exactly), the identity set at or above the old one's, the tables, keys and constraints renamed, the trigger
+        removed -- any difference = no swap. A later window checks every complete kept collection again; the one after
+        drops the old table. Readers keep their table, index and constraint names; the schema-level grants hold. Only in
+        idle windows: it never blocks a run (the window ends before the next run is due; a run that is asked for waits for
+        the job's lock as for an index build). The swap of a very large Finding needs its last changed collection copied
+        and the swap in ONE window -- at the largest installs that can take more than a short window; it then says so and
+        the install stays on the old table, removing a little at a time.
+        Every name the move puts into a statement -- the foreign keys' and the referenced tables' names read from the
+        catalog included -- is bracket-quoted with `]` doubled (`[a]]b]`); `SI-IndexBuild.ps1` does the same for its
+        constants (`Get-SIIndexQuotedName`: the columnstore statement, the scheme, the drop, resume and pause, the sample read).
+        *Who may write the move's record* (defense in depth, 2026-11-23): only the index build job (the updater's identity).
+        The engine role `si_engine` is DENIED INSERT / UPDATE / DELETE on `sidata.PartitionMove` and
+        `sidata.PartitionMoveTouched` (its schema grant on `sidata` would otherwise reach them: an engine that set
+        `State = 'checked'` would let the job drop `<T>_Unpartitioned`, one that cleared the touched rows would let a changed
+        collection swap unseen); it may still READ them (the runner's wake-up does). The move's trigger on the old table keeps
+        noting the collections an engine write changes: the trigger and the touched table have one owner, so its insert is not
+        permission-checked (ownership chaining) -- proven on a real SQL Server in `SIv3-CollectionPartitions`.
+      - *Stability and data quality of the move* (independent reviews 2026-11-23):
+        BOUNDED -- every statement carries a time limit (2 min, the stores' optional TimeoutSeconds), the window's deadline
+        and the stop seam are asked before every range and inside every loop (the reset of a changed collection, the
+        foreign-key clean-up of the copy); counts are read per KEPT collection by seeks (one per collection to find them,
+        one count each), never one scan of the whole table or of retired rows. The update's bounded step beats the
+        install's lock before every range (`Invoke-SIUpdaterLockBeat -Force`) and keeps its budget at 4 min (new schema) /
+        8 min (schema current) -- with one statement's limit at most ~10 min, under the 15 minutes after which the pipeline
+        runner treats a lock as abandoned. ONE MOVER AT A TIME: a lease row (`sidata.PartitionMove` '(mover)', beaten every
+        20 s, free after 3 min unbeaten) -- the update's step and the index build job never move a table at once; the second
+        one says so and does nothing. SELF-HEAL: a copy that cannot go on from its own last key while it holds fewer rows than
+        the table is noted and copied again from the start. VERIFIED: a collection counts as copied only once its rows AND a
+        checksum of every value match range by range (`Invoke-SIPartitionMoveCompare`: BINARY_CHECKSUM over the plain columns
+        + a SHA-256 of each large value such as DetailJson; recorded in `sidata.PartitionMoveVerified`); a column the table
+        gains or loses after its copy was made (a release adding one WITH VALUES) restarts the copy. THE SWAP compares
+        before it takes the table: under the exclusive lock it only re-reads the trigger's notes, then drops SI's own
+        columnstore index of the old table INSIDE the swap (it served the readers until then) and sets its build back to
+        waiting; the check (rows + checksums) runs at once in the same window, so a difference is real. ROOM: before the copy
+        is made, its size (the table's bytes x kept rows / rows x 1.25) must fit with 10 % of the database's maximum kept free
+        -- else `waiting-space`, one line, nothing made. CONVERGENCE: after 12 windows in a row in which runs changed rows it
+        had copied, the move gives up (`gave-up`) and removes its copy and trigger; switching `SI_Data_RetireByPartition` off
+        removes them too (the update's step). TERMINAL states (`gave-up`, `check-differs`, `waiting-space`, `blocked`) are
+        skipped by the runner's work read, so a stuck move never restarts the job every wake-up. One range never carries more
+        than about 64 MB. The partition truncate and the paced removal empty the tables in the same order (IssueContext,
+        Recommendation, Finding).
+      - *The gap before a run keeps its limit* (review item 6): an index built in the gap before a scheduled run -- the
+        one-time forced build too -- stops at the 3-hour late limit (`SI_INDEXBUILD_CAP`: a resumable one pauses, any other is
+        cancelled and never counts as the one-time forced build, which stays for a true idle window where it may take as long
+        as it needs); and an install holds at most ONE scheduled run a day for an index (`cfg.InstallState` 'IndexGapHold'),
+        whichever index asks.
+      - *A busy install (a run always going) -- the gap after an update* (owner 2026-11-23: the large installs run almost
+        back to back, so an idle window may never come). Every update, after its schema and grants and while it holds the
+        install's lock (no run starts meanwhile, so nothing writes the tables), runs the same step
+        (`Invoke-SIUpdaterPartitionStep`, `container\updater\_shared\SI-UpdaterDatabase.ps1`) BOUNDED: at most 4 min when it
+        applied new schema (its code still has to roll), 8 min when the schema was current (the lock beaten before every range) -- the next pipeline run may
+        start up to that much later, and the update's log says so. Resumable: the next update or idle window goes on from the
+        range it stopped at. CHOSEN over copying online during a run's steps: Risk Analysis writes sidata.Finding during a
+        run, so an online copy would compete with it and recopy what it changes, and the swap needs the table to itself --
+        the update's gap has no writer at all. Never fails the update; set off = nothing.
   - *The security owners' categories* are read from the Risk Analysis row's Category stored on the finding when its
     views' columns are derived (`sidata.Finding.RaCategory`, the same expression the pairs read, NULL for a row that is
     not JSON) through a narrow index, instead of one `SELECT DISTINCT` over every finding's JSON (239 s per collection on
@@ -8916,6 +9418,21 @@ it is whole.**
   read fails on an answer (`Read-SILaQueryStreamSafe` answers a marker instead of an error), the same query is read again
   the lean way (data first) and a line says so -- a reader fault turns streaming off for the rest of the process (a fault
   never doubles every read), a network fault does not. A refused answer (4xx) is never handed to the stream reader.
+- **The advanced hunting reader** (`SI-GraphRest.ps1`, `Invoke-SIHuntingQueryRest -StreamRows`; #1321). Risk Analysis passes
+  it when `SI_RA_HuntingStreamRead` = on (the default since owner 2026-11-23; off = the older read; every other engine keeps
+  the older read) and the hunting call it has takes `-StreamRows`. The request asks for the
+  answer's headers first; its body is then read from the response STREAM through a small buffer
+  (`engine\_shared\SI-HuntingStreamRead.ps1`, System.Text.Json's reader compiled once per process, the type named by a hash
+  of its source). Each element of the answer's `results` is cut out as its own bytes, unchanged, and about 4 MB of them at a
+  time are parsed as ONE JSON array by the same ConvertFrom-Json the older read used on the whole body, then built into the
+  same `Results[].AdditionalProperties` shape -- so the rows, their order, the column order, every value and its type (dates,
+  numbers, nulls, nested lists and objects) and the schema are exactly the older read's. The 900-second ceiling stays one:
+  the time the request and the reads wait for the service, together. Failures keep their meaning: rows ConvertFrom-Json
+  refuses are "a body that is not JSON" as before; no memory is the out-of-memory text the slice split reads; the ceiling is
+  the TaskCanceledException text the bucket escalation reads; a network drop is the transport's error. An answer this reader
+  cannot read (not one JSON object, a field named twice, a reader fault) is not an error of the query: the same query is
+  asked again the older way and one plain line says so, and the reader is off for the rest of the process. A part asked
+  ahead (several parts at a time) already has its bytes; they are read the same way, without the text and the tree.
 - **The Risk Analysis Summary collections.** `Get-SIDataLoadPlan` answers its plan as ONE list; the Summary step wrapped
   it in `@(...)`, so with several collections the plan was one item, no item had an Action, and no Summary collection
   was ever loaded (the large install: "4 ... 0 to load, 0 already loaded, 0 not complete", `sidata.SummaryLoad` empty).
@@ -10028,11 +10545,37 @@ a waited-for run, or for its own second pass.
 7. **The roll**: the database setup job, the schema and grants (*The database first*, below), the template check, the build
    and roll of the engine jobs (`setup/Invoke-SIContainerUpdate.ps1 -Apply`: build, roll, verify, restore on failure; ring 1
    installs the release's templates directly), then, Pro, the web app and MCP server (image built from the release, app
-   rolled, a healthy revision and `/healthz` 200 awaited, the previous image restored on failure), the record, and the
+   rolled, a healthy revision and `/healthz` 200 awaited, the previous image restored on failure -- see *The web app's
+   health after its roll*, below), the record, and the
    updater itself last. Only when all of that ended well, the install's registry keeps only the images the install runs
    now (*Old images leave the install's registry*, below). A second pass then runs that release's own update steps.
 8. With no new code to roll: only the size steps. Then template packs from the template channel, then the web app's
    sign-in owner and name checks, and the run's state and any failure report.
+
+**The web app's health after its roll.** A revision switch-over takes minutes: the new revision starts, the old one
+shuts down a little later, and only then does the new one take requests. So after the roll the updater waits until the
+NEW revision is the app's latest ready revision, running (Running or RunningAtMaxScale), healthy, and has all of the
+traffic; only then does it ask `/healthz`, with a grace period of 5 minutes in all and longer pauses between the asks
+(5, 10, 20, then 30 seconds). The first 200 ends the wait. The web app is put back on its previous image when the new
+revision fails, when it does not serve within the grace period, or when `/healthz` never answers 200 within it. The
+shared sign-in front's roll gives its `/healthz` the same grace period. (`_shared/SI-UpdaterWebApp.ps1`,
+`Wait-SIUpdaterWebHealthy`.)
+
+**The earlier sign-in's database tables.** Once the web app reads back on Microsoft's built-in sign-in, the database
+setup job removes the earlier sign-in front's tables (the schema `signin`). The updater judges the outcome only from the
+row the job writes for THIS run. Azure can report the execution as failed while the run is still going, for example
+when a first replica is retried. So when Azure reports anything but success and the row is not there yet, the updater
+keeps reading it until the execution has really ended, and for up to 5 minutes after that. Every outcome is one
+information line: removed, none left, still there (the next update tries again), or the job did not finish (the next
+update removes them). SecurityInsight removes the tables itself, so this step never writes a warning or
+a support step.
+
+**Mail switched off is a choice, not a failure.** When mail is off or not set up (`SI_Mail_Mode`), or a mail kind is
+switched off, the mail job says so in one information line per part and ends successfully. The exemption mails and the
+governance mails stay queued in the outbox until mail is on, and a governance notice or review is not recorded as sent:
+an exemption or governance mail is marked sent only when it really went out. Only a real failure fails the step: mail is on and a send fails, or a read
+fails. The container judges every engine by that engine's own exit code. An exit code left behind by an earlier
+program in the same process never fails an engine that ended normally.
 
 **Nothing but a running run holds an update.** The run gate (`_shared/SI-UpdaterRunGate.ps1`) holds an update while a
 pipeline run has not ended, or one of its steps is still going, and the update lands between two runs. It never cancels
@@ -10197,6 +10740,37 @@ setup, never a runtime one (the jobs, the web app and the MCP server stay ordina
 in [A2b](#a2b-rights-per-identity); they are given by the database setup job, or once with
 `setup/Grant-SIUpdaterDatabase.ps1 -Apply` (or `Install-SIUpdaterJob.ps1 -GrantSql`). Its user is found by SID, so an
 existing one is reused.
+
+#### The image check every 15 minutes -- `caj-si-image-check` (#1344, IMAGE-30MIN-1, framework SEC-LANE-1 G5)
+
+A security fix in a base image must not wait for the nightly update. Next to `caj-si-updater` every install has
+`caj-si-image-check`, on `'*/15 * * * *'` UTC (owner 2026-11-24: 30 minutes, the same day 15). It is the updater's image run in a second mode, not a second program:
+
+* **The job** (`setup/_shared/SI-ImageCheckJob.ps1`) is made FROM the updater job: the same image, user-assigned identity,
+  registry pull identity, Key Vault-referenced secrets and environment, plus `SI_UPDATER_MODE = image-check` and
+  `SI_UPDATER_JOB_NAME` = the updater (everything it names is the updater's). No new right. 2 CPU / 4 GiB (the registry
+  builds the images), one replica, no retry, 2 hours at most. A secret that is not a Key Vault reference is never copied
+  (the job is then not made, said why). Kept present -- and on the updater's image -- by `Install-SIUpdaterJob.ps1` (3b),
+  the release's `Invoke-SIContainerUpdate.ps1` (9n) and every updater run (quiet when it is right). Read back each time.
+* **A run** (`container/updater/_shared/SI-UpdaterImageCheck.ps1`, `Invoke-SIUpdaterImageCheckRun`) starts right after
+  the sign-in and the database, before every step of a normal update run (no secret hand-over, support, identity, licence,
+  size or template step). It steps aside -- one INFO line, nothing asked -- in the 15 minutes after a start of the
+  nightly timer (the window is the tick, its end exclusive: exactly one tick per nightly start, never two in a row),
+  while an execution of `caj-si-updater` runs, or while an earlier check runs. It stops nothing.
+* **The question** goes through the one update client (`SI-UpdaterInvardia.ps1`, image-check mode): the same signed
+  manifest, ring and install key (read only -- the check never claims a key). Only an IMAGE-ONLY release of what runs
+  goes on (`Get-SIImageCheckCandidate`: a fourth version part on the running release; then the image-only proof of the
+  downloaded release). A code release is not downloaded and not applied -- it stays on the nightly update.
+* **The swap** is the updater's own image-only path (`Invoke-SIUpdaterImageOnly`): no run gate, a running execution
+  keeps its image and the next one takes the new (image-only is code-identical). A release that carries
+  `UPDATE-NEEDS-QUIET.txt` waits while a job runs (one line; the next check tries again).
+* **The proof**: the check moves its own image to the updater's, then reads back EVERY job whose image is of a repository
+  this release built: its tag must be a build of the version, its digest the one that build produced in the install's
+  registry runs (framework RELEASE-DRYRUN-1 case (h), `Get-SIImageCheckDigestProof`; fails closed). Not proven = the run
+  fails and says which job; the failure reaches Invardia like any update failure.
+* **Quiet**: until a check decides there is work its log lines are held (`Start-SIUpdaterQuiet`); nothing new = one line,
+  and the update state in the Key Vault (the nightly update's last check and last error) is not written.
+* A nightly update that starts while a check runs waits for it to end (`Wait-SIUpdaterImageCheckEnded`, bounded).
 
 #### Old images leave the install's registry -- only the images the install runs are kept
 
@@ -10473,10 +11047,30 @@ Support app may do.
   (`setup/_shared/SI-ControlPlaneValues.ps1`, `Invoke-SIUpdaterControlPlaneStep`, before the identity-names step):
   `SI_UPDATER_STATE_IDENTITYMOVEMODE` (plan | apply | off -> `cfg.InstallState 'IdentityMoveMode'`) and
   `SI_UPDATER_SETTINGS` (a JSON object; allow-list `OpenAI_endpoint`, `OpenAI_deployment`, `OpenAI_apiVersion`,
-  `SI_EnableAI`; never a secret) through `Set-SIProSetting` (now `engine/pro-settings/SI-ProSettingWrite.ps1`, which the
+  `SI_EnableAI`, the off-only AI switches `BuildSummaryByAI`, `SI_EnableAI_azure`, `SI_EnableAI_endpoint`,
+  `SI_EnableAI_identity`, `SI_PrivilegeTierClassifier_RunAI` (#1304), and the mail list below; never a secret) through `Set-SIProSetting` (now `engine/pro-settings/SI-ProSettingWrite.ps1`, which the
   updater image carries with `SI-Settings.ps1` and the catalog), `cfg.ChangeLog` ChangedBy `the update (control-plane
   value)` + the reason (`SI_UPDATER_CONTROLPLANE_REASON`, else a standard one), each read back. Equal = nothing written;
   a refusal is a warning.
+  **Mail settings (#1339)** are on the same allow-list, so an install can be set up like one where mail works, with a
+  named recipient: `SI_Mail_Mode` (sharedMailbox | smtp | none); the sender's From address `SI_Mail_From` (ONE e-mail
+  address, checked as the web app checks it; an address, not a right -- Exchange's scoped role decides what may be sent, so a
+  wrong From simply fails to send and SecurityInsight reports it); the switches `SendMail`, `RiskAnalysis_Summary_SendMail`,
+  `RiskAnalysis_Detailed_SendMail`, `Mail_CloseLoop_Daily_SendMail`, `SI_Pro_DepartmentReport_SendMail`,
+  `SI_Pro_TechnicalReview_SendMail`, `SI_Pro_GovernanceNotify_SendMail`, `SI_Pro_TaskDigest_SendMail`,
+  `SI_GuardMail_Enabled`, `SI_Pro_DataQuality_Mail_Enabled`; the recipient lists `MailTo`, `RiskAnalysis_Summary_To`,
+  `RiskAnalysis_Detailed_To`, `Mail_CloseLoop_Daily_To`, `SI_GuardMail_To`, `SI_Pro_DataQuality_Mail_To`. Only what an
+  Admin sets in the web app, through the same writer and change log. **Never the sender's rights**: the probe mailbox, the
+  restriction attestation and the SMTP server and its sign-in are not on the list (the mailbox's send right is set up
+  through the rights path). A **recipient list is SET as a whole**: the
+  value replaces the list (a JSON array, or text split on line, comma and semicolon as the web app's form splits it); an
+  empty list is refused (it is not a reset), and every address is checked as the web app checks it -- one malformed address
+  and nothing of that list is written. A mail setting is written at the scope the web app writes it (its one engine, e.g.
+  `engine:risk-analysis` for `MailTo`, else `solution`) and **once per value** (`cfg.InstallState 'CPSetting:<name>'`):
+  the same value on a later update writes nothing, so an Admin's later change in the web app is kept; a new value is
+  applied. Example: `SI_UPDATER_SETTINGS={"SI_Mail_Mode":"sharedMailbox","SI_Mail_From":"securityinsight@example.com",
+  "Mail_CloseLoop_Daily_SendMail":true,
+  "Mail_CloseLoop_Daily_To":["secops@example.com"],"SendMail":true,"MailTo":["secops@example.com"]}`.
 - **`SI_UPDATER_OUTPUTS` -- what an output sends, switched per install** (owner 2026-11-16: the new ServiceNow columns and
   outputs are switched on per install through the updater). The exact value Invardia sets on the updater job (compact JSON,
   one object; every part optional):
@@ -10706,6 +11300,7 @@ object exists):
 | schema | `vuln`, `cmdbsync`, `snowstage` SELECT, INSERT, UPDATE | the vulnerability loop, the CMDB sync, the ServiceNow hand-off; no DELETE on the schema |
 | object | DELETE on `cmdbsync.SyncStage`, `snowstage.BatchCi` / `BatchCiKeyValue` / `BatchCiRelation` | the only deletes in those schemas |
 | DENY | INSERT, UPDATE, DELETE on `sidata.CiOverride` | an Admin's manual CI override is the web app's; the engine reads it |
+| DENY | INSERT, UPDATE, DELETE on `sidata.PartitionMove`, `sidata.PartitionMoveTouched` | the collection partitions' move record is the index build job's (the updater's identity); the engine reads it. The move's trigger still records an engine write (ownership chaining) |
 | object | SELECT on 24 cfg tables / views it only reads (settings, documents, departments, rules, exemptions, CMDB views, access for the guards' SuperAdmin mail ...) | object-level: cfg is not the engine's |
 | object | SELECT + exactly the verbs it writes on 36 cfg tables: its run / guard / connector / mail / report / pipeline / flow / bucket / verification records, `cfg.InstallState` (tenant record, licence-superseded mark, proven mail restriction, template release state), `cfg.AuditEvent` / `ChangeAttribution` / `ChangeLog` (INSERT only), and the template tables for `caj-si-templates` (`cfg.Template` INSERT / UPDATE, `cfg.TemplateRevision` INSERT, `cfg.TemplatePackStaged` read) | DELETE only on `cfg.DataOutItem`, `cfg.RaBucketHistory`, `cfg.RaBucketState` |
 | object | EXECUTE on `cfg.AuditRetentionApply`, `ConfigBackupPrune`, `ConfigBackupTake`, `ConfigJournalRetentionApply`, `ConnectorChangeRetentionApply`, `CmdbImportSnapshot` | the only way the engine removes audit / journal / backup / change-log rows |
@@ -10766,7 +11361,7 @@ step: the engine keeps db_datareader + db_datawriter there.
   naming `setup\Grant-SITaggingDatabase.ps1 -Apply`, which stays as the fallback. Never a stop, never throws.
 
 **Grants in a later release -- the certificate-signed grant procedure `cfg.ApplyComponentGrants`** (#672; framework §12.23
-P4 + P9 "five years without contact"; BUILT 2026-10-15 on branch `si-v3-scale/signed-grant-proc`, not merged, not run on
+P4 + P9 "five years without contact"; BUILT 2026-10-15, not merged, not run on
 any install). ~95% of installs have no Support app and no contact: after setup the SQL admin group may be EMPTY for years,
 so every update's schema AND grants are applied by the updater's OWN contained user -- no admin, no person. Code:
 `engine/pro-settings/SI-GrantProcedure.ps1` (pure T-SQL builders + the rules' mirror), the procedure's text is in it.
@@ -10962,6 +11557,28 @@ images in its own registry; what changed is how fast that build and roll are.
 | 2 | A FEATURE release: THE FULL SUITE (`tests/Invoke-GateOnTestVm.ps1 -Full -Lane release`: every Pester suite and every dotnet test project, sharded; a 3 h lease). A HOTFIX: `tests/Invoke-FastGate.ps1 -Hotfix -Base <commit released last to this ring>` (state: `C:\SI-ENVS\_build\release-state.json`, lane `hotfix`). Both ON INVARDIA'S TEST VM (the exact commit as a git bundle, the result JSON back, plus the offline `Test-Smoke.ps1 -Offline`); on the development machine ONLY with `-GateOnMgmt1` (the operator's word); an UNAVAILABLE VM stops the release -- nothing gated, nothing released, said plainly (2026-10-09: offline tests never run on the development machine). docs/TESTS.md 5b. | hotfix 2-5 min, full suite longer, + VM start |
 | 3 | `setup/Publish-SIRelease.ps1 -Ref <commit> -Build -Ring <n> -Apply` -- the signed source package to Invardia, released to the ring (UPDATE-1.7). Ring 2 / 3 need `-OperatorApproval`. | ~10 s |
 | 4 | Ring 1 (its environment is known on this machine, `C:\SI-ENVS\_build\release-rings.json`): `az containerapp job start` of the updater at once -- no waiting for 03:00 -- followed to the end; the job's `si-installed` tag must name the released version. | 4-5 min |
+
+**The cheap checks first, in code (RELEASE-FLOW-1, 2026-11-24).** A release that took a day showed the failure: the gate
+passes were started by hand outside the release command, the green gate was then refused by a one-second check (the commit
+message named no framework sections), and every fix moved the commit, so the gate had to run again. Now:
+- **Every pre-check runs first, on the exact commit:** 0 the commit (HEAD, clean tree), 0a package clean, 0d What's new, 0f
+  the `framework-checked:` line, then **0g Invardia's dry run** of this release's ring call (`POST .../rings/<n>/check`).
+  Before the gate a new version is not registered yet -- that one answer is expected; a sign-in, rights or ring problem, or
+  any other refusal, stops the release in seconds. **0h writes the pre-check record** (`<gate proof store>\prechecks\<commit>-ring<n>.json`;
+  the first time the checks passed on the commit is kept).
+- **No gate starts without that record** (`Get-SIReleaseGateMode`), and **gate passes handed in (`-GatePassResults`) are
+  refused unless the record was first written BEFORE every pass started** -- running passes by hand before the checks is
+  exactly the mistake, and it cannot be repeated.
+- **`-PreCheckOnly`**: the pre-checks and the dry run alone (seconds, no lock, no gate) -- for use right after a merge.
+- **`-RunGatePasses`**: after the pre-checks, the release plans the gate passes itself from step 1a's own selection: each
+  slow suite (`fast-gate.map.json` `quick.slowSuites`, measured on the Linux test runner) in a pass of its own at 2
+  workers, the speed suites (`aloneSuites`) alone, the rest in as few passes as keep each within `-PassBudgetSeconds`
+  (45 min; the runner ends an execution at about 55) by the measured suite seconds; the web app's tests ride with one pass.
+  The passes run at most 3 at once, are joined into ONE proof (every pass green, on the release commit, together covering
+  every selected suite) and the release goes on.
+- **0f names the exact fix**: amend nothing (that moves the commit); add an empty commit with the line
+  `framework-checked: <sections>`, then run the pre-checks on it before any gate.
+- The owner's word to release without a test run (`-OwnerRedGateWords`) releases with no test run, and only after the pre-checks.
 
 **Two cycles (2026-10-09).** Operator: *"it is simply taking too long whenever i want simple things fixed. customer is
 frustrated and i am loosing business"*, *"a simple fix in si and pim must take max 15 min before it is released, you must
@@ -11372,9 +11989,9 @@ apart as optional and never make it go out. Mail step open = no working mail = n
 required step is done. Off with `SIWeb_GetStartedReminder`. Audited `getstarted.reminder.send` (source job). SI's Get
 Started has no "skip for now", so there is no skipped state yet.
 
-### The environment report (Pro web app, framework ENV-REPORT-1, #482)
+### System Documentation -- formerly "the environment report" (Pro web app, framework ENV-REPORT-1, #482; renamed #1376)
 
-Configuration > Environment report (Admin and SuperAdmin), `EnvReport/`. Built at report time from the live install:
+Configuration > System Documentation (Admin and SuperAdmin), `EnvReport/`, route `/Admin/EnvironmentReport` (kept). The name a person reads is "System Documentation" everywhere (owner 2026-11-25, #1376; guard `SystemDocumentationNameTests`); code ids, route, file and class names keep the old one. Built at report time from the live install:
 1. **Summary** -- customer (the licence), tenant, edition + dimension, licence state, version, ring, environment, install
    date, health (Get Started). 2. **Architecture** -- the install's resource group through ARM with the web app's own
    Reader (`ArmAzureFactsReader`: one list, one GET per resource type whose network facts are shown -- public network
@@ -13371,6 +13988,534 @@ success-partial with FailedStep / FailedStepErrorClass, and each failed part is 
 before any SQL or timeout word. The heartbeat's Database field carries `usedMb` / `maxSizeMb` -- the same cheap read as the
 Counts' sqlUsedMb / sqlMaxMb (FILEPROPERTY SpaceUsed of the data files, DATABASEPROPERTYEX MaxSizeInBytes), taken from them,
 never read twice -- and Warnings raise si-data-1403 at 85 % of the maximum size, before a write fails.
+
+**The install reports its database load (#1306 / #1316, SCALE-2).** So that support sees which tables grow and which queries
+read without a person in the database, the heartbeat's `Database` field can carry two more keys INSIDE its existing value,
+after the six and the statistics keys (`statsAsync` / `statsStalePct` / `statsRefreshedUtc`), in this order -- never a new
+top-level key:
+
+| key | type | what it is |
+|---|---|---|
+| `tables` | array, at most 15 | the largest tables of SI's OWN schemas only (`DatabaseLoadSchemas`: `sidata`, `cfg`, `vuln`, `cmdbsync`, `snowstage`, `si`, `signin` -- every schema SI creates) by reserved space, largest first; a table a customer or consultant made in the database (`dbo` or any other schema) never sends its name: `{ name ('schema.table'), rows (whole number), reservedMb (whole number) }` -- `sys.dm_db_partition_stats` |
+| `topQueries24h` | array, at most 10 | the queries with the most logical reads in the last 24 hours, per query hash: `{ queryHash ('0x' + 16 upper-case hex), executions, durationMs (total), logicalReads (total) }` -- Query Store, or this database's plan cache when Query Store is off |
+
+ONE read (`Get-SIHeartbeatDatabaseLoadSql`, `SET LOCK_TIMEOUT 5000`, DMV / catalog views only, never a product table). It
+NEVER selects a query's text -- the text can carry customer values; only the hash leaves, and support matches a hash to SI's
+own statements. Each part is read in its own TRY: a part that is refused (a missing right, a lock) is left out on its own and
+said once ("not read: queries (SQL error 300) ..."); a read that fails leaves both out; never the rest of `Database`, never the
+heartbeat. The read runs as the heartbeat's own identity (the engine role, which holds VIEW DATABASE PERFORMANCE STATE since
+#881) -- no new right. Invardia's wire contract is closed (an unknown key drops the whole `Database` section), so both keys sit
+behind the contract switch `DatabaseSendLoad` -- **on since Invardia accepted them (2026-11-23)**; the switch goes once every
+install carries the release that sends them (REMOVE-ME).
+
+**Columnstore indexes on the read-heavy tables (#1316, SCALE-2 -- one setting, ON by default).** The data sync's summary
+groups, key figures and changes phases scan a whole collection of `sidata.Finding` and group / total it (per CI, issue and
+report: counts, sums, the lowest tier, distinct CVEs, the exempted counted apart), and the key figures scan
+`sidata.CiFindingState` (opened / fixed / mean time to fix); at a large install the database sat at its limit, bound by
+physical reads. The setting `SI_Data_ColumnstoreIndexes` (solution, bool, default ON since owner 2026-11-23: not stored
+= on; false = off) switches on two NONCLUSTERED COLUMNSTORE indexes (`engine\_shared\SI-IndexBuild.ps1`, `$script:SIColumnstore`):
+`NCCI_Finding_Load` on `sidata.Finding` (CollectionId, FindingId, AssetKey, AssetName, ReportName, SecurityDomain,
+ConfigurationId, Cve, Title, Severity, Tier, RiskScore, RiskRating, ExemptionId, HasExploit, DepartmentId, Category,
+Subcategory, CiLifecycle, EosStatus, FixDueDate, SourceFirstDetected -- no MAX column) and `NCCI_CiFindingState_Load` on
+`sidata.CiFindingState` (OwnerKey, FindingKey, CiId, State, FirstDetected, ClosedAt, CloseReason, Severity). They are INDEXES:
+no statement changes, no result changes (prio 1); SQL Server picks them only where cheaper. The path:
+* the UPDATER, on every run (`Invoke-SIColumnstoreIndexStep`, from `Invoke-SIUpdaterIndexBuildJob`), reads the setting and
+  the database once: on + a supported size + the index missing + its columns there = a `cfg.IndexBuild` row `waiting` with
+  the statement and this database's estimate; it never builds one itself;
+* the INDEX BUILD JOB `caj-si-index-build` builds it in an idle window, `WITH (ONLINE = ON)` -- a columnstore index cannot be
+  resumable, so it is taken like a filtered one (started only when its estimate fits the window, or once after 7 days; an
+  update that comes cancels it and it waits again). The job refuses a columnstore row while the setting is off (the row is
+  removed, nothing built) and one that is not in SI's list;
+* WITH THE COLLECTION PARTITIONS (#1317, `SI_Data_RetireByPartition`, also ON by default): `NCCI_Finding_Load` waits while
+  `sidata.Finding`'s move onto `PS_SICollection` is pending (the runner does not start the job for it, the job answers
+  `waiting` in one line, the update says so) and is then built ALIGNED, `... WITH (ONLINE = ON) ON PS_SICollection
+  ([CollectionId])`, so a retired collection's partition can still be truncated; one built earlier on the old table is
+  dropped by the move right before its copy and built again aligned after the swap. `NCCI_CiFindingState_Load` is not
+  affected. The full rule: *Retention by partition* -> *Columnstore x partitions*;
+* A BUSY INSTALL (runs back to back, so no idle window ever comes; coordinator 2026-11-23): the pipeline runner's wake-up at
+  a SCHEDULED start (no run runs or resumes, no Run now -- also the first run after an update) builds an index that has
+  waited 24 h FIRST (`Get-SIIndexBuildWindowDecision -StartDue`, `HoldsRun`): that wake-up starts no run (a Blocked drain),
+  the index build job takes the install's lock and the run waits for it -- never cancelled -- and starts at the wake-up
+  after the build; the runner says "the scheduled run starts late" in a WARN line. Bounded: a run starts at most 3 h late
+  (`GapLateMinutes`: a resumable build pauses there; a non-resumable one -- columnstore, filtered -- starts only when its
+  estimate fits, or once after 7 days whatever its time), at most once a day per index (`LastStartUtc`) and one held run a day per install (`IndexGapHold`), never again
+  within an hour of an index build job start (a start that did not take the lock never holds run after run; an
+  unreadable start counts as recent). Never while an update waits or runs (the update goes first and still interrupts the
+  build: a resumable one pauses, a columnstore one is cancelled and started again later), never during a data sync, a
+  data out or an open step. The other option -- building online DURING a run's non-sync steps, paced by the database load
+  -- was not taken: Risk Analysis writes into `sidata.Finding` all the time, an online columnstore build there competes
+  with those writes and its final schema lock waits behind them (or holds them), and the job's lock model (a run waits
+  for a build) would have to change;
+* OFF again (the rollback): the next update drops a built index of the list (`SET LOCK_TIMEOUT 10000`; not now = the next
+  update) and removes its waiting row; a row that builds or is paused is left to the job. A setting that cannot be read
+  changes nothing.
+Azure SQL Database: Standard S3 and above, every Premium / vCore size (Basic and S0-S2 record nothing and the update says
+why). Risk: a later schema change that ALTERs or DROPs a column inside one of these indexes is refused while the index is
+there -- the columns are stable key columns, and such a change drops the index first. Writes of new findings cost a little
+more with the index there; on by default (owner 2026-11-23: new features ship on), off per install is the rollback.
+
+**The data sync works on what changed (#1319, SCALE-2 -- one setting, ON by default).** At a large install every phase of the
+data sync rebuilt from the WHOLE newest collection every run; most findings are the same as the run before. The setting
+`SI_Data_ChangedSet` (solution, `on` | `shadow` | `off`, default **on**; `engine\pro-data\_shared\SI-DataChangedSet.ps1`)
+lets a phase carry the result of every finding that did not change since the PUBLISHED collection, and work out only the rest.
+The rule it never breaks: it changes HOW a collection is built, never WHAT is published or sent -- the published-run pointer,
+the publish checks, data health and every connector guard are untouched, every table a page or connector reads is the same
+table with the same values.
+* **The finding hash** (`sidata.FindingHash`, one row per finding, `sidata.FindingHashState` per collection; made in FindingId
+  ranges sized from the measured time of the one before, paced, at the start of the first phase that uses it, only for a
+  collection newer than the published one or when nothing is published yet): SHA-256 over EVERY column of `sidata.Finding`
+  that this database has -- read from the catalog, in ordinal name order, each NULL-marked and length-prefixed -- and then the
+  finding's document. LEFT OUT: the row's identity (`FindingId`, `CollectionId`), the run's own ordering, bucketing and tracing
+  (`RaSeq`, `RaSort`, `RaBucket`, `RaDedup`, `RaTraceHash`, `RaTraceKey`, `RaTraceSuffixed`, `RaReport`), what a LATER phase
+  writes onto the row (`ImportanceRank`, `RemediationKey`, and the prepared view columns of `view-stored-columns.json`), the
+  ROW'S WRITER (#1354, rule `fh2`, 2026-11-24: `RaRowSolutionVersion`, `TypedOnInsert`, `TypedStatement` -- one list,
+  `$script:SIDataRowWriter` in `SI-DataChangedSet.ps1`, that the finding history's state leaves out too; under `fh1` a release
+  alone made every finding changed, so the first run after any release carried nothing), and from the document the keys the
+  run itself moves -- `CollectionTime`, `TimeGenerated`, `si_collection_time`, `_TimeReceived`, `_ItemId`, `_BilledSize` and
+  (#1354) `SolutionVersion` (top-level keys of a JSON object only). Neither phase that carries reads any of them (the prepared
+  columns' list and the work-row values; the list is checked every run), so a carried result is the same. AN EXISTING INSTALL:
+  the published collection's hashes are of the `fh1` field list, so the first run after the update builds both phases in full
+  once ("the published collection has no finding hashes for this field list") -- the same work as today's first run after any
+  release, when every hash differed and nothing was carried -- and makes `fh2` hashes; every run after it is built from what
+  changed, a release alone included. INCLUDED, with everything else: the
+  narrow columns (asset, report, domain, configuration id, CVE, title, severity, risk score), the JOINED fields written by
+  the steps before -- the tier, the department and its source, the exemption (id, until, request), the CI lifecycle, the
+  CMDB id and name -- the derived columns (weighted score, rating, MITRE, compliance, CVSS, exploit, fix, risk score parts,
+  row values) and the Risk Analysis finding key and asset. The field list is named by its `HashSet` (16 hex characters of
+  the SHA-256 of the rule, the columns and the run fields): another list = another set = a full build. A hash is stale (made
+  again) when the collection's rows were rewritten after it (`DerivedAt`, `ResolvedAt`, `ServicesDerivedAt`, `CorrelatedAt`,
+  `CiLifecycleAt`, `RiskPartsAt`, `TypedAt`, `RaRowsAt`) or when there is not one per finding. The collection's status, kind,
+  time and those marks are recorded as ONE hash with its finding hashes (`FindingHashState.StampHash`) and compared each time:
+  a mark changed afterwards by anyone -- set, cleared, the status moved -- makes them stale (a full build), never fresher.
+  The list of prepared view columns is checked first: a name that is not a plain identifier = a full build, no statement
+  of the phase runs. An error is recorded and said by its SQL error number and its words, never a value it quotes. Only the published collection's
+  hashes and newer ones are kept.
+* **The base** = the PUBLISHED collection (`sidata.PublishedRun` `current`), never just "the newest stored". **A full build**
+  (today's path) is made, and the reason recorded per phase in `sidata.ChangedSetRun`, when: nothing is published; the
+  collection is the published one or older than it; the published collection is not complete / retired / partial; it has no
+  hashes for this field list, or its rows were rewritten after them; this collection's hashes are not made; the published
+  collection's phase was built with ANOTHER BUILD FINGERPRINT or OTHER SETTINGS (the phase's fingerprint: its name, the
+  build fingerprint, the HashSet and the phase's own statement and settings -- #1331, below; NOT the version); or the weekly
+  full build is due -- ONLY as the fallback when the rolling full check could not run (#1331, below).
+* **The build fingerprint (#1331, SCALE-3 track D): a full build after an update ONLY when the update changes what the build
+  produces.** Worked out once per data sync run (`Get-SIDataChangedSetBuildFingerprint`) from four parts, each recorded as 16
+  hex characters per phase run (`sidata.ChangedSetRun.BuildParts`, `m=..;y=..;t=..;s=..`):
+  `m` the data-model files (every file under `data-model\` -- the source mappings, the outputs, the rules, the locked model
+  files -- path + content, line ends made one); `y` the #1318 typing statement's fingerprint (`Get-SIDataTypedFingerprint` with
+  every switch, so any expression it can carry); `t` the template set in force (every live `cfg.Template` row's kind, key and
+  body, and every customer override in `cfg.ItemOverride`: kind, key, state, body); `s` the solution settings that change what
+  the build writes (`SI_Data_ParseAtInsert`, `ReportTemplate`, `RiskAnalysis_ReportTemplate_Default_Detailed` /
+  `_Summary` -- the contract's `BuildSettings`). The hashed field list (HashSet) and the phase's own statement complete the
+  phase's fingerprint. A version update with the same fingerprint = the changed-set build as usual; a different one = full,
+  and the run says which part moved ("the update changes what the build produces (the template set)", or "the field list or
+  this phase's own statement" when the four parts are the same). A part that cannot be read = the phase built in full. An
+  untrusted base stays a full build. The first run on this build is a full build once (older records carry no build
+  fingerprint: said as "built by an older build").
+* **The rolling full check (#1331): every CI is built in full and compared at least once in any 7 consecutive runs.** On top of
+  the random sample, every quick build (on) also builds IN FULL and compares one seventh of ALL CIs: a CI's part is fixed
+  (`Get-SIDataChangedSetRollExpr`: the first 3 bytes of the SHA-256 of its AssetKey as nvarchar, mod 7 -- unseeded, the same
+  part every run; `Get-SIDataChangedSetRollPartOf` is the same rule outside SQL); the run's part is the one after the part of
+  the phase's last finished run (0 after none; recorded in `sidata.ChangedSetRun.RollingSlot` and logged as "the rolling full
+  check builds part N of 7 of all CIs in full (n CI(s) with unchanged findings)"). Its findings are marked `Sample` with the
+  random sample's, so a difference in the rotated part is handled exactly like one in the sample: the run is built in full
+  before anything is published (`FellBack`) and carries the warning (the fix request). A build decided full records no part
+  (it built every CI in full); a failed phase does not move the rotation (the next run takes the same part).
+  **The weekly full build stays ONLY as the fallback** when the rolling check could not run: the database does not record it
+  yet (no `RollingSlot` / `BuildParts` columns), or a quick build of the last 7 days ran without it -- said as "the weekly full
+  build is due (none in the last 7 days, and the rolling full check could not run: ...)".
+* **Changed set and carry**: a finding of the new collection whose hash equals a finding of the base carries THAT finding's
+  result (pairs in `sidata.ChangedSetCarry`, set-based by id, in FindingId ranges); every other finding is built as before.
+  What a phase carries is a pure function of a part of the hash's input, so equal hashes give equal results. Removals and
+  closes are never decided here: every phase that removes or closes keeps its own full key-to-key compare, unchanged.
+* **The sample check (on, every run)**: about one CI in ten (by a SHA-256 of a random seed and the finding's asset key; the
+  seed is recorded), plus the rolling part (#1331, above), is built in full and compared with what would have been carried, column for column. ANY difference = the
+  phase is built in full in THIS run before anything is published (recorded `FellBack`), and the run carries a WARNING (the
+  run's report opens the fix request) with the count, a few finding ids and the column names -- never a value.
+* **Shadow** (troubleshooting only -- twice the work): built both ways, every carried finding compared, the FULL result kept;
+  a difference is the same warning. **Off**: every phase exactly as before; nothing of this build is read or written. A
+  database without this build's tables is built as off and says so.
+* **Per phase:**
+  * *view context, finding side* -- CHANGED-SET: the prepared view columns are a function of the finding's document and the
+    list only (the field fill reads nothing else); a carried finding's columns are copied from its base finding (only where
+    they differ), the fill reads the others. The sample is filled in full and compared; a difference fills the whole
+    collection again (the fill writes only what differs, so it then holds the full build's values).
+  * *findings per CI* -- CHANGED-SET for the work rows: the work table (`sidata.CiFindingDbWork`) still holds the published
+    collection's rows after its run; a carried finding's work row is its own columns plus the document values the fill reads
+    (weighted score, component, risk factors, sub-CI, patch cycle, CVE published, category, subcategory, severity rank) taken
+    from the base finding's work row; the fill reads the others; the base's rows are then taken away (index by finding) and
+    the count is checked (one row per keyed finding of the collection -- else nothing is staged). The staging (the CI look-ups:
+    a CI that appears or goes for an asset is always seen), the swap (its own content-hash compare of the whole set) and the
+    lifecycle run as before over the whole set.
+  * *issue context, summary groups, key figures* -- FULL: collection-wide aggregates (per CVE, per tier / severity / rating /
+    domain / department / report, the executive figures); every coarse group holds changed findings in a real run, so
+    "only the affected groups" reads about the whole collection again -- they read typed columns (never the document) and
+    the columnstore indexes are their lever.
+  * *changes* -- FULL: it IS a key-to-key compare of two collections on narrow columns, and its pair is the listed previous
+    collection, not the published one; a hash shortcut would skip only the field compare, which reads the same pages.
+  * *remediation tasks* -- FULL: a task's state follows the finding lifecycle and the software evidence read this run, not
+    only the findings' content; a CI whose findings did not change can still change state, so carrying would break "closes
+    only on positive evidence".
+* **Where it is said**: one line per run (the setting and where it came from), one line per phase and collection (full and
+  why, or what was carried and the sample), and `sidata.ChangedSetRun` (phase, collection, base, build, why, fingerprint,
+  carried, compared, differences, detail, seed, sampled CIs, fell back, outcome). A phase whose record is not `ok` is never a
+  base for the next run.
+
+**The data sync reads less for the same rows (#1213 B3 / B4, #1226, #1116 (b)(c), #1182 -- SCALE-3 track A, ON, no setting).**
+Each change below reads or writes less and leaves every table a page or connector reads with exactly the rows it had:
+* **The issue context reads the findings once** (`Get-SIDataIssueContextSql`): the collection's findings that carry a CVE or a
+  configuration id are read ONCE into `#f` (only the columns the issue rows are made of, keyed on `FindingId`); the key
+  sides, the items, the counts and the asset names all read `#f` instead of the wide `sidata.Finding` rows (four reads before).
+* **The key figures read the narrow findings** (`Get-SIDataKeyFiguresFindingsSource`): when THIS run has filled
+  `sidata.FindingNarrow` for the collection (the summary groups and the remediations fill it earlier in the run), the figures'
+  findings step reads it (`ConvertTo-SIDataNarrowSql`) -- never a fill of its own, since the figures read the collection once
+  either way. The narrow table holds the figures' fields too (`EosStatus`, `FixDueDate`, `AffectedVersion`,
+  `AffectedSoftware`, `Dj_si_fix_release_date`); a narrow table made before them is extended by the schema apply, and until
+  then is not used (`Get-SIDataNarrowCheckSql` asks for every column) -- the steps read `sidata.Finding` as before.
+* **Only a trusted, current collection is built** (`Get-SIDataBuildFilter`, read once per data sync by
+  `Set-SIDataBuildReady`): every build step's "which collections are pending" query (the views' data, departments, counted
+  twins, context, CVE / risk / domain / preview summaries, changes, tier 0, pivots, summary groups, remediations, key
+  figures) leaves out (1) a collection whose own verdict (`sidata.CollectionTrust`) says it is not trusted, and (2) a
+  collection that was never built (`ViewsReadyAt` empty) while a newer trusted complete collection of its kind exists -- the
+  collection a stopped run left beside the newer one. Neither is ever shown (the views list only collections whose view data
+  is written; the published run is a trusted one), so nothing a page shows changes; the retention prunes them as before. What
+  is SHOWN or SENT never reads the rule (the data-out verdict, the published run, a comparison's previous collection). A
+  database without the verdict table or the mark: that part is off.
+* **The published copy refresh numbers only the keys and writes only what changed** (`sidata.PublishedCopyRefreshRange`, the
+  findings per CI matched by their content hash): the copy's rows are numbered by identity and hash only (`#pc`), never by
+  sorting whole rows with their documents, and joined back by the identity; a matched row's document is written only where IT
+  differs, its identity and run time apart (they move every run). A copy that holds an identity twice in a range (never made
+  by the procedure) is refreshed as before. The rows counted are the rows written, each once.
+* **A large parameter is read once** -- the Risk Analysis CI lookups (`Get-RACiSqlKeyedSql`, `Get-RAStreamCiSql`) load the
+  slice's ids and names into keyed `#temp` tables (statistics: the plan seeks by the real number of ids; a table variable is
+  planned as one row), and the findings per CI insert (`Get-SIDataWriteCiFindingSql`) reads its chunk out of `@j` once into
+  `#x` before the transaction. The same predicates, the same rows.
+* **The update's key figures follow the same rule** (`engine\_shared\data-sql\SI-DataBuildRule.ps1`, the one definition the
+  data sync loads through `SI-DataSql.ps1` and the update's key-figures step loads itself): the update never figures a
+  collection the data sync would not build.
+
+**A carried report is never published empty (#1323 data-quality review 2).** A held report's carry pins its source collection
+(`xc:<collection>:<report>` = `f=<source>;l=<last>`). On a retry the pin counts only while that source is still a live,
+complete collection; otherwise what was carried from it is removed, the pin dropped, and the report planned again from a
+kept last complete result -- and when none is left the carry fails closed: the report stays held and the collection is
+never marked complete. The retention never marks a collection a carry mark pins, nor the collection being completed
+(`carry:<collection>`).
+### Finding history model (SCALE-3; design, core built 2026-11-23 -- not released)
+
+REQUIREMENTS #1332 (the history model) and #1334 (aggregates from the changes), SCALE-3 #1330 track B. The rule it never breaks
+(SCALE-2 #1314 (5)): it changes HOW findings are stored and the aggregates built, never WHAT a page shows or a connector sends.
+The one-trusted-run pointer (#780, `sidata.PublishedRun` / `sidata.vPublishedCollection`), the publish checks
+(`sidata.PublishedRunSet`), the held-report rule (#901), data health and every connector guard are unchanged.
+
+**Why this shape, from the code as it is.** `sidata.Finding` (`sql/si-data-schema.sql:149`) holds one full row per finding per
+collection, ~120 columns and the source record (`DetailJson`) -- ~20 KB a row at internal (#1114: 70,622 rows = 1.4 GB). Risk
+Analysis writes the run's whole collection into it while the run goes (`engine/risk-analysis/_shared/RA-SqlStream.ps1`), and
+then about twenty data-sync phases UPDATE that collection's rows in place (derive, view context, responsibility, exemptions,
+CI lifecycle, risk parts, `ImportanceRank` -- `SI-DataPivots.ps1:48-58`, `RemediationKey` -- `SI-DataRemediation.ps1`). About
+60 product files and the web app (`pro-management/src/SI.Management.Core/ProData/*.cs`) read it by `CollectionId`. A design
+that replaces the table under all of them at once would put every surface at risk at once. So the history model sits BESIDE
+the working rows: the collections a page or connector can be asked for stay whole in `sidata.Finding` (the "materialised"
+collections), every collection is ALSO recorded as states + a narrow membership, the aggregates are maintained from the
+difference of two memberships, and only a collection that is no longer materialised is read through the point-in-time function.
+Today's retention keeps 3 complete collections (`SI_Data_KeepCollections`, DESIGN *Data retention*); with the default every
+kept collection stays materialised, so no reader changes source -- the gain is in the aggregates (#1334) and in history that
+can be kept far longer than 3 collections at a fraction of the size.
+
+**1. Tables** (all additive, `sidata` schema, created by the schema apply; the column list of the two finding-shaped tables is
+taken from `sys.columns` of `sidata.Finding` at apply time, as `sidata.PublishedCopyEnsure` already does, `si-data-schema.sql:3608`):
+* `sidata.FindingState` -- ONE ROW PER DISTINCT FINDING STATE, content-addressed. `StateId BIGINT IDENTITY` (clustered PK),
+  `StateHash BINARY(32)` (unique), `KeyHash BINARY(32)`, `FirstCollectionId`, `LastCollectionId` (valid-from / last-seen run),
+  `CreatedAt`, and EVERY column of `sidata.Finding` except the per-run ones below; `DetailJson` with the run's own fields
+  (`SI-DataChangedSet.ps1:63` RunFields) emptied in place by `JSON_MODIFY` (their position kept, so the text is the same bytes
+  once they are put back). Indexes: `UX_FindingState_Hash (StateHash)`, `IX_FindingState_Key (KeyHash)`,
+  `IX_FindingState_Last (LastCollectionId)` for retention. ON THE COLLECTION PARTITIONS by `HomeCollectionId` (#1332 storage,
+  2026-11-23): the collection the state was made in, or -- once that collection left the history -- the newest collection
+  still holding it (its last-seen moves every run, its home only when its home leaves); clustered `(StateId, HomeCollectionId)`;
+  the hash index is a plain aligned index there (a unique aligned index must carry the home column) -- the one writer keeps a
+  hash once (UPDLOCK + HOLDLOCK re-read) and a second state of one hash would make a member twice, which the member's key refuses.
+* `sidata.FindingStateMember` -- ONE NARROW ROW PER FINDING PER COLLECTION: `CollectionId, FindingId` (the clustered key, the
+  same values as in `sidata.Finding`, so every link, deep link and work table keyed by FindingId stays valid), `StateId`,
+  `KeyHash`, and the per-run columns: `ImportanceRank`, `RaSeq, RaSort, RaBucket, RaDedup, RaReport, RaInView, RaTraceHash,
+  RaTraceKey, RaTraceSuffixed` (the contract's NotHashed set, `SI-DataChangedSet.ps1:66-67`) and -- since #1354 -- the row's
+  writer `RaRowSolutionVersion, TypedOnInsert, TypedStatement`, `RunValues NVARCHAR(2000)` (the run fields of the document, as
+  a small JSON object; since #1354 also `SolutionVersion`). ~60-100 bytes a row. ON THE COLLECTION PARTITIONS by `CollectionId`
+  (#1332 storage, 2026-11-23), every index aligned. #1317's cut and fold see both history tables: a boundary is cut and a range
+  folded only where NO table on the scheme holds a row (the cut reads each table's own partitioning column), so a range the
+  history still holds is never folded and no history row moves by a fold; the history's own step folds a range once it
+  emptied it. A database whose history tables were made before this (unreleased builds), one without a cut boundary, or
+  `SI_Data_RetireByPartition` off: the data sync's paced removal, the same rules (`Test-SIDataHistoryOnPartitions`).
+  On an existing install whose large tables are not moved yet, the kept collections' history shares their partition, so the
+  move cannot cut those few collections a partition of their own (it never moves a row): they leave once by the paced
+  removal, as #1317's collections made before their partition do; every later collection has its own.
+* `sidata.HistoryRun` -- one row per collection: `State` (writing | written | verified | differs | failed), `UptoFindingId`
+  (the resume mark), `Members`, `NewStates`, `Opened`, `Closed` (key compare with the previous history collection), `StampHash`
+  (`Get-SIDataChangedSetStampHashExpr`, a later rewrite of the collection's rows makes it stale), `HashSet`, `WrittenAt`,
+  `VerifiedAt`, `Diff` (counts and finding ids, never a value).
+* `sidata.HistoryCompare` -- one row per collection and reader per shadow compare: `Reader`, `Rows`, `OnlyOld`, `OnlyNew`,
+  `Outcome`, `At`.
+* `sidata.FindingStateDelta` -- the run's change set, the input of #1334: `CollectionId, PrevCollectionId, StateId, KeyHash,
+  Delta (+1 opened / -1 closed), N` (a state held by N findings). Only what changed: ~2 x the churn.
+* Stays per collection, unchanged: `sidata.Collection` and its marks, the per-collection aggregates (`FindingDaily`,
+  `AssetDaily`, `SummaryGroup*`, `KeyFigure`, `FindingChange*`, `CveSummary*`, ...), `sidata.PublishedRun`. Goes: nothing in
+  this step; the full rows of collections beyond the materialised set go only on the owner's decision D3.
+
+**2. How a collection is read.** `sidata.FindingAt(@CollectionId)` (inline table function): `FindingStateMember m JOIN
+FindingState s ON s.StateId = m.StateId WHERE m.CollectionId = @CollectionId`, returning EXACTLY the column list of
+`sidata.Finding` -- the state's columns, the member's per-run columns, `CollectionId` / `FindingId` from the member, and the
+document with the run fields put back (`JSON_MODIFY` from `RunValues`). `sidata.vFindingAny` = `sidata.Finding` UNION ALL
+`FindingAt` for the collections that are not materialised (by `HistoryRun` + `sidata.Collection`). The published-run pointer is
+unchanged: it names a collection id; `sidata.PublishedRunSet` adds one check in mode `on`: the published collection is
+materialised AND its history row is `verified`. Readers and their source:
+
+| Reader | Today | With the history model | Status (readers lane, 2026-11-23, not released) |
+|---|---|---|---|
+| Web app collection views and pages (`CollectionViewSql.cs`, `ProDataSql.cs`, `FindingFilterColumns.cs`, `Exempted.cs`, ...) and the MCP server (same Core) | `sidata.Finding` by id | `sidata.vFinding`: the collection's history once every compare of its run was the same, else its stored rows | MOVED -- through the one seam (`ProData/FindingSource.cs`, called by the web app's executor and Core's `SqlReader`); not one statement text changed |
+| `sidata.vPublishedCollection` / `vLatestCollection` | `sidata.Collection` | they name ids; the publish pointer now also names the source (`PublishedRun.FindingSource`: `history` only when the run's compares were the same, else `stored`) | MOVED (the pointer) -- the views keep their shape |
+| `sidata.vCurrentFinding` / `vExemptedFinding` | `sidata.Finding` | the readers read `vCurrentFindingServed` / `vExemptedFindingServed` (over `vFinding`); the data sync's builders keep the originals (they read while rows are rewritten) | MOVED (the readers) |
+| Data out (`engine/data-out/SI-DataOut.ps1`: carried keys) | the published collection | through the reader seam (`SI-FindingSource.ps1`, `Invoke-SIDataOutJob.ps1`); its own carried-keys statement is one of the compared readers | MOVED; note: data out sends right after the findings per CI are stored, before that collection's history is written -- it reads the stored rows of THAT collection by design, the history of older ones |
+| Vulnerability close-loop (`SI-VulnSetBased.ps1`, `SI-VulnDesired.ps1`) | the published collection + `vuln.*` | through the reader seam after its own row fill; its typed page is a compared reader; closes stay its own full key compare (#1320) | MOVED; runs before the data sync: the same note as data out |
+| ServiceNow / CMDB (`sidata.CiFinding`, `snowstage.*`) | per-CI current state, not per collection | unaffected (built by the data sync from the rows, read per CI) | UNCHANGED by design |
+| What changed (`SI-DataChanges.ps1:121-211`) | two whole collections | from `FindingStateDelta` (#1334 below); the per-request page compare of any pair: `vFindingAny` | aggregates lane (#1334) |
+| Summary groups, key figures, remediation tasks, tier 0, pivots | one whole collection | #1334 below; their pages read the stored aggregates (no finding read) | aggregates lane (#1334); a page that counts live reads `vFinding` (moved) |
+| Data health 3-run fingerprint, report carry (#901 `CollectionReportCarry`), the held-report rows | older kept collections | unchanged while kept; `vFindingAny` once D3 | data-sync builders: not routed (they read while rows are rewritten) |
+| Retention (`Get-SIDataPurgeCollectionSql`, #1317 partitions) | removes a collection's rows | also removes its members by partition; a state with no member left goes (paced) | partitions lane |
+
+**The readers (built 2026-11-23 on branch si-v3-scale3/history-readers; not released).** ONE view: `sidata.vFinding` = exactly
+`sidata.Finding`'s columns; per collection EITHER its stored rows OR its history (the body of `sidata.FindingAt`), decided by
+`sidata.FindingSourceOf(@CollectionId)`: the history when `HistoryRun.Serves = 1` and `verified`, its marks unmoved
+(`sidata.HistoryStampOf` = the very hash the history step stores; a rewrite after it = the stored rows at once), the setting not
+off / shadow (read from `cfg.Setting` on every read), and for the PUBLISHED collection its pointer says `history`; else the stored
+rows. `SESSION_CONTEXT('si.finding.source')` forces one (the run's compare). THE SEAMS: the web app's executor
+(`AzureSqlExecutor.RunCoreAsync`), Core's `SqlReader` (MCP) and the engine's reader jobs (`New-SIFindingSourceInvoke`: data out,
+the close-loop) send a statement that READS `sidata.Finding` / `vExemptedFinding` / `vCurrentFinding` to the served views; a
+statement that writes the findings (a write target, an index ON it, an UPDATE / DELETE through its alias), a quoted name and
+another table are never changed (one case list for both: `tests/fixtures/finding-source-cases.json`); while no
+collection is served (`sidata.FindingSourceActive`, asked at most once a minute) every statement goes EXACTLY as written -- off =
+today's tables. The data sync's builders are not routed. SERVED ONLY AFTER EVERY READER COMPARED THE SAME
+(`SI-DataHistoryServe.ps1`, the data sync right after the history step): for each verified collection not yet compared since its
+verify, every reader of `Get-SIDataHistoryReaders` (the findings page, the CI page, the key figures, the exempted view, the
+close-loop's own typed page, data out's own carried keys) runs forced to the stored rows and forced to the history on one
+connection, every row as JSON hashed (SHA-256), compared as a multiset (`HistoryCompare` `reader: <name>`); all the same =
+`Serves 1`; ANY difference = `Serves 0`, the history row `differs`, a run WARNING (the fix request: reader names and counts,
+never a value) and the publish pointer says `stored` -- never unverified rows. PERFORMANCE: the page keys (AssetKey, Severity,
+Tier, the scores, ExemptionId, Cve, ConfigurationId) are COPIED onto the member (the state keeps them), `FindingAt` takes them
+from the member, `FK_FindingStateMember_State` lets a read that needs no state column skip the state, and ten member indexes
+(`SI-IndexBuild.ps1` `$script:SIHistoryIndexes`, the same (CollectionId, ...) shapes the pages use on `sidata.Finding`) are
+recorded by the updater and built ONLY by the index build job in an idle window -- until every one is there nothing is served
+(the run says why). Shadow = nothing served; off = nothing of it runs and the views read the setting at once. REWORKED 2026-11-24 (coordinator: no page slower than today): (1) the source is decided ONCE PER STATEMENT -- the seams read `sidata.FindingSourceLists()` (cached 15 s) and hand the statement `si.finding.served` / `si.finding.stored` (JSON id lists; the stored list also names the next 20 ids, for a collection made after the answer) / `si.finding.maxid` as session context in the same batch; `vFinding` = the stored rows when there is no context, the stored rows of the stored list, the history of the served list -- no per-row decision; the history step waits 20 s after it stops serving a collection before it removes members; (2) the columns the top pages SHOW (AssetName, RiskRating, Title, ReportName, SecurityDomain, CiLifecycle, HasExploit, Category, Subcategory, DepartmentName) are member copies too, the state is read only through OUTER APPLY TOP (1) when a column needs it, `IX_FindingStateMember_Asset` covers the CI page; `FindingAt` (the run's row compare) still reconstructs from the STATES and the reader compare's `served columns` reader proves the copies; no foreign key onto the states (their partitions are truncated). MEASURED (runner, 2,440 findings, si-s3b2-20261124000313-3bee; logical reads history / stored): CI page 4 / 7, key figures 21 / 50, CVE search 7 / 8 -- below today; the opening page's keys 5 / 2 and the page's rows 305 / 123 -- the stored branch is still touched for a TOP-ordered read and per key of a keyed read (the optimizer drives it from the findings, not from the list). THEREFORE (coordinator 2026-11-24): the FINDINGS LIST (the raw findings grid `CollectionViewSql.Rows` and the findings browser `ProDataSql.FindingsPage`) reads inside `FindingSource.KeepStored()` (the web app's grid for the `rows` spec, the findings browser and the findings export; the engine's seam honours the same rule through a statement marker) and its statements are never routed: findings list stays on the stored rows until its history plan is at or below today's: open item (join order from the list). The history model stays on; the per-run reader compare still compares the findings list's statement (reader `findings page`), so it is proven ready to move; every other reader reads the served source. The plan test asserts every page <= today's (the findings list equals today by construction).
+
+**3. How a run writes.** After the LAST writer of the collection's rows (after the remediation tasks, `SI-DataSync.ps1:709`),
+for the run's collection C, in `FindingId` ranges (#1319's measured range rule, paced, resumable from `HistoryRun.UptoFindingId`):
+(a) the state hash of every finding = SHA-256 over every state column (NULL-marked, length-prefixed, `Get-SIDataChangedSetColumnPart`)
+and the document's BYTES with the run fields emptied -- #1319's FindingHash field list plus what the later phases write
+(`ImportanceRank` excepted: it is per run) -- byte-exact, never key-order-normalised, so equal hash = equal reconstruction;
+(b) a hash not yet in `FindingState` = a NEW state (one INSERT ... SELECT from `sidata.Finding`); (c) every finding becomes a
+member (narrow INSERT); (d) `LastCollectionId` moves for the states C holds. Closes and opens: `FindingStateDelta` from the
+membership of C against the membership of the previous history collection P -- `StateId` multisets, KEYS ONLY (no wide
+column read) -- so a gone finding is found by the full key compare, never from a change set (#1314 (6b)). A FULL BUILD
+(#1319's triggers: untrusted base, version / field-set change, weekly; or a `differs` history row) is the same path: every
+finding is hashed and matched -- the model has no "carry", so a full build writes a full membership and verifies every key.
+A collection whose rows are rewritten after its history (its `StampHash` moved) gets its history written again (members
+replaced, states re-matched).
+
+**4. Aggregates from the changes (#1334)** -- each maintained from `FindingStateDelta` of (P -> C) on top of P's stored rows,
+and compared in shadow with today's full build:
+* *What changed* (`FindingChange*`, `AssetChange*`, `ChangeCount*`): a finding key whose state multiset is equal in P and C is
+  `unchanged` (counted only, as today); only the keys in the delta are grouped from the two collections' rows -- exact. The
+  CI rows come from the narrow member + state columns (count, risk, tier per CI) instead of the wide rows.
+* *Summary groups* (`SummaryGroup*`): the additive measures (Findings, Tier0 / Critical / High / Rated counts, TotalRisk) =
+  P's value + the delta's contribution; the distinct measures (Assets, Recommendations, the Critical / High / Exploited
+  recommendations) and MIN / MAX (BestTier, MaxRisk) from a reference-count table per (collection, grouping, key, member)
+  moved by the delta; a group's `AttributesJson` rebuilt only for groups the delta touches. Float sums are kept in an exact
+  DECIMAL(38,10) beside the value (risk: float addition order, below).
+* *Key figures* (`KeyFigure`): the counts the same way; the lifecycle figures (opened / fixed / mean time to fix) read
+  `sidata.CiFindingState`, which is not per collection -- unchanged.
+* *Remediation tasks*: task membership (`RemediationTaskFinding`) from the delta; a task's STATE is still evaluated in full
+  for every task whose findings or whose CI's software evidence (`sidata.SoftwareEvidence`) changed this run, the rest carry
+  (closes only on positive evidence, #1319's reason for keeping it full).
+* Until a phase's delta build has a clean shadow, the phase runs in full exactly as today.
+
+**5. Retention and storage (built 2026-11-23, #1332 storage lane).** History window = `SI_Data_HistoryDays`, DEFAULT 30
+(owner decision 3; 0 = the history follows the kept collections). The index build job's idle window and the update's bounded
+4 / 8-minute step (`Invoke-SIPartitionHousekeeping` part (d), `engine\pro-settings\SI-ProPartitionMove.ps1`
+`Invoke-SIHistoryPartitionRetention`, the updater's identity, the install's lock and the mover lease held) -- NEVER a row
+delete: (i) THE MEMBERS of a partition leave in ONE transaction (TRUNCATE ... WITH (PARTITIONS)) only when every collection in
+it is out of the history -- the guard re-read inside the transaction under the publisher's app lock: never the published run's
+collection, never a kept one (not marked retired), never one a kept report carries rows from, never one inside the window
+whose history was VERIFIED (the FROZEN collections, decision 4: shown as published, never written again -- the data sync
+skips a collection whose stored rows are gone but whose history is there); an unverified history is never kept frozen.
+Counts before and after (the partition 0, every other partition the same) or rolled back. (ii) THE STATES of a partition leave
+only when no collection of its range is in the history any more (no member, no history row, none kept, none published, no
+history being written, every id given out): the states a newer collection still holds are first MOVED FORWARD to the newest
+collection holding them (chunked UPDATEs of the home column, each its own transaction with a SHA-256 of every other column of
+every moved row before and after -- a difference rolls the chunk back), then the partition -- holding only states no member
+refers to, re-read under lock -- is emptied in ONE transaction with the same counts. A state held by a kept, published or
+frozen collection is never removed (it is held by a member). A lock held longer than 5 s = that step rolled back, a WARNING
+line, every row kept, the next window tries again. A long-lived state moves forward about once per window length (it lands
+with the newest collection), not every run. Estimate, large install (1.45 M findings, ~10 KB a row, ~2 % of findings change a run --
+to be read from `sidata.ChangedSetRun.Carried`): today 3 kept collections = ~4.4 M wide rows (~45 GB); history adds
+~1.5 M states once (~15 GB, shared by every collection) + per run ~30 k new states (~0.3 GB) + 1.45 M members (~0.1 GB). 30
+days of history = ~27 GB on top of the materialised set; the same 30 days as full copies would be ~435 GB.
+
+**6. Migration of an existing install.** No migration inside the schema step (#1114 (b)). The data sync's history step finds the
+kept complete collections without a `verified` history row and writes them OLDEST FIRST through the same write path (3), in
+ranges, paced, resumable (`UptoFindingId`; a stop, a lost connection or the time budget resume next run), online (it only
+reads `sidata.Finding` and writes the new tables). Each is verified (7) before the next. (#1332 storage, 2026-11-23) The SAME
+loop also runs OUTSIDE a run -- the index build job's idle window and the update's bounded step (part (e),
+`Invoke-SIHistoryMigrationStep` -> `Invoke-SIDataHistory -OutsideRun`): every range asks whether to stop (the window's end,
+an update that wants to go) and -- at most every 20 s -- whether a PIPELINE RUN holds the install's lock (`cfg.PipelineLock`
+'install' with a run's FlowRunId and a beat in the last 15 minutes; the job's and an update's own lock carry none): a run
+holding it = nothing starts / the step stops at its range. The compare resumes too (`HistoryRun.VerifyUpto`, the rows, the
+differences so far and both running checksums kept after every range). One progress line per collection when it stops
+('N of M finding(s) written (P %)' / 'written, N of M compared (P %)'), one total line ('K of M kept collection(s)
+verified by checksum'). A collection counts as migrated only when every row compared the same, the members are the rows
+AND its CHECKSUM on both sides is equal (`rows|s1|s2|s3|s4`: exact decimal sums of four 7-byte slices of every row's
+SHA-256 over every column -- additive, so the same whatever ranges it was read in; `HistoryRun.SumStored` / `SumHistory`). Until every kept collection is
+`verified`, the old model serves that collection (as a difference would). Switched off = nothing of this runs; dropping the five tables is the rollback.
+
+**7. Prio-1 proof.** Setting `SI_Data_HistoryModel` = `off` | `shadow` | `on`, **default ON** (owner 2026-11-23): on = the
+new model serves from the first run (the delta-built aggregates, the history for any point in time) AND the old model is
+still built every run as the check; every reader is compared row for row every run; ANY difference = a fix request and THAT
+run falls back to the old model's rows before publish -- a difference never publishes unverified data. Shadow = both built,
+compared, the OLD model serves (troubleshooting). Off = exactly as before. Compared per collection, after the history write: (a) the collection
+itself -- the multiset of per-row SHA-256 over every column of `sidata.Finding` vs the same over `FindingAt` (an exact,
+case-sensitive, byte compare -- never `EXCEPT` under the case-insensitive collation); (b) each aggregate's delta build vs its
+stored full build, row for row (#1334). Any difference = `HistoryRun.State = differs`, a WARN line and the run's data-problem
+report (the fix request), counts and finding ids only; the run's aggregates are rebuilt in full (the old model) BEFORE the
+publish step, so what is published is the old model's; a `differs` collection is never a base. `on` -> `shadow` or `off` is
+the rollback (the old model is still written every run).
+
+**8. Risks, mitigations (as #1314 (6)).** (a) a rewrite of a collection after its history is written -> StampHash per
+history row, compared before every use; stale = written again. (b) The document's run fields could be numbers, absent or
+repeated keys -> put back with their own JSON type from `RunValues`; a document that names a key twice or is not an object is
+stored verbatim in the state and its run values never stripped (its state then changes each run -- correct, only bigger).
+(c) Float sums by delta differ in the last bits from a full SUM (addition order) -> exact DECIMAL accumulators; the shadow
+compares floats exactly; a measured difference is a finding, not tolerated. (d) Duplicate rows with the same content in one
+collection -> members, not states, carry the multiplicity. (e) Hash collision -> SHA-256 over the full byte content; the
+shadow's byte compare would show it. (f) Write cost -> one extra read of the new collection per run (as #1319's hash; next:
+the hash at insert, #1318) + narrow writes; measured per run in `HistoryRun`. (g) Retention removing the wrong rows -> only
+through #1317's guarded partition path; states only when no member refers to them (re-read inside the delete).
+(h) A reader that reads a non-materialised collection from `sidata.Finding` finds no rows -> while D3 keeps history = kept
+collections there is no such collection; widening it is gated on every reader in the table above reading `vFindingAny` (a test
+lists every `sidata.Finding` reader of an older collection).
+
+**Effort (engineering days, incl. the focused test per part).** Tables + ensure + point-in-time function 2; run write +
+delta + resume 3; shadow compare + reporting 2; migration (oldest first, verified) 1; retention by partition 1; changes from
+the delta 2; summary groups by delta 4; key figures 2; remediation tasks 3; readers on `vFindingAny` (only with D3) 4;
+measurement at internal + a large install 2. About 26 days; 11 for the core (tables to migration + changes).
+
+**What is built (2026-11-23, not released).** `sql/si-data-schema.sql` (end of file): `FindingState` (its columns made from
+`sidata.Finding`'s catalog at every schema apply, a later Finding column added on the next apply), `FindingStateMember`,
+`HistoryRun`, `HistoryCompare`, `FindingStateDelta`, and `sidata.FindingAt` made again at every apply.
+`engine/pro-data/_shared/SI-DataHistory.ps1` `Invoke-SIDataHistory`, called by the data sync right after the remediation tasks
+(`SI-DataSync.ps1`, phase `finding history`): every kept complete Detailed collection, OLDEST first, written in FindingId ranges
+(resumable), its change set made against What changed's pair, compared row for row (`Invoke-SIDataHistoryVerify`), and What
+changed rebuilt from the change set and compared with the stored full build (`Invoke-SIDataHistoryChangesCheck`, the stored
+statement itself with the grouped keys restricted to the change set); a collection already verified with unmoved marks is not
+read again; a collection whose marks moved, or that differed, is written again (the states only it held are made again from
+its rows, never matched by their hash); then the retention. Settings `SI_Data_HistoryModel` (on | shadow | off, default on)
+and `SI_Data_HistoryDays` (0 = the history follows the kept collections). Every difference is a run WARNING with ids and
+column names. What the pages and connectors read is still the stored rows and the full builds -- with the old model built
+every run as the check, a difference cannot reach a page.
+
+**A state is the finding, never its writer (#1354, 2026-11-24, rule `hm2`).** The internal install's first 3.1.44 run wrote every finding
+as a NEW state in every collection (18,306 / 18,141 / 18,204 of 18,306 / 18,141 / 18,204; 4,221 s). Proven read-only on its
+database: the finding key matched across the three collections, the state did not -- in 100 % of the findings matched one to one
+(15,652 and 15,614) the release that wrote the row differed (`RaRowSolutionVersion` and the document's `SolutionVersion`:
+3.1.43 / 3.1.43.4 / 3.1.44, one release per collection) and, from 3.1.44 on, how the insert typed it (#1318 `TypedOnInsert` /
+`TypedStatement`); every other column differed for at most a part of the findings (real source changes). Those three columns
+and the document field describe the WRITER, so under `hm2` they are the member's (`Member` + `RunFields`, the same lists as the
+schema's `@SIHistCols` / `@SIHistRf`) and never part of a state or its hash: the same finding written by another release, at
+another time, under other ids, typed or not, is the same state -- only a real change of a column or of the document writes one.
+The row-for-row compare is unchanged (every column, byte for byte, of every collection). AN INSTALL THAT ALREADY HAS A HISTORY
+(every install that ran 3.1.44): the schema apply adds the three columns to the member and reads them as `COALESCE(member, state)` in
+`sidata.FindingAt` / `vFinding` -- a member written before holds NULL there and points at a state written before, which holds
+the value, a member written after holds it and points at a state that never has it -- so every collection reads back exactly as
+before, nothing is served from a collection until it is compared again (`Serves` = 0 on the column add), and the next history
+step writes every kept collection AGAIN under `hm2` (its ColumnSet moved): oldest first, inside the install's lock, each through
+`Reset-SIDataHistoryCollection` (its members and then the states no member refers to, in 50,000 / 20,000-row batches) and the
+ranged, resumable write and compare -- the first collection makes its states, every later one only its changes, and the `hm1`
+states are gone with the last collection. A collection that is only in the history (frozen) keeps its `hm1` states until the
+retention by partition removes it (30 days). The seventh run field made one more put-back step in `sidata.FindingAt`: the steps
+are expanded into ONE expression, and a step that read its input three times grew it to 3^7 -- the test server ran out of
+memory compiling the row compare (SQL error 701) -- so each step now reads its input twice (2^7; the inner `JSON_MODIFY` puts
+back a string, the outer a number, the other one deletes a key no document has), the same value for every row. Measured on
+the runner (si-hist-20261124154823-6ed5, 20,000 findings of ~300 bytes): the first collection 125 s (20,000 new states), the
+next with the same findings 124 s (0 new states) -- the step's time is the strip, the hashes and the row-for-row compare of
+every row, not the states it writes. Tests: `SIv3-FindingHistoryStateKey` (TESTS.md).
+NOT the same cause -- the 2 summary-group differences of the 11-23 collection (`domain-category: 2`): the full build of the
+summary groups groups under the database's case-insensitive collation and keeps whichever spelling SQL meets first, so the
+same 28 findings (Identity / `User` x 4 + `user` x 24) are stored as `User` in one variant and `user` in the other, and a
+second build can pick the other spelling; the build from the changes compares byte for byte and sees one group twice (only
+stored + only computed). Read again at internal on 2026-11-24 (the full build computed again, read only): the same in the
+collections of 11-22 and 11-24 (`recommendation-tier` labels, `domain-category` Identity / user). A separate item (the
+grouping's key spelling made deterministic), not changed here.
+
+**Part 4 as built (owner 2026-11-23: "Yes, all" to decisions 1, 3, 4, 5, 6).** Each aggregate built from the changes is
+compared with the full build of the same aggregate EVERY run, every column byte for byte; equal = the rows served ARE the rows
+the changes give (the same bytes); a difference = that run's full build is what is published, a run WARNING (the fix request)
+names the aggregate and the counts, never a value, and the collection is `differs` (never a base).
+* *What changed, the finding rows and the counts* -- only the finding keys whose states moved are grouped (above).
+* *What changed, the CI rows* (`AssetChange` / `AssetChangeCounted`, the `assets` counts): a CI a changed state stands on is
+  grouped from the two collections' rows; every other CI from the narrow members and their states (count, exact risk total,
+  lowest tier, the name), never the wide rows.
+* *Summary groups* (`SummaryGroup` / `SummaryGroupCounted`): `Get-SISummaryGroupingSqlText -Changes` -- the groups a changed
+  finding stands in (either side; @Prev's side read through `sidata.FindingAt`) are computed again by the SAME statement the
+  full build runs (one key filter added), every other group is CARRIED from @Prev's stored rows as they are; checked only
+  when both stored builds are of the same definition and fresh. The one read of the collection's narrow columns stays (a key
+  is computed per finding); the work saved is the aggregates and the per-group attributes of the untouched groups.
+* *Exact sums (decision 5)*: every `sum` measure of the groupings and What changed's CI risk totals are summed as
+  `decimal(38,10)` and stored as float -- the same bits whatever order SQL adds in, in the full build and from the changes.
+* *The change signals, built (2026-11-23)* -- first as triggers, measured, then REPLACED (owner: "+31-108 % on the every-run
+  lifecycle update is too high; prio 1 is stability"): an AFTER trigger on `sidata.CiFindingState` cost +31 to +108 % on the
+  every-run LastSeen update of 1,000,000 rows (it keeps the statement's inserted / deleted rows even when it returns at once).
+  Now the LIFECYCLE'S OWN STATEMENTS mark what they change, in the same statement: every statement of
+  `engine/pro-data/_shared/SI-DataCiLifecycle.ps1` that changes a read column (OwnerKey, FindingKey, CiId, State,
+  FirstDetected, ClosedAt, CloseReason -- open, repair, the CI id seen again, reopen, retired close, absent close, the
+  equivalence key move and fold, the freeze repair, the stale-open repair, the retention) sets `ChangedAt` where the column moves,
+  and a row that leaves (DELETE, key move) is written to `sidata.CiFindingStateGone` by that statement's OUTPUT; the CI
+  build's merge (`SI-CiBuildSql.ps1`) notes the rows it moves (OUTPUT INTO @lcm) and marks them in the same batch. The every-run
+  updates (LastSeen / LastSnapshot / AbsentRuns) are the statements of before. The marks are written between `/*M{*/` and
+  `/*}M*/`: kept when the database has the column (`Set-SIDataLifecycleMarks`, which also records since when:
+  `CiBuildState 'LifecycleMarksSince'`), taken out otherwise -- the statement is then exactly the one of before. Measured
+  (on demand, tag Scale) at 1,000,000 rows, the lifecycle statement's every-run path: 56.6 / 55.0 s marks off, 56.6 / 56.8 s
+  marks on -- within noise. Proven by the same 12-step before / after diff (every step: a new mark exactly where a read column
+  changed, the same mark everywhere else, a tombstone for every row that left -- the key move now through the equivalence
+  itself), and a GUARD that lists every write statement in that file touching the 7 columns and requires its mark.
+* *The CI inputs*: no trigger on `sidata.Ci` either -- the CI build moves `CollectionTime` / `LastSeen` on every CI each run, so
+  a trigger there would cost the same. Instead each key figures build records a fingerprint of the CI rows it read
+  (`sidata.KeyFigureInput`: the count and two order-free sums of a SHA-256 per `#d` row, written in the build's own
+  transaction); equal fingerprints = the CI figures' input was the same multiset. The stale admins are not carried (their
+  window moves over the last sign-ins as each build read them).
+* *Key figures, figure by figure (built)* -- `Get-SIDataHistoryKeyFiguresCheckSql`: a figure is CARRIED from the previous
+  collection's stored rows only when none of its inputs moved since those figures were built (`KeyFiguresAt`, less a second):
+  the lifecycle figures (opened, fixed, mean time to fix) when no CVE lifecycle row is marked or gone and no row's first-detected
+  / closed time lies where the window moved between the two collection times; the CI figures (coverage, users without MFA)
+  when both builds read the same CI rows (their fingerprints); both only with the same settings (the 'meta' rows), a later
+  collection and the marks written since before the base was built. Every other
+  figure is the full build's: it reads the findings and their CI mapping through CiLink / RecordIdentifier / CiRecord, which
+  have no complete change signal. The result is compared with the full build every run, byte for byte; a difference is a
+  run WARNING (the fix request), the full build is what is published, the collection is never a base.
+* *Remediation tasks -- full, and why (checked 2026-11-23)*: the software evidence they read has no change signal -- every read
+  device's rows are DELETED and inserted again (`engine/_shared/SI-SoftwareEvidence.ps1` ~720 / ~726), identical or not, and
+  its per-device mark moves on every read; a task's link rows also carry the collection's own FindingIds. A per-CI carry would
+  need a content signal on the evidence (its writes marking what they change, as the lifecycle's do) and a FindingId map
+  through the members -- the next step.
+* Built by the storage lane (2026-11-23): the members and states on the partitions, retention by partition with the 30-day
+  default and the frozen rule (decision 4), the migration outside a run. Still open: the readers on `vFindingAny` (another
+  builder), the publish check on a verified history.
+
+**Owner decisions** (each with a recommendation):
+1. The shape -- materialised kept collections + content-addressed states + narrow membership (recommended: exact rows,
+   FindingIds and links kept, no reader at risk) vs pure valid-from / valid-to rows (no membership; FindingId, rank and the
+   run fields could not be reproduced row for row).
+2. ~~Default mode~~ DECIDED (owner 2026-11-23): default `on`, the old model built every run as the check, a difference =
+   fix request + that run falls back to the old model before publish.
+3. How much history: recommended keep it = the kept collections first (nothing a page shows changes); then 30 days of
+   history with the readers moved to `vFindingAny`, a separate release.
+4. A collection that is no longer materialised is FROZEN (shown as it was published; a later re-derive or exemption change
+   applies to materialised collections only) -- recommended yes; today kept collections are re-derived.
+5. Float measures in the aggregates: exact decimal accumulators (recommended) vs a tolerance in the compare.
+6. The history write's extra read per run is accepted until the hash moves to Risk Analysis' insert (#1318) -- recommended yes.
 
 **Two updates never change the install at once; a long step is never a hang (#911).** An updater execution (hourly or update
 now) reads its own job's executions after the sign-in and steps aside, with one line and no change, while an EARLIER one still

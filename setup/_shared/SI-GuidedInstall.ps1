@@ -1364,17 +1364,17 @@ function Close-SIInstallDatabaseAccess {
     param([Parameter(Mandatory)]$Ctx)
     $ok = $true
     try { if (Get-Command -Name Complete-SIInstallSqlAdmin -ErrorAction SilentlyContinue) { if (-not (Complete-SIInstallSqlAdmin -Ctx $Ctx)) { $ok = $false } } } catch { $ok = $false }
-    # The hand-back above never takes the Invardia Support app's database access away: its own database user and its place in the
-    # admin group (framework 4.1b) were made before it (the Support access step) and nothing here removes either. Now the server's
+    # The hand-back above never takes the Invardia Support app's read-only database user away (made before it, by the Support
+    # access step: the just-in-time support grant, SECAUDIT-1a -- never db_owner, never the admin group). Now the server's
     # administrator is read back (the admin group, recorded as a group), and where it can be PROVEN -- an install that
     # ran as the Support app, which is no longer the administrator now -- it signs in to the product databases once
-    # and says who it is there (before the firewall rule for this machine is removed).
+    # and says who it is there: its own user, read-only (before the firewall rule for this machine is removed).
     try {
         if (Get-Command -Name Confirm-SIInstallSupportAppSignIn -ErrorAction SilentlyContinue) {
             $proof = Confirm-SIInstallSupportAppSignIn -Ctx $Ctx
             if ($proof) {
                 $act = $null
-                if (-not $proof.Proven) { $act = [ordered]@{ text = 'Run in this install''s folder as an administrator of the database server (it shows the plan without -Apply; it changes nothing that is already right):'; command = (Get-SIInstallSupportAppDatabaseCommand -Ctx $Ctx) } }
+                if (-not $proof.Proven) { $act = [ordered]@{ text = 'Run in this install''s folder as an administrator of the database server (it changes nothing that is already right; it never gives standing admin):'; command = (Get-SIInstallSupportAppDatabaseCommand -Ctx $Ctx) } }
                 $null = Send-SIInstallEvent -Ctx $Ctx -StepId 'support-app-access' -State $(if ($proof.Proven) { 'ok' } else { 'warning' }) -Message ([string]$proof.Text) -Action $act
             }
         }
@@ -2955,16 +2955,17 @@ function Get-SIInstallStepTable {
         $level = if ($ctx.Values['supportAccess']) { [string]$ctx.Values['supportAccess'] } else { 'troubleshoot' }
         $r = Invoke-SIInstallScript -Ctx $ctx -RelativePath 'setup/Grant-SISupportAccess.ps1' -Arguments ([ordered]@{ AppId = $app; Level = $level; ConfigPath = $ctx.ConfigPath })
         $self = './setup/Grant-SISupportAccess.ps1 -AppId {0} -Level {1}' -f $app, $level
-        # THE SUPPORT APP KEEPS ITS DATABASE ACCESS AFTER THE INSTALL (both editions -- support is never Pro-only, framework
-        # PRO-COMMUNITY-SAME; framework 4.1b, owner 2026-10-18) -- whoever runs the
-        # install, and whatever the script above could do: its own database user with db_owner in the product databases and
-        # its place in the server's admin group, made NOW (while the install is still the server's administrator) and read
-        # back. Both stay; nothing removes them. Never fails the install:
-        # what is not in place is a warning with the command that makes it.
+        # THE SUPPORT APP AFTER THE INSTALL: A STANDING READ-ONLY USER, ADMIN ONLY JUST IN TIME (both editions -- support is
+        # never Pro-only, framework PRO-COMMUNITY-SAME; framework SECAUDIT-1a, #1374) -- whoever runs the install, and
+        # whatever the script above could do: the just-in-time support grant (its own database user in si_support_read, the
+        # signed procedures, the consent) made NOW (while the install is still the server's administrator) and read back.
+        # NEVER db_owner, NEVER the SQL admin group. Never fails the install: what is not in place is a warning with the
+        # command that makes it.
         $sd = $null
         if (Get-Command -Name Set-SIInstallSupportAppDatabase -ErrorAction SilentlyContinue) { $sd = Set-SIInstallSupportAppDatabase -Ctx $ctx }
         $dbText = if ($sd) { ' ' + [string]$sd.Message } else { '' }
-        $dbCmd = if ($sd -and -not $sd.Ok) { @(Get-SIInstallSupportAppDatabaseCommand -Ctx $ctx) } else { @() }
+        $dbCmd = if ($sd -and -not $sd.Ok) { @(@(Get-SIInstallSupportAppDatabaseCommand -Ctx $ctx) | Where-Object { $_ -ne $self }) } else { @() }
+        $dbBad = [bool]($sd -and -not $sd.Ok)
         if ($r.Error) {
             return (New-SIInstallResult -State 'warning' -Message (('Support access was not granted: {0}' -f $r.Error) + $dbText) `
                 -Action ([ordered]@{ text = 'When the Invardia Support app exists in your tenant, run in this install''s folder:'; command = (@($self) + $dbCmd) -join "`n" }) -Detail @{ log = (Get-SIInstallTail $r.Text) })
@@ -2974,9 +2975,9 @@ function Get-SIInstallStepTable {
             return (New-SIInstallResult -State 'warning' -Message (('Support access ({0}) is partly granted; the rest needs someone with more rights.' -f $level) + $dbText) `
                 -Action ([ordered]@{ text = 'Ask an administrator to do the following (or to run the same command in this install''s folder):'; command = (@($tasks) + @($self) + $dbCmd) -join "`n" }) -Detail @{ log = (Get-SIInstallTail $r.Text) })
         }
-        if ($dbCmd.Count) {
-            return (New-SIInstallResult -State 'warning' -Message (('The Invardia Support app has {0} access, but its database access (its own database user and its place in the database admin group) is not in place.' -f $level) + $dbText) `
-                -Action ([ordered]@{ text = 'Run in this install''s folder, as an administrator of the database server (it shows the plan without -Apply):'; command = $dbCmd -join "`n" }))
+        if ($dbBad) {
+            return (New-SIInstallResult -State 'warning' -Message (('The Invardia Support app has {0} access, but its just-in-time database access (its own read-only database user and the signed support grant) is not in place.' -f $level) + $dbText) `
+                -Action ([ordered]@{ text = 'Run in this install''s folder, as an administrator of the database server:'; command = (@($self) + $dbCmd) -join "`n" }))
         }
         New-SIInstallResult -Message (('The Invardia Support app has {0} access.' -f $level) + $dbText)
     }
@@ -3129,8 +3130,8 @@ function Get-SIInstallStepTable {
         if (($ctx.Data -or $ctx.Pro) -and [string]$ctx.Facts['sqlServerId']) { $a.SqlServerId = [string]$ctx.Facts['sqlServerId'] }
         # #681 (owner 2026-10-19: "same config as pim"): the in-network SQL identity id-si-sql, a member of the admin group,
         # BEFORE the database closes -- after the close, support reaches the database only from inside, through a one-time job
-        # signed in as it (setup\Invoke-SISupportSqlAccessJob.ps1). The Support app's own database user was made by the
-        # install's support-access step, while this machine still reached the database.
+        # signed in as it (setup\Invoke-SISupportSqlAccessJob.ps1). The Support app's own READ-ONLY database user was made by
+        # the install's support-access step, while this machine still reached the database.
         $miNote = ''
         if ($a.Contains('SqlServerId') -and (Get-Command -Name Get-SIInstallSupportAppAdminGroupId -ErrorAction SilentlyContinue)) {
             $mi = Invoke-SIInstallArmTry -Ctx $ctx -Command 'Invoke-SIPrivateNetworkSqlIdentity' -Arguments ([ordered]@{ ResourceGroupId = $rgId; Location = [string]$v['location'] })
@@ -3144,7 +3145,7 @@ function Get-SIInstallStepTable {
                 $graph = { param($m, $u, $b) Invoke-SIInstallGraph -Ctx $siPnGraphCtx -Method $m -Uri $u -Body $b }
                 # #1092: the admin group was made minutes ago (the database steps) -- a 404 on it is Entra replication: waited
                 # for and tried again for up to 5 minutes (said in the log), then read back; only past that a warning
-                $mm = Set-SISupportAppGroupMember -Graph $graph -GroupId $gid -ServicePrincipalId ([string]$mi.Value.PrincipalId) -Apply -Sleep $ctx.Seams.Sleep -Print { param($t) Write-SIInstallConsole -Ctx $siPnGraphCtx -Text $t -Color DarkGray }
+                $mm = Set-SISqlAdminGroupMember -Graph $graph -GroupId $gid -ServicePrincipalId ([string]$mi.Value.PrincipalId) -Apply -Sleep $ctx.Seams.Sleep -Print { param($t) Write-SIInstallConsole -Ctx $siPnGraphCtx -Text $t -Color DarkGray }
                 if ($mm.State -notin 'present', 'added') { $miNote = (' The in-network SQL identity {0} is not a member of the database admin group yet ({1}).' -f (Get-SIPrivateNetworkNames).SqlIdentity, $mm.Detail) }
             }
         }

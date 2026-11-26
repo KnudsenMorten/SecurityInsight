@@ -1,0 +1,13 @@
+{
+  "version": "3.1.45",
+  "date": "2026-11-24",
+  "type": "feature",
+  "summary": "Security recommendations Summary and Detailed can show only the risks past their accepted time to fix.",
+  "new": [
+    {
+      "title": "Actual Risks or Within Accepted Lifecycle",
+      "text": "Security recommendations Summary and Detailed have a choice above the table: Actual Risks (the default, every open finding) or Within Accepted Lifecycle (only findings past their accepted time to fix). The wall board's table uses the same choice."
+    }
+  ],
+  "fixes": []
+}

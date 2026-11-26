@@ -156,6 +156,8 @@ function Invoke-SIDataSyncCore {
     }
     $phaseInvoke = $Invoke; if ($SettingsInvoke) { $phaseInvoke = $SettingsInvoke }
     $phaseClock = [Diagnostics.Stopwatch]::StartNew()
+    # #1372 the data sync's whole time so far: the measure of the statistics refresh's budget at its end (step 6d)
+    $syncClock = [Diagnostics.Stopwatch]::StartNew()
     # the SQL pacing's own waits (SI-SqlPacing.ps1: the job sleeps before a range while the database is saturated -- time that
     # is in no SQL statement): per phase, the seconds the pacer waited, as a row of its own ('<phase>: paused')
     $phasePaced = @{ S = 0.0; N = 0 }
@@ -209,6 +211,11 @@ function Invoke-SIDataSyncCore {
         $retiredReady = ([string]$rr -eq '1')
     } catch { & $warn ("collections : the retention mark could not be added ({0}) -- old collections are not removed this run; the next run tries again" -f $_.Exception.Message) }
     Set-SIDataRetiredReady -Ready $retiredReady
+    # #1226 (SCALE-3 A): from here on no build step builds a collection that is not trusted, nor one that was never built beside
+    # a newer trusted one (Get-SIDataBuildFilter) -- what the database can carry of the rule, read once. Never fails the sync.
+    if (Get-Command -Name Set-SIDataBuildReady -ErrorAction SilentlyContinue) {
+        try { Set-SIDataBuildReady -Answer (& $Invoke (Get-SIDataBuildReadySql) @{} 'scalar') } catch { Set-SIDataBuildReady -Answer 0 }
+    }
     # "A data sync is running" (sidata.ViewState 'sync'), before the first row is stored: the web app keeps serving the
     # pages it has until this run's end mark (step 7), and says so in its header. Never fails the data sync.
     if (-not $DryRun -and (Get-Command -Name Set-SIDataSyncRunning -ErrorAction SilentlyContinue)) { $result['SyncRunning'] = Set-SIDataSyncRunning -Invoke $Invoke -Now $Now -Log $Log }
@@ -464,8 +471,7 @@ function Invoke-SIDataSyncCore {
             foreach ($p in $pending) {
                 $result.Derived += (Invoke-SIDataDeriveCollection -Invoke $Invoke -CollectionId ([int]$p['CollectionId']) -BatchSize ([ref]$deriveBatch) -Services:$servicesReady -Fix:$fixReady -Log $Log)
             }
-            & $ok ("views       : {0} collection(s) got their views' data ({1} finding row(s), {2} aggregate row(s))" -f @($result.Derived).Count,
-                (@($result.Derived | ForEach-Object { $_.Findings }) | Measure-Object -Sum).Sum, (@($result.Derived | ForEach-Object { $_.Facets }) | Measure-Object -Sum).Sum)
+            & $ok (Format-SIDataViewsLine -Derived @($result.Derived))
             if ($servicesReady) {
                 & $ok ("services    : {0} collection(s) got their service membership ({1} service row(s), sources: {2})" -f @($result.Derived).Count,
                     (@($result.Derived | ForEach-Object { $_.Services }) | Measure-Object -Sum).Sum, ((Get-SIDataServiceSources | ForEach-Object { $_.Name }) -join ', '))
@@ -473,7 +479,8 @@ function Invoke-SIDataSyncCore {
         }
     }
 
-    & $phase 'views (derive)' ([long](@($result.Derived | ForEach-Object { if ($_) { [long]$_.Findings } else { 0L } }) | Measure-Object -Sum).Sum)
+    # #1318 the rows the phase covered: worked out here + stored with their values when Risk Analysis inserted them
+    & $phase 'views (derive)' ([long](Get-SIDataViewsRowCounts -Derived @($result.Derived)).Total)
     # ---- 4b (2). the risk score's parts as columns (2026-10-29): the collections stored before the parts were columns get
     # them, newest first, within 20 minutes per run (the rest on the next runs; a stopped collection goes on where it stopped).
     # A new collection got them with its derive above. Never fails the run.
@@ -594,8 +601,34 @@ function Invoke-SIDataSyncCore {
     # columns (the derive writes the fix columns). Never fails the data sync. #745: AFTER the collection is shown -- the
     # prepared context is the longest part of a large collection's sync, and a collection without it is read by the web app
     # from the finding rows, so it never holds the collection back.
+    # #1319 (SCALE-2) THE DATA SYNC WORKS ON WHAT CHANGED (SI_Data_ChangedSet, SI-DataChangedSet.ps1): read ONCE here, used by
+    # the prepared context and the findings per CI. On (the default) carries the unchanged findings' results from the published
+    # collection with the automatic full builds and the sample check; off = every phase exactly as before.
+    $csMode = 'off'
+    if (-not $DryRun -and (Get-Command -Name Read-SIDataChangedSetMode -ErrorAction SilentlyContinue)) {
+        $csRead = $null
+        if (Get-Command -Name Reset-SIDataChangedSetRunState -ErrorAction SilentlyContinue) { Reset-SIDataChangedSetRunState }
+        try { $csRead = Read-SIDataChangedSetMode -Invoke $Invoke } catch { $csRead = $null }
+        if ($csRead) {
+            $csMode = [string]$csRead.Mode
+            & $info ("what changed: {0} ({1}) -- {2}" -f $csMode, [string]$csRead.Source, $(if ($csMode -eq 'off') { 'every phase is built in full' } else { 'the findings that did not change since the published collection carry its results; checked by a sample every run' }))
+            if ($csMode -ne 'off') { Clear-SIDataChangedSetOldHashes -Invoke $Invoke -Log $Log }
+        }
+    }
     if ($viewsReady -eq 1 -and (Get-Command -Name Invoke-SIDataViewContext -ErrorAction SilentlyContinue)) {
-        $result['ViewContext'] = Invoke-SIDataViewContext -Invoke $Invoke -DryRun:$DryRun -Log $Log
+        if ($csMode -ne 'off') { $result['ViewContext'] = Invoke-SIDataViewContext -Invoke $Invoke -DryRun:$DryRun -Log $Log -ChangedSet $csMode }
+        else { $result['ViewContext'] = Invoke-SIDataViewContext -Invoke $Invoke -DryRun:$DryRun -Log $Log }
+    }
+    # ---- #1364 THE MEANING RULES (fold) of the recommendation equivalence, on the newest complete collection, once its context is
+    # stored (the rules read the affected software) and BEFORE anything is built from it: a finding that restates another finding of
+    # its CI (Defender for Cloud "Update openssl" next to that server's openssl CVEs) is MOVED out of sidata.Finding into
+    # sidata.FindingEvidence -- one finding everywhere, the other its evidence (SI-DataFindingFold.ps1). Never fails the step.
+    if ($viewsReady -eq 1 -and -not $DryRun) {
+        try {
+            if (-not (Get-Command -Name Invoke-SIDataFindingFold -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot 'SI-DataFindingFold.ps1') }
+            $foldC = & $Invoke "SELECT TOP (1) CollectionId FROM sidata.Collection WHERE Kind = N'Detailed' AND Status = N'Complete' AND ContextAt IS NOT NULL ORDER BY CollectionTime DESC" @{} 'scalar'
+            if ($null -ne $foldC -and -not ($foldC -is [System.DBNull])) { $result['FindingFold'] = Invoke-SIDataFindingFold -Invoke $Invoke -CollectionId ([long]$foldC) -Log $Log }
+        } catch { & $warn ('linked findings: the meaning rules were not applied this run -- ' + $_.Exception.Message) }
     }
 
     & $phase 'view context'
@@ -621,6 +654,15 @@ function Invoke-SIDataSyncCore {
     if ($viewsReady -eq 1 -and (Get-Command -Name Invoke-SIDataKeyFigures -ErrorAction SilentlyContinue)) {
         # #1218: every kept collection gets its key figures (once each), paced, never one of them left to a later run
         $result['KeyFigures'] = Invoke-SIDataKeyFigures -Invoke $Invoke -DryRun:$DryRun -Log $Log -Keep $keepNow
+    }
+    # #1355 the Summary groupings of the findings the "Within Accepted Lifecycle" view counts -- AFTER the key figures, which store
+    # those findings. Never fails the data sync; a failure is a failure of the Summary groupings part (its step, its words).
+    if ($viewsReady -eq 1 -and (Get-Command -Name Invoke-SIDataSummaryGroupsLifecycle -ErrorAction SilentlyContinue)) {
+        $sgl = Invoke-SIDataSummaryGroupsLifecycle -Invoke $Invoke -DryRun:$DryRun -Log $Log
+        $sgNow = $result['SummaryGroups']
+        if ($sgl -and [string]$sgl.Status -eq 'failed' -and -not ($sgNow -and [string]$sgNow.Status -eq 'failed')) {
+            $result['SummaryGroups'] = [pscustomobject]@{ Status = 'failed'; Error = ('the "Within Accepted Lifecycle" rows: {0}' -f [string]$sgl.Error) }
+        }
     }
 
     & $phase 'key figures'
@@ -666,7 +708,16 @@ function Invoke-SIDataSyncCore {
         # -LaQuery: the raw reader for its pages (#639) -- $readOrSkip reads a variable named $Query, which inside the page reader
         # would be the page reader's own
         if ($OnFindingsStored) { try { & $OnFindingsStored 'storing' $null } catch { & $warn ("data out    : the data-out lock was not taken ({0}) -- the findings per CI are stored as usual" -f $_.Exception.Message) } }
-        $result['DataModel'] = Invoke-SIDataCiSync -Invoke $Invoke -ReadOrSkip $readOrSkip -LaQuery $Query -LookbackDays ($lookback + 1) -DryRun:$DryRun -Log $Log -Phase $phase
+        if ($csMode -ne 'off') { $result['DataModel'] = Invoke-SIDataCiSync -Invoke $Invoke -ReadOrSkip $readOrSkip -LaQuery $Query -LookbackDays ($lookback + 1) -DryRun:$DryRun -Log $Log -Phase $phase -ChangedSet $csMode }
+        else { $result['DataModel'] = Invoke-SIDataCiSync -Invoke $Invoke -ReadOrSkip $readOrSkip -LaQuery $Query -LookbackDays ($lookback + 1) -DryRun:$DryRun -Log $Log -Phase $phase }
+        # #1319 what each phase built from what changed, compared and found (Get-SIDataSyncIssues says a difference)
+        if ($csMode -ne 'off') {
+            $csAll = New-Object System.Collections.Generic.List[object]
+            foreach ($src in @($result['ViewContext'], $result['DataModel'])) {
+                if ($src -and $src.PSObject.Properties['ChangedSet']) { foreach ($x in @($src.ChangedSet)) { if ($x) { $csAll.Add($x) } } }
+            }
+            $result['ChangedSet'] = $csAll.ToArray()
+        }
         # #1038 (1): the collection is marked ready for data out NOW -- before the CI summary, the column choices, the
         # clean-up, the views and everything after the core -- and the data-out job is started on it
         if ($OnFindingsStored) { try { & $OnFindingsStored 'stored' $result['DataModel'] } catch { & $warn ("data out    : the collection was not marked ready for data out ({0}) -- the data sync sends data out itself" -f $_.Exception.Message) } }
@@ -686,6 +737,23 @@ function Invoke-SIDataSyncCore {
         $result['RemediationTasks'] = Invoke-SIDataRemediationTasks -Invoke $Invoke -DryRun:$DryRun -Log $Log
     }
     & $phase 'remediation tasks'
+    # ---- 4g (2c). #1332 / #1334 THE FINDING HISTORY MODEL (SI_Data_HistoryModel, SI-DataHistory.ps1; on by default): after the
+    # LAST writer of the collection's rows, every kept complete collection is also recorded as states + a narrow membership
+    # (the oldest first -- an existing install's migration is this same loop, resumable), compared row for row with the stored
+    # rows and What changed checked from its change set. A difference is a WARNING (the fix request); the stored rows and the
+    # full builds are what is published. Off = nothing of it runs. Never fails the data sync.
+    if ($viewsReady -eq 1 -and -not $DryRun -and (Get-Command -Name Read-SIDataHistoryMode -ErrorAction SilentlyContinue)) {
+        $hmRead = $null
+        try { $hmRead = Read-SIDataHistoryMode -Invoke $Invoke } catch { $hmRead = $null }
+        if ($hmRead) {
+            & $info ("history     : {0} ({1}){2}" -f [string]$hmRead.Mode, [string]$hmRead.Source, $(if ([string]$hmRead.Mode -eq 'off') { ' -- not written' } else { ' -- every kept collection recorded as finding states, checked row for row against the stored rows every run' }))
+            if ([string]$hmRead.Mode -ne 'off') { $result['History'] = Invoke-SIDataHistory -Invoke $Invoke -Mode ([string]$hmRead.Mode) -Log $Log }
+            # #1332 the readers on the history: a collection is read from its history only once what every reader returns was
+            # compared the same (SI-DataHistoryServe.ps1); any difference = its readers read the stored rows + a warning
+            if ([string]$hmRead.Mode -ne 'off' -and (Get-Command -Name Invoke-SIDataHistoryServe -ErrorAction SilentlyContinue)) { $result['HistoryServe'] = Invoke-SIDataHistoryServe -Invoke $Invoke -Mode ([string]$hmRead.Mode) -Log $Log }
+        }
+    }
+    & $phase 'finding history'
     # 2026-10-25 this run's narrow findings (SI-DataFindingNarrow.ps1) are emptied once the last step that reads them is done
     # #904: a narrow fill that FAILED this run is a part that failed (taken before the run's state is emptied)
     if (Get-Command -Name Get-SIDataFindingNarrowState -ErrorAction SilentlyContinue) { $result['Narrow'] = Get-SIDataFindingNarrowState }
@@ -729,11 +797,11 @@ function Invoke-SIDataSyncCore {
         # ServiceNow spent ~4 h removing old collections here, before its data out): started by hand or on its own schedule
         # too, the sync ONLY MARKS -- the data out never waits on a removal, however the sync is started. The rows go the
         # same way as a pipeline-started sync's: the pipeline runner's wake-ups finish the marked collections in key ranges
-        # inside their time budget, ONLY while no run, data sync or data out is going (#1038 part 3: housekeeping), in both
+        # inside their time budget -- during a run (#1063) paced by the database's load and giving way to the data sync and a data out, when idle as before -- in both
         # pipeline and schedules mode. A marked collection is never derived, prepared or shown again, so no reader is left on it.
         if ($retiredReady) {
             $byPipeline = Test-SIDataRunByPipeline -Invoke $SettingsInvoke
-            $rowsBy = if ($byPipeline) { 'by the pipeline runner''s wake-ups, in key ranges -- once no run, data sync or data out is going' }
+            $rowsBy = if ($byPipeline) { 'by the pipeline runner''s wake-ups, in key ranges, once this run is over -- during a later run paced by the database''s load, giving way to the data sync and a data out; with nothing going as fast as the load allows' }
                       else { 'by the pipeline runner''s next wake-ups, in key ranges -- after this data sync has sent its data out' }
             $result['CollectionRetention'] = Invoke-SIDataCollectionRetention -Invoke $Invoke -MarkOnly -RowsRemovedBy $rowsBy -Log $Log -KeepCollections $keepNow
         }
@@ -756,6 +824,20 @@ function Invoke-SIDataSyncCore {
         & $ok ("asset data  : full asset metadata older than {0} day(s) removed -- {1} stored object(s), {2} older asset bag(s) (collected before {3:yyyy-MM-dd HH:mm} UTC)" -f $apr.RetentionDays, $apr.MetadataRows, $apr.Assets, $apr.Cutoff)
 
         & $phase 'asset metadata retention'
+        # ---- 6d. #1372 (owner 2026-11-25: "Refresh stats in the run") the statistics of the tables this data sync rewrote,
+        # refreshed BEFORE the views' mark moves the pages to the new rows -- so the first page read never sets off the
+        # database's own refresh of a large table (engine\_shared\data-sql\SI-DataStatistics.ps1). A tenth of the data sync's
+        # own time as its budget; what is left goes to the refresh after the run. Never fails the data sync.
+        try {
+            if (-not (Get-Command -Name Invoke-SIDataStatisticsRefreshRewritten -ErrorAction SilentlyContinue)) {
+                $stf = [IO.Path]::Combine((Split-Path -Parent (Split-Path -Parent $PSScriptRoot)), '_shared', 'data-sql', 'SI-DataStatistics.ps1')
+                if (Test-Path -LiteralPath $stf) { . $stf }
+            }
+            if (Get-Command -Name Invoke-SIDataStatisticsRefreshRewritten -ErrorAction SilentlyContinue) {
+                $result['Statistics'] = Invoke-SIDataStatisticsRefreshRewritten -Invoke $Invoke -SyncSeconds $syncClock.Elapsed.TotalSeconds -Log $Log
+            }
+        } catch { & $Log 'WARN' ('statistics   : the tables this data sync rewrote were not refreshed ({0}) -- the refresh after the run does it; the data is not affected' -f $_.Exception.Message) }
+        & $phase 'statistics (rewritten tables)' ([long]$(if ($result['Statistics']) { $result['Statistics'].Refreshed } else { -1 }))
         # ---- 7. the views' data mark: what the web app's result caches of the data views are kept under -- last, so a
         # page read under the new mark sees everything this run stored (SI-DataViewContext.ps1). Never fails the data sync.
         if (Get-Command -Name Set-SIDataViewVersion -ErrorAction SilentlyContinue) { $result['ViewVersion'] = Set-SIDataViewVersion -Invoke $Invoke -Log $Log }
@@ -1381,9 +1463,35 @@ function Get-SIDataCarrySchemaCheckSql {
     "SELECT CASE WHEN COL_LENGTH('sidata.Finding', 'CarriedFrom') IS NOT NULL AND OBJECT_ID('sidata.CollectionReportCarry') IS NOT NULL AND OBJECT_ID('sidata.RaReportStatus') IS NOT NULL AND OBJECT_ID('sidata.CollectionPartial') IS NOT NULL THEN 1 ELSE 0 END"
 }
 
+function Get-SIDataViewsRowCounts {
+    <# PURE. #1318 The finding rows the views step covered, over its collections: Worked = worked out by the data sync,
+       Stored = stored with their values when Risk Analysis inserted them (SI_Data_ParseAtInsert on), Total = both. #>
+    param([AllowEmptyCollection()][object[]]$Derived = @())
+    $w = 0L; $s = 0L; $f = 0L
+    foreach ($d in @($Derived)) {
+        if (-not $d) { continue }
+        $w += [long]$d.Findings; $f += [long]$d.Facets
+        if ($d.PSObject.Properties['TypedAtInsert'] -and [string]$d.ParseAtInsert -eq 'on') { $s += [long]$d.TypedAtInsert }
+    }
+    [pscustomobject]@{ Worked = $w; Stored = $s; Total = $w + $s; Facets = $f }
+}
+
+function Format-SIDataViewsLine {
+    <# PURE. The views step's line: with rows stored with their values at insert, both counts; else as before. #>
+    param([AllowEmptyCollection()][object[]]$Derived = @())
+    $c = Get-SIDataViewsRowCounts -Derived $Derived
+    $inv = [Globalization.CultureInfo]::InvariantCulture
+    $n = @($Derived | Where-Object { $_ }).Count
+    if ($c.Stored -gt 0) {
+        return [string]::Format($inv, "views       : {0} collection(s) got their views' data ({1} finding row(s) stored with their values at insert, {2} worked out here, {3} aggregate row(s))", $n, $c.Stored, $c.Worked, $c.Facets)
+    }
+    [string]::Format($inv, "views       : {0} collection(s) got their views' data ({1} finding row(s), {2} aggregate row(s))", $n, $c.Worked, $c.Facets)
+}
+
 function Get-SIDataCarryColumnsSql {
-    <# The columns of sidata.Finding a carried row takes from its source row (every stored column but its own id, its collection, the carry mark and Risk Analysis' per-run bookkeeping). #>
-    "SELECT name FROM sys.columns WHERE object_id = OBJECT_ID('sidata.Finding') AND is_identity = 0 AND is_computed = 0 AND name NOT IN ('FindingId', 'CollectionId', 'CarriedFrom', 'RaReport', 'RaBucket', 'RaSeq', 'RaDedup', 'RaSort', 'RaInView') ORDER BY column_id"
+    <# The columns of sidata.Finding a carried row takes from its source row (every stored column but its own id, its collection, the carry mark and Risk Analysis' per-run bookkeeping).
+       #1318 never the parse-at-insert marks (TypedOnInsert, TypedStatement): a carried row is derived by the data sync as before. #>
+    "SELECT name FROM sys.columns WHERE object_id = OBJECT_ID('sidata.Finding') AND is_identity = 0 AND is_computed = 0 AND name NOT IN ('FindingId', 'CollectionId', 'CarriedFrom', 'RaReport', 'RaBucket', 'RaSeq', 'RaDedup', 'RaSort', 'RaInView', 'TypedOnInsert', 'TypedStatement') ORDER BY column_id"
 }
 
 function Get-SIDataCarryMaxDays {
@@ -1394,34 +1502,53 @@ function Get-SIDataCarryMaxDays {
     0
 }
 
+# #1323 stability + data-quality review: the carry is NOT one statement any more. A held report can be ~1 M rows with their
+# documents; one INSERT in one transaction on S3 is a heavy log, holds locks the Risk Analysis writes wait on, can time out,
+# and a rollback after the exact clear (below) would leave the report with NO rows. So, per collection:
+#   1. PLAN (Get-SIDataCarrySql, one short statement): which reports, from which last complete collection; the INTENT is
+#      written first -- sidata.ViewState 'carry:<collection>' (the collection is never marked Complete while it is there,
+#      Get-SIDataCompleteCollectionSql) and per report a mark 'xc:<collection>:<hash>' = 'f=<from collection>;l=<last
+#      source FindingId carried>' (the source collection is PINNED by it: a retry carries from the same one);
+#   2. CLEAR (Get-SIDataCarryClearSql, batched): a report held for 'unreadable-slices' loses this run's rows first, so it
+#      shows EXACTLY its last complete result (owner: no mixing);
+#   3. RANGES (Get-SIDataCarryRangeSql): the source rows in FindingId ranges, each range its own transaction together with
+#      its mark -- a range is in exactly once, a retry goes on after the last one (sized from each range's measured time);
+#   4. FINISH (Get-SIDataCarryFinishSql): the rows read back -- carried = the source's (exact: every source row; else every
+#      source row this run has no row of the same finding for) -- then the per-report record, and the marks go, in ONE
+#      transaction. A count that does not match: nothing is recorded, the marks stay, the caller's load fails and the next
+#      data sync finishes it.
 function Get-SIDataCarrySql {
     <#
-        ONE statement per collection (see above): the incomplete reports of the collection's run, the last collection in which
-        each was complete (its verdict there was not NotComplete; a collection from before the verdicts existed counts when it
-        carries no verdict at all and no partial mark), the rows carried, the record per report. Idempotent: a row already
-        in the collection (this run's, or carried by an earlier try) is never added twice. Answers one row per report.
-        -Columns: Get-SIDataCarryColumnsSql's names (checked against sys.columns; nothing else reaches the statement).
-        @MaxDays (owner 2026-10-14: a carried result is at most 7 days old): a last complete result OLDER than that many days
-        before this collection is not carried -- the report shows as not complete (TooOldTime says from when); 0 = no limit.
+        THE PLAN (see above): the incomplete reports of the collection's run, the last collection in which each was complete
+        (its verdict there was not NotComplete; a collection from before the verdicts existed counts when it carries no
+        verdict at all and no partial mark), and the intent marks. Answers one row per report: ReportName, FromId, FromTime,
+        Reason, TooOldTime, MaxDays, Exact (held for 'unreadable-slices' with a last complete result), Mark, Done (1: the
+        carry of this collection was finished before -- nothing is written again), Last, SrcMax, SrcMin.
+        @MaxDays: a last complete result OLDER than that many days before this collection is not carried; 0 = no limit.
+        -Columns is accepted for the callers of before (the plan takes no column).
     #>
-    param([Parameter(Mandatory)][string[]]$Columns)
-    $safe = @($Columns | Where-Object { $_ -match '^[A-Za-z_][A-Za-z0-9_]*$' })
-    $list = ($safe | ForEach-Object { '[{0}]' -f $_ }) -join ', '
-    $from = ($safe | ForEach-Object { 'f.[{0}]' -f $_ }) -join ', '
+    param([string[]]$Columns = @())
     @"
 SET NOCOUNT ON;
 SET XACT_ABORT ON;
 DECLARE @c INT = CONVERT(int, @CollectionId);
 DECLARE @t DATETIME2(3) = (SELECT CollectionTime FROM sidata.Collection WHERE CollectionId = @c);
+DECLARE @pend NVARCHAR(64) = N'carry:' + CONVERT(nvarchar(20), @c);
+-- the marks of collections that are gone
+DELETE v FROM sidata.ViewState v
+WHERE (v.Name LIKE N'carry:%' AND NOT EXISTS (SELECT 1 FROM sidata.Collection x WHERE x.CollectionId = TRY_CONVERT(int, SUBSTRING(v.Name, 7, 20))))
+   OR (v.Name LIKE N'xc:%' AND NOT EXISTS (SELECT 1 FROM sidata.Collection x WHERE x.CollectionId = TRY_CONVERT(int, SUBSTRING(v.Name, 4, CHARINDEX(N':', v.Name + N':', 4) - 4))));
 DECLARE @inc TABLE (ReportName NVARCHAR(256) NOT NULL PRIMARY KEY, Reason NVARCHAR(2000) NULL);
 INSERT @inc SELECT ReportName, MAX(Reason) FROM sidata.RaReportStatus WHERE CollectionTime = @t AND Grain = N'Detailed' AND State = N'NotComplete' GROUP BY ReportName;
 DECLARE @max INT = ISNULL(TRY_CONVERT(int, @MaxDays), 0);
-DECLARE @src TABLE (ReportName NVARCHAR(256) NOT NULL PRIMARY KEY, FromId INT NULL, FromTime DATETIME2(3) NULL, Reason NVARCHAR(2000) NULL, TooOldTime DATETIME2(3) NULL);
-INSERT @src SELECT i.ReportName,
+DECLARE @src TABLE (ReportName NVARCHAR(256) NOT NULL PRIMARY KEY, FromId INT NULL, FromTime DATETIME2(3) NULL, Reason NVARCHAR(2000) NULL, TooOldTime DATETIME2(3) NULL,
+                    Mark NVARCHAR(64) NOT NULL, Exact BIT NOT NULL DEFAULT 0);
+INSERT @src (ReportName, FromId, FromTime, Reason, TooOldTime, Mark) SELECT i.ReportName,
        CASE WHEN @max > 0 AND g.CollectionTime < DATEADD(day, -@max, @t) THEN NULL ELSE g.CollectionId END,
        CASE WHEN @max > 0 AND g.CollectionTime < DATEADD(day, -@max, @t) THEN NULL ELSE g.CollectionTime END,
        i.Reason,
-       CASE WHEN @max > 0 AND g.CollectionTime < DATEADD(day, -@max, @t) THEN g.CollectionTime END
+       CASE WHEN @max > 0 AND g.CollectionTime < DATEADD(day, -@max, @t) THEN g.CollectionTime END,
+       N'xc:' + CONVERT(nvarchar(20), @c) + N':' + LEFT(CONVERT(nvarchar(64), HASHBYTES('SHA2_256', i.ReportName), 2), 40)
 FROM @inc i OUTER APPLY (
     SELECT TOP (1) p.CollectionId, p.CollectionTime FROM sidata.Collection p
     WHERE p.Kind = N'Detailed' AND p.Status = N'Complete' AND p.CollectionId <> @c AND p.CollectionTime < @t$(if (Get-Command -Name Get-SIDataLiveFilter -ErrorAction SilentlyContinue) { Get-SIDataLiveFilter -Alias p })
@@ -1429,28 +1556,147 @@ FROM @inc i OUTER APPLY (
            OR (NOT EXISTS (SELECT 1 FROM sidata.RaReportStatus s WHERE s.CollectionTime = p.CollectionTime AND s.Grain = N'Detailed')
                AND NOT EXISTS (SELECT 1 FROM sidata.CollectionPartial x WHERE x.CollectionId = p.CollectionId)))
     ORDER BY p.CollectionTime DESC) g;
-DECLARE @added TABLE (ReportName NVARCHAR(256) NULL);
-BEGIN TRANSACTION;
-INSERT sidata.Finding (CollectionId, $list, CarriedFrom)
-OUTPUT inserted.ReportName INTO @added (ReportName)
-SELECT @c, $from, s.FromTime
-FROM @src s JOIN sidata.Finding f ON f.CollectionId = s.FromId AND f.ReportName = s.ReportName
-WHERE s.FromId IS NOT NULL
-  AND NOT EXISTS (SELECT 1 FROM sidata.Finding k WHERE k.CollectionId = @c AND k.ReportName = f.ReportName
-                  AND ISNULL(k.AssetKey, N'') = ISNULL(f.AssetKey, N'') AND ISNULL(k.ConfigurationId, N'') = ISNULL(f.ConfigurationId, N'')
-                  AND (f.ConfigurationId IS NOT NULL OR ISNULL(k.Title, N'') = ISNULL(f.Title, N'')));
-DELETE FROM sidata.CollectionReportCarry WHERE CollectionId = @c OR NOT EXISTS (SELECT 1 FROM sidata.Collection x WHERE x.CollectionId = sidata.CollectionReportCarry.CollectionId);
-INSERT sidata.CollectionReportCarry (CollectionId, ReportName, FromCollectionId, FromTime, CarriedRows, ThisRunRows, Reason)
-SELECT @c, s.ReportName, s.FromId, s.FromTime,
-       (SELECT COUNT(*) FROM sidata.Finding f WHERE f.CollectionId = @c AND f.ReportName = s.ReportName AND f.CarriedFrom IS NOT NULL),
-       (SELECT COUNT(*) FROM sidata.Finding f WHERE f.CollectionId = @c AND f.ReportName = s.ReportName AND f.CarriedFrom IS NULL),
-       LEFT(s.Reason, 2000)
-FROM @src s;
-COMMIT TRANSACTION;
-SELECT r.ReportName, r.FromCollectionId, r.FromTime, r.CarriedRows, r.ThisRunRows, r.Reason, (SELECT COUNT(*) FROM @added a WHERE a.ReportName = r.ReportName) AS AddedNow,
-       (SELECT s.TooOldTime FROM @src s WHERE s.ReportName = r.ReportName) AS TooOldTime, @max AS MaxDays
-FROM sidata.CollectionReportCarry r WHERE r.CollectionId = @c ORDER BY r.ReportName;
+-- a carry already begun keeps its source collection (the mark pins it) -- only while that source is still a LIVE complete
+-- collection (#1323 data-quality review 2: a pin checked only for the row's existence carried 0 rows from a source the
+-- retention had retired, the read-back 0 = 0 passed, and the report was published EMPTY). A pin whose source is no longer
+-- live is answered PinLost = 1: the caller drops what was carried from it and plans again from a live source, or -- none
+-- left -- fails closed (the report stays held, the collection is never marked complete).
+DECLARE @pinLost TABLE (ReportName NVARCHAR(256) NOT NULL PRIMARY KEY);
+INSERT @pinLost (ReportName)
+SELECT s.ReportName FROM @src s CROSS APPLY (SELECT TRY_CONVERT(int, SUBSTRING(v.Value, 3, CHARINDEX(N';', v.Value + N';') - 3)) AS F FROM sidata.ViewState v WHERE v.Name = s.Mark) m
+WHERE EXISTS (SELECT 1 FROM sidata.ViewState v WHERE v.Name = @pend)
+  AND (m.F IS NULL OR NOT EXISTS (SELECT 1 FROM sidata.Collection x WHERE x.CollectionId = m.F AND x.Kind = N'Detailed' AND x.Status = N'Complete'$(if (Get-Command -Name Get-SIDataLiveFilter -ErrorAction SilentlyContinue) { Get-SIDataLiveFilter -Alias x })));
+UPDATE s SET FromId = m.F, FromTime = (SELECT x.CollectionTime FROM sidata.Collection x WHERE x.CollectionId = m.F), TooOldTime = NULL
+FROM @src s CROSS APPLY (SELECT TRY_CONVERT(int, SUBSTRING(v.Value, 3, CHARINDEX(N';', v.Value + N';') - 3)) AS F FROM sidata.ViewState v WHERE v.Name = s.Mark) m
+WHERE EXISTS (SELECT 1 FROM sidata.ViewState v WHERE v.Name = @pend) AND m.F IS NOT NULL AND s.ReportName NOT IN (SELECT l.ReportName FROM @pinLost l);
+-- #1323 review (owner: no mixing): a report HELD for slices that could not be read and that HAS a last complete result
+-- shows EXACTLY that result, row for row (the clear and the ranges below)
+DECLARE @exact TABLE (ReportName NVARCHAR(256) NOT NULL PRIMARY KEY);
+IF COL_LENGTH('sidata.RaReportStatus', 'HoldKind') IS NOT NULL
+BEGIN
+    DECLARE @xq NVARCHAR(MAX) = N'SELECT DISTINCT s.ReportName FROM sidata.RaReportStatus s WHERE s.CollectionTime = @t AND s.Grain = N''Detailed'' AND s.State = N''NotComplete'' AND s.HoldKind = N''unreadable-slices'''
+        + CASE WHEN COL_LENGTH('sidata.RaReportStatus', 'HeldRaReport') IS NOT NULL THEN N' AND s.HeldRaReport IS NULL' ELSE N'' END;
+    INSERT @exact (ReportName) EXEC sp_executesql @xq, N'@t datetime2(3)', @t = @t;
+    UPDATE s SET Exact = 1 FROM @src s WHERE s.FromId IS NOT NULL AND s.ReportName IN (SELECT e.ReportName FROM @exact e);
+END
+DECLARE @done BIT = CASE WHEN NOT EXISTS (SELECT 1 FROM sidata.ViewState WHERE Name = @pend) AND EXISTS (SELECT 1 FROM sidata.CollectionReportCarry WHERE CollectionId = @c) THEN 1 ELSE 0 END;
+IF @done = 0 AND EXISTS (SELECT 1 FROM @src WHERE FromId IS NOT NULL)
+BEGIN
+    BEGIN TRANSACTION;
+    IF NOT EXISTS (SELECT 1 FROM sidata.ViewState WITH (UPDLOCK, HOLDLOCK) WHERE Name = @pend)
+        INSERT sidata.ViewState (Name, Value) VALUES (@pend, N'pending');
+    INSERT sidata.ViewState (Name, Value)
+    SELECT s.Mark, N'f=' + CONVERT(nvarchar(20), s.FromId) + N';l=0' FROM @src s
+    WHERE s.FromId IS NOT NULL AND NOT EXISTS (SELECT 1 FROM sidata.ViewState v WHERE v.Name = s.Mark);
+    COMMIT TRANSACTION;
+END
+SELECT s.ReportName, s.FromId, s.FromTime, s.Reason, s.TooOldTime, @max AS MaxDays, s.Exact, s.Mark, @done AS Done,
+       CASE WHEN s.ReportName IN (SELECT l.ReportName FROM @pinLost l) THEN 1 ELSE 0 END AS PinLost,
+       ISNULL((SELECT TRY_CONVERT(bigint, SUBSTRING(v.Value, CHARINDEX(N';l=', v.Value) + 3, 30)) FROM sidata.ViewState v WHERE v.Name = s.Mark), 0) AS Last,
+       ISNULL((SELECT MAX(f.FindingId) FROM sidata.Finding f WHERE f.CollectionId = s.FromId AND f.ReportName = s.ReportName), 0) AS SrcMax,
+       ISNULL((SELECT MIN(f.FindingId) FROM sidata.Finding f WHERE f.CollectionId = s.FromId AND f.ReportName = s.ReportName), 0) AS SrcMin
+FROM @src s ORDER BY s.ReportName;
 "@
+}
+
+function Get-SIDataCarryClearSql {
+    <# #1323 review: ONE batch of this run's rows of a report held for 'unreadable-slices' (Invoke-SIDataBatchedDelete; a
+       carried row is never removed). Only after the plan wrote the intent mark. #>
+    "DELETE TOP (@Batch) FROM sidata.Finding WHERE CollectionId = CONVERT(int, @CollectionId) AND ReportName = @ReportName AND CarriedFrom IS NULL; SELECT @@ROWCOUNT;"
+}
+
+function Get-SIDataCarryDropCarriedSql {
+    <# #1323 data-quality review 2: ONE batch of the rows a carry brought into the collection for a report from a source that is
+       no longer kept (Invoke-SIDataBatchedDelete; this run's own rows are never removed here). #>
+    "DELETE TOP (@Batch) FROM sidata.Finding WHERE CollectionId = CONVERT(int, @CollectionId) AND ReportName = @ReportName AND CarriedFrom IS NOT NULL; SELECT @@ROWCOUNT;"
+}
+
+function Get-SIDataCarryRangeSql {
+    <#
+        ONE range of a report's source rows (FindingId after the mark's last, up to @UpTo), in its own transaction together with
+        its mark: in exactly once. @Exact = 1 (a held report shown exactly): every source row; else (as before) only a source
+        row this run has no row of the same finding for (AssetKey + ConfigurationId, or + Title without one). Answers the rows
+        added. -Columns: Get-SIDataCarryColumnsSql's names (checked; nothing else reaches the statement).
+    #>
+    param([Parameter(Mandatory)][string[]]$Columns)
+    $safe = @($Columns | Where-Object { $_ -match '^[A-Za-z_][A-Za-z0-9_]*$' })
+    $list = ($safe | ForEach-Object { '[{0}]' -f $_ }) -join ', '
+    $cols = ($safe | ForEach-Object { 'f.[{0}]' -f $_ }) -join ', '
+    @"
+SET NOCOUNT ON;
+SET XACT_ABORT ON;
+DECLARE @c INT = CONVERT(int, @CollectionId);
+DECLARE @src INT = CONVERT(int, @FromId);
+DECLARE @hi BIGINT = CONVERT(bigint, @UpTo);
+DECLARE @ft DATETIME2(3) = (SELECT CollectionTime FROM sidata.Collection WHERE CollectionId = @src);
+DECLARE @n INT = 0;
+BEGIN TRANSACTION;
+DECLARE @last BIGINT = (SELECT TRY_CONVERT(bigint, SUBSTRING(Value, CHARINDEX(N';l=', Value) + 3, 30)) FROM sidata.ViewState WITH (UPDLOCK, HOLDLOCK) WHERE Name = @Mark);
+IF @last IS NOT NULL AND @last < @hi
+BEGIN
+    INSERT sidata.Finding (CollectionId, $list, CarriedFrom)
+    SELECT @c, $cols, @ft
+    FROM sidata.Finding f
+    WHERE f.CollectionId = @src AND f.ReportName = @ReportName AND f.FindingId > @last AND f.FindingId <= @hi
+      AND (CONVERT(int, @Exact) = 1 OR NOT EXISTS (SELECT 1 FROM sidata.Finding k WHERE k.CollectionId = @c AND k.ReportName = f.ReportName AND k.CarriedFrom IS NULL
+                  AND ISNULL(k.AssetKey, N'') = ISNULL(f.AssetKey, N'') AND ISNULL(k.ConfigurationId, N'') = ISNULL(f.ConfigurationId, N'')
+                  AND (f.ConfigurationId IS NOT NULL OR ISNULL(k.Title, N'') = ISNULL(f.Title, N''))));
+    SET @n = @@ROWCOUNT;
+    UPDATE sidata.ViewState SET Value = N'f=' + CONVERT(nvarchar(20), @src) + N';l=' + CONVERT(nvarchar(20), @hi), UpdatedAt = SYSUTCDATETIME() WHERE Name = @Mark;
+END
+COMMIT TRANSACTION;
+SELECT @n;
+"@
+}
+
+function Get-SIDataCarryFinishSql {
+    <#
+        THE READ-BACK and the record (see above). @Plan: the plan's rows (JSON). @Done = 1: only the record is answered. Else
+        per carried report the rows are counted -- carried = the source's (exact: every source row and none of this run;
+        else every source row this run has no row of the same finding for) -- and only when every one matches the record
+        is written and the marks go, in one transaction. Answers the record rows (Ok = 1) or the reports that do not match
+        (Ok = 0, Expected, Carried, ThisRun) and writes nothing.
+    #>
+    @'
+SET NOCOUNT ON;
+SET XACT_ABORT ON;
+DECLARE @c INT = CONVERT(int, @CollectionId);
+DECLARE @pend NVARCHAR(64) = N'carry:' + CONVERT(nvarchar(20), @c);
+DECLARE @r TABLE (ReportName NVARCHAR(256) NOT NULL PRIMARY KEY, FromId INT NULL, FromTime DATETIME2(3) NULL, Reason NVARCHAR(2000) NULL, Exact BIT NOT NULL, Mark NVARCHAR(64) NULL, TooOldTime DATETIME2(3) NULL);
+INSERT @r SELECT j.ReportName, j.FromId, CONVERT(datetime2(3), NULLIF(j.FromTime, N''), 126), j.Reason, ISNULL(j.Exact, 0), j.Mark, CONVERT(datetime2(3), NULLIF(j.TooOldTime, N''), 126)
+FROM OPENJSON(@Plan) WITH (ReportName nvarchar(256), FromId int, FromTime nvarchar(40), Reason nvarchar(2000), Exact bit, Mark nvarchar(64), TooOldTime nvarchar(40)) j;
+IF CONVERT(int, @Done) = 0
+BEGIN
+    DECLARE @chk TABLE (ReportName NVARCHAR(256) NOT NULL, Expected BIGINT NOT NULL, Carried BIGINT NOT NULL, ThisRun BIGINT NOT NULL, Exact BIT NOT NULL);
+    INSERT @chk SELECT r.ReportName,
+        (SELECT COUNT_BIG(*) FROM sidata.Finding f WHERE f.CollectionId = r.FromId AND f.ReportName = r.ReportName
+            AND (r.Exact = 1 OR NOT EXISTS (SELECT 1 FROM sidata.Finding k WHERE k.CollectionId = @c AND k.ReportName = f.ReportName AND k.CarriedFrom IS NULL
+                  AND ISNULL(k.AssetKey, N'') = ISNULL(f.AssetKey, N'') AND ISNULL(k.ConfigurationId, N'') = ISNULL(f.ConfigurationId, N'')
+                  AND (f.ConfigurationId IS NOT NULL OR ISNULL(k.Title, N'') = ISNULL(f.Title, N''))))),
+        (SELECT COUNT_BIG(*) FROM sidata.Finding f WHERE f.CollectionId = @c AND f.ReportName = r.ReportName AND f.CarriedFrom IS NOT NULL),
+        (SELECT COUNT_BIG(*) FROM sidata.Finding f WHERE f.CollectionId = @c AND f.ReportName = r.ReportName AND f.CarriedFrom IS NULL),
+        r.Exact
+    FROM @r r WHERE r.FromId IS NOT NULL;
+    IF EXISTS (SELECT 1 FROM @chk WHERE Expected <> Carried OR (Exact = 1 AND ThisRun > 0))
+    BEGIN
+        SELECT ReportName, Expected, Carried, ThisRun, CAST(0 AS bit) AS Ok FROM @chk WHERE Expected <> Carried OR (Exact = 1 AND ThisRun > 0) ORDER BY ReportName;
+        RETURN;
+    END
+    BEGIN TRANSACTION;
+    DELETE FROM sidata.CollectionReportCarry WHERE CollectionId = @c OR NOT EXISTS (SELECT 1 FROM sidata.Collection x WHERE x.CollectionId = sidata.CollectionReportCarry.CollectionId);
+    INSERT sidata.CollectionReportCarry (CollectionId, ReportName, FromCollectionId, FromTime, CarriedRows, ThisRunRows, Reason)
+    SELECT @c, r.ReportName, r.FromId, r.FromTime,
+           (SELECT COUNT(*) FROM sidata.Finding f WHERE f.CollectionId = @c AND f.ReportName = r.ReportName AND f.CarriedFrom IS NOT NULL),
+           (SELECT COUNT(*) FROM sidata.Finding f WHERE f.CollectionId = @c AND f.ReportName = r.ReportName AND f.CarriedFrom IS NULL),
+           LEFT(r.Reason, 2000)
+    FROM @r r;
+    DELETE FROM sidata.ViewState WHERE Name = @pend OR Name IN (SELECT r.Mark FROM @r r WHERE r.Mark IS NOT NULL);
+    COMMIT TRANSACTION;
+END
+SELECT x.ReportName, x.FromCollectionId, x.FromTime, x.CarriedRows, x.ThisRunRows, x.Reason, CAST(1 AS bit) AS Ok,
+       (SELECT r.TooOldTime FROM @r r WHERE r.ReportName = x.ReportName) AS TooOldTime, CONVERT(int, @MaxDays) AS MaxDays
+FROM sidata.CollectionReportCarry x WHERE x.CollectionId = @c ORDER BY x.ReportName;
+'@
 }
 
 function Get-SIDataScopeSql {
@@ -1497,6 +1743,83 @@ function Format-SIDataCarryText {
     [pscustomobject]@{ Text = ($parts -join '; '); Lines = $lines.ToArray() }
 }
 
+function Invoke-SIDataCarryRanged {
+    <#
+        THE CARRY OF ONE COLLECTION (see "the carry is NOT one statement" above): plan + intent, the exact clear, the ranges,
+        the read-back and the record. Answers the record rows (ReportName, FromCollectionId, FromTime, CarriedRows,
+        ThisRunRows, Reason, AddedNow, TooOldTime, MaxDays). Throws when a report's rows read back do not match its source
+        (the marks stay: the collection is not marked Complete and the next data sync finishes it). -RangeRows: the first
+        range's size in source FindingIds; each next one follows the last one's measured time (Get-SIDataNextSize).
+    #>
+    param([Parameter(Mandatory)][int]$CollectionId, [Parameter(Mandatory)][scriptblock]$Invoke, [Parameter(Mandatory)][string[]]$Columns,
+          [scriptblock]$Log, [long]$RangeRows = 20000, [long]$TargetMs = 5000)
+    $inv = [Globalization.CultureInfo]::InvariantCulture
+    $max = [string](Get-SIDataCarryMaxDays)
+    $plan = @(@(& $Invoke (Get-SIDataCarrySql) @{ CollectionId = [string]$CollectionId; MaxDays = $max } 'reader') | ForEach-Object { $_ } | Where-Object { $_ -is [System.Collections.IDictionary] -and $_['ReportName'] })
+    $v = { param($r, [string]$n) $x = $r[$n]; if ($x -is [System.DBNull]) { $null } else { $x } }
+    # #1323 data-quality review 2: a PINNED source that is no longer live (retired, removed, no longer complete) is never read
+    # back as "0 = 0". What was carried from it goes, its mark goes, and the report is planned again from a live source; no live
+    # source left = FAIL CLOSED -- the report stays held and the collection is not marked complete (never published with the
+    # report empty).
+    $lost = @($plan | Where-Object { [int](& $v $_ 'PinLost') -eq 1 })
+    if ($lost.Count) {
+        $none = @($lost | Where-Object { $null -eq (& $v $_ 'FromId') })
+        if ($none.Count) {
+            throw ('the carry of {0} was begun from a collection that is no longer kept, and no other complete result of it is left -- the report stays held and the collection is not marked complete (never shown with the report empty)' -f ((@($none | ForEach-Object { [string]$_['ReportName'] })) -join ', '))
+        }
+        foreach ($r in $lost) {
+            $b = [long]5000
+            $gone = Invoke-SIDataBatchedDelete -Invoke $Invoke -Sql (Get-SIDataCarryDropCarriedSql) -Params @{ CollectionId = [string]$CollectionId; ReportName = [string]$r['ReportName'] } -BatchSize ([ref]$b)
+            $null = & $Invoke 'SET NOCOUNT ON; DELETE FROM sidata.ViewState WHERE Name = @Mark; SELECT @@ROWCOUNT;' @{ Mark = [string]$r['Mark'] } 'scalar'
+            if ($Log) { & $Log 'WARN' ("  per report  : {0}: the collection its carry was begun from is no longer kept -- {1} row(s) carried from it removed; carried again from its last complete result that is kept" -f [string]$r['ReportName'], $gone) }
+        }
+        $plan = @(@(& $Invoke (Get-SIDataCarrySql) @{ CollectionId = [string]$CollectionId; MaxDays = $max } 'reader') | ForEach-Object { $_ } | Where-Object { $_ -is [System.Collections.IDictionary] -and $_['ReportName'] })
+        if (@($plan | Where-Object { [int](& $v $_ 'PinLost') -eq 1 }).Count) { throw 'the carry could not be planned again from a kept collection -- the report stays held and the collection is not marked complete' }
+    }
+    $done = [bool]($plan.Count -and [int](& $v $plan[0] 'Done') -eq 1)
+    $added = @{}
+    if (-not $done) {
+        foreach ($r in $plan) {
+            $name = [string]$r['ReportName']; $added[$name] = 0L
+            $fromId = & $v $r 'FromId'; if ($null -eq $fromId) { continue }
+            $exact = [int](& $v $r 'Exact') -eq 1
+            if ($exact) {
+                $b = [long]5000
+                $gone = Invoke-SIDataBatchedDelete -Invoke $Invoke -Sql (Get-SIDataCarryClearSql) -Params @{ CollectionId = [string]$CollectionId; ReportName = $name } -BatchSize ([ref]$b)
+                if ($gone -gt 0 -and $Log) { & $Log 'INFO' ("  per report  : {0}: {1} row(s) of this run removed -- it shows exactly its last complete result" -f $name, $gone) }
+            }
+            $last = [long](& $v $r 'Last'); $srcMax = [long](& $v $r 'SrcMax'); $srcMin = [long](& $v $r 'SrcMin')
+            if ($last -lt ($srcMin - 1)) { $last = $srcMin - 1 }
+            $size = [Math]::Max(500L, $RangeRows)
+            $rangeSql = Get-SIDataCarryRangeSql -Columns $Columns
+            while ($last -lt $srcMax) {
+                $hi = [Math]::Min($srcMax, $last + $size)
+                $sw = [Diagnostics.Stopwatch]::StartNew()
+                $n = [long](& $Invoke $rangeSql @{ CollectionId = [string]$CollectionId; FromId = [string]$fromId; ReportName = $name; Mark = [string]$r['Mark']
+                                                   UpTo = $hi.ToString($inv); Exact = $(if ($exact) { '1' } else { '0' }) } 'scalar')
+                $sw.Stop()
+                $added[$name] += $n
+                $last = $hi
+                $size = Get-SIDataNextSize -Current $size -ElapsedMs $sw.ElapsedMilliseconds -TargetMs $TargetMs -Minimum 500
+            }
+        }
+    }
+    $json = ConvertTo-Json -Compress -Depth 3 -InputObject @($plan | ForEach-Object {
+        [ordered]@{ ReportName = [string]$_['ReportName']; FromId = (& $v $_ 'FromId')
+                    FromTime = $(if ($null -ne (& $v $_ 'FromTime')) { ([datetime](& $v $_ 'FromTime')).ToString('yyyy-MM-ddTHH:mm:ss.fff', $inv) } else { '' })
+                    Reason = [string](& $v $_ 'Reason'); Exact = ([int](& $v $_ 'Exact') -eq 1); Mark = [string](& $v $_ 'Mark')
+                    TooOldTime = $(if ($null -ne (& $v $_ 'TooOldTime')) { ([datetime](& $v $_ 'TooOldTime')).ToString('yyyy-MM-ddTHH:mm:ss.fff', $inv) } else { '' }) } })
+    if (-not $plan.Count) { $json = '[]' }
+    $fin = @(@(& $Invoke (Get-SIDataCarryFinishSql) @{ CollectionId = [string]$CollectionId; Plan = $json; Done = $(if ($done) { '1' } else { '0' }); MaxDays = $max } 'reader') | ForEach-Object { $_ } | Where-Object { $_ -is [System.Collections.IDictionary] -and $_['ReportName'] })
+    $bad = @($fin | Where-Object { -not [bool]$_['Ok'] })
+    if ($bad.Count) {
+        throw ('the carried rows of {0} do not match their last complete result ({1}) -- the collection is not marked complete; the next data sync finishes the carry' -f `
+            (@($bad | ForEach-Object { [string]$_['ReportName'] }) -join ', '), (@($bad | ForEach-Object { 'expected {0}, carried {1}, this run {2}' -f $_['Expected'], $_['Carried'], $_['ThisRun'] }) -join '; '))
+    }
+    foreach ($f in $fin) { $f['AddedNow'] = $(if ($added.ContainsKey([string]$f['ReportName'])) { [long]$added[[string]$f['ReportName']] } else { 0L }) }
+    $fin
+}
+
 function Invoke-SIDataCarryReports {
     <#
         One collection Risk Analysis wrote, before it is marked complete: its incomplete reports keep their last complete rows
@@ -1515,7 +1838,7 @@ function Invoke-SIDataCarryReports {
         return [pscustomobject]@{ Ready = $false; Reports = @(); Text = ''; Scope = '' }
     }
     $cols = @(@(& $Invoke (Get-SIDataCarryColumnsSql) @{} 'reader') | ForEach-Object { $_ } | Where-Object { $_ } | ForEach-Object { [string]$_['name'] } | Where-Object { $_ })
-    $rows = @(@(& $Invoke (Get-SIDataCarrySql -Columns $cols) @{ CollectionId = [string]$CollectionId; MaxDays = [string](Get-SIDataCarryMaxDays) } 'reader') | ForEach-Object { $_ } | Where-Object { $_ -is [System.Collections.IDictionary] -and $_['ReportName'] })
+    $rows = @(Invoke-SIDataCarryRanged -CollectionId $CollectionId -Invoke $Invoke -Columns $cols -Log $Log)
     $scope = ''
     try { $scope = ([string](& $Invoke (Get-SIDataScopeSql) @{ CollectionId = [string]$CollectionId } 'scalar')).Trim().ToLowerInvariant() } catch { $scope = '' }
     $fmt = Format-SIDataCarryText -Rows $rows
@@ -1973,6 +2296,26 @@ function Get-SIDataSyncIssues {
         if ($p -and [string](& $get $p 'Status') -eq 'failed') {
             $out.Add([pscustomobject]@{ Level = 'WARNING'; Text = ('{0} were not built this run ({1}) -- this part failed; its pages show the last complete result and the next run builds it' -f $parts[$k].Name, [string](& $get $p 'Error')) })
         }
+    }
+    # #1319 the quick build from what changed (SI_Data_ChangedSet): a difference from the full build (the full build was kept, or
+    # this run was built in full before anything was published) or a check that could not run -- a WARNING, so the run's report
+    # opens the fix request; never a value of a finding (ids and column names only)
+    foreach ($cs in @(& $get $Result 'ChangedSet')) {
+        if (-not $cs -or -not (Get-Command -Name Get-SIDataChangedSetWarningText -ErrorAction SilentlyContinue)) { continue }
+        $w = Get-SIDataChangedSetWarningText -Result $cs
+        if ($w) { $out.Add([pscustomobject]@{ Level = 'WARNING'; Text = $w }) }
+    }
+    # #1332 the finding history: a difference from the stored rows / the full build, or a step that did not complete -- a
+    # WARNING, so the run's report opens the fix request; never a value of a finding (ids and column names only)
+    $hm = & $get $Result 'History'
+    if ($hm -and (Get-Command -Name Get-SIDataHistoryWarningText -ErrorAction SilentlyContinue)) {
+        foreach ($w in @(Get-SIDataHistoryWarningText -Result $hm)) { if ($w) { $out.Add([pscustomobject]@{ Level = 'WARNING'; Text = $w }) } }
+    }
+    # #1332 the readers on the history: what a reader returns differed between the history and the stored rows (its readers
+    # read the stored rows), or the step could not decide -- a WARNING (the fix request); reader names and counts only
+    $hs = & $get $Result 'HistoryServe'
+    if ($hs -and (Get-Command -Name Get-SIDataHistoryServeWarningText -ErrorAction SilentlyContinue)) {
+        foreach ($w in @(Get-SIDataHistoryServeWarningText -Result $hs)) { if ($w) { $out.Add([pscustomobject]@{ Level = 'WARNING'; Text = $w }) } }
     }
     $am = & $get $Result 'AssetMetadata'
     if ($am -and [string](& $get $am 'Status') -eq 'failed') {

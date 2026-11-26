@@ -52,8 +52,8 @@ if (-not (Get-Command -Name Get-SIOpenAIRightsState -ErrorAction SilentlyContinu
 # ---- PRO-COMMUNITY-SAME (owner 2026-11-11): the engine jobs of every install, and the Invardia Support app's database
 # access at install -- the SAME in both editions (moved here from SI-GuidedInstallPro.ps1, which keeps only the licence and
 # the v2.2 CMDB migration). A paid engine's job is made in both editions and asks the licence when it runs.
-# the Invardia Support app's database access: its own database user and its place in the admin group (framework 4.1b, kept after the install)
-if (-not (Get-Command -Name Invoke-SISupportAppDatabaseAccess -ErrorAction SilentlyContinue)) { . ([IO.Path]::Combine($PSScriptRoot, 'SI-SupportAppDatabase.ps1')) }
+# the Invardia Support app's database access: its own READ-ONLY database user; admin only just in time (framework SECAUDIT-1a, #1374)
+if (-not (Get-Command -Name Invoke-SISupportAppReadOnlyAccess -ErrorAction SilentlyContinue)) { . ([IO.Path]::Combine($PSScriptRoot, 'SI-SupportAppDatabase.ps1')) }
 
 function Get-SIInstallProEngines {
     <# PURE. The paid engines that get a container job in EVERY install, both editions (framework PRO-COMMUNITY-SAME, Invardia
@@ -110,19 +110,34 @@ function Get-SIInstallSupportAppAdminGroupId {
     [string]$fg.Group.Id
 }
 
+function Get-SIInstallSupportGrantSignedSql {
+    <# PURE. READS ONLY, one value: how many of the four support grant procedures are signed by a support signer whose private
+       key is removed ('0'..'4') -- the scalar read-back of the just-in-time path in the guided install. #>
+    $c = Get-SISupportGrantContract
+    $names = (@($c.Procedures | ForEach-Object { "(N'$_')" })) -join ', '
+    "SELECT CONVERT(nvarchar(10), COUNT(*)) AS Value FROM (VALUES $names) AS w(n) WHERE EXISTS (SELECT 1 FROM sys.crypt_properties AS cp JOIN sys.certificates AS c ON c.thumbprint = cp.thumbprint WHERE cp.major_id = OBJECT_ID(w.n) AND c.name LIKE N'$($c.SignerPrefix)%' AND c.pvt_key_encryption_type = 'NA');"
+}
+
 function Set-SIInstallSupportAppDatabase {
     <#
-        THE INVARDIA SUPPORT APP KEEPS ITS DATABASE ACCESS AFTER THE INSTALL -- BOTH PARTS, PERMANENTLY (framework section
-        4.1b; owner 2026-10-18: "make sure it never gets removed again") -- whoever runs the install: a person in Azure
-        Cloud Shell, or the Support app itself. Only when the answers name a Support app (supportAppId); without one NOTHING
-        is done and nothing is reported ($null).
-          1. ITS OWN DATABASE USER in the Pro database and the identity ledger, from its client id (WITH SID, TYPE = E, no
-             directory lookup), with db_owner. Made while the install is still the server's administrator, read back,
-             never removed by the end of the install.
-          2. membership of the server's admin group: added, read back, LEFT THERE -- no step of the install takes it away.
-             The end of the install makes that group the server's administrator, as a group (setup\Set-SISqlAdminGroup.ps1).
+        THE INVARDIA SUPPORT APP AFTER THE INSTALL: A STANDING READ-ONLY USER, ADMIN ONLY JUST IN TIME (framework SECAUDIT-1a;
+        owner 2026-11-04 point 3 and 2026-11-25, #1374) -- whoever runs the install: a person in Azure Cloud Shell, or the
+        Support app itself. Only when the answers name a Support app (supportAppId); without one NOTHING is done and nothing
+        is reported ($null).
+          1. THE JUST-IN-TIME SUPPORT GRANT in the Pro database and the identity ledger -- the support grant's admin steps
+             (engine\pro-settings\SI-SupportGrantSql.ps1: its tables, the Support app's OWN database user from its client id
+             in the read-only role si_support_read, the customer's consent at the chosen level, the four SIGNED procedures,
+             the engine's EXECUTE), made while the install is still the server's administrator;
+          2. the read-only user READ BACK (made here when a grant step could not make it): its own user, in si_support_read,
+             and NOT in db_owner; the four procedures read back signed;
           3. the client id is recorded in the Pro database, so the heartbeat knows which application to report on.
-        -CheckOnly reads only (the end-of-install check). Never throws. Returns @{ Ok; Member; Databases; Message; Unchecked }.
+        NEVER db_owner for the Support app, NEVER a member of the SQL admin group: its membership is only READ (a standing
+        membership of an earlier release is said, with who removes it: setup\Remove-SISupportStandingAccess.ps1).
+        -CheckOnly reads only (the end-of-install check). Never throws.
+        Returns @{ Ok; Member; Databases; Message; Unchecked }. Member.State: not-member | standing | unchecked.
+        Databases: Invoke-SISupportAppReadOnlyAccess's rows + Signed (0..4, -1 = not read). Ok = the just-in-time database
+        state: every database read-only, no db_owner, 4 procedures signed. A membership of the SQL admin group is said
+        (Member 'standing'), not part of Ok: this step never makes one and cannot remove one.
     #>
     param([Parameter(Mandatory)]$Ctx, [switch]$CheckOnly)
     $app = ''; try { $app = ([string]$Ctx.Values['supportAppId']).Trim() } catch { }
@@ -142,22 +157,21 @@ function Set-SIInstallSupportAppDatabase {
         $sp = $null; $spWhy = ''
         try { $sp = Get-SISupportAppServicePrincipal -Graph $graph -ClientId $app } catch { $spWhy = 'could not be checked: the directory did not answer ({0})' -f $_.Exception.Message }
         if (-not $sp -and -not $spWhy) { $spWhy = 'the tenant has no service principal for the application {0}' -f $app }
-        # ---- 1. its own database user with db_owner (needs no directory: the SID is the client id) ----
+        if (-not (Get-Command -Name Get-SISupportGrantAdminSteps -ErrorAction SilentlyContinue)) { . ([IO.Path]::Combine((Split-Path -Parent (Split-Path -Parent $PSScriptRoot)), 'engine', 'pro-settings', 'SI-SupportGrantSql.ps1')) }
+        # ---- 1. the just-in-time support grant, with the read-only user (needs no directory: the SID is the client id) ----
         $dbs = @($script:SIInstallProDatabase, $script:SIInstallLedgerDatabase)
         $name = $(if ($sp -and $sp.DisplayName) { $sp.DisplayName } else { 'invardia-support-app' })
         $script:SIInstallSupportDbResult = @()
         Use-SIInstallUserSqlToken -Ctx $Ctx -Action {
-            $script:SIInstallSupportDbResult = @(Invoke-SISupportAppDatabaseAccess -Sql $sql -Databases $dbs -ClientId $app -UserName $name -Apply:(-not $CheckOnly))
             if (-not $CheckOnly) {
                 # 3. recorded for the heartbeat; a record that cannot be written is a line, never a failed step
                 try { $null = & $sql $script:SIInstallProDatabase (Get-SISupportAppRecordSql -ClientId $app -By 'guided install') }
                 catch { Write-SIInstallConsole -Ctx $Ctx -Text ('      the Support app''s client id could not be recorded in the Pro database ({0})' -f $_.Exception.Message) -Color 'Yellow' }
-                # #1021: the JUST-IN-TIME support grant, made NOW while the install is the databases' owner -- the tables, the
-                # standing read-only role, the customer's consent at the chosen level and the four signed procedures, in each
-                # product database (only ADDS; today's access above stays). A step that fails is a line, never a failed install:
-                # setup\Install-SISupportGrantProcedure.ps1 puts it in place later through a Support session.
+                # #1021 / #1374: the JUST-IN-TIME support grant, made NOW while the install is the databases' owner -- the
+                # tables, the Support app's own user in the standing read-only role, the customer's consent at the chosen level
+                # and the four signed procedures, in each product database. NO db_owner, NO group. A step that fails is a line,
+                # never a failed install: setup\Install-SISupportGrantProcedure.ps1 puts it in place later through a Support session.
                 try {
-                    if (-not (Get-Command -Name Get-SISupportGrantAdminSteps -ErrorAction SilentlyContinue)) { . ([IO.Path]::Combine((Split-Path -Parent (Split-Path -Parent $PSScriptRoot)), 'engine', 'pro-settings', 'SI-SupportGrantSql.ps1')) }
                     $sgLevel = if ($Ctx.Values['supportAccess']) { [string]$Ctx.Values['supportAccess'] } else { 'troubleshoot' }
                     foreach ($sgDb in $dbs) {
                         foreach ($sgStep in @(Get-SISupportGrantAdminSteps -ClientId $app -UserName $name -Level $sgLevel -Source customer -By 'guided install')) {
@@ -167,24 +181,44 @@ function Set-SIInstallSupportAppDatabase {
                     }
                 } catch { Write-SIInstallConsole -Ctx $Ctx -Text ('      the support grant was not put in place ({0})' -f $_.Exception.Message) -Color 'Yellow' }
             }
+            # 2. READ BACK (both modes): its own user in the read-only role, no db_owner (made here when a grant step above could
+            # not make it -- the read-only role only, never more), and the four procedures signed
+            $rows = @(Invoke-SISupportAppReadOnlyAccess -Sql $sql -Databases $dbs -ClientId $app -UserName $name -Apply:(-not $CheckOnly))
+            foreach ($r in $rows) {
+                $signed = -1
+                if ($r.State -in 'present', 'granted') { try { $signed = [int]([string](& $sql $r.Database (Get-SIInstallSupportGrantSignedSql))).Trim() } catch { $signed = -1 } }
+                $r | Add-Member -NotePropertyName Signed -NotePropertyValue $signed -Force
+            }
+            $script:SIInstallSupportDbResult = $rows
         }
         $res = @($script:SIInstallSupportDbResult); $script:SIInstallSupportDbResult = $null
         $out.Databases = $res
-        $dbOk = [bool]($res.Count -gt 0 -and @($res | Where-Object { $_.State -in 'present', 'granted' }).Count -eq $res.Count)
-        # ---- 2. a member of the admin group ----
+        $dbOk = [bool]($res.Count -gt 0 -and @($res | Where-Object { $_.State -in 'present', 'granted' -and -not $_.Owner -and $_.Signed -eq 4 }).Count -eq $res.Count)
+        # ---- the SQL admin group: READ ONLY -- the Support app is never added (SECAUDIT-1a) ----
         $member = $null
         if ($sp -and $sp.Id) {
             $gid = ''; $gWhy = ''
             try { $gid = Get-SIInstallSupportAppAdminGroupId -Ctx $Ctx } catch { $gWhy = 'could not be checked: the directory did not answer ({0})' -f $_.Exception.Message }
-            if ($gid) { $member = Set-SISupportAppGroupMember -Graph $graph -GroupId $gid -ServicePrincipalId $sp.Id -Apply:(-not $CheckOnly) -Sleep $Ctx.Seams.Sleep }
-            else { $member = [pscustomobject]@{ State = $(if ($gWhy) { 'unchecked' } else { 'failed' }); Detail = $(if ($gWhy) { $gWhy } else { 'the database admin group was not found in the directory' }) } }
-        } else { $member = [pscustomobject]@{ State = $(if ($spWhy -like 'could not be checked*') { 'unchecked' } else { 'failed' }); Detail = $spWhy } }
+            if ($gid) {
+                try {
+                    if (Test-SISupportAppGroupMember -Graph $graph -GroupId $gid -ServicePrincipalId $sp.Id) { $member = [pscustomobject]@{ State = 'standing'; Detail = $(if (Test-SIInstallRunsAsSupportApp -Ctx $Ctx) { 'a member of the database admin group only while this install runs AS the Support app (the database server step makes the installing identity a member) -- the hand-back at the end of the install takes it out again (#1374)' } else { 'still a STANDING member of the database admin group (an earlier release) -- not added by this step; Invardia support removes it (setup\Remove-SISupportStandingAccess.ps1)' }) } }
+                    else { $member = [pscustomobject]@{ State = 'not-member'; Detail = 'not a member of the database admin group -- admin only just in time' } }
+                } catch { $member = [pscustomobject]@{ State = 'unchecked'; Detail = ('could not be checked: the directory did not answer whether it is a member ({0})' -f $_.Exception.Message) } }
+            }
+            elseif ($gWhy) { $member = [pscustomobject]@{ State = 'unchecked'; Detail = $gWhy } }
+            else { $member = [pscustomobject]@{ State = 'not-member'; Detail = 'no database admin group was found in the directory -- the Support app is in none' } }
+        } else { $member = [pscustomobject]@{ State = $(if ($spWhy -like 'could not be checked*') { 'unchecked' } else { 'failed' }); Detail = $(if ($spWhy) { $spWhy } else { 'the Support app''s service principal was not found' }) } }
         $out.Member = $member
-        $out.Ok = [bool]($dbOk -and $member.State -in 'present', 'added')
+        # Ok = the just-in-time DATABASE state this step makes (the read-only user, no db_owner, the signed grant). A group
+        # membership is never made here; one that is there is SAID (Member, the message, the end check's note), never
+        # repaired by running this step again -- it is not this step's to remove (Remove-SISupportStandingAccess is)
+        # (a tenant without the Support app -- 'failed' -- is not in place: the just-in-time grant has no application to serve)
+        $out.Ok = [bool]($dbOk -and $member.State -ne 'failed')
         if ($out.Ok) { $Ctx.Facts['supportAppDatabase'] = 'ok' } elseif (-not $CheckOnly) { $Ctx.Facts['supportAppDatabase'] = 'not in place' }
         $out.Unchecked = (@(@($res | Where-Object { $_.State -eq 'unchecked' } | ForEach-Object { '{0}: {1}' -f $_.Database, $_.Detail }) + @($(if ($member.State -eq 'unchecked') { 'the admin group: ' + $member.Detail })) | Where-Object { $_ }) -join '; ')
-        $out.Message = ('The Invardia Support app''s database access, kept after the install -- its own database user: {0}. Member of the database admin group: {1}.' -f
-            ((@($res | ForEach-Object { '{0}: {1}' -f $_.Database, $_.Detail })) -join '; '), $member.Detail)
+        $sgText = { param($r) if ($r.Signed -eq 4) { 'the 4 support grant procedures signed' } elseif ($r.Signed -ge 0) { '{0} of the 4 support grant procedures signed' -f $r.Signed } else { 'the support grant procedures not read' } }
+        $out.Message = ('The Invardia Support app''s database access, just in time -- its own read-only database user: {0}. {1}.' -f
+            ((@($res | ForEach-Object { '{0}: {1}; {2}' -f $_.Database, $_.Detail, (& $sgText $_) })) -join '; '), $member.Detail)
     } catch {
         $out.Ok = $false; $out.Unchecked = 'could not be checked: {0}' -f $_.Exception.Message
         $out.Message = 'The Invardia Support app''s database access ' + $out.Unchecked + '.'
@@ -192,18 +226,23 @@ function Set-SIInstallSupportAppDatabase {
     [pscustomobject]$out
 }
 function Get-SIInstallSupportAppDatabaseCommand {
-    <# PURE apart from reading $Ctx. The command that puts both parts of the Support app's database access in place on an install that is there. #>
+    <# PURE apart from reading $Ctx. The repair command (#1374, SECAUDIT-1a): the just-in-time support grant's install step --
+       the Support app's read-only database user, the signed procedures and the consent -- never standing admin (the earlier
+       Grant-SISupportAppDatabase.ps1 refuses without -LegacyStandingAccess). In a Support session Invardia support runs
+       setup\Install-SISupportGrantProcedure.ps1 instead. #>
     param([Parameter(Mandatory)]$Ctx)
-    './setup/Grant-SISupportAppDatabase.ps1 -AppId {0} -Apply' -f ([string]$Ctx.Values['supportAppId'])
+    $lvl = if ([string]$Ctx.Values['supportAccess']) { [string]$Ctx.Values['supportAccess'] } else { 'troubleshoot' }
+    './setup/Grant-SISupportAccess.ps1 -AppId {0} -Level {1}' -f ([string]$Ctx.Values['supportAppId']), $lvl
 }
 
 function Confirm-SIInstallSupportAppSignIn {
     <#
-        THE END OF THE INSTALL, once the admin group has the server back: does the Support app still get in?
+        THE END OF THE INSTALL, once the admin group has the server back: does the Support app get in READ-ONLY (the
+        just-in-time state, SECAUDIT-1a)?
           * READ BACK from the server: its administrator is the admin group, and the server records it as kind Group.
           * THE PROOF, WHERE IT CAN BE MADE: an install that ran AS the Support app signs in to each product database
-            with the Support app's own token and asks who it is there -- dbo (through the group) or its own database user,
-            either with the owner role (framework 4.1b holds both). One try per
+            with the Support app's own token and asks who it is there -- PROVEN only as its own database user WITHOUT the
+            owner role; dbo (through the admin group) or the owner role is standing admin, said as such. One try per
             database: a server whose administrator changed a moment ago may not answer yet, and that is said as "could
             not be checked", never as "missing". A person's install cannot make this proof (it has no token of the
             Support app); it says what it read back and that the sign-in was not made.
@@ -233,7 +272,7 @@ function Confirm-SIInstallSupportAppSignIn {
         if (-not $asSupportApp) {
             # a person's install: nothing is said unless the server's administrator could be read
             if (-not $adminText) { return $null }
-            return [pscustomobject]@{ Proven = $adminOk; Text = ('The Invardia Support app''s database access: {0}; the Support app is a member of that group and has its own database user in each product database. A database sign-in as the Support app was not made (this install was not run as it).' -f $adminText) }
+            return [pscustomobject]@{ Proven = $adminOk; Text = ('The Invardia Support app''s database access: {0}; the Support app is NOT a member of that group and has its own read-only database user in each product database (admin only just in time). A database sign-in as the Support app was not made (this install was not run as it).' -f $adminText) }
         }
         $fqdn = Get-SIInstallSqlFqdn -Ctx $Ctx; $said = New-Object System.Collections.Generic.List[string]; $all = $true
         foreach ($db in $script:SIInstallProDatabase, $script:SIInstallLedgerDatabase) {
@@ -241,8 +280,10 @@ function Confirm-SIInstallSupportAppSignIn {
                 $tok = [string](& $Ctx.Seams.Token 'https://database.windows.net/' $true)
                 $who = ([string](& $Ctx.Seams.Sql $fqdn $db (Get-SISupportAppWhoAmISql) 'scalar' $tok)).Trim()
                 $p = ConvertFrom-SISupportAppDatabaseAnswer $who
-                if ($p.User -and $p.Owner) { $said.Add(('{0}: signed in as {1}, with the owner role' -f $db, (Get-SISupportAppSignedInName $p.User))) }
-                else { $all = $false; $said.Add(('{0}: signed in as {1}, WITHOUT the owner role' -f $db, (Get-SISupportAppSignedInName $p.User))) }
+                $isDbo = ([string]$p.User).Trim() -ieq 'dbo'
+                if ($p.User -and -not $isDbo -and -not $p.Owner) { $said.Add(('{0}: signed in as {1}, read-only (no owner role: admin only just in time)' -f $db, (Get-SISupportAppSignedInName $p.User))) }
+                elseif ($p.User) { $all = $false; $said.Add(('{0}: signed in as {1}, WITH the owner role -- standing admin, not the just-in-time state' -f $db, (Get-SISupportAppSignedInName $p.User))) }
+                else { $all = $false; $said.Add(('{0}: no database user answered' -f $db)) }
             } catch { $all = $false; $said.Add(('{0}: could not be checked: {1}' -f $db, $_.Exception.Message)) }
         }
         if ($all) { $facts['supportAppSignInProven'] = $true }
@@ -252,30 +293,35 @@ function Confirm-SIInstallSupportAppSignIn {
 
 function Get-SIInstallSupportEndCheck {
     <# THE END-OF-INSTALL CHECK's support part (Get-SIInstallEndCheck calls it where this file is loaded): the Invardia
-       Support app's database access, BOTH parts (framework 4.1b) -- its own database user with the owner role READ from
-       each product database, its membership of the database admin group READ from the directory. Missing = said
-       ('support-app-access|...': its step runs again). What could not be read is kept as a note for the health check
-       ("could not be checked: ..."), never reported as missing. No Support app in the answers = nothing checked, nothing
-       said. Never throws. #>
+       Support app in the JUST-IN-TIME state (SECAUDIT-1a, #1374) -- READ from each product database: its own database user
+       in the read-only role si_support_read, NOT in db_owner, the four support grant procedures signed; READ from the
+       directory: NOT a member of the database admin group. Not in place = said ('support-app-access|...': its step runs
+       again, it makes only the read-only user and the grant). Standing admin found (db_owner / the group, an earlier
+       release) = said with who removes it. What could not be read is kept as a note for the health check ("could not be
+       checked: ..."), never reported as missing. No Support app in the answers = nothing checked, nothing said. Never throws. #>
     param([Parameter(Mandatory)]$Ctx)
     $bad = New-Object System.Collections.Generic.List[string]
     try {
         $v = $Ctx.Values
         $done = @($Ctx.State['completed']) + @($Ctx.State['pending'].Keys)
-        # The Invardia Support app's database access, BOTH parts (framework 4.1b; only when the answers name a Support app
-        # and its step ran): its own database user with the owner role is READ from each product database, and its
-        # membership of the database admin group from the directory. Missing = said, and its step runs again. What could
-        # not be read is kept as a note for the health check ("could not be checked: ..."), never reported as missing.
-        # No Support app in the answers = nothing checked, nothing said.
         $from = 'support-app-access'
         try { $Ctx.Facts.Remove('supportAppDatabaseNote') } catch { }
         if ($done -contains 'support-app-access' -and $done -contains 'pro-schema' -and ([string]$v['supportAppId']).Trim()) {
             $sd = Set-SIInstallSupportAppDatabase -Ctx $Ctx -CheckOnly
             if ($sd) {
-                foreach ($d in @($sd.Databases | Where-Object { $_.State -eq 'missing' })) { $bad.Add($from + '|' + ('the Invardia Support app cannot run the setup scripts against the database {0}: {1}' -f $d.Database, $d.Detail)) }
-                if ($sd.Member -and $sd.Member.State -eq 'planned') { $bad.Add($from + '|the Invardia Support app is not a member of the database admin group') }
-                $Ctx.Facts['supportAppDatabaseNote'] = $(if ($sd.Unchecked) { 'The Invardia Support app''s database access -- ' + [string]$sd.Unchecked + '.' }
-                                                         elseif ($sd.Ok) { 'The Invardia Support app''s own database user, with the owner role, was read back from both databases, and its membership of the database admin group from the directory.' } else { '' })
+                foreach ($d in @($sd.Databases | Where-Object { $_.State -eq 'missing' })) { $bad.Add($from + '|' + ('the Invardia Support app has no read-only database user in {0}: {1}' -f $d.Database, $d.Detail)) }
+                foreach ($d in @($sd.Databases | Where-Object { $_.State -in 'present', 'granted' -and $_.Signed -ge 0 -and $_.Signed -lt 4 })) { $bad.Add($from + '|' + ('the just-in-time support grant is not in place in {0}: {1} of the 4 procedures are signed' -f $d.Database, $d.Signed)) }
+                $owners = @($sd.Databases | Where-Object { $_.Owner } | ForEach-Object { $_.Database })
+                if ($owners.Count) { $bad.Add($from + '|' + ('the Invardia Support app still holds STANDING db_owner in {0} -- not the just-in-time state; the update takes it off where the just-in-time grant reads back, else Invardia support (setup\Remove-SISupportStandingAccess.ps1)' -f ($owners -join ', '))) }
+                # #1374 (owner 2026-11-25 point 8): an install run AS the Support app has taken it out of the admin group by now
+                # (the hand-back, Exit-SIInstallSupportAppAdminGroup) -- still a member = the check FAILS (its step runs again)
+                $asSup = Test-SIInstallRunsAsSupportApp -Ctx $Ctx
+                if ($asSup -and $sd.Member -and $sd.Member.State -eq 'standing') { $bad.Add($from + '|the Invardia Support app this install runs as is still a member of the database admin group -- the end of the install takes it out (the next run tries again)') }
+                $memberNote = if ($sd.Member -and $sd.Member.State -eq 'standing' -and -not $asSup) { ' The Support app is ' + [string]$sd.Member.Detail + '.' } else { '' }
+                $Ctx.Facts['supportAppDatabaseNote'] = $(if ($sd.Unchecked) { 'The Invardia Support app''s database access -- ' + [string]$sd.Unchecked + '.' + $memberNote }
+                                                         elseif ($sd.Ok -and -not $memberNote) { 'The Invardia Support app is in the just-in-time state: its own read-only database user (si_support_read, no db_owner) and the 4 signed support grant procedures were read back from both databases, and the directory says it is not a member of the database admin group.' }
+                                                         elseif ($sd.Ok) { 'The Invardia Support app''s own read-only database user (si_support_read, no db_owner) and the 4 signed support grant procedures were read back from both databases.' + $memberNote }
+                                                         else { $memberNote.Trim() })
             }
         }
     } catch { }
@@ -678,8 +724,63 @@ function Restore-SIInstallSqlAdminGroup {
         $r = Invoke-SIInstallScript -Ctx $Ctx -RelativePath 'setup/Set-SISqlAdminGroup.ps1' -Arguments (Get-SIInstallSqlAdminGroupArgs -Ctx $Ctx)
         if ($r.Error) { return [string]$r.Error }
         $Ctx.Facts['sqlAdminIsInstallApp'] = $false
+        # #1374 (owner 2026-11-25, point 8: "Remove it at install end"): the hand-back keeps today's administrator as a member
+        # of the group -- the Support app this install runs as leaves it again here
+        $null = Exit-SIInstallSupportAppAdminGroup -Ctx $Ctx
         ''
     } catch { [string]$_.Exception.Message }
+}
+
+function Test-SIInstallRunsAsSupportApp {
+    <# PURE apart from reading $Ctx. $true when this install is signed in AS the Invardia Support app: an application whose
+       client id is the answers' supportAppId, or the Support session's own sign-in (signInMethod Support). #>
+    param([Parameter(Mandatory)]$Ctx)
+    try {
+        if (-not (Test-SIInstallSignedInAsApp -Ctx $Ctx)) { return $false }
+        $acct = ([string]$Ctx.Facts['account']).Trim()
+        $sup = ''; try { $sup = ([string]$Ctx.Values['supportAppId']).Trim() } catch { }
+        [bool](($acct -and $sup -and $acct -ieq $sup) -or ([string]$Ctx.Facts['signInMethod'] -ieq 'Support'))
+    } catch { $false }
+}
+
+function Exit-SIInstallSupportAppAdminGroup {
+    <#
+        #1374 (framework SECAUDIT-1a; owner 2026-11-25 point 8: "Remove it at install end"). An install that runs AS the
+        Invardia Support app is a member of the database admin group ONLY while it runs (the database server step and the
+        hand-back make the installing identity a member -- setup\Set-SISqlAdminGroup.ps1): at every hand-back and at the
+        end of the run it takes ITSELF out of the group (members/<its object id>/$ref DELETE) and READS IT BACK from its own
+        side. Nothing else is ever taken out: the install's own identities (id-si-dbinit, id-si-sql) stay; the break-glass
+        member is added by hand on the owner's word. An install run as anyone else: nothing ($null).
+        Returns $null (not this case) | '' (not a member, read back) | the reason it is still a member (said as a warning on
+        the Support access step; the end check fails on it, and the next run tries again). Never throws.
+    #>
+    param([Parameter(Mandatory)]$Ctx)
+    try {
+        if (-not (Test-SIInstallRunsAsSupportApp -Ctx $Ctx)) { return $null }
+        $spId = ([string]$Ctx.Facts['userObjectId']).Trim()
+        if (-not $spId) { return (& { $w = 'the Support app''s own object id is not known, so it could not take itself out of the database admin group'; $null = Send-SIInstallEvent -Ctx $Ctx -StepId 'support-app-access' -State 'warning' -Message $w -Action ([ordered]@{ text = 'Run the install command again: it takes the Support app out of the group at its end.'; command = $Ctx.ResumeCommand }); $w }) }
+        $gid = Get-SIInstallSupportAppAdminGroupId -Ctx $Ctx
+        if (-not $gid) { return '' }
+        $__siLeaveCtx = $Ctx
+        $graph = { param([string]$Method, [string]$Uri, $Body) Invoke-SIInstallGraph -Ctx $__siLeaveCtx -Method $Method -Uri $Uri -Body $Body }
+        if (-not (Test-SISupportAppGroupMember -Graph $graph -GroupId $gid -ServicePrincipalId $spId)) { $Ctx.Facts['supportAppAdminGroupLeft'] = $true; return '' }
+        $null = & $graph 'DELETE' ('https://graph.microsoft.com/v1.0/groups/{0}/members/{1}/$ref' -f $gid, $spId) $null
+        $gone = $false
+        foreach ($w in @(0, 10, 20, 30)) {
+            if ($w) { & $Ctx.Seams.Sleep $w }
+            if (-not (Test-SISupportAppGroupMember -Graph $graph -GroupId $gid -ServicePrincipalId $spId)) { $gone = $true; break }
+        }
+        if ($gone) {
+            $Ctx.Facts['supportAppAdminGroupLeft'] = $true
+            Write-SIInstallConsole -Ctx $Ctx -Text '      the Invardia Support app this install runs as left the database admin group again (read back) -- it keeps only its read-only database user; admin only just in time' -Color 'DarkGray'
+            return ''
+        }
+        $why = 'the Invardia Support app this install runs as was taken out of the database admin group, but is still read back as a member'
+    } catch { $why = 'the Invardia Support app this install runs as could not take itself out of the database admin group: {0}' -f $_.Exception.Message }
+    $Ctx.Facts['supportAppAdminGroupLeft'] = $false
+    $null = Send-SIInstallEvent -Ctx $Ctx -StepId 'support-app-access' -State 'warning' -Message $why `
+        -Action ([ordered]@{ text = 'Run the install command again: it takes the Support app out of the group at its end.'; command = $Ctx.ResumeCommand })
+    $why
 }
 
 function Get-SIInstallEndCheck {
@@ -790,7 +891,9 @@ function Complete-SIInstallSqlAdmin {
     param([Parameter(Mandatory)]$Ctx)
     try {
         $back = Restore-SIInstallSqlAdminGroup -Ctx $Ctx
-        if (-not $back) { return $true }
+        # #1374: the END of the run -- an install run AS the Support app leaves the database admin group also when no
+        # hand-back was needed now (a membership the database server step gave it)
+        if (-not $back) { $null = Exit-SIInstallSupportAppAdminGroup -Ctx $Ctx; return $true }
         $null = Send-SIInstallEvent -Ctx $Ctx -StepId 'pro-sql' -State 'warning' `
             -Message ('The database server''s administrator is still the application this install runs as, not the admin group: {0}' -f $back) `
             -Action ([ordered]@{ text = 'Run the install command again: it sets the admin group at its end.'; command = $Ctx.ResumeCommand })

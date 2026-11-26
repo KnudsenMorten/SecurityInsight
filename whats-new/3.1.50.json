@@ -1,0 +1,16 @@
+{
+  "version": "3.1.50",
+  "date": "2026-11-25",
+  "type": "feature",
+  "summary": "The job buttons go through a queue, Remediations pages answer faster, and profiling rules are grouped by kind.",
+  "new": [
+    { "title": "Profiling rules grouped by kind", "text": "Configuration > Profiling rules lists the rules in collapsible groups, one per kind of condition." },
+    { "title": "Tasks follow Defender's remediation type", "text": "A Defender recommendation's task follows Defender's own remediation type." }
+  ],
+  "fixes": [
+    { "title": "The job buttons go through the queue", "text": "Run now, Stop, schedule changes, template release and mail send-now go to the installation through a queue." },
+    { "title": "Faster Remediations pages", "text": "Task report values are kept ready and statistics are refreshed after each data sync, so the first click answers quickly." },
+    { "title": "One finding per recommendation and CI", "text": "Defender for Cloud and the Exposure Graph reporting the same recommendation on one CI give one finding." },
+    { "title": "Domain and category owners recognised", "text": "Owners named by e-mail address are looked up once and stored, so they can decide their requests." }
+  ]
+}

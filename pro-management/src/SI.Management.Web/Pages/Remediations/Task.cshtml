@@ -1,0 +1,117 @@
+@page
+@model SI.Management.Web.Pages.Remediations.TaskModel
+@using SI.Management.Core.ProData
+@* owner 2026-11-25: "i expected a landing page for each remeidation task with all relevant info" -- ONE task: what it is and
+   its state, what to do and where, the asset it covers, its dates, and the findings it resolves (the shared grid). Only the
+   values the task has are shown. Pages/Remediations/TaskPage.cs reads them. *@
+@{
+    string S(string k) => Model.S(k);
+    var state = S("State");
+    var why = S("ClosedWhy");
+    var tc = Model.TaskCollection;
+}
+<p class="split"><a href="@Model.BackHref" data-task-back>&larr; @Model.BackText</a></p>
+<partial name="~/Pages/Collection/_Header.cshtml" model="Model" />
+@if (Model.Row is not null)
+{
+    <div class="grid-2">
+        <section class="card" aria-labelledby="h-task" data-task-page="@S("TaskId")" data-kind="@S("Kind")" data-state="@state">
+            <h2 id="h-task">The task</h2>
+            <dl class="kv">
+                <dt>Task</dt><dd class="wrap">@S("TaskName")</dd>
+                <dt>Kind</dt><dd>@S("Kind").Replace('-', ' ')</dd>
+                @if (S("Channel").Length > 0) { <dt>Tool</dt><dd title="@RemediationTaskReports.ChannelTip(S("Channel"))">@S("Channel")</dd> }
+                <dt>State</dt><dd data-task-state>@if (state == "open") { <span class="badge warn">open</span> } else { <span class="badge good">closed</span> }</dd>
+                @if (why.Length > 0) { <dt>Closed because</dt><dd data-task-closed-why>@why</dd> }
+                @if (S("HighestSeverity").Length > 0) { <dt>Highest severity</dt><dd>@S("HighestSeverity")</dd> }
+                @if (S("HighestRiskRating").Length > 0) { <dt>Highest risk rating</dt><dd>@S("HighestRiskRating")</dd> }
+                @if (Model.Number("MaxRiskScore") is { } risk) { <dt>Highest risk score</dt><dd>@Fmt.Score(risk)</dd> }
+                @if (Model.Number("MaxWeightedRisk") is { } wr) { <dt>Highest weighted risk</dt><dd>@Fmt.Score(wr)</dd> }
+                <dt>Findings</dt><dd data-task-findings>@S("Findings")</dd>
+                <dt>CVEs</dt><dd data-task-cves>@S("Cves")</dd>
+                @if (S("Seen").Length > 0) { <dt>Worked out from</dt><dd>@S("Seen")</dd> }
+                @if (tc is not null)
+                {
+                    <dt>Collection</dt><dd data-task-collection="@tc.CollectionId">@Fmt.Time(tc.CollectionTime)@if (tc.CollectionId != Model.Current?.CollectionId) { <span class="muted"> -- the newest collection whose tasks are fully built, at or before the one picked</span> }</dd>
+                }
+                <dt>Task id</dt><dd class="mono wrap">@S("TaskId")</dd>
+                @if (S("TaskGroup").Length > 0) { <dt>Task across assets</dt><dd class="mono wrap">@S("TaskGroup")</dd> }
+            </dl>
+        </section>
+        <section class="card" aria-labelledby="h-what" data-task-what>
+            <h2 id="h-what">What to do</h2>
+            <dl class="kv">
+                @if (Model.RecommendedUpdates.Count > 0)
+                {
+                    <dt>Recommended update@(Model.RecommendedUpdates.Count == 1 ? "" : "s")</dt>
+                    <dd data-task-recommended>@foreach (var u in Model.RecommendedUpdates) { <span class="cell-line">@u</span> }</dd>
+                }
+                @if (Model.RemediationTexts.Count > 0)
+                {
+                    <dt>Remediation</dt>
+                    <dd class="wrap" data-task-remediation>@foreach (var t in Model.RemediationTexts) { <p>@t</p> }</dd>
+                }
+                @if (S("Application").Length > 0) { <dt>Application (bundles it)</dt><dd data-task-application>@S("Application")</dd> }
+                @if (S("ApplicationVersion").Length > 0) { <dt>Application version</dt><dd data-task-application-version>@S("ApplicationVersion")</dd> }
+                @if (Model.Bundled && S("Product").Length > 0)
+                {
+                    <dt>Bundled library</dt>
+                    <dd data-task-bundled>@S("Product")@(S("Version").Length > 0 ? " " + S("Version") : "")@(S("Vendor").Length > 0 ? " (" + S("Vendor") + ")" : "") <span class="muted">-- its fix comes from the vendor of the application that bundles it</span></dd>
+                }
+                else
+                {
+                    if (S("Product").Length > 0) { <dt>Product</dt><dd data-task-product>@S("Product")@(S("Vendor").Length > 0 ? " (" + S("Vendor") + ")" : "")</dd> }
+                    if (S("Version").Length > 0) { <dt>Version</dt><dd data-task-version>@S("Version")</dd> }
+                }
+                @if (Model.Paths.Count > 0)
+                {
+                    <dt>Detected paths (@Fmt.Int(Model.Paths.Count))</dt>
+                    <dd class="mono wrap" data-task-paths="@Model.Paths.Count">@foreach (var p in Model.Paths) { <span class="cell-line">@p</span> }</dd>
+                    if (Model.When("EvidenceAt") is { } ev) { <dt>Paths read</dt><dd>@Fmt.Time(ev)</dd> }
+                }
+            </dl>
+            @if (Model.RecommendedUpdates.Count == 0 && Model.RemediationTexts.Count == 0 && Model.Paths.Count == 0 && S("Application").Length == 0 && S("Product").Length == 0)
+            {
+                <p class="hint">The task's name says what to do; its findings below carry the details.</p>
+            }
+        </section>
+    </div>
+
+    <div class="grid-2">
+        <section class="card" aria-labelledby="h-task-asset" data-task-asset-card>
+            <h2 id="h-task-asset">The asset (CI)</h2>
+            <dl class="kv">
+                <dt>Asset (CI)</dt><dd>@if (Model.AssetHref is { } ah) { <a href="@ah" data-task-asset-page>@S("AssetName")</a> } else { @S("AssetName") }</dd>
+                @if (S("AssetKind").Length > 0) { <dt>Asset kind</dt><dd>@S("AssetKind")</dd> }
+                @if (S("Tier").Length > 0) { <dt>Tier</dt><dd><span class="tierdot t@(S("Tier"))"></span>@SI.Management.Web.Pages.Tiers.TierLinks.AssetLabel(S("Tier"), S("AssetKey"))</dd> }
+                @if (S("CiId").Length > 0) { <dt>CI key</dt><dd class="mono">@if (Model.CiHref is { } ch) { <a href="@ch" data-task-ci-page>@S("CiId")</a> } else { @S("CiId") }</dd> }
+                else if (S("OwnerKey").Length > 0) { <dt>CI key</dt><dd class="mono">@S("OwnerKey")</dd> }
+                @if (S("AssetKey").Length > 0) { <dt>Asset (CI) key</dt><dd class="mono wrap">@S("AssetKey")</dd> }
+                @if (S("SecurityDomain").Length > 0) { <dt>Security domain</dt><dd>@S("SecurityDomain")</dd> }
+                @if (S("CiOwner").Length > 0) { <dt>Owner</dt><dd>@S("CiOwner")</dd> }
+                @if (S("Department").Length > 0) { <dt>Department</dt><dd>@S("Department")</dd> }
+                @if (S("CiDepartment").Length > 0) { <dt>Department (the asset's, when the task was worked out)</dt><dd>@S("CiDepartment")</dd> }
+                @if (S("CmdbId").Length > 0) { <dt>CMDB CI</dt><dd class="mono">@S("CmdbId")</dd> }
+            </dl>
+            @if (Model.AllTasksHref is { } all) { <p><a href="@all" data-task-asset-tasks>All tasks of this asset</a> <span class="hint">on Tasks per asset, with every column, filter and export.</span></p> }
+        </section>
+        <section class="card" aria-labelledby="h-task-dates" data-task-dates>
+            <h2 id="h-task-dates">Dates and lifecycle</h2>
+            <dl class="kv">
+                @if (Model.When("FirstSeen") is { } fs) { <dt>First seen</dt><dd data-task-first-seen>@Fmt.Time(fs)</dd> }
+                @if (Model.When("LastSeen") is { } ls) { <dt>Last seen</dt><dd>@Fmt.Time(ls)</dd> }
+                <dt>State</dt><dd>@state@if (why.Length > 0) { <span class="muted"> (@why)</span> }</dd>
+                @if (Model.When("ClosedAt") is { } ca) { <dt>Closed</dt><dd data-task-closed>@Fmt.Time(ca)</dd> }
+                @if (S("ReopenCount") is { Length: > 0 } ro && ro != "0") { <dt>Reopened</dt><dd>@ro</dd> }
+            </dl>
+            <p class="hint">@SI.Management.Web.Pages.Remediations.RemediationTaskPageModel.LifecycleText A task closes as fixed only when its findings are gone on a complete run. Each finding's due date, exemption and whether the "Within Accepted Lifecycle" view counts it are in the table below.</p>
+        </section>
+    </div>
+
+    @if (Model.Grid is not null)
+    {
+        <h2 id="h-task-findings">The findings it resolves</h2>
+        <partial name="~/Pages/Collection/_Grid.cshtml" model="Model" />
+    }
+}
+<partial name="~/Pages/Collection/_Queries.cshtml" model="Model" />

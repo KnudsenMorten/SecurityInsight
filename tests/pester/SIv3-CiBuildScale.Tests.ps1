@@ -26,7 +26,10 @@ BeforeAll {
     . (Join-Path $script:SIRoot 'engine\data-model\SI-RecordCapture.ps1')
     . (Join-Path $script:SIRoot 'engine\data-model\SI-CiBuildRun.ps1')
     . (Join-Path $script:SIRoot 'engine\data-out\SI-DataOut.ps1')
-    $script:T = [datetime]::SpecifyKind([datetime]'2026-10-21T03:00:00', [DateTimeKind]::Utc)
+    # YESTERDAY 03:00 UTC, never a fixed date: the build reads the records of its lookback (30 days) against the database's
+    # own clock (SYSUTCDATETIME), so a fixed 2026-10-21 fell out of it on 2026-11-20 -- the grouping found no record, the
+    # build said "no records in the lookback -- not built" and every real-SQL test read an empty result
+    $script:T = [datetime]::SpecifyKind([datetime]::UtcNow.Date.AddHours(-21), [DateTimeKind]::Utc)
     $script:SnRec = [pscustomobject]@{ si_cmdb_id = 'CI0012'; si_cmdb_name = 'Payroll VM'; si_cmdb_criticality = 'high'; azure_resource_id = @('/subscriptions/s/vm1', '/subscriptions/s/VM2'); entra_object_id = 'E-1'; si_fqdn = 'payroll.corp'; unrelated = 'x' }
 }
 
@@ -202,10 +205,11 @@ Describe 'The staged build equals the whole-set build (real SQL Server)' -Skip:(
         }
         function script:Build($Db, [datetime]$At) {
             $posted = New-Object System.Collections.Generic.List[object]
+            $lines = New-Object System.Collections.Generic.List[string]
             # the ledger on a connection of its own (the build closes it at its end)
             $r = Invoke-SICiBuild -SqlInvoke ($Db.Seam()) -LedgerProvider ([pscustomobject]@{ Kind = 'sql'; Connection = (EngineConn $Db.ConnStr) }) -Rules @() -BuildTime $At `
-                -Post { param($Rows) foreach ($x in $Rows) { $posted.Add($x) }; @($Rows).Count }.GetNewClosure() -BatchCis 40 -PageRows 25 -LookbackDays 30 -WorkbookMaxCis 0 -RunId 'scale' -Log { param($l, $m) }
-            [pscustomobject]@{ Result = $r; Posted = $posted.ToArray() }
+                -Post { param($Rows) foreach ($x in $Rows) { $posted.Add($x) }; @($Rows).Count }.GetNewClosure() -BatchCis 40 -PageRows 25 -LookbackDays 30 -WorkbookMaxCis 0 -RunId 'scale' -Log { param($l, $m) $lines.Add("$l $m") }.GetNewClosure()
+            [pscustomobject]@{ Result = $r; Posted = $posted.ToArray(); Log = ($lines -join "`n") }
         }
         function script:RowText($Rows) {
             $t = @(foreach ($x in $Rows) { $o = [ordered]@{}; foreach ($n in ([string[]]@($x.PSObject.Properties | ForEach-Object { $_.Name }) | Sort-Object)) { if ($n -ne 'si_collection_time') { $o[$n] = $x.$n } }; ConvertTo-Json -InputObject $o -Compress -Depth 8 })
@@ -230,6 +234,7 @@ Describe 'The staged build equals the whole-set build (real SQL Server)' -Skip:(
         foreach ($db in $script:A, $script:B) { if ($db) { Drop-Db $db } }
     }
     It 'the stage is used on the updated database and the whole-set path (said) on the other' {
+        $script:A1.Result | Should -Not -BeNullOrEmpty -Because ('the build answered nothing; its log:' + "`n" + $script:A1.Log)
         $script:A1.Result.Failed | Should -BeFalse -Because ([string]$script:A1.Result.Reason)
         $script:B1.Result.Failed | Should -BeFalse -Because ([string]$script:B1.Result.Reason)
         $script:A1.Result.Staged | Should -BeTrue

@@ -450,9 +450,12 @@ public static class DataQualityText
     public const string GroupFieldFill = "Field fill per source";
     /// #1053 the correlation gatekeeper's numbers (groups per rule) -- stored for the trend, never compared.
     public const string GroupCorrelation = "Correlation suspects";
+    /// #1365 the duplicate check's numbers (findings / tasks still two where the merge rules make one, per rule) -- stored
+    /// for the trend, never compared; any number above 0 is a data-quality defect (the run log names examples).
+    public const string GroupDuplicates = "Duplicates not merged";
 
     /// The groups in the order the panel lists them.
-    public static readonly IReadOnlyList<string> Groups = [GroupSources, GroupCis, GroupClasses, GroupTiers, GroupReports, GroupKeyFill, GroupFieldFill, GroupCorrelation];
+    public static readonly IReadOnlyList<string> Groups = [GroupSources, GroupCis, GroupClasses, GroupTiers, GroupReports, GroupKeyFill, GroupFieldFill, GroupCorrelation, GroupDuplicates];
 
     public static int GroupOrder(string group)
     {
@@ -464,6 +467,7 @@ public static class DataQualityText
     public static string Group(string key, string kind)
     {
         if (key.StartsWith("corr.", StringComparison.OrdinalIgnoreCase) || kind == "corr") return GroupCorrelation;
+        if (key.StartsWith("dup.", StringComparison.OrdinalIgnoreCase) || kind == "dup") return GroupDuplicates;
         if (key.StartsWith("fill.src.", StringComparison.OrdinalIgnoreCase)) return GroupFieldFill;
         if (key.StartsWith("fill.", StringComparison.OrdinalIgnoreCase) || kind == "fill") return GroupKeyFill;
         if (key.StartsWith("rows.", StringComparison.OrdinalIgnoreCase) || kind == "rows") return GroupReports;

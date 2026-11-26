@@ -106,6 +106,11 @@
     <partial name="_AuthRefreshScript" />
 </head>
 <body>
+    @* A page module that did not load says so (3.1.50 live: a page silently did nothing until reloaded). Written by the
+       server, so it works when NO script loads -- an expired sign-in answers every .js with the sign-in page: CSS keeps it
+       out of sight for a few seconds (app.css), main.js removes it as its first statement and shows it again only when a
+       module it imports fails. Reload is a plain link to this page. *@
+    <div class="update-banner module-guard" data-kind="session" data-module-guard role="alert"><span class="update-text">This page needs a reload — your sign-in may have expired.</span><span class="update-actions"><a class="update-reload" href="" data-module-reload>Reload</a></span></div>
     <a class="skip" href="#main">Skip to content</a>
     @* The brand bar (BRAND-2.2): always dark (brand-ink) in light AND dark mode, so the REVERSED Pro logo; the version
        pill; on the right ONE line (#909): the environment (its details card holds mode, licence, update ring, guard mode,
@@ -408,8 +413,11 @@
                     <div class="notice" role="status" data-sync-notice>@(SI.Management.Web.Collection.SyncNotice.Before)@Fmt.Time(syncNotice.StartedUtc, "time")@(SI.Management.Web.Collection.SyncNotice.After)</div>
                 }
                 @* ONE TRUSTED RUN (owner 2026-10-19): every page shows the same, last trusted run -- which one, and whether a newer run
-                   is going or did not complete, in one plain line (an admin gets the way to the pipeline) *@
-                @if (User.Identity?.IsAuthenticated == true && !magic && await PublishedRunNotices.CurrentAsync(default) is { ShownTime: { } shownUtc } shownRun)
+                   is going or did not complete, in one plain line (an admin gets the way to the pipeline).
+                   #1386 (owner 2026-11-25, "One line"): a collection view's header already shows the date -- there the line is
+                   shown only when it says more than the date (Pages/Collection/ViewHead.cs) *@
+                @if (User.Identity?.IsAuthenticated == true && !magic && await PublishedRunNotices.CurrentAsync(default) is { ShownTime: { } shownUtc } shownRun
+                     && !SI.Management.Web.Pages.Collection.ViewHead.LayoutRunLineRedundant(shownRun, ViewContext.HttpContext.Items[SI.Management.Web.Pages.Collection.ViewHead.RunShownKey] is true))
                 {
                     <div class="notice@(shownRun.RefusedAt is not null && !shownRun.Running ? " warn" : "")" role="status" data-utc data-published-run>@(SI.Management.Web.Collection.PublishedRunNoticeText.Lead)@Fmt.When(shownUtc)@(SI.Management.Web.Collection.PublishedRunNoticeText.Tail(shownRun))@if (shownRun.CiFindingsTime is { } ciFindingsUtc)
                         {
@@ -460,7 +468,8 @@
     {
         <script src="~/js/getstarted-badge.js" asp-append-version="true"></script>
     }
-    <script type="module" src="~/js/app/main.js" asp-append-version="true"></script>
+    @* one version stamp for main.js AND every module it imports (relative imports inherit /js/v/<stamp>/) -- Pages/AppScripts.cs *@
+    <script type="module" src="@SI.Management.Web.Pages.AppScripts.Url("app/main.js")"></script>
     @if (User.Identity?.IsAuthenticated == true && !magic)
     {
         <script type="module" src="~/js/whats-new-badge.js" asp-append-version="true"></script>

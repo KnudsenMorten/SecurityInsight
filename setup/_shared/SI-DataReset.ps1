@@ -333,6 +333,7 @@ IF OBJECT_ID(N'cfg.PipelineLock') IS NOT NULL
                  + N', last sign of life ' + ISNULL(CONVERT(nvarchar(19), HeartbeatUtc, 120) + N'Z', N'none yet (taken ' + ISNULL(CONVERT(nvarchar(19), AcquiredUtc, 120) + N'Z', N'?') + N')')
       FROM cfg.PipelineLock$hint
      WHERE Holder IS NOT NULL AND Holder <> @Holder
+       AND LockId <> N'updater-ended'   -- #1357: the end mark of an updater run that has ENDED is no running execution
        AND ((HeartbeatUtc IS NOT NULL AND HeartbeatUtc >= DATEADD(minute, -$($c.BeatStaleMinutes), @now))
             OR (HeartbeatUtc IS NULL AND AcquiredUtc >= DATEADD(minute, -$($c.NeverBeatMinutes), @now)))
      ORDER BY HeartbeatUtc DESC;

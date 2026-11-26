@@ -22,6 +22,26 @@ if (-not (Get-Command -Name Get-SIDefaultTierValue -ErrorAction SilentlyContinue
 # #562 the asset type / subtype come from the ONE classification (the CI build's rows and value maps).
 if (-not (Get-Command -Name Get-SIProfileAssetClassification -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot '..\..\data-model\SI-ProfileClassification.ps1') }
 
+# #1389 THE PER-ROW HELPERS ARE LOADED ONCE, HERE (owner 2026-11-25: "Yes, all builders"; same output, same path for every
+# size). MEASURED on the test runner (pwsh 7.6.10): `Get-Command -Name X` costs 8.3 ms per call, found or not, and this
+# builder asked 5-6 times per row. Worse, a dot-source INSIDE the row function defines the helpers in that one call's scope,
+# so they were gone when the row returned and the next row parsed the file again (SI-SolutionVersion.ps1's load also reset
+# its cache, so every row re-read VERSION from disk). Loaded here they live as long as the builder does. A guard that must
+# stay (degrade, do not die) is `Test-Path function:<name>` (0.08 ms).
+foreach ($__siRowHelper in @(
+        @{ Fn = 'Get-SISyntheticAssetName';  File = 'SI-AssetName.ps1' }
+        @{ Fn = 'Get-SISolutionVersion';     File = 'SI-SolutionVersion.ps1' }
+        @{ Fn = 'ConvertTo-SICleanedEgBlob'; File = 'Convert-EgBlob.ps1' }
+    )) {
+    if (-not (Test-Path -Path ('function:' + $__siRowHelper.Fn))) { . (Join-Path $PSScriptRoot $__siRowHelper.File) }
+}
+# DEGRADE, DO NOT DIE (#244): the tier attribution columns are an audit surface, never worth the row -- said once, not per row.
+if (-not (Test-Path -Path 'function:Set-SIProfileTierAttribution')) {
+    try { . (Join-Path $PSScriptRoot 'Get-SITierAttribution.ps1') } catch {
+        Write-Warning ("tier attribution unavailable ({0}) -- SI_TierSetBy/Reason/Claims will be empty for this run; the tier itself is unaffected." -f $_.Exception.Message)
+    }
+}
+
 if (-not (Get-Variable -Name _SISchemaCache -Scope Script -ErrorAction SilentlyContinue)) {
     $script:_SISchemaCache = @{}
 }
@@ -64,6 +84,24 @@ function Get-SIPublicIpSchema {
         }
     )
     return $schema
+}
+
+function Get-SIPublicIpHashFieldNames {
+    <# #1389 the four per-stage hash field lists (CollectHash / EnrichHash / PostureHash / ClassifyHash), built ONCE per schema
+       object and cached beside PublicIpEmitFields. They were rebuilt from every schema field through Where-Object /
+       ForEach-Object on every row; the expressions are unchanged, so the lists -- and the hashes -- are identical. #>
+    param([Parameter(Mandatory)] $Schema)
+    $c = $script:_SISchemaCache['PublicIpHashFieldNames']
+    if ($null -ne $c -and [object]::ReferenceEquals($c.Schema, $Schema)) { return $c }
+    $c = @{
+        Schema   = $Schema
+        Collect  = @($Schema.fields | Where-Object { $_.stage.writtenBy -eq 'collect'         -and $_.purpose -notin 'enrichment','forensic','raw' } | ForEach-Object { $_.name })
+        Enrich   = @($Schema.fields | Where-Object { $_.stage.writtenBy -eq 'enrich'          -and $_.purpose -notin 'enrichment','forensic','raw' } | ForEach-Object { $_.name })
+        Posture  = @($Schema.fields | Where-Object { $_.stage.writtenBy -eq 'posture_analyze' -and $_.purpose -notin 'enrichment','forensic','raw' } | ForEach-Object { $_.name })
+        Classify = @($Schema.fields | Where-Object { $_.stage.writtenBy -eq 'classify'        -and $_.name -notmatch '^(CollectHash|EnrichHash|PostureHash|ClassifyHash)$' } | ForEach-Object { $_.name })
+    }
+    $script:_SISchemaCache['PublicIpHashFieldNames'] = $c
+    return $c
 }
 
 # ---------------------------------------------------------------------------
@@ -316,9 +354,7 @@ function Get-SIDerivedValue {
             # arrive equal to PrimaryEntityId. That is the identifier again -- skip it.
             if (-not [string]::IsNullOrWhiteSpace($ownerName) -and $ownerName -ne $pe) { return $ownerName }
             if (-not [string]::IsNullOrWhiteSpace($pe)) {
-                if (-not (Get-Command Get-SISyntheticAssetName -ErrorAction SilentlyContinue)) {
-                    . (Join-Path $PSScriptRoot 'SI-AssetName.ps1')
-                }
+                # #1389 SI-AssetName.ps1 is loaded once at the top of this file
                 return (Get-SISyntheticAssetName -Engine 'publicip' -Id $pe)
             }
             return $null
@@ -333,7 +369,7 @@ function Get-SIDerivedValue {
         # the nightly runs the released code, so without this a profile row cannot be attributed to the
         # code that produced it. Risk Analysis has stamped it since v2.1 -- which is exactly why the two
         # trees interleaving was visible in the RA tables and invisible here.
-        'SolutionVersion'   { if (-not (Get-Command Get-SISolutionVersion -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot 'SI-SolutionVersion.ps1') }; return (Get-SISolutionVersion) }
+        'SolutionVersion'   { return (Get-SISolutionVersion) }   # #1389 loaded once at the top of this file
         'CollectionTime'    { return $Context.RunContext.CollectionTime }
         # SIRules carries the AssetProfileBy* YAML rule matches
         # produced by Stage Profile (Verdict.SI_RuleMatches). Always an array.
@@ -561,10 +597,7 @@ function Build-SIPublicIpProfileRow {
 
     # strip *@odata.type keys recursively from EG rawData blob,
     # and drop classify.proofs from Properties (already exposed as Tier_Proofs
-    # JSON column + flat verdict columns).
-    if (-not (Get-Command -Name ConvertTo-SICleanedEgBlob -ErrorAction SilentlyContinue)) {
-        . (Join-Path $PSScriptRoot 'Convert-EgBlob.ps1')
-    }
+    # JSON column + flat verdict columns). (#1389 Convert-EgBlob.ps1 is loaded once at the top of this file.)
     $collectEg = ConvertTo-SICleanedEgBlob -Value $collectEg
 
     $properties = @{
@@ -668,12 +701,8 @@ function Build-SIPublicIpProfileRow {
     # The tier above is the OWNING asset's tier when discovery knows the owner (precedence owner > verdict > 3, not a MIN),
     # so the owner is then the one and only source: 'owner', with the owner's name as the evidence. Otherwise the rules /
     # classification verdict, as for the other engines. DEGRADE, DO NOT DIE: an audit surface is never worth the row.
-    if (-not (Get-Command -Name Set-SIProfileTierAttribution -ErrorAction SilentlyContinue)) {
-        try { . (Join-Path $PSScriptRoot 'Get-SITierAttribution.ps1') } catch {
-            Write-Warning ("tier attribution unavailable ({0}) -- SI_TierSetBy/Reason/Claims will be empty for this run; the tier itself is unaffected." -f $_.Exception.Message)
-        }
-    }
-    if (Get-Command -Name Set-SIProfileTierAttribution -ErrorAction SilentlyContinue) {
+    # #1389 Get-SITierAttribution.ps1 is loaded once at the top of this file; the guard stays, at 0.08 ms instead of 8 ms.
+    if (Test-Path -Path 'function:Set-SIProfileTierAttribution') {
         $tierClaimSources = @{}
         try {
             if (-not [string]::IsNullOrWhiteSpace($ownerTierMeta)) {
@@ -695,19 +724,17 @@ function Build-SIPublicIpProfileRow {
 
     # ---- #562 AssetType / AssetSubtype FROM THE ONE CLASSIFICATION -- 'Public IP', the dimension's spelling (was 'PublicIP') ----
     $row['AssetSubtype'] = ''
-    if (Get-Command -Name ConvertTo-SIPublicIpClassificationItem -ErrorAction SilentlyContinue) {
+    if (Test-Path -Path 'function:ConvertTo-SIPublicIpClassificationItem') {
         $cls = Get-SIProfileAssetClassification -Item (ConvertTo-SIPublicIpClassificationItem)
         if ($null -ne $cls) { $row['AssetType'] = $cls.Type; $row['AssetSubtype'] = $cls.Subtype }
     }
-    $collectFieldNames  = @($schema.fields | Where-Object { $_.stage.writtenBy -eq 'collect'         -and $_.purpose -notin 'enrichment','forensic','raw' } | ForEach-Object { $_.name })
-    $enrichFieldNames   = @($schema.fields | Where-Object { $_.stage.writtenBy -eq 'enrich'          -and $_.purpose -notin 'enrichment','forensic','raw' } | ForEach-Object { $_.name })
-    $postureFieldNames  = @($schema.fields | Where-Object { $_.stage.writtenBy -eq 'posture_analyze' -and $_.purpose -notin 'enrichment','forensic','raw' } | ForEach-Object { $_.name })
-    $classifyFieldNames = @($schema.fields | Where-Object { $_.stage.writtenBy -eq 'classify'        -and $_.name -notmatch '^(CollectHash|EnrichHash|PostureHash|ClassifyHash)$' } | ForEach-Object { $_.name })
+    # #1389 the four per-stage hash field lists are cached per schema
+    $hashNames = Get-SIPublicIpHashFieldNames -Schema $schema
 
-    $row['CollectHash']  = Get-SIRowHash (_SIHashBag $collectFieldNames  $row)
-    $row['EnrichHash']   = Get-SIRowHash (_SIHashBag $enrichFieldNames   $row)
-    $row['PostureHash']  = Get-SIRowHash (_SIHashBag $postureFieldNames  $row)
-    $row['ClassifyHash'] = Get-SIRowHash (_SIHashBag $classifyFieldNames $row)
+    $row['CollectHash']  = Get-SIRowHash (_SIHashBag $hashNames.Collect  $row)
+    $row['EnrichHash']   = Get-SIRowHash (_SIHashBag $hashNames.Enrich   $row)
+    $row['PostureHash']  = Get-SIRowHash (_SIHashBag $hashNames.Posture  $row)
+    $row['ClassifyHash'] = Get-SIRowHash (_SIHashBag $hashNames.Classify $row)
 
     return [pscustomobject]$row
 }

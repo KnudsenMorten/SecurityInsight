@@ -75,7 +75,7 @@ function Get-SIRiskRating {
     param([double]$Score, [switch]$Lower, [double[]]$Bands)
     if (-not $Bands -or $Bands.Count -ne 3) {
         $Bands = @(50.0, 30.0, 15.0)
-        if (Get-Command -Name Get-RARiskRatingBands -ErrorAction SilentlyContinue) { try { $Bands = [double[]]@(Get-RARiskRatingBands) } catch { $Bands = @(50.0, 30.0, 15.0) } }
+        if (Test-Path -Path 'function:Get-RARiskRatingBands') { try { $Bands = [double[]]@(Get-RARiskRatingBands) } catch { $Bands = @(50.0, 30.0, 15.0) } }
     }
     $r = if ($Score -ge $Bands[0]) { 'Critical' } elseif ($Score -ge $Bands[1]) { 'High' } elseif ($Score -ge $Bands[2]) { 'Moderate' } else { 'Low' }
     if ($Lower) { return $r.ToLowerInvariant() }
@@ -1424,7 +1424,7 @@ function Calculate-RiskScore {
                 # 📌 Additive and last, so a report that already resolved an id keeps it; this only
                 # fills blanks. A name with no identity anywhere still yields '' -- an ExposureGraph
                 # subscription node SHOULD report no id rather than borrow one.
-                if ((Get-Command Resolve-SIAssetIdentity -ErrorAction SilentlyContinue) -and $isSummaryReport) {
+                if ((Test-Path -Path 'function:Resolve-SIAssetIdentity') -and $isSummaryReport) {
                     $_rn2 = @($existingImpacted)
                     $_ri2 = @($existingImpactedIds)
                     if ($_rn2.Count -gt 0 -and $_ri2.Count -eq $_rn2.Count) {
@@ -1445,7 +1445,7 @@ function Calculate-RiskScore {
                 # ONE ASSET, ONE IDENTITY: a resolved id names its asset (the profile's own name), and an Azure VM id that a
                 # device carries becomes that device -- so one machine is one entry in this row, in the Top 50 and in the
                 # AI rollup, whatever each source calls it. Only changes what the map knows; the count follows the list.
-                if ((Get-Command ConvertTo-SICanonicalAssetPairs -ErrorAction SilentlyContinue) -and $isSummaryReport) {
+                if ((Test-Path -Path 'function:ConvertTo-SICanonicalAssetPairs') -and $isSummaryReport) {
                     $_canon = ConvertTo-SICanonicalAssetPairs -Names ([string[]]@($existingImpacted)) -Ids ([string[]]@($existingImpactedIds))
                     if ($_canon.Changed) {
                         $existingImpacted = @($_canon.Names); $existingImpactedIds = @($_canon.Ids)

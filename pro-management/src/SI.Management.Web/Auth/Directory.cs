@@ -39,6 +39,10 @@ public interface IDirectoryNames
     /// #335: a person typed into a department's people field -- a mail address (a user's mail or sign-in name) or an
     /// object id (a user or group) -- as the directory knows them. Null = unknown (lookup off, not found, or failed).
     Task<DirectoryPerson?> FindAsync(string mailOrObjectId, CancellationToken ct) => Task.FromResult<DirectoryPerson?>(null);
+    /// #995b: the ONE user whose mail or sign-in name is EXACTLY this address -- to store a mail-only department person's or
+    /// advisor's object id once (they are matched by object id only from then on). Resolved = exactly one user; NotFound /
+    /// Ambiguous = none or more than one (never a guess); Unavailable = no lookup here, or it failed.
+    Task<MailMatch> MatchMailAsync(string mail, CancellationToken ct) => Task.FromResult(MailMatch.Unavailable);
     /// #335: the people picker -- users and groups whose name, mail or sign-in name starts with the text typed (a few of
     /// each). Empty when the lookup is off or fails.
     Task<IReadOnlyList<DirectoryPerson>> SearchAsync(string text, CancellationToken ct) => Task.FromResult<IReadOnlyList<DirectoryPerson>>(Array.Empty<DirectoryPerson>());
@@ -56,6 +60,31 @@ public sealed record DirectoryPerson(string Type, string ObjectId, string Name, 
 {
     /// A user whose account is disabled (known from SecurityInsight's own names only; shown after the enabled ones).
     public bool Disabled { get; init; }
+}
+
+/// #995b: what an exact address lookup found (<see cref="IDirectoryNames.MatchMailAsync"/>).
+public enum MailMatchOutcome { Resolved, NotFound, Ambiguous, Unavailable }
+
+/// #995b: the outcome, and the one user when Resolved.
+public sealed record MailMatch(MailMatchOutcome Outcome, DirectoryPerson? Person = null)
+{
+    public static readonly MailMatch Unavailable = new(MailMatchOutcome.Unavailable);
+    public static readonly MailMatch NotFound = new(MailMatchOutcome.NotFound);
+    public static readonly MailMatch Ambiguous = new(MailMatchOutcome.Ambiguous);
+
+    /// <summary>
+    /// PURE. The users a lookup returned, judged: only users whose mail or sign-in name EQUALS the address (any case) count --
+    /// a looser answer of the source is never trusted -- and exactly one of them resolves; none = NotFound, more = Ambiguous.
+    /// </summary>
+    public static MailMatch Judge(string mail, IEnumerable<(DirectoryPerson User, string? Mail, string? Upn)> users)
+    {
+        var m = (mail ?? "").Trim();
+        if (m.Length == 0) return NotFound;
+        var exact = users.Where(u => u.User.Type == "user" && !u.User.Disabled && u.User.ObjectId.Length > 0
+                                     && (string.Equals(u.Mail?.Trim(), m, StringComparison.OrdinalIgnoreCase) || string.Equals(u.Upn?.Trim(), m, StringComparison.OrdinalIgnoreCase)))
+                         .Select(u => u.User).GroupBy(u => u.ObjectId, StringComparer.OrdinalIgnoreCase).Select(g => g.First()).ToList();
+        return exact.Count switch { 0 => NotFound, 1 => new MailMatch(MailMatchOutcome.Resolved, exact[0]), _ => Ambiguous };
+    }
 }
 
 /// #446: one app role assignment on the web app's enterprise application: who (User | Group | ServicePrincipal), and the
@@ -289,6 +318,41 @@ public sealed class GraphDirectory : IGroupMembershipSource, IDirectoryNames
         {
             _log.LogWarning(ex, "a person could not be looked up in Microsoft Graph");
             return null;
+        }
+    }
+
+    /// <summary>
+    /// #995b: GET /users?$filter=mail eq '...' or userPrincipalName eq '...' (the same standard read as <see cref="FindAsync"/>,
+    /// User.ReadBasic.All -- no other right) -- members and guests; a guest's mail is the address it was invited with.
+    /// Up to 3 are read so that "more than one" is told apart; <see cref="MailMatch.Judge"/> keeps only exact matches.
+    /// </summary>
+    public async Task<MailMatch> MatchMailAsync(string mail, CancellationToken ct)
+    {
+        var q = (mail ?? "").Trim();
+        if (!SI.Management.Web.Departments.DepartmentPeople.IsMail(q)) return MailMatch.NotFound;
+        var v = q.Replace("'", "''", StringComparison.Ordinal);
+        var url = $"{Graph}/users?$select=id,displayName,mail,userPrincipalName&$top=3&$filter=" + Uri.EscapeDataString($"mail eq '{v}' or userPrincipalName eq '{v}'");
+        try
+        {
+            using var req = await Request(HttpMethod.Get, url, ct);
+            using var res = await _http.SendAsync(req, ct);
+            if (!res.IsSuccessStatusCode) { _log.LogWarning("the address lookup answered {Status}", (int)res.StatusCode); return MailMatch.Unavailable; }
+            using var d = JsonDocument.Parse(await res.Content.ReadAsStringAsync(ct));
+            var found = new List<(DirectoryPerson, string?, string?)>();
+            foreach (var e in d.RootElement.GetProperty("value").EnumerateArray())
+            {
+                string? S(string p) => e.TryGetProperty(p, out var x) && x.ValueKind == JsonValueKind.String ? x.GetString() : null;
+                if (S("id") is not { } id) continue;
+                var upn = S("userPrincipalName");
+                found.Add((new DirectoryPerson("user", id.ToLowerInvariant(), S("displayName") ?? S("mail") ?? id, S("mail") ?? upn,
+                    (upn ?? "").Contains("#EXT#", StringComparison.OrdinalIgnoreCase)), S("mail"), upn));
+            }
+            return MailMatch.Judge(q, found);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or JsonException or KeyNotFoundException or InvalidOperationException or Azure.Identity.AuthenticationFailedException)
+        {
+            _log.LogWarning(ex, "an address could not be looked up in Microsoft Graph");
+            return MailMatch.Unavailable;
         }
     }
 }

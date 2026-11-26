@@ -53,7 +53,7 @@ public static class RemediationTaskSql
     public static readonly GridSpec Tasks = GridSql.Check(new GridSpec("remediationtasks", "", $"""
 SELECT {Hex("f.TaskId")} AS TaskId, f.AssetKey, f.OwnerKey, COALESCE(f.AssetName, f.AssetKey, f.OwnerKey) AS AssetName, {ProDataSql.TierExpr("f.Tier")} AS Tier,
        f.TaskName, f.Kind, f.State, f.ClosedWhy, f.Findings, f.Cves, f.HighestSeverity, f.MaxRiskScore, f.MaxWeightedRisk,
-       f.Product, f.Version, f.Application, f.ApplicationPaths, f.FirstSeen, f.LastSeen, f.ClosedAt, f.ReopenCount,
+       f.Product, f.Version, f.Application, f.ApplicationVersion, f.ApplicationPaths, f.FirstSeen, f.LastSeen, f.ClosedAt, f.ReopenCount,
        CASE WHEN f.InThisCollection = 1 THEN N'{SeenNow}' ELSE N'{SeenKept}' END AS Seen,
        f.CiOwner, f.CiDepartment, d.Name AS Department, f.SecurityDomain,
        {TaskGroupOf("f")} AS TaskGroup, {RemediationTaskReports.ChannelOf("f")} AS Channel, f.HighestRiskRating,
@@ -63,52 +63,64 @@ LEFT JOIN cfg.Department AS d ON d.DepartmentId = f.DepartmentId
 WHERE f.CollectionId = {MarkedCollection}
 """, new GridColumn[]
     {
-        new("TaskId", "Task id", Filter: GridFilter.Contains, Search: true),
-        // #1283 the same task on every asset (a report row opens its tasks by it)
-        new("TaskGroup", "Task across assets", Filter: GridFilter.Values),
+        // owner 2026-11-25 ("why are the paths + application paths still way out to the sort order of the page. it must be close
+        // to the appliation name"): the task's own columns first -- the asset, the task and RIGHT AFTER it the application that
+        // bundles it, its version, its paths and where it was detected -- then what the task is (kind, state, findings, risk,
+        // dates), then the keys and who answers for the asset; the CI's own attributes after all of them
+        // (DataViewDefaults.ForGrid). A remembered layout keeps that order too (DataViewDefaults.TaskOrder).
         new("AssetName", "Asset (CI)", Filter: GridFilter.Contains, Search: true),
-        // the asset's key and the CI id a task belongs to match EXACTLY (one asset's or one CI's own tasks: a key is never
-        // matched as part of another, "srv1" in "srv10")
-        new("AssetKey", "Asset (CI) key", Filter: GridFilter.Values, Search: true),
-        new("OwnerKey", "CI id", Filter: GridFilter.Values),
         new("TaskName", "Task", Filter: GridFilter.Contains, Search: true),
+        new("Application", "Application (bundles it)", Filter: GridFilter.Contains, Search: true),
+        // owner 2026-11-24 ("Yes, separate column"): the bundling application's version(s), never part of the task's name or key
+        new("ApplicationVersion", "Application version", Filter: GridFilter.Contains, Search: true),
+        new("ApplicationPaths", "Paths", Filter: GridFilter.Contains, Search: true, Lines: true),
+        // owner 2026-11-19: where the product was detected on the asset, shown by default ("so we know where it needs fixing")
+        new("DetectedPaths", "Detected paths", Filter: GridFilter.Contains, Lines: true),
         new("Kind", "Kind", Filter: GridFilter.Values),
         new("Channel", "Tool", Filter: GridFilter.Values),
         new("State", "State", Filter: GridFilter.Values),
+        new("ClosedWhy", "Closed because", Filter: GridFilter.Values),
+        new("Findings", "Findings", GridType.Number, GridFilter.Range),
+        new("Cves", "CVEs", GridType.Number, GridFilter.Range),
         new("HighestSeverity", "Highest severity", Filter: GridFilter.Values, SortSql: SevSort),
         new("HighestRiskRating", "Highest risk rating", Filter: GridFilter.Values, SortSql: RemediationTaskReports.RatingSort("g.[HighestRiskRating]")),
         new("MaxRiskScore", "Highest risk score", GridType.Number, GridFilter.Range),
         new("MaxWeightedRisk", "Highest weighted risk", GridType.Number, GridFilter.Range),
         new("Tier", "Tier", GridType.Tier, GridFilter.Values, SortSql: TierSort),
         new("SecurityDomain", "Security domain", Filter: GridFilter.Values),
-        new("Findings", "Findings", GridType.Number, GridFilter.Range),
-        new("Cves", "CVEs", GridType.Number, GridFilter.Range),
         new("Product", "Product", Filter: GridFilter.Contains, Search: true),
         new("Version", "Version", Filter: GridFilter.Contains, Search: true),
-        new("Application", "Application (bundles it)", Filter: GridFilter.Contains, Search: true),
-        // owner 2026-11-19: where the product was detected on the asset, shown by default ("so we know where it needs fixing")
-        new("DetectedPaths", "Detected paths", Filter: GridFilter.Contains),
-        new("ApplicationPaths", "Paths", Filter: GridFilter.Contains, Search: true),
-        new("ClosedWhy", "Closed because", Filter: GridFilter.Values),
-        new("ClosedAt", "Closed", GridType.Date, GridFilter.Dates),
         new("FirstSeen", "First seen", GridType.Date, GridFilter.Dates),
         new("LastSeen", "Last seen", GridType.Date, GridFilter.Dates),
+        new("ClosedAt", "Closed", GridType.Date, GridFilter.Dates),
         new("ReopenCount", "Reopened", GridType.Number, GridFilter.Range),
         new("Seen", "Worked out from", Filter: GridFilter.Values),
+        new("TaskId", "Task id", Filter: GridFilter.Contains, Search: true),
+        // #1283 the same task on every asset (a report row opens its tasks by it)
+        new("TaskGroup", "Task across assets", Filter: GridFilter.Values),
+        // the asset's key and the CI id a task belongs to match EXACTLY (one asset's or one CI's own tasks: a key is never
+        // matched as part of another, "srv1" in "srv10")
+        new("AssetKey", "Asset (CI) key", Filter: GridFilter.Values, Search: true),
+        new("OwnerKey", "CI key", Filter: GridFilter.Values),
         new("CiOwner", "Owner", Filter: GridFilter.Contains, Search: true),
         new("CiDepartment", "Department (the asset's, when the task was worked out)", Filter: GridFilter.Contains),
         new("Department", "Department", Filter: GridFilter.Values),
     }, "MaxRiskScore", true, "TaskId", ["CollectionId"], Immutable: false));   // reads the department name (cfg): not cached long
 
-    /// owner 2026-11-19: the disk paths where Defender found the task's product on the task's CI (sidata.SoftwareEvidence of
-    /// its READ Defender devices, the newest run), at most 10, one per line -- "so we know where it needs fixing". Empty for a
-    /// task without a product or a CI without Defender evidence.
+    /// owner 2026-11-19: the disk paths where Defender found the task's product on the task's CI -- "so we know where it needs
+    /// fixing" -- one per line, EVERY path in full (owner 2026-11-24: "detected paths is cut off and it mentions multiple
+    /// paths"): the task's OWN paths when it has them (a bundled task: its application's copy; the product's own task: the
+    /// copies that are not bundled), else the CI's evidence of that product AND version (sidata.SoftwareEvidence of its
+    /// Defender devices; a task of several versions: every version). Empty for a task without a product or a CI without
+    /// Defender evidence.
     public static string DetectedPaths(string t) => $"""
-(SELECT STRING_AGG(CAST(p.FullPath AS nvarchar(max)), NCHAR(10))
- FROM (SELECT DISTINCT TOP (10) e.FullPath
+COALESCE(REPLACE(NULLIF({t}.ApplicationPaths, N''), N';', NCHAR(10)),
+(SELECT STRING_AGG(CAST(p.FullPath AS nvarchar(max)), NCHAR(10)) WITHIN GROUP (ORDER BY p.FullPath)
+ FROM (SELECT DISTINCT e.FullPath
        FROM sidata.CiLink AS dpl
        JOIN sidata.SoftwareEvidence AS e ON e.DeviceId = LOWER(dpl.NativeId)
-       WHERE dpl.CiId = {t}.OwnerKey AND dpl.Provider = N'mde' AND e.Product = {t}.Product AND e.PathType = N'disk') AS p)
+       WHERE dpl.CiId = {t}.OwnerKey AND dpl.Provider = N'mde' AND e.Product = {t}.Product AND e.PathType = N'disk'
+         AND ({t}.Version IS NULL OR e.Version = {t}.Version)) AS p))
 """;
 
     // ---- Remediations > Task findings: the findings each task resolves (and, bundled, the paths of the copy) ---------------
@@ -116,7 +128,7 @@ WHERE f.CollectionId = {MarkedCollection}
     public static readonly GridSpec TaskFindings = GridSql.Check(new GridSpec("remediationtaskfindings", "", $"""
 SELECT {Hex("l.TaskId")} + N'|' + l.FindingKey AS LinkKey, {Hex("l.TaskId")} AS TaskId, f.TaskName, f.Kind, f.State AS TaskState,
        COALESCE(f.AssetName, f.AssetKey, f.OwnerKey) AS AssetName, f.AssetKey, l.FindingKey, l.Cve AS CveId, l.Title, l.Severity, l.RiskScore,
-       l.Version, f.Application, f.ApplicationPaths, CASE WHEN l.InThisCollection = 1 THEN N'{SeenNow}' ELSE N'{SeenKept}' END AS Seen,
+       l.Version, f.Application, f.ApplicationVersion, f.ApplicationPaths, CASE WHEN l.InThisCollection = 1 THEN N'{SeenNow}' ELSE N'{SeenKept}' END AS Seen,
        {DetectedPaths("f")} AS DetectedPaths
 FROM sidata.RemediationTaskFinding AS l
 JOIN sidata.RemediationTask AS f ON f.CollectionId = l.CollectionId AND f.TaskId = l.TaskId
@@ -137,9 +149,11 @@ WHERE f.CollectionId = {MarkedCollection}
         new("RiskScore", "Risk score", GridType.Number, GridFilter.Range),
         new("Version", "Version", Filter: GridFilter.Contains, Search: true),
         new("Application", "Application (bundles it)", Filter: GridFilter.Contains, Search: true),
+        // owner 2026-11-24 ("Yes, separate column"): the bundling application's version(s), never part of the task's name or key
+        new("ApplicationVersion", "Application version", Filter: GridFilter.Contains, Search: true),
         // owner 2026-11-19: where the product was detected on the asset, shown by default
-        new("DetectedPaths", "Detected paths", Filter: GridFilter.Contains),
-        new("ApplicationPaths", "Paths of the copy", Filter: GridFilter.Contains, Search: true),
+        new("DetectedPaths", "Detected paths", Filter: GridFilter.Contains, Lines: true),
+        new("ApplicationPaths", "Paths of the copy", Filter: GridFilter.Contains, Search: true, Lines: true),
         new("Seen", "Seen in", Filter: GridFilter.Values),
     }, "RiskScore", true, "LinkKey", ["CollectionId"], Immutable: false));
 
@@ -177,7 +191,7 @@ SELECT {Hex("t.TaskId")} AS TaskId, t.AssetKey, t.OwnerKey, COALESCE(t.AssetName
        t.TaskName, t.Kind, t.State, t.ClosedWhy, s.Findings, s.Cves,
        CASE s.SevRank WHEN 4 THEN N'critical' WHEN 3 THEN N'high' WHEN 2 THEN N'medium' WHEN 1 THEN N'low' ELSE N'info' END AS HighestSeverity,
        s.MaxRiskScore, s.MaxWeightedRisk,
-       t.Product, t.Version, t.Application, t.ApplicationPaths, t.FirstSeen, t.LastSeen, t.ClosedAt, t.ReopenCount,
+       t.Product, t.Version, t.Application, t.ApplicationVersion, t.ApplicationPaths, t.FirstSeen, t.LastSeen, t.ClosedAt, t.ReopenCount,
        CASE WHEN t.InThisCollection = 1 THEN N'{SeenNow}' ELSE N'{SeenKept}' END AS Seen,
        t.CiOwner, t.CiDepartment, d.Name AS Department, CASE WHEN s.Doms = 1 THEN s.Dom END AS SecurityDomain,
        {TaskGroupOf("t")} AS TaskGroup, {RemediationTaskReports.ChannelOf("t")} AS Channel, {RemediationTaskReports.RatingText("s.RatingRank")} AS HighestRiskRating,
@@ -206,7 +220,7 @@ WHERE t.CollectionId = {MarkedCollection} AND s.Findings > 0
         Source = $"""
 SELECT {Hex("l.TaskId")} + N'|' + l.FindingKey AS LinkKey, {Hex("l.TaskId")} AS TaskId, t.TaskName, t.Kind, t.State AS TaskState,
        COALESCE(t.AssetName, t.AssetKey, t.OwnerKey) AS AssetName, t.AssetKey, l.FindingKey, l.Cve AS CveId, l.Title, l.Severity, l.RiskScore,
-       l.Version, t.Application, t.ApplicationPaths, CASE WHEN l.InThisCollection = 1 THEN N'{SeenNow}' ELSE N'{SeenKept}' END AS Seen,
+       l.Version, t.Application, t.ApplicationVersion, t.ApplicationPaths, CASE WHEN l.InThisCollection = 1 THEN N'{SeenNow}' ELSE N'{SeenKept}' END AS Seen,
        {DetectedPaths("t")} AS DetectedPaths
 FROM {VisibleLinks}
 JOIN sidata.RemediationTask AS t ON t.CollectionId = l.CollectionId AND t.TaskId = l.TaskId
@@ -305,6 +319,156 @@ WHERE t.CollectionId = {MarkedCollection}
             new("AssetName", "Asset (CI)"),
             new("AssetKey", "Asset (CI) key", Hidden: true),
         }, "State", false, "TaskId", parameters.Distinct(StringComparer.Ordinal).ToList(), Immutable: false));
+    }
+
+    // ---- ONE task: Remediations > Task, the task's own page (owner 2026-11-25: "i expected a landing page for each remeidation
+    // task with all relevant info") ---------------------------------------------------------------------------------------------
+    //
+    // The task's row of Tasks per asset (a limited person: TasksFor, unchanged -- counted over the findings they may see) read
+    // by its key -- the clustered key (CollectionId, TaskId): one seek -- with the few stored values Tasks per asset does not
+    // show (the product's vendor, when its paths were read, the CMDB CI, the asset's kind) and what its findings say to do
+    // (their recommended updates and remediation, each once); and the findings it resolves, read off the link table's
+    // clustered key (CollectionId, TaskId, ...) with each finding's own row by ITS clustered key (CollectionId, FindingId).
+    // Typed columns only: no source-record column and no JSON is read.
+
+    /// The source parameter of one task: its id as the task grids show it (lower-case hex of the 32-byte hash).
+    public const string TaskIdParameter = "TaskId";
+
+    /// A task id from the address: hex, an even number of digits, at most the 64 of the hash (lower case); null = not one.
+    public static string? TaskIdOf(string? raw)
+    {
+        var t = raw?.Trim();
+        if (string.IsNullOrEmpty(t) || t.Length > 64 || t.Length % 2 != 0) return null;
+        foreach (var ch in t) if (!Uri.IsHexDigit(ch)) return null;
+        return t.ToLowerInvariant();
+    }
+
+    /// The task row (alias <paramref name="alias"/>) is the one asked for: a seek on the clustered key.
+    private static string IsTask(string alias) => $"{alias}.TaskId = TRY_CONVERT(binary(32), @{TaskIdParameter}, 2)";
+
+    /// The separator of the texts the findings of a task say to do (one text may hold line breaks).
+    public const char FixSeparator = '\u001e';
+
+    /// What the task's findings say to do -- <paramref name="column"/> of sidata.Finding, each distinct text once. A limited
+    /// person: over the findings they may see only (the visibility on the finding, alias f).
+    private static string FixesOf(string column, string task, RowVisibility? v)
+    {
+        var fin = v is null ? "fx" : "f";
+        var limited = v is null ? "" : $" AND lx.InThisCollection = 1 AND ({Visible(v)})";
+        return $"""
+(SELECT STRING_AGG(CAST(x.V AS nvarchar(max)), NCHAR(30)) WITHIN GROUP (ORDER BY x.V)
+ FROM (SELECT DISTINCT {fin}.{column} AS V
+       FROM sidata.RemediationTaskFinding AS lx
+       JOIN sidata.Finding AS {fin} ON {fin}.CollectionId = lx.CollectionId AND {fin}.FindingId = lx.FindingId
+       WHERE lx.CollectionId = {task}.CollectionId AND lx.TaskId = {task}.TaskId AND NULLIF({fin}.{column}, N'') IS NOT NULL{limited}) AS x)
+""";
+    }
+
+    /// <summary>
+    /// The task's row, by its key (@CollectionId picks the collection as on every task grid, @TaskId the task): the columns
+    /// of Tasks per asset and the task's other stored values. A limited person gets <see cref="TasksFor"/> narrowed the same
+    /// way: a task none of whose findings they may see is not found.
+    /// </summary>
+    public static GridSpec OneTask(RowVisibility? v)
+    {
+        var (spec, t) = v is null ? (Tasks, "f") : (TasksFor(v), "t");
+        var source = spec.Source.TrimStart();
+        if (!source.StartsWith("SELECT ", StringComparison.Ordinal)) throw new InvalidOperationException($"grid {spec.Name}: not a SELECT");
+        var extra = $"""
+{t}.CollectionId AS TaskCollectionId, {t}.CiId, {t}.Vendor, {t}.EvidenceAt, {t}.CmdbId,
+       (SELECT a.AssetKind FROM sidata.Asset AS a WHERE a.AssetKey = {t}.AssetKey) AS AssetKind,
+       {FixesOf("FixRecommendedUpdate", t, v).Trim()} AS RecommendedUpdates,
+       {FixesOf("FixRemediation", t, v).Trim()} AS Remediations,
+
+""";
+        return GridSql.Check(spec with
+        {
+            Name = spec.Name + "@task",
+            Source = "SELECT " + extra + source["SELECT ".Length..].TrimEnd() + "\n  AND " + IsTask(t) + "\n",
+            SourceParameters = spec.SourceParameters.Append(TaskIdParameter).Distinct(StringComparer.Ordinal).ToList(),
+            Columns = spec.Columns.Concat(new GridColumn[]
+            {
+                new("TaskCollectionId", "Collection of the task", Hidden: true),
+                new("CiId", "CI id of the task", Hidden: true),
+                new("Vendor", "Product vendor"),
+                new("EvidenceAt", "Paths read", GridType.Date),
+                new("CmdbId", "CMDB CI of the task"),
+                new("AssetKind", "Asset kind"),
+                new("RecommendedUpdates", "Recommended updates"),
+                new("Remediations", "Remediation of its findings"),
+            }).ToList(),
+            Keyset = null,
+        });
+    }
+
+    /// The text the separator joined (<see cref="FixSeparator"/>), each item once, in full.
+    public static IReadOnlyList<string> Fixes(string? joined) =>
+        string.IsNullOrWhiteSpace(joined) ? Array.Empty<string>()
+        : joined.Split(FixSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Distinct(StringComparer.Ordinal).ToList();
+
+    /// The answer of the "Within Accepted Lifecycle" view for a link's finding (alias of the link <paramref name="l"/>): "yes"
+    /// when the view counts it (sidata.FindingLifecycleRisk, #1355), "no" when it is counted by "Actual Risks" only; NULL when
+    /// the collection's lifecycle rows are not stored (its key figures' marker) or the link has no finding row.
+    private static string LifecycleOf(string l) => $"""
+CASE WHEN {l}.FindingId IS NULL
+       OR NOT EXISTS (SELECT 1 FROM sidata.KeyFigure AS kf WHERE kf.CollectionId = {l}.CollectionId AND kf.Block = N'meta' AND kf.Figure = N'lifecycle_rows') THEN NULL
+     WHEN EXISTS (SELECT 1 FROM sidata.FindingLifecycleRisk AS lr WHERE lr.CollectionId = {l}.CollectionId AND lr.FindingId = {l}.FindingId) THEN N'yes'
+     ELSE N'no' END
+""";
+
+    /// <summary>
+    /// The findings ONE task resolves (@CollectionId, @TaskId), with each finding's own values: its risk rating and weighted
+    /// risk (copied to the link at build), whether an exploit is known, when the source first detected it, its due date, its
+    /// exemption, and the "Within Accepted Lifecycle" answer. Everyone who sees every row gets every link of the task (a link
+    /// carried with its task included, as on Task findings); a limited person only the collection's own links whose finding
+    /// they may see (<see cref="TaskFindingsFor"/>'s rule).
+    /// </summary>
+    public static GridSpec FindingsOfTask(RowVisibility? v) => v is null ? FindingsOfTaskAll : TaskFindingRows(v);
+
+    private static readonly GridSpec FindingsOfTaskAll = TaskFindingRows(null);
+
+    private static GridSpec TaskFindingRows(RowVisibility? v)
+    {
+        var fd = v is null ? "fd" : "f";
+        var join = v is null
+            ? "LEFT JOIN sidata.Finding AS fd ON fd.CollectionId = l.CollectionId AND fd.FindingId = l.FindingId"
+            : "JOIN sidata.Finding AS f ON f.CollectionId = l.CollectionId AND f.FindingId = l.FindingId";
+        var limited = v is null ? "" : $"\n  AND l.InThisCollection = 1 AND l.FindingId IS NOT NULL AND ({Visible(v)})";
+        // #1388 the due date, as the ticket carries it: the provider's own where it is set (owner "Provider's date wins if set"),
+        // the finding model's (CiFindingState.DueAt, the days to fix) for the rest
+        var source = $"""
+SELECT {Hex("l.TaskId")} + N'|' + l.FindingKey AS LinkKey, l.FindingKey, l.Cve AS CveId, l.Title, l.Severity, l.RiskScore, l.RiskRating, l.WeightedRisk,
+       {fd}.HasExploit, {fd}.SourceFirstDetected AS FirstDetected, COALESCE({fd}.FixDueDate, dst.DueAt) AS DueDate, {fd}.ExemptedUntil,
+       {LifecycleOf("l").Trim()} AS WithinAcceptedLifecycle,
+       l.Version, CASE WHEN l.InThisCollection = 1 THEN N'{SeenNow}' ELSE N'{SeenKept}' END AS Seen,
+       CONVERT(nvarchar(20), l.FindingId) AS FindingId, CONVERT(nvarchar(20), l.CollectionId) AS FindingCollectionId
+FROM sidata.RemediationTaskFinding AS l
+{join}
+LEFT JOIN sidata.CiFindingState AS dst ON dst.OwnerKey = l.OwnerKey AND dst.FindingKey = l.FindingKey
+WHERE l.CollectionId = {MarkedCollection} AND {IsTask("l")}{limited}
+""";
+        var parameters = new List<string> { "CollectionId", TaskIdParameter };
+        if (v is not null) parameters.AddRange(v.Parameters.Keys);
+        return GridSql.Check(new GridSpec(TaskFindings.Name + (v is null ? "@task" : "@dept@task"), "", source, new GridColumn[]
+        {
+            new("LinkKey", "Link", Hidden: true),
+            new("FindingKey", "Finding", Filter: GridFilter.Contains, Search: true),
+            new("CveId", "CVE", Filter: GridFilter.Contains, Search: true),
+            new("Title", "Title", Filter: GridFilter.Contains, Search: true),
+            new("Severity", "Severity", Filter: GridFilter.Values, SortSql: "CASE g.[Severity] WHEN N'critical' THEN 0 WHEN N'high' THEN 1 WHEN N'medium' THEN 2 WHEN N'low' THEN 3 ELSE 4 END"),
+            new("RiskScore", "Risk score", GridType.Number, GridFilter.Range),
+            new("RiskRating", "Risk rating", Filter: GridFilter.Values, SortSql: RemediationTaskReports.RatingSort("g.[RiskRating]")),
+            new("WeightedRisk", "Weighted risk", GridType.Number, GridFilter.Range),
+            new("HasExploit", "Exploit", GridType.Flag, GridFilter.Values),
+            new("FirstDetected", "First detected", GridType.Date, GridFilter.Dates),
+            new("DueDate", "Due date", GridType.Date, GridFilter.Dates),
+            new("ExemptedUntil", "Exempted until", GridType.Date, GridFilter.Dates),
+            new("WithinAcceptedLifecycle", "Within Accepted Lifecycle", Filter: GridFilter.Values),
+            new("Version", "Version", Filter: GridFilter.Contains, Search: true),
+            new("Seen", "Seen in", Filter: GridFilter.Values),
+            new("FindingId", "Finding row", Hidden: true),
+            new("FindingCollectionId", "Collection of the finding", Hidden: true),
+        }, "RiskScore", true, "LinkKey", parameters.Distinct(StringComparer.Ordinal).ToList(), Immutable: false));
     }
 
     /// The grid a limited person gets for one of the task grids (null = not a task grid).

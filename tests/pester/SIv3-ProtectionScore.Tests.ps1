@@ -41,19 +41,24 @@ BeforeAll {
 }
 
 Describe 'the protection score (the one engine function)' {
-    It 'is the tier-weighted share of active assets in good standing, in two views; groups and inactive assets left out' {
+    It '#1361 is the tier-share score of the assets'' health, in two views; groups and inactive assets left out; an empty tier hands its share on' {
         $s = Complete-SIProtectionTally -Tally (NewFixture)
         $s.Assets | Should -Be 6
-        # weights 8 + 4 + 2 + 8 + 2 + 4 = 28; technical: only pc-ok (2) is good; lifecycle: srv-oct (8), pc-ok (2), user-14d (2)
-        $s.Technical | Should -Be 7.1
-        $s.Lifecycle | Should -Be 42.9
-        $s.NoDate | Should -Be 1; $s.Findings | Should -Be 5
-        (@($s.Rows | Where-Object { $_.Figure -eq 'lifecycle' -and $_.Dim1 -eq 'Devices' -and $_.Dim2 -eq '(all)' })[0]).Value | Should -Be 71.4
+        # health = 100 - 25 per Very High fix - 10 per High - min(20, 3 per Medium + 1 per Low); technical: T0 (90, 90) = 90, T1
+        # (75, 90) = 82.5, T2 (97, 90) = 93.5, no Tier 3 -- its 10 % goes to the others: (40 x 90 + 30 x 82.5 + 20 x 93.5) / 90
+        $s.Technical | Should -Be 88.3
+        # lifecycle: srv-oct's October fix (6 days) and user-14d's finding (14 days) are within their grace: T0 95, T1 82.5, T2 98.5
+        $s.Lifecycle | Should -Be 91.6
+        $s.TechnicalGood | Should -Be 1 -Because 'good standing (no open Very High / High item): pc-ok only'
+        $s.LifecycleGood | Should -Be 3
+        $s.NoDate | Should -Be 2; $s.Findings | Should -Be 6
+        (@($s.Rows | Where-Object { $_.Figure -eq 'lifecycle' -and $_.Dim1 -eq 'Devices' -and $_.Dim2 -eq '(all)' })[0]).Value | Should -Be 91
+        (@($s.Rows | Where-Object { $_.Figure -eq 'technical' -and $_.Dim1 -eq '(all)' -and $_.Dim2 -eq 'Tier 1' })[0]).Value | Should -Be 82.5 -Because 'a tier''s row is its average health'
         (@($s.Rows | Where-Object { $_.Figure -eq 'agebasis' -and $_.Dim1 -eq 'fix release' })[0]).Value | Should -Be 3
     }
     It 'a finding exactly at the grace counts; the grace is per asset type; 0 = the technical view' {
         $s = Complete-SIProtectionTally -Tally (NewFixture @{ SI_ProtectionScore_GraceDays_Identity = '7'; SI_ProtectionScore_OtherGraceDays_Identity = '7' })
-        $s.Lifecycle | Should -Be 35.7 -Because 'the 14-day identity finding now counts too'
+        $s.Lifecycle | Should -Be 90.5 -Because 'the 14-day identity finding now counts too'
         $z = Complete-SIProtectionTally -Tally (NewFixture @{ SI_ProtectionScore_GraceDays_Device = '0'; SI_ProtectionScore_GraceDays_Identity = '0'; SI_ProtectionScore_GraceDays_CloudResource = '0'
                                                              SI_ProtectionScore_OtherGraceDays_Device = '0'; SI_ProtectionScore_OtherGraceDays_Identity = '0'; SI_ProtectionScore_OtherGraceDays_CloudResource = '0' })
         $z.Lifecycle | Should -Be $z.Technical
@@ -62,13 +67,13 @@ Describe 'the protection score (the one engine function)' {
         # owner 2026-10-21: "go with your recommendation, grace 0 for non-patch" -- the shipped settings: user-14d (a finding with
         # only the source's first-seen: not a patch) now counts; srv-oct (the October update, 6 days) stays within its grace
         $s = Complete-SIProtectionTally -Tally (NewFixture -Shipped)
-        $s.Lifecycle | Should -Be 35.7 -Because 'srv-oct (8) and pc-ok (2) of 28 -- user-14d is no longer in good standing'
-        $s.Technical | Should -Be 7.1
+        $s.Lifecycle | Should -Be 90.5 -Because 'user-14d''s High finding (not a patch) now costs its 10 points: T2 = (97 + 90) / 2'
+        $s.Technical | Should -Be 88.3
         (Get-SIProtectionScoreSettings -Settings @{}).OtherGrace.identity | Should -Be 0
         (Get-SIProtectionScoreSettings -Settings @{ SI_ProtectionScore_OtherGraceDays_Identity = '14' }).OtherGrace.identity | Should -Be 14
         (Get-SIProtectionScoreSettings -Settings @{ SI_ProtectionScore_OtherGraceDays_Identity = 'soon' }).OtherGrace.identity | Should -Be 0 -Because 'invalid = the default'
         # a customer raises the other findings' grace for identities: user-14d is within 14 days again
-        (Complete-SIProtectionTally -Tally (NewFixture -Shipped @{ SI_ProtectionScore_OtherGraceDays_Identity = '15' })).Lifecycle | Should -Be 42.9
+        (Complete-SIProtectionTally -Tally (NewFixture -Shipped @{ SI_ProtectionScore_OtherGraceDays_Identity = '15' })).Lifecycle | Should -Be 91.6
     }
     It '#860 what a patch finding is: a fix release, a recommended update (name or id), or a patch cycle that is a cycle' {
         Test-SIProtectionPatchFinding -FixRelease '2026-10-01T00:00:00Z' | Should -BeTrue
@@ -81,22 +86,63 @@ Describe 'the protection score (the one engine function)' {
         Test-SIProtectionPatchFinding -FixRelease 'not a date' | Should -BeFalse
         Test-SIProtectionPatchFinding | Should -BeFalse
     }
-    It 'the tier weights and the severities are settings, not code' {
-        (Complete-SIProtectionTally -Tally (NewFixture @{ SI_ProtectionScore_TierWeights = '1,1,1,1' })).Technical | Should -Be 16.7
-        (Complete-SIProtectionTally -Tally (NewFixture @{ SI_ProtectionScore_Severities = 'Very High' })).Technical | Should -Be 85.7
+    It '#1361 the tier shares, the points per severity and the Medium / Low cap are settings, not code' {
+        (Complete-SIProtectionTally -Tally (NewFixture @{ SI_ProtectionScore_TierShares = '1,1,1,1' })).Technical | Should -Be 88.7
+        (Complete-SIProtectionTally -Tally (NewFixture @{ SI_ProtectionScore_SeverityPoints = 'Very High=25,High=0,Medium=0,Low=0' })).Technical | Should -Be 95.8
+        $d = Get-SIProtectionScoreSettings -Settings @{}
+        @($d.Shares) | Should -Be @(40, 30, 20, 10); $d.MinorCap | Should -Be 20
+        @($d.Points.Values) | Should -Be @(25, 10, 3, 1)
+        # an invalid value is the default, as a whole
+        @((Get-SIProtectionScoreSettings -Settings @{ SI_ProtectionScore_TierShares = '50,50' }).Shares) | Should -Be @(40, 30, 20, 10)
+        @((Get-SIProtectionScoreSettings -Settings @{ SI_ProtectionScore_TierShares = '0,0,0,0' }).Shares) | Should -Be @(40, 30, 20, 10)
+        @((Get-SIProtectionScoreSettings -Settings @{ SI_ProtectionScore_SeverityPoints = 'Very High=25,Critical=9' }).Points.Values) | Should -Be @(25, 10, 3, 1)
+        @((Get-SIProtectionScoreSettings -Settings @{ SI_ProtectionScore_SeverityPoints = 'high=12' }).Points.Values) | Should -Be @(25, 12, 3, 1)
+        (Get-SIProtectionScoreSettings -Settings @{ SI_ProtectionScore_MinorPointsCap = 'x' }).MinorCap | Should -Be 20
+        (Get-SIProtectionScoreSettings -Settings @{ SI_ProtectionScore_MinorPointsCap = '0' }).MinorCap | Should -Be 0
+        # the item points come from ONE function: Critical is the source's word for Very High
+        Get-SIProtectionItemPoints -Severity 'Critical' -Points $d.Points | Should -Be 25
+        Get-SIProtectionItemPoints -Severity 'Medium-High' -Points $d.Points | Should -Be 10
+        Get-SIProtectionItemPoints -Severity 'Informational' -Points $d.Points | Should -Be 0
+    }
+    It '#1361 one fix is one item however many CVEs it closes; Medium and Low together cost at most the cap; every fix raises the health' {
+        $h = { param($Settings, [scriptblock]$Add) $t = New-SIProtectionTally -CollectionTime $script:T -Settings $Settings; Add-SIProtectionAsset $t 'a' 'device' 'Server' 0; & $Add $t; (Complete-SIProtectionTally -Tally $t).Technical }
+        # three High CVEs closed by one update = one 10-point fix; a Medium configuration finding = 3
+        & $h @{} { param($t) foreach ($c in 1..3) { Add-SIProtectionFinding $t 'a' 'High' -UpdateName 'October 2026 Security Updates' -UpdateId '5127648' }; Add-SIProtectionFinding $t 'a' 'Medium' } | Should -Be 87
+        # a fix's severity is the highest of its findings
+        & $h @{} { param($t) Add-SIProtectionFinding $t 'a' 'Medium' -UpdateId 'KB1'; Add-SIProtectionFinding $t 'a' 'Very High' -UpdateId 'KB1' } | Should -Be 75
+        # the owner's example: 1 Very High + 2 High + 5 Medium = 100 - 25 - 20 - 15 = 40; the Very High fixed = 65
+        $ex = { param($t, [bool]$vh) if ($vh) { Add-SIProtectionFinding $t 'a' 'Very High' -UpdateId 'KB1' }; Add-SIProtectionFinding $t 'a' 'High' -UpdateId 'KB2'; Add-SIProtectionFinding $t 'a' 'High' -UpdateId 'KB3'; foreach ($i in 1..5) { Add-SIProtectionFinding $t 'a' 'Medium' } }
+        & $h @{} { param($t) & $ex $t $true } | Should -Be 40
+        & $h @{} { param($t) & $ex $t $false } | Should -Be 65
+        # ten Medium findings = 30 points, capped at 20; cap 0 = Medium / Low do not count; never below 0
+        & $h @{} { param($t) foreach ($i in 1..10) { Add-SIProtectionFinding $t 'a' 'Medium' } } | Should -Be 80
+        & $h @{ SI_ProtectionScore_MinorPointsCap = '0' } { param($t) foreach ($i in 1..10) { Add-SIProtectionFinding $t 'a' 'Low' } } | Should -Be 100
+        & $h @{} { param($t) foreach ($i in 1..6) { Add-SIProtectionFinding $t 'a' 'Very High' } } | Should -Be 0
+        # the lifecycle view: a fix counts when one of its findings does
+        $t = New-SIProtectionTally -CollectionTime $script:T -Settings @{}; Add-SIProtectionAsset $t 'a' 'device' 'Server' 0
+        Add-SIProtectionFinding $t 'a' 'High' -UpdateId 'KB9' -FixRelease '2026-10-17T00:00:00Z'
+        (Complete-SIProtectionTally -Tally $t).Lifecycle | Should -Be 100 -Because 'released 2 days ago: within the 30-day grace'
+        $t = New-SIProtectionTally -CollectionTime $script:T -Settings @{}; Add-SIProtectionAsset $t 'a' 'device' 'Server' 0
+        Add-SIProtectionFinding $t 'a' 'High' -UpdateId 'KB9' -FixRelease '2026-10-17T00:00:00Z'; Add-SIProtectionFinding $t 'a' 'High' -UpdateId 'KB9' -FixRelease '2026-08-01T00:00:00Z'
+        (Complete-SIProtectionTally -Tally $t).Lifecycle | Should -Be 90
+        # a tier with no asset hands its share on; a tier's share holds whatever its asset count
+        $t = New-SIProtectionTally -CollectionTime $script:T -Settings @{}
+        Add-SIProtectionAsset $t 't0' 'device' 'Server' 0; foreach ($i in 1..50) { Add-SIProtectionAsset $t "t3-$i" 'device' 'Workstation' 3 }
+        Add-SIProtectionFinding $t 't0' 'Very High' -UpdateId 'KB1'
+        (Complete-SIProtectionTally -Tally $t).Technical | Should -Be 80 -Because '(40 x 75 + 10 x 100) / 50: the one Tier 0 server weighs 4 x the fifty Tier 3 workstations'
     }
     It 'reads a Risk Analysis row: its CI, severity, exemption, update name and the source''s first-seen' {
         $t = New-SIProtectionTally -CollectionTime $script:T -Settings @{}
         Add-SIProtectionAsset $t 'ci-1' 'device' 'Server' 0
         Add-SIProtectionRow -Tally $t -Row ([pscustomobject]@{ si_ci_id = 'CI-1'; SecuritySeverity = 'High'; si_source_first_seen = '2026-10-18T00:00:00Z'; si_fix_recommended_update_id = '5127648' })
         $s = Complete-SIProtectionTally -Tally $t
-        $s.Technical | Should -Be 0; $s.Lifecycle | Should -Be 100 -Because 'a patch (its update id) seen 1 day before is within the grace'
+        $s.Technical | Should -Be 90; $s.Lifecycle | Should -Be 100 -Because 'a patch (its update id) seen 1 day before is within the grace'
         (@($s.Rows | Where-Object { $_.Figure -eq 'agebasis' -and $_.Dim1 -eq 'source first seen' })[0]).Value | Should -Be 1
         # #860: the same row without a fix is not a patch -- it counts from day one; a source's patch cycle makes it one
         $u = New-SIProtectionTally -CollectionTime $script:T -Settings @{}
         Add-SIProtectionAsset $u 'ci-1' 'device' 'Server' 0
         Add-SIProtectionRow -Tally $u -Row ([pscustomobject]@{ si_ci_id = 'CI-1'; SecuritySeverity = 'High'; si_source_first_seen = '2026-10-18T00:00:00Z' })
-        (Complete-SIProtectionTally -Tally $u).Lifecycle | Should -Be 0
+        (Complete-SIProtectionTally -Tally $u).Lifecycle | Should -Be 90
         $c = New-SIProtectionTally -CollectionTime $script:T -Settings @{}
         Add-SIProtectionAsset $c 'ci-1' 'device' 'Server' 0
         Add-SIProtectionRow -Tally $c -Row ([pscustomobject]@{ si_ci_id = 'CI-1'; SecuritySeverity = 'High'; si_source_first_seen = '2026-10-18T00:00:00Z'; si_patch_cycle = 'In monthly cycle' })
@@ -111,12 +157,12 @@ Describe 'the Risk Analysis mail shows the protection score, never the old 0-100
         $kpi = [pscustomobject]@{ Protection = $p; TotalRows = 5; SevCount = @{ Critical = 1; High = 4 }; SevByDomain = @{} }
         $html = ConvertTo-RAReportMailHtml -Kpi $kpi -ReportLabel 'RiskAnalysis_Detailed'
         # #827 (owner 2026-10-20): the two names, each value in its band's words and colour
-        $html | Should -Match 'Protection Score, within Accepted Lifecycle:</strong> <strong data-band="at-risk" style="color:#c62828;">42\.9 % · At Risk</strong>'
-        $html | Should -Match 'Protection Score, Actual Risks:</strong> <strong data-band="at-risk" style="color:#c62828;">7\.1 % · At Risk</strong>'
+        $html | Should -Match 'Protection Score, within Accepted Lifecycle:</strong> <strong data-band="very-good" style="color:#1b5e20;">91\.6 % · Very Good</strong>'
+        $html | Should -Match 'Protection Score, Actual Risks:</strong> <strong data-band="good" style="color:#2e7d32;">88\.3 % · Good</strong>'
         $html | Should -Not -Match '% technical'
         $html | Should -Match 'Protection Score by asset type'
-        $html | Should -Match '(?s)Devices.{0,400}71\.4 %</strong> within Accepted Lifecycle .{0,20}Actual Risks'
-        $html | Should -Match '1 of 5 counted findings had no usable date'
+        $html | Should -Match '(?s)Devices.{0,400}91\.0 %</strong> within Accepted Lifecycle .{0,20}Actual Risks'
+        $html | Should -Match '2 of 6 counted findings had no usable date'
         $html | Should -Not -Match '/100'
         $html | Should -Not -Match 'Risk Analysis KPI'
     }
@@ -154,10 +200,10 @@ Describe 'the Risk Analysis mail shows the protection score, never the old 0-100
         $t.BasisCount[1] | Should -Be 3; $t.BasisCis[1].Count | Should -Be 3
         (Get-Command Add-SIProtectionFinding).Definition | Should -Not -Match '\.Add\(@\{'
         $s = Complete-SIProtectionTally -Tally $t
-        $s.Findings | Should -Be 5; $s.NoDate | Should -Be 1
+        $s.Findings | Should -Be 6; $s.NoDate | Should -Be 2
         @($s.Rows | Where-Object { $_.Figure -eq 'technical' }).Count | Should -Be @($s.Rows | Where-Object { $_.Figure -eq 'lifecycle' }).Count
-        (@($s.Rows | Where-Object { $_.Figure -eq 'technical' -and $_.Dim1 -eq '(all)' -and $_.Dim2 -eq '(all)' })[0]).Value | Should -Be 7.1
-        (@($s.Rows | Where-Object { $_.Figure -eq 'lifecycle' -and $_.Dim1 -eq 'Identities' -and $_.Dim2 -eq 'Tier 0' })[0]).Value | Should -Be 0
+        (@($s.Rows | Where-Object { $_.Figure -eq 'technical' -and $_.Dim1 -eq '(all)' -and $_.Dim2 -eq '(all)' })[0]).Value | Should -Be 88.3
+        (@($s.Rows | Where-Object { $_.Figure -eq 'lifecycle' -and $_.Dim1 -eq 'Identities' -and $_.Dim2 -eq 'Tier 0' })[0]).Value | Should -Be 90 -Because 'user-nodate: one High finding without a date'
     }
     It 'the stored figures (Pro) read into the same shape and render with the same code -- the values exactly as stored' {
         . (Join-Path $script:Root 'engine\risk-analysis\_shared\RA-ReportMail.ps1')
@@ -222,8 +268,8 @@ Describe 'Pro: the Detailed mail waits for the STORED score (owner 2026-10-22: o
     It 'the kept view''s Kpi.Protection has the shape the Risk Analysis page parses, from the same score' {
         $p = Complete-SIProtectionTally -Tally (NewFixture)
         $j = ConvertTo-SIRaExecViewProtectionJson -Protection $p | ConvertFrom-Json
-        $j.Lifecycle | Should -Be 42.9; $j.Technical | Should -Be 7.1; $j.Assets | Should -Be 6; $j.NoDate | Should -Be 1; $j.Findings | Should -Be 5
-        $j.ByType.Devices.Lifecycle | Should -Be 71.4; $j.ByType.Devices.Assets | Should -Be 3
+        $j.Lifecycle | Should -Be 91.6; $j.Technical | Should -Be 88.3; $j.Assets | Should -Be 6; $j.NoDate | Should -Be 2; $j.Findings | Should -Be 6
+        $j.ByType.Devices.Lifecycle | Should -Be 91; $j.ByType.Devices.Assets | Should -Be 3
         ConvertTo-SIRaExecViewProtectionJson -Protection $null | Should -BeNullOrEmpty
     }
     It 'a Pro Detailed run keeps its mail for the stored score instead of counting one; a mail that cannot be kept is sent at once, saying why' {
@@ -330,8 +376,9 @@ Describe 'the Protection Score''s bands: ONE file the engine and the web app rea
     # (the web app's embedded copy equals it: SecurityPostureTests, Pro -- this suite is Community-safe)
     It 'the mails write the value in its band''s words: the Risk Analysis mail line' {
         $h = ConvertTo-SIProtectionMailHtml -Score (Complete-SIProtectionTally -Tally (NewFixture))
-        $h | Should -Match 'Protection Score, within Accepted Lifecycle:</strong> <span data-band="at-risk" style="color:#c62828;font-weight:700;">42\.9 % &middot; At Risk</span>'
-        $h | Should -Match 'Protection Score, Actual Risks:</strong> <span data-band="at-risk"'
+        $h | Should -Match 'Protection Score, within Accepted Lifecycle:</strong> <span data-band="very-good" style="color:#1b5e20;font-weight:700;">91\.6 % &middot; Very Good</span>'
+        $h | Should -Match 'Protection Score, Actual Risks:</strong> <span data-band="good"'
+        $h | Should -Match 'The average health of the active assets \(100 less 25 per open Very High fix, 10 per High, 3 per Medium, 1 per Low; Medium and Low together at most 20\), each tier a fixed share: Tier 0 40 %, Tier 1 30 %, Tier 2 20 %, Tier 3 10 %'
     }
 }
 

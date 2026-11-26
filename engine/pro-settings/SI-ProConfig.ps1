@@ -1619,7 +1619,9 @@ function Invoke-SIProConfigurationMigration {
     # the ownership rows are retired only once the map document holds what they said
     $retire = @($plan.Retire | Where-Object { $_.Kind -ne 'cmdbownership' -or -not $refused.Count })
     if ($retire.Count) {
-        $sb = New-Object System.Text.StringBuilder; $p = [ordered]@{ By = $by }
+        # #1377: the retirement is ONE commit of the change journal (before: one per row)
+        $sb = New-Object System.Text.StringBuilder; $p = [ordered]@{ By = $by; CfgCommitId = [guid]::NewGuid().ToString('N'); CfgSource = 'template'; CfgReason = $null }
+        [void]$sb.AppendLine((Get-SITemplatePublishCommitContextSql))
         [void]$sb.AppendLine('SET XACT_ABORT ON;'); [void]$sb.AppendLine('BEGIN TRAN;')
         $i = 0
         foreach ($r in $retire) {
@@ -1715,6 +1717,24 @@ function Get-SIProStoreTransaction {
     $null
 }
 
+function Get-SITemplatePublishCommitContextSql {
+    <# PURE. #1377: the SESSION_CONTEXT every batch of a template publish stamps, so the change journal's triggers write the
+       whole publish under ONE commit id (si.audit.cid), as source 'template', with the commit's line (si.cfg.reason). The
+       same keys as SI-ConfigJournal.ps1 New-SIConfigInvoke; here so the publish stands alone. #>
+@'
+EXEC sys.sp_set_session_context @key = N'si.audit.cid', @value = @CfgCommitId;
+EXEC sys.sp_set_session_context @key = N'si.cfg.source', @value = @CfgSource;
+EXEC sys.sp_set_session_context @key = N'si.cfg.reason', @value = @CfgReason;
+'@
+}
+
+function Get-SITemplatePublishCommitReason {
+    <# PURE. #1377: the grouped commit's line -- "Template pack 1.17 installed by the product" (the web app adds ": N rows"). #>
+    param([string]$Version)
+    $v = "$Version".Trim()
+    if ($v) { 'Template pack {0} installed by the product' -f $v } else { 'Template pack installed by the product' }
+}
+
 function Invoke-SITemplatePublish {
     <#
         Apply a publish plan: insert / update / revive / retire, each with a cfg.ChangeLog entry (Scope 'template', the
@@ -1728,10 +1748,18 @@ function Invoke-SITemplatePublish {
         the old set until the commit; without it the read waits for the commit). The batches stay (a command's parameters are
         limited), inside the one transaction. A store without one (a test's fake) gets the batches as before.
         -AfterBatch { param($BatchNo, $Invoke) }: test seam, called after each batch inside the transaction.
+        #1377 (owner 2026-11-25 "Fix both"): THE WHOLE PUBLISH IS ONE COMMIT of the change journal. Every batch stamps the
+        same commit id (-CommitId, else a fresh one; SESSION_CONTEXT si.audit.cid, which the journal triggers read), the
+        journal source 'template' and the commit's line (-CommitReason, e.g. "Template pack 1.17 installed by the
+        product") -- before, no context was set, so every statement got a commit id of its own: one commit per row. Who
+        stays as before (the database login the publish runs as; the web app shows it by name).
     #>
-    param([Parameter(Mandatory)]$Store, [AllowEmptyCollection()][object[]]$Plan = @(), [Parameter(Mandatory)][string]$ChangedBy, [int]$BatchSize = 100, [scriptblock]$AfterBatch)
+    param([Parameter(Mandatory)]$Store, [AllowEmptyCollection()][object[]]$Plan = @(), [Parameter(Mandatory)][string]$ChangedBy, [int]$BatchSize = 100, [scriptblock]$AfterBatch,
+          [string]$CommitId, [string]$CommitReason)
     $work = @($Plan | Where-Object { $_.Action -ne 'same' })
     if (-not $work.Count) { return 0 }
+    if (-not "$CommitId".Trim()) { $CommitId = [guid]::NewGuid().ToString('N') }
+    $journalCtx = Get-SITemplatePublishCommitContextSql
     $txn = Get-SIProStoreTransaction -Store $Store
     $write = {
     param($Send)
@@ -1739,8 +1767,9 @@ function Invoke-SITemplatePublish {
     for ($s = 0; $s -lt $work.Count; $s += $BatchSize) {
         $chunk = @($work[$s..([Math]::Min($s + $BatchSize, $work.Count) - 1)])
         $sb = New-Object System.Text.StringBuilder
+        [void]$sb.AppendLine($journalCtx)
         [void]$sb.AppendLine('SET XACT_ABORT ON;'); [void]$sb.AppendLine('BEGIN TRAN;')
-        $p = [ordered]@{ By = $ChangedBy }
+        $p = [ordered]@{ By = $ChangedBy; CfgCommitId = $CommitId; CfgSource = 'template'; CfgReason = $(if ("$CommitReason".Trim()) { "$CommitReason".Trim() } else { $null }) }
         for ($i = 0; $i -lt $chunk.Count; $i++) {
             $c = $chunk[$i]; $p["k$i"] = $c.Kind; $p["i$i"] = $c.ItemKey
             if ($c.Action -eq 'retire') {

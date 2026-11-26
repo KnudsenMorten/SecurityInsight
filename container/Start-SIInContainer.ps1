@@ -157,6 +157,10 @@ if ($siRole) {
             elseif ($engineEnv -eq 'support-grant') {
                 $dispatchDirect = $true
             }
+            # #1252: the job request job (caj-si-job-requests), started by its queue when a person asked for a job in the web app.
+            elseif ($engineEnv -eq 'job-requests') {
+                $dispatchDirect = $true
+            }
             # #235: the template publish job (caj-si-templates), started by the web app with the accepted fingerprint.
             elseif ($engineEnv -eq 'templates-publish') {
                 $dispatchDirect = $true
@@ -572,6 +576,7 @@ if ($dispatchClassifier) {
     Write-Host "[SI_ROLE=worker SI_ENGINE=privilege-tier-classifier] dispatching to $classifierScript" -ForegroundColor Cyan
     $clsExit = 0
     try {
+        $global:LASTEXITCODE = 0   # the classifier's own exit code only (as the engines below)
         & $classifierScript
         if ($LASTEXITCODE) { $clsExit = $LASTEXITCODE }
     } catch {
@@ -600,6 +605,9 @@ if ($dispatchDirect) {
         Write-Host ("[SI_ROLE=worker SI_ENGINE={0}] dispatching to {1} {2}" -f $engine, $script, (($d.Args.GetEnumerator() | ForEach-Object { "-$($_.Key) $($_.Value)" }) -join ' ')) -ForegroundColor Cyan
         try {
             $argsForEngine = $d.Args
+            # the exit code is the ENGINE's own (its `exit N`), never one a program run earlier in this process left behind:
+            # an engine that ends normally -- e.g. the mail job with every mail switched off -- exits 0
+            $global:LASTEXITCODE = 0
             & $script @argsForEngine
             if ($LASTEXITCODE) { $directExit = $LASTEXITCODE }
         } catch {

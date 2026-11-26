@@ -148,7 +148,7 @@ Describe 'the copies the pages show: one silent call (the defect) vs range by ra
         $flow.IndexOf('$upkeepDo = Get-SIPipelineUpkeepDecision -Drain $drain') | Should -BeGreaterThan $flow.IndexOf('$drain = Invoke-SIPipelineDrain')
         $upd = [IO.File]::ReadAllText((Join-Path $script:SIRoot 'setup\Invoke-SIContainerUpdate.ps1'))
         $upd | Should -Match ([regex]::Escape('$dataSql | Add-Member -NotePropertyName SIConnectionInfo -NotePropertyValue $dataInfo'))
-        $upd | Should -Match ([regex]::Escape('Invoke-SIPublishedCopyCatchUp -Invoke $dataSql -WhatIf:(-not $Apply -or $DetectOnly) -Beat $copyBeat'))
+        $upd | Should -Match ([regex]::Escape('Invoke-SIPublishedCopyCatchUp -Invoke $dataSql -WhatIf:(-not $Apply -or $DetectOnly) -Log $copyLog -Beat $copyBeat'))
     }
 }
 

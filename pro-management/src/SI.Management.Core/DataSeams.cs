@@ -101,6 +101,18 @@ public sealed class SqlReader : ISqlReader
             },
         };
         await cn.OpenAsync(ct).ConfigureAwait(false);
+        // #1332 the readers on the finding history: a read of the findings goes to the served view while the database serves
+        // any collection from its history (ProData/FindingSource.cs); otherwise exactly as written
+        sql = await ProData.FindingSource.RouteAsync(sql, cn.DataSource + "|" + cn.Database, async t =>
+        {
+            await using var p = cn.CreateCommand();
+            p.CommandText = ProData.FindingSource.ListsSql;
+            await using var r = await p.ExecuteReaderAsync(t).ConfigureAwait(false);
+            if (!await r.ReadAsync(t).ConfigureAwait(false)) return ProData.FindingSource.Lists.None;
+            var row = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+            for (var i = 0; i < r.FieldCount; i++) row[r.GetName(i)] = r.IsDBNull(i) ? null : r.GetValue(i);
+            return ProData.FindingSource.Lists.From(row);
+        }, ct).ConfigureAwait(false);
         await using var cmd = cn.CreateCommand();
         cmd.CommandText = sql;
         foreach (var (k, v) in parameters) cmd.Parameters.AddWithValue("@" + k, v ?? DBNull.Value);

@@ -60,7 +60,9 @@ public sealed class AdvisorsModel : PageModel
     public async Task<IActionResult> OnPostAddAsync(string? kind, string? displayName, string? company, string? mail, string? objectId, bool isExternal, string? note, CancellationToken ct)
     {
         if (Gate() is { Allowed: false } g) return Done(new WriteResult(WriteStatus.Refused, g.Reason));
-        return Done(await Safely(() => _advisors.AddAsync(new AdvisorInput(Id, kind ?? AdvisorKinds.Person, displayName ?? "", company, mail, objectId, isExternal, note), User.ChangeName(), ct), "The advisor"));
+        var r = await Safely(() => _advisors.AddAsync(new AdvisorInput(Id, kind ?? AdvisorKinds.Person, displayName ?? "", company, mail, objectId, isExternal, note), User.ChangeName(), ct), "The advisor");
+        // #995b: an advisor added by e-mail address only gets its object id from the directory now (exactly one account)
+        return Done(await DepartmentAdminModel.WithObjectIdsAsync(HttpContext, r, Id, ct));
     }
 
     [SI.Management.Web.Audit.Audited("department.advisor.revoke")]

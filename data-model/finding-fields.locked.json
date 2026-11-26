@@ -2,7 +2,7 @@
   "$comment": "Finding field map: the generic fields a finding carries to an output, per FINDING TYPE (the provider mapping format, keyed by finding type: recordTypes = cve | endpoint-recommendation | azure-recommendation | identity | attack-path | exposure | recommendation | *). For one field the items are tried in order and the first that yields a value wins; a source is a path into the finding item, $template:<text with {path}> (every placeholder needs a value), $label:<field> (the label of the item that gave an earlier field its value) or $value:<field> (an earlier field's value). Empty stays empty; a value equal to the asset's name is never taken. An output column reads a field as extra.<field>. Customer overrides: finding-fields.custom.json (Community) or the settings database (Pro), per item.",
   "kind": "finding-field-map",
   "id": "finding-fields",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "The generic fields of a finding (classification, risk, fix) that an output can send -- each one a mapping, never code.",
   "mappings": [
     { "field": "si_security_domain", "recordTypes": [ "*" ], "sources": [ "si_security_domain" ], "normalize": [ "trim" ] },
@@ -20,6 +20,8 @@
     { "field": "si_security_grouping_parent", "recordTypes": [ "cve" ], "when": { "field": "si_component", "op": "eq", "value": "OS" }, "label": "security-update", "sources": [ "si_fix_recommended_update_id" ], "normalize": [ "split:;", "trim", "regex_extract:^(?:KB)?(\\d{4,8})$", "prefix:Security update KB", "sorted_join:; " ] },
     { "field": "si_security_grouping_parent", "recordTypes": [ "cve" ], "label": "software-upgrade", "sources": [ "$template:Update {si_affected_product} {si_affected_version} ({si_affected_vendor})", "$template:Update {si_affected_product} {si_affected_version}" ] },
     { "field": "si_security_grouping_parent", "recordTypes": [ "cve" ], "label": "security-update", "sources": [ "si_fix_recommended_update" ], "normalize": [ "split:;", "trim", "strip:\\s*\\(Last updated at[^)]*\\)\\s*$", "sorted_join:; " ] },
+    { "field": "si_security_grouping_parent", "recordTypes": [ "endpoint-recommendation", "exposure", "recommendation" ], "when": { "field": "si_recommendation_remediation_type", "op": "in", "value": [ "Update", "Upgrade" ] }, "label": "software-upgrade", "sources": [ "si_title" ], "normalize": [ "trim" ] },
+    { "field": "si_security_grouping_parent", "recordTypes": [ "endpoint-recommendation", "exposure", "recommendation" ], "when": { "field": "si_recommendation_remediation_type", "op": "eq", "value": "Uninstall" }, "label": "other", "sources": [ "si_title" ], "normalize": [ "trim" ] },
     { "field": "si_security_grouping_parent", "recordTypes": [ "endpoint-recommendation", "exposure", "recommendation" ], "label": "configuration", "sources": [ "si_title" ], "normalize": [ "trim" ] },
     { "field": "si_security_grouping_parent", "recordTypes": [ "azure-recommendation" ], "label": "cloud-recommendation", "sources": [ "si_title" ], "normalize": [ "trim" ] },
     { "field": "si_security_grouping_parent", "recordTypes": [ "identity" ], "label": "identity-rule", "sources": [ "si_title" ], "normalize": [ "trim" ] },

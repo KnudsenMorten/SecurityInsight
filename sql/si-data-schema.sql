@@ -127,6 +127,21 @@ IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_AssetIdentifier_Value'
 CREATE INDEX IX_AssetIdentifier_Value ON sidata.AssetIdentifier (IdentifierValue, IdentifierType) INCLUDE (AssetKey);
 
 -- ---------------------------------------------------------------------------------------------
+-- ONE PARTITION PER COLLECTION (#1317; first built as #1038 part 2): the large tables keyed by CollectionId (Finding,
+-- Recommendation, IssueContext) live on this partition scheme, so a retired collection can leave by emptying its own
+-- partition (seconds) instead of deleting a million rows in paced key ranges (hours). RANGE RIGHT: boundary c starts the
+-- partition of collection c. Created EMPTY (one partition -- every row in it, exactly as an unpartitioned table): the
+-- boundaries are cut only by the index build job while SI_Data_RetireByPartition is on -- empty ones ahead of the next
+-- collection ids, so each new collection lands alone in its own partition -- and only where no row moves. A new install's
+-- tables are created on it; an existing install's tables are moved onto it by the same job, in idle windows
+-- (engine\pro-settings\SI-ProPartitionMove.ps1).
+-- ---------------------------------------------------------------------------------------------
+IF (SELECT COUNT(*) FROM sys.partition_functions WHERE name = N'PF_SICollection') = 0
+    EXEC (N'CREATE PARTITION FUNCTION PF_SICollection (INT) AS RANGE RIGHT FOR VALUES ()');
+IF (SELECT COUNT(*) FROM sys.partition_schemes WHERE name = N'PS_SICollection') = 0
+    EXEC (N'CREATE PARTITION SCHEME PS_SICollection AS PARTITION PF_SICollection ALL TO ([PRIMARY])');
+
+-- ---------------------------------------------------------------------------------------------
 -- Finding: one row per Risk Analysis Detailed row, NARROW + the whole row as JSON. Clustered on the collection,
 -- so opening one collection and purging one collection both read one contiguous range.
 -- ---------------------------------------------------------------------------------------------
@@ -146,7 +161,7 @@ CREATE TABLE sidata.Finding (
     RiskScore        FLOAT          NULL,       -- RiskScoreTotal
     DetailJson       NVARCHAR(MAX)  NULL,
     CONSTRAINT PK_Finding PRIMARY KEY CLUSTERED (CollectionId, FindingId)
-);
+) ON PS_SICollection (CollectionId);
 
 -- one-collection drill-down: "most important first" = lowest tier, then highest score
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_Finding_Drilldown' AND object_id = OBJECT_ID('sidata.Finding'))
@@ -175,7 +190,7 @@ CREATE TABLE sidata.Recommendation (
     Tier                TINYINT        NULL,
     DetailJson          NVARCHAR(MAX)  NULL,
     CONSTRAINT PK_Recommendation PRIMARY KEY CLUSTERED (CollectionId, RecommendationRowId)
-);
+) ON PS_SICollection (CollectionId);
 
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_Recommendation_Asset' AND object_id = OBJECT_ID('sidata.Recommendation'))
 CREATE INDEX IX_Recommendation_Asset ON sidata.Recommendation (AssetKey, CollectionId) INCLUDE (RecommendationId, Severity, Tier);
@@ -1996,7 +2011,7 @@ CREATE TABLE sidata.IssueContext (
     CmdbName         NVARCHAR(MAX)  NULL,
     CmdbCriticality  NVARCHAR(MAX)  NULL,
     CONSTRAINT PK_IssueContext PRIMARY KEY CLUSTERED (CollectionId, IssueKey)
-);
+) ON PS_SICollection (CollectionId);
 
 -- (4) the CI context as columns of sidata.Ci, next to the CI grid's (above): who answers for the CI and where it lives --
 --     every reference as id AND name -- its list fields, and its identifier VALUES and linked object ids ('; '-joined).
@@ -3869,26 +3884,55 @@ BEGIN
        AND COL_LENGTH(N''sidata.'' + @Table + N''Pub'', N''ContentHash'') IS NOT NULL AND EXISTS (SELECT 1 FROM @c WHERE IsIdent = 1)
     BEGIN
         DECLARE @idc nvarchar(300) = (SELECT TOP (1) QUOTENAME(Name) FROM @c WHERE IsIdent = 1 ORDER BY ColumnId), @rq nvarchar(max) = REPLACE(@rng, N''~.'', N''q.''),
-                @cvSet nvarchar(max), @cvDiff nvarchar(max), @oldBody nvarchar(max);
+                @cvSet nvarchar(max), @cvDiff nvarchar(max), @oldBody nvarchar(max), @oldMatch nvarchar(max), @insNew nvarchar(max),
+                @nvSet nvarchar(max), @nvDiff nvarchar(max), @wvSet nvarchar(max), @wvDiff nvarchar(max);
         SELECT @cvSet = STRING_AGG(CONVERT(nvarchar(max), QUOTENAME(Name) + N'' = s.'' + QUOTENAME(Name)), N'', ''),
                @cvDiff = STRING_AGG(CONVERT(nvarchar(max), N''ISNULL(DATALENGTH(s.'' + QUOTENAME(Name) + N''), -1) <> ISNULL(DATALENGTH(p.'' + QUOTENAME(Name) + N''), -1) OR CAST(s.''
                          + QUOTENAME(Name) + N'' AS varbinary(max)) <> CAST(p.'' + QUOTENAME(Name) + N'' AS varbinary(max))''), N'' OR '')
         FROM @c WHERE IsIdent = 1 OR Name IN (N''CollectionTime'', N''DocJson'');
+        -- #1116 (b) (SCALE-3 A): the same columns in two parts, each written only where IT differs -- the narrow ones (the
+        -- identity, CollectionTime: they move every run) and the document (DocJson: it moves only when its content does)
+        SELECT @nvSet = STRING_AGG(CONVERT(nvarchar(max), QUOTENAME(Name) + N'' = s.'' + QUOTENAME(Name)), N'', ''),
+               @nvDiff = STRING_AGG(CONVERT(nvarchar(max), N''ISNULL(DATALENGTH(s.'' + QUOTENAME(Name) + N''), -1) <> ISNULL(DATALENGTH(q.'' + QUOTENAME(Name) + N''), -1) OR CAST(s.''
+                         + QUOTENAME(Name) + N'' AS varbinary(max)) <> CAST(q.'' + QUOTENAME(Name) + N'' AS varbinary(max))''), N'' OR '')
+        FROM @c WHERE IsIdent = 1 OR Name = N''CollectionTime'';
+        SELECT @wvSet = STRING_AGG(CONVERT(nvarchar(max), QUOTENAME(Name) + N'' = s.'' + QUOTENAME(Name)), N'', ''),
+               @wvDiff = STRING_AGG(CONVERT(nvarchar(max), N''ISNULL(DATALENGTH(s.'' + QUOTENAME(Name) + N''), -1) <> ISNULL(DATALENGTH(q.'' + QUOTENAME(Name) + N''), -1) OR CAST(s.''
+                         + QUOTENAME(Name) + N'' AS varbinary(max)) <> CAST(q.'' + QUOTENAME(Name) + N'' AS varbinary(max))''), N'' OR '')
+        FROM @c WHERE IsIdent = 0 AND Name = N''DocJson'';
         SET @oldBody = SUBSTRING(@sql, DATALENGTH(@pre) / 2 + 1, 2147483647);
+        -- the source rows the copy does not hold yet (as often as the source has them)
+        SET @insNew = N''INSERT '' + @P + N'' ('' + @cols + N'', RowHash) SELECT '' + @scols + N'', s.ContentHash FROM '' + @S + N'' AS s JOIN #ch AS h ON h.SId = s.'' + @idc
+                 + N'' WHERE '' + @rs + N'' AND h.Rn > (SELECT COUNT_BIG(*) FROM '' + @P + N'' AS q WHERE '' + @rq + N'' AND q.RowHash = h.H); SET @m += @@ROWCOUNT; '';
+        -- AS BEFORE (a copy whose range holds an identity twice -- never made by this procedure): the copy''s rows numbered over
+        -- the whole row; kept only for that case
+        SET @oldMatch = N'';WITH p AS (SELECT q.RowHash, ROW_NUMBER() OVER (PARTITION BY q.RowHash ORDER BY q.'' + @idc + N'') AS Rn FROM '' + @P + N'' AS q WHERE '' + @rq + N'') ''
+                 + N''DELETE FROM p WHERE p.RowHash IS NULL OR NOT EXISTS (SELECT 1 FROM #ch AS h WHERE h.H = p.RowHash AND h.Rn = p.Rn); SET @m += @@ROWCOUNT; ''
+                 + N'';WITH p AS (SELECT q.*, ROW_NUMBER() OVER (PARTITION BY q.RowHash ORDER BY q.'' + @idc + N'') AS Rn FROM '' + @P + N'' AS q WHERE '' + @rq + N'') ''
+                 + N''UPDATE p SET '' + @cvSet + N'' FROM p JOIN #ch AS h ON h.H = p.RowHash AND h.Rn = p.Rn JOIN '' + @S + N'' AS s ON s.'' + @idc + N'' = h.SId WHERE '' + @cvDiff + N''; SET @m += @@ROWCOUNT; ''
+                 + @insNew;
         SET @sql = @pre + N''IF EXISTS (SELECT 1 FROM '' + @S + N'' AS s WHERE '' + @rs + N'' AND s.ContentHash IS NULL) BEGIN '' + @oldBody + N'' END ELSE BEGIN ''
                  + N''DECLARE @m bigint = 0; ''
                  + N''SELECT s.'' + @idc + N'' AS SId, s.ContentHash AS H, ROW_NUMBER() OVER (PARTITION BY s.ContentHash ORDER BY s.'' + @idc + N'') AS Rn INTO #ch FROM '' + @S + N'' AS s WHERE '' + @rs + N''; ''
                  + N''CREATE UNIQUE CLUSTERED INDEX CX_ch ON #ch (H, Rn); ''
+                 -- #1116 (b): the copy''s rows numbered by their KEYS only (identity, hash) -- never a sort of whole rows, documents
+                 -- included -- and joined back to the copy by the identity
+                 + N''SELECT q.'' + @idc + N'' AS PId, q.RowHash AS H, ROW_NUMBER() OVER (PARTITION BY q.RowHash ORDER BY q.'' + @idc + N'') AS Rn INTO #pc FROM '' + @P + N'' AS q WHERE '' + @rq + N''; ''
+                 + N''IF EXISTS (SELECT 1 FROM #pc GROUP BY PId HAVING COUNT_BIG(*) > 1) BEGIN '' + @oldMatch + N'' END ELSE BEGIN ''
+                 + N''CREATE UNIQUE CLUSTERED INDEX CX_pc ON #pc (PId); ''
                  -- the copy''s rows without a match (no hash, a hash no longer there, or more often than in the source) go
-                 + N'';WITH p AS (SELECT q.RowHash, ROW_NUMBER() OVER (PARTITION BY q.RowHash ORDER BY q.'' + @idc + N'') AS Rn FROM '' + @P + N'' AS q WHERE '' + @rq + N'') ''
-                 + N''DELETE FROM p WHERE p.RowHash IS NULL OR NOT EXISTS (SELECT 1 FROM #ch AS h WHERE h.H = p.RowHash AND h.Rn = p.Rn); SET @m += @@ROWCOUNT; ''
-                 -- a matched row: what the run moves, from its source row, only where it differs
-                 + N'';WITH p AS (SELECT q.*, ROW_NUMBER() OVER (PARTITION BY q.RowHash ORDER BY q.'' + @idc + N'') AS Rn FROM '' + @P + N'' AS q WHERE '' + @rq + N'') ''
-                 + N''UPDATE p SET '' + @cvSet + N'' FROM p JOIN #ch AS h ON h.H = p.RowHash AND h.Rn = p.Rn JOIN '' + @S + N'' AS s ON s.'' + @idc + N'' = h.SId WHERE '' + @cvDiff + N''; SET @m += @@ROWCOUNT; ''
-                 -- the source rows the copy does not hold yet (as often as the source has them)
-                 + N''INSERT '' + @P + N'' ('' + @cols + N'', RowHash) SELECT '' + @scols + N'', s.ContentHash FROM '' + @S + N'' AS s JOIN #ch AS h ON h.SId = s.'' + @idc
-                 + N'' WHERE '' + @rs + N'' AND h.Rn > (SELECT COUNT_BIG(*) FROM '' + @P + N'' AS q WHERE '' + @rq + N'' AND q.RowHash = h.H); SET @m += @@ROWCOUNT; ''
-                 + N''DROP TABLE #ch; SET @r = @m; END'';
+                 + N''DELETE q FROM '' + @P + N'' AS q JOIN #pc AS pc ON pc.PId = q.'' + @idc + N'' WHERE '' + @rq
+                 + N'' AND (pc.H IS NULL OR NOT EXISTS (SELECT 1 FROM #ch AS h WHERE h.H = pc.H AND h.Rn = pc.Rn)); SET @m += @@ROWCOUNT; ''
+                 -- a matched row: what the run moves, from its source row, each part only where it differs (a row written in
+                 -- both parts is counted once)
+                 + N''SELECT TOP (0) PId INTO #u FROM #pc; ''
+                 + CASE WHEN @wvSet IS NULL THEN N'''' ELSE N''UPDATE q SET '' + @wvSet + N'' OUTPUT pc.PId INTO #u (PId) FROM '' + @P + N'' AS q JOIN #pc AS pc ON pc.PId = q.'' + @idc
+                        + N'' JOIN #ch AS h ON h.H = pc.H AND h.Rn = pc.Rn JOIN '' + @S + N'' AS s ON s.'' + @idc + N'' = h.SId WHERE '' + @rq + N'' AND ('' + @wvDiff + N''); '' END
+                 + CASE WHEN @nvSet IS NULL THEN N'''' ELSE N''UPDATE q SET '' + @nvSet + N'' OUTPUT pc.PId INTO #u (PId) FROM '' + @P + N'' AS q JOIN #pc AS pc ON pc.PId = q.'' + @idc
+                        + N'' JOIN #ch AS h ON h.H = pc.H AND h.Rn = pc.Rn JOIN '' + @S + N'' AS s ON s.'' + @idc + N'' = h.SId WHERE '' + @rq + N'' AND ('' + @nvDiff + N''); '' END
+                 + N''SET @m += (SELECT COUNT_BIG(*) FROM (SELECT DISTINCT PId FROM #u) AS d); DROP TABLE #u; ''
+                 + @insNew
+                 + N''END; DROP TABLE #pc; DROP TABLE #ch; SET @r = @m; END'';
     END
     IF @own = 1 BEGIN TRANSACTION;
     EXEC sp_executesql @sql, N''@f nvarchar(max), @t nvarchar(max), @r bigint OUTPUT'', @f = @From, @t = @hiText, @r = @r OUTPUT;
@@ -4079,9 +4123,11 @@ WHERE m.CollectionTime <= ISNULL((SELECT CONVERT(datetime2(3), p.CopiedAt) FROM 
 
 -- #901 A COLLECTION WHOSE ONLY INCOMPLETENESS IS REPORTS SI DELIBERATELY HELD (owner: "a report fails alone, the job
 -- completes ... we use last known good data"): 1 when Risk Analysis judged it per report (RaPartialScope 'reports'), EVERY
--- NotComplete Detailed report of it carries a HoldKind (a silent source #900, an incomplete role read #899 -- never a #877
--- hold-back, a lost slice or a report that failed), every such report was carried by the data sync, and each carry has a
--- last complete result (FromCollectionId). Anything else -- or an older schema without the column -- is 0: partial as before.
+-- NotComplete Detailed report of it carries a HoldKind (a silent source #900, an incomplete role read #899, #1323 query
+-- slices that could not be read when nothing else was wrong with the report -- never a #877 hold-back or a report that
+-- failed), every such report was carried by the data sync, and each carry has a last complete result (FromCollectionId:
+-- a report with NO earlier complete result keeps the run unpublished). Anything else -- or an older schema without the
+-- column -- is 0: partial as before.
 IF COL_LENGTH('sidata.RaReportStatus', 'HoldKind') IS NOT NULL
 EXEC (N'CREATE OR ALTER FUNCTION sidata.CollectionHeldOnly (@cid INT) RETURNS BIT
 AS
@@ -4935,7 +4981,8 @@ BEGIN
     INSERT @nf (Name) VALUES (N'AssetKey'), (N'AssetName'), (N'ReportName'), (N'SecurityDomain'), (N'ConfigurationId'), (N'Cve'), (N'Title'), (N'Severity'), (N'Tier'),
         (N'RiskScore'), (N'RiskScoreWeighted'), (N'RiskRating'), (N'ExemptionId'), (N'RemediationEffort'), (N'FixOwner'), (N'DepartmentId'), (N'HasExploit'),
         (N'FixRemediation'), (N'CiLifecycle'), (N'FixRecommendedUpdateId'), (N'FixRecommendedUpdate'), (N'AffectedVendor'), (N'AffectedProduct'),
-        (N'RaFindingKey'), (N'RaSeq'), (N'RaAssetId'), (N'Category'), (N'Subcategory'), (N'ComplianceTags'), (N'Cvss'), (N'MitreTactics'), (N'MitreTechniques'), (N'SourceFirstDetected');
+        (N'RaFindingKey'), (N'RaSeq'), (N'RaAssetId'), (N'Category'), (N'Subcategory'), (N'ComplianceTags'), (N'Cvss'), (N'MitreTactics'), (N'MitreTechniques'), (N'SourceFirstDetected'),
+        (N'EosStatus'), (N'FixDueDate'), (N'AffectedVersion'), (N'AffectedSoftware');
     DECLARE @nsql nvarchar(max) = N'CREATE TABLE sidata.FindingNarrow (CollectionId INT NOT NULL, FindingId BIGINT NOT NULL, '
         + (SELECT STRING_AGG(CONVERT(nvarchar(max), QUOTENAME(c.name) + N' ' +
                CASE WHEN t.name IN (N'nvarchar', N'nchar') THEN t.name + N'(' + CASE WHEN c.max_length = -1 THEN N'max' ELSE CONVERT(nvarchar(10), c.max_length / 2) END + N')'
@@ -4949,10 +4996,33 @@ BEGIN
         + N', DjIsJson BIT NULL, Dj_si_remediation_type NVARCHAR(4000) NULL, Dj_RiskScoreTotal_Weighted NVARCHAR(4000) NULL, Dj_si_component NVARCHAR(4000) NULL,'
         + N' Dj_RiskFactor_Probability_Detailed NVARCHAR(4000) NULL, Dj_RiskFactor_Consequence_Detailed NVARCHAR(4000) NULL, Dj_si_servicenow_subci NVARCHAR(4000) NULL,'
         + N' Dj_si_patch_cycle NVARCHAR(4000) NULL, Dj_si_cve_published NVARCHAR(4000) NULL, Dj_si_category NVARCHAR(4000) NULL, Dj_Category NVARCHAR(4000) NULL,'
-        + N' Dj_si_subcategory NVARCHAR(4000) NULL, Dj_Subcategory NVARCHAR(4000) NULL, CONSTRAINT PK_FindingNarrow PRIMARY KEY CLUSTERED (CollectionId, FindingId));';
+        + N' Dj_si_subcategory NVARCHAR(4000) NULL, Dj_Subcategory NVARCHAR(4000) NULL, Dj_si_fix_release_date NVARCHAR(4000) NULL, CONSTRAINT PK_FindingNarrow PRIMARY KEY CLUSTERED (CollectionId, FindingId));';
     -- only when sidata.Finding carries every one of them (the schema above adds them all)
     IF (SELECT COUNT(*) FROM sys.columns AS c JOIN @nf AS n ON n.Name = c.name WHERE c.object_id = OBJECT_ID('sidata.Finding')) = (SELECT COUNT(*) FROM @nf)
         EXEC (@nsql);
+END
+-- #1213 B4 (SCALE-3, 2026-11-23): the key figures read their findings from the narrow table too -- the columns they need, added
+-- to a narrow table made before (the same name, type and collation as sidata.Finding's; one statement each; additive). Until
+-- every column is there the data sync reads sidata.Finding as before (Get-SIDataNarrowCheckSql). (The table's presence is
+-- asked by a column of its own: no CREATE follows here.)
+IF COL_LENGTH('sidata.FindingNarrow', 'FindingId') IS NOT NULL
+BEGIN
+    DECLARE @nk TABLE (N int IDENTITY(1, 1) NOT NULL, Stmt nvarchar(max) NOT NULL);
+    INSERT @nk (Stmt)
+    SELECT N'ALTER TABLE sidata.FindingNarrow ADD ' + QUOTENAME(c.name) + N' ' +
+           CASE WHEN t.name IN (N'nvarchar', N'nchar') THEN t.name + N'(' + CASE WHEN c.max_length = -1 THEN N'max' ELSE CONVERT(nvarchar(10), c.max_length / 2) END + N')'
+                WHEN t.name IN (N'varchar', N'char', N'varbinary', N'binary') THEN t.name + N'(' + CASE WHEN c.max_length = -1 THEN N'max' ELSE CONVERT(nvarchar(10), c.max_length) END + N')'
+                WHEN t.name IN (N'decimal', N'numeric') THEN t.name + N'(' + CONVERT(nvarchar(5), c.precision) + N', ' + CONVERT(nvarchar(5), c.scale) + N')'
+                WHEN t.name IN (N'datetime2', N'time', N'datetimeoffset') THEN t.name + N'(' + CONVERT(nvarchar(5), c.scale) + N')'
+                ELSE t.name END
+           + CASE WHEN c.collation_name IS NOT NULL THEN N' COLLATE ' + c.collation_name ELSE N'' END + N' NULL;'
+    FROM sys.columns AS c JOIN sys.types AS t ON t.user_type_id = c.user_type_id
+    WHERE c.object_id = OBJECT_ID('sidata.Finding') AND c.name IN (N'EosStatus', N'FixDueDate', N'AffectedVersion', N'AffectedSoftware')
+      AND COL_LENGTH('sidata.FindingNarrow', c.name) IS NULL
+    ORDER BY c.column_id;
+    IF COL_LENGTH('sidata.FindingNarrow', 'Dj_si_fix_release_date') IS NULL INSERT @nk (Stmt) VALUES (N'ALTER TABLE sidata.FindingNarrow ADD Dj_si_fix_release_date NVARCHAR(4000) NULL;');
+    DECLARE @nki int = 1, @nkn int = (SELECT COUNT(*) FROM @nk), @nks nvarchar(max);
+    WHILE @nki <= @nkn BEGIN SELECT @nks = Stmt FROM @nk WHERE N = @nki; EXEC (@nks); SET @nki += 1; END
 END
 
 -- ---------------------------------------------------------------------------------------------
@@ -5059,6 +5129,30 @@ IF COL_LENGTH('sidata.Collection', 'RiskPartsUpto') IS NULL ALTER TABLE sidata.C
 IF COL_LENGTH('sidata.Finding', 'DetailIsJson') IS NULL ALTER TABLE sidata.Finding ADD DetailIsJson BIT NULL;
 IF COL_LENGTH('sidata.Finding', 'ViewComponent') IS NULL ALTER TABLE sidata.Finding ADD ViewComponent NVARCHAR(64) NULL;
 IF COL_LENGTH('sidata.Collection', 'TypedAt') IS NULL ALTER TABLE sidata.Collection ADD TypedAt DATETIME2(3) NULL;
+
+-- ---------------------------------------------------------------------------------------------
+-- #1318 PARSE ONCE AT INSERT (setting SI_Data_ParseAtInsert, off by default). Risk Analysis' insert runs the derive's own
+-- typed statement over the rows it just inserted and marks each row with the switch set it used:
+--   sidata.Finding.TypedOnInsert  NULL = not typed at insert (derived by the data sync as before); else the mask of the
+--                                 switches (Get-SIDataTypedMask: 1 base, 2 services, 4 fix, 8 category, 16 row values,
+--                                 32 risk score parts) -- what the row was typed with, for reading.
+--   sidata.Finding.TypedStatement NULL = not typed at insert; else the fingerprint of the EXACT typing statement
+--                                 (Get-SIDataTypedFingerprint, a hash of its text). With the setting on, the data sync
+--                                 leaves alone ONLY the rows whose fingerprint is the one of its own current statement; a
+--                                 row typed by a release whose statement differed is derived again.
+-- The filtered index holds only marked rows, so it costs nothing while the setting is off.
+-- ---------------------------------------------------------------------------------------------
+IF COL_LENGTH('sidata.Finding', 'TypedOnInsert') IS NULL ALTER TABLE sidata.Finding ADD TypedOnInsert TINYINT NULL;
+IF COL_LENGTH('sidata.Finding', 'TypedStatement') IS NULL ALTER TABLE sidata.Finding ADD TypedStatement BINARY(16) NULL;
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_Finding_TypedStatement' AND object_id = OBJECT_ID('sidata.Finding'))
+    EXEC (N'CREATE INDEX IX_Finding_TypedStatement ON sidata.Finding (CollectionId, TypedStatement) WHERE TypedStatement IS NOT NULL');
+-- #1337 ADDED 2026-11-23: the check of a report filled as it was complete (engine\pro-data\_shared\SI-DataReportEarly.ps1
+-- Get-SIDataEarlyReportSql: its FindingId range, count, id checksum and how many rows carry the current statement) read
+-- TypedStatement through a key lookup per row. A NEW index, so the change is additive (IX_Finding_RaSeq is left as it is);
+-- on a large table it is built outside the file (engine\pro-settings\SI-ProSchema.ps1: filtered, so started in an update
+-- only when its estimate fits, else in the index-build window).
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_Finding_RaReportTyped' AND object_id = OBJECT_ID('sidata.Finding'))
+    EXEC (N'CREATE INDEX IX_Finding_RaReportTyped ON sidata.Finding (CollectionId, RaReport) INCLUDE (TypedStatement) WHERE RaSeq IS NOT NULL');
 
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_Finding_AssetSidePage' AND object_id = OBJECT_ID('sidata.Finding'))
     EXEC (N'CREATE INDEX IX_Finding_AssetSidePage ON sidata.Finding (CollectionId, RiskAssetSide DESC) INCLUDE (ExemptionId)');
@@ -5606,6 +5700,9 @@ CREATE TABLE sidata.RemediationTaskSplit (
 -- when a working row was written: the rows a build left behind are removed only once they are a day old (never a running build's)
 IF COL_LENGTH('sidata.RemediationTaskSig', 'CreatedAt') IS NULL ALTER TABLE sidata.RemediationTaskSig ADD CreatedAt DATETIME2(0) NOT NULL CONSTRAINT DF_RemediationTaskSig_Created DEFAULT SYSUTCDATETIME();
 IF COL_LENGTH('sidata.RemediationTaskSplit', 'CreatedAt') IS NULL ALTER TABLE sidata.RemediationTaskSplit ADD CreatedAt DATETIME2(0) NOT NULL CONSTRAINT DF_RemediationTaskSplit_Created DEFAULT SYSUTCDATETIME();
+-- the paths of a software unit's copies that are NOT bundled (on its read row, TaskKey NULL): the product's own task shows them
+IF COL_LENGTH('sidata.RemediationTaskSplit', 'PlainPaths') IS NULL ALTER TABLE sidata.RemediationTaskSplit ADD PlainPaths NVARCHAR(MAX) NULL;
+IF COL_LENGTH('sidata.RemediationTaskSplit', 'ApplicationVersion') IS NULL ALTER TABLE sidata.RemediationTaskSplit ADD ApplicationVersion NVARCHAR(MAX) NULL;
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'CX_RemediationTaskSplit' AND object_id = OBJECT_ID('sidata.RemediationTaskSplit'))
     EXEC (N'CREATE CLUSTERED INDEX CX_RemediationTaskSplit ON sidata.RemediationTaskSplit (BuildId, ComboHash)');
 -- ---------------------------------------------------------------------------------------------
@@ -5631,6 +5728,48 @@ IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'CX_RemediationTaskSplit' 
 IF COL_LENGTH('sidata.RemediationTask', 'TaskKeyHash') IS NULL ALTER TABLE sidata.RemediationTask ADD TaskKeyHash BINARY(32) NULL;
 IF COL_LENGTH('sidata.RemediationTask', 'Channel') IS NULL ALTER TABLE sidata.RemediationTask ADD Channel NVARCHAR(32) NULL;
 IF COL_LENGTH('sidata.RemediationTask', 'HighestRiskRating') IS NULL ALTER TABLE sidata.RemediationTask ADD HighestRiskRating NVARCHAR(16) NULL;
+-- the bundling application's version(s) of a bundled task (owner 2026-11-24 "Yes, separate column"): Defender's version where
+-- it names the application, else the version folder; several = sorted, ', ' between. Never part of the task's name or key.
+IF COL_LENGTH('sidata.RemediationTask', 'ApplicationVersion') IS NULL ALTER TABLE sidata.RemediationTask ADD ApplicationVersion NVARCHAR(MAX) NULL;
+-- #1367 THE TASK'S CONTEXT FOR A TICKET (owner 2026-11-25: "i want the have as much context in the tasks as possible, as it is
+-- being sent to servicenow" / "and other ticket systems"): worked out ONCE by the task build (engine\pro-data\_shared\
+-- SI-DataRemediationTask.ps1) from the task's own findings, its CI and the evidence of #1364 -- every output that carries tasks
+-- (the ServiceNow push, the SQL hand-off views) maps these typed columns; nothing is worked out or parsed per row when served.
+--   WhatToDo               the action in words: for a bundled library the APPLICATION to update first (its version, where it
+--                          is installed), the library and its CVEs as the reason -- never a bare "Update <library>"
+--   RecommendedUpdate / RemediationSteps   the findings' recommended update(s) and remediation, each distinct text once
+--   CveList                every CVE id of the task, sorted, ', ' between (in full: the links carry one row per CVE too)
+--   ExploitAvailable / EndOfSupport / EndOfSupportDate / DueDate / FirstDetected   over its findings: any exploit, the end of
+--                          support status(es) and the earliest date, the earliest fix due date, the earliest first detection
+--   WithinAcceptedLifecycle  yes = at least one of its findings counts in the "Within Accepted Lifecycle" view
+--                          (sidata.FindingLifecycleRisk), no = none, NULL = the collection has no lifecycle rows
+--   DetectedPaths          every path where the product was found on the CI (the task's own paths, else the CI's Defender
+--                          evidence of that product and version), ';' between, in full
+--   AssetType / AssetOs / AssetIp / AssetEnvironment / InternetExposed   the CI's values when the context was worked out
+--   AlsoReportedBy         the evidence of #1364 (the same weakness reported by another source, folded onto the task's finding:
+--                          '<report>: <title>'); empty while sidata.FindingEvidence is not there
+--   ContextHash            SHA-256 of the columns above. NOT part of RowHash (u_row_hash keeps its meaning: no ServiceNow
+--                          record changes because this release adds columns); a context that changes on an open task moves
+--                          ChangedAt (the SQL hand-off's delta), the first fill never does.
+-- Additive; NULL on a task built before this release until it is worked out again.
+IF COL_LENGTH('sidata.RemediationTask', 'WhatToDo') IS NULL ALTER TABLE sidata.RemediationTask ADD WhatToDo NVARCHAR(MAX) NULL;
+IF COL_LENGTH('sidata.RemediationTask', 'RecommendedUpdate') IS NULL ALTER TABLE sidata.RemediationTask ADD RecommendedUpdate NVARCHAR(MAX) NULL;
+IF COL_LENGTH('sidata.RemediationTask', 'RemediationSteps') IS NULL ALTER TABLE sidata.RemediationTask ADD RemediationSteps NVARCHAR(MAX) NULL;
+IF COL_LENGTH('sidata.RemediationTask', 'CveList') IS NULL ALTER TABLE sidata.RemediationTask ADD CveList NVARCHAR(MAX) NULL;
+IF COL_LENGTH('sidata.RemediationTask', 'ExploitAvailable') IS NULL ALTER TABLE sidata.RemediationTask ADD ExploitAvailable BIT NULL;
+IF COL_LENGTH('sidata.RemediationTask', 'EndOfSupport') IS NULL ALTER TABLE sidata.RemediationTask ADD EndOfSupport NVARCHAR(MAX) NULL;
+IF COL_LENGTH('sidata.RemediationTask', 'EndOfSupportDate') IS NULL ALTER TABLE sidata.RemediationTask ADD EndOfSupportDate DATETIME2(3) NULL;
+IF COL_LENGTH('sidata.RemediationTask', 'DueDate') IS NULL ALTER TABLE sidata.RemediationTask ADD DueDate DATETIME2(3) NULL;
+IF COL_LENGTH('sidata.RemediationTask', 'FirstDetected') IS NULL ALTER TABLE sidata.RemediationTask ADD FirstDetected DATETIME2(3) NULL;
+IF COL_LENGTH('sidata.RemediationTask', 'WithinAcceptedLifecycle') IS NULL ALTER TABLE sidata.RemediationTask ADD WithinAcceptedLifecycle NVARCHAR(3) NULL;
+IF COL_LENGTH('sidata.RemediationTask', 'DetectedPaths') IS NULL ALTER TABLE sidata.RemediationTask ADD DetectedPaths NVARCHAR(MAX) NULL;
+IF COL_LENGTH('sidata.RemediationTask', 'AssetType') IS NULL ALTER TABLE sidata.RemediationTask ADD AssetType NVARCHAR(128) NULL;
+IF COL_LENGTH('sidata.RemediationTask', 'AssetOs') IS NULL ALTER TABLE sidata.RemediationTask ADD AssetOs NVARCHAR(801) NULL;
+IF COL_LENGTH('sidata.RemediationTask', 'AssetIp') IS NULL ALTER TABLE sidata.RemediationTask ADD AssetIp NVARCHAR(400) NULL;
+IF COL_LENGTH('sidata.RemediationTask', 'AssetEnvironment') IS NULL ALTER TABLE sidata.RemediationTask ADD AssetEnvironment NVARCHAR(400) NULL;
+IF COL_LENGTH('sidata.RemediationTask', 'InternetExposed') IS NULL ALTER TABLE sidata.RemediationTask ADD InternetExposed BIT NULL;
+IF COL_LENGTH('sidata.RemediationTask', 'AlsoReportedBy') IS NULL ALTER TABLE sidata.RemediationTask ADD AlsoReportedBy NVARCHAR(MAX) NULL;
+IF COL_LENGTH('sidata.RemediationTask', 'ContextHash') IS NULL ALTER TABLE sidata.RemediationTask ADD ContextHash BINARY(32) NULL;
 IF COL_LENGTH('sidata.RemediationTaskFinding', 'Category') IS NULL ALTER TABLE sidata.RemediationTaskFinding ADD Category NVARCHAR(256) NULL;
 IF COL_LENGTH('sidata.RemediationTaskFinding', 'Subcategory') IS NULL ALTER TABLE sidata.RemediationTaskFinding ADD Subcategory NVARCHAR(256) NULL;
 IF COL_LENGTH('sidata.RemediationTaskFinding', 'RiskRating') IS NULL ALTER TABLE sidata.RemediationTaskFinding ADD RiskRating NVARCHAR(16) NULL;
@@ -5690,6 +5829,12 @@ DECLARE @SIRemOn nvarchar(max) = N'EXISTS (SELECT 1 FROM cfg.Setting AS sw
               WHERE sw.Name = N''SI_DataOut_Outputs'' AND sw.Scope = N''solution'' AND LOWER(LTRIM(RTRIM(ss.[value]))) = N''{OUT}'')';
 DECLARE @SIRemTaskOn nvarchar(max) = CASE WHEN OBJECT_ID('cfg.Setting') IS NOT NULL THEN REPLACE(@SIRemOn, N'{OUT}', N'servicenow-remediation-task') ELSE N'1 = 0' END;
 DECLARE @SIRemLinkOn nvarchar(max) = CASE WHEN OBJECT_ID('cfg.Setting') IS NOT NULL THEN REPLACE(@SIRemOn, N'{OUT}', N'servicenow-remediation-task-finding') ELSE N'1 = 0' END;
+-- #1367 "MORE INFO": the task's own page in the web app (/Remediations/Task?id=<task id>) on the install's web address
+-- (SIWeb_PublicBaseUrl, the setting every mail's links use; https only) -- read live, the same SQL the push reads
+-- (engine\data-out\SI-DataOut.ps1: Get-SIDataOutTaskWebBaseSql). No collection in the link: the page then shows the newest
+-- collection whose tasks are built, and the task id is the same in every collection, so an old ticket's link still opens it.
+-- No address set (or no settings table) = no link.
+DECLARE @SIRemWeb nvarchar(max) = CASE WHEN OBJECT_ID('cfg.Setting') IS NOT NULL THEN N'(SELECT TOP (1) CASE WHEN wu.U LIKE N''https://_%'' THEN wu.U END FROM cfg.Setting AS ws CROSS APPLY (SELECT LTRIM(RTRIM(CASE WHEN ISJSON(N''['' + ws.ValueJson + N'']'') = 1 THEN JSON_VALUE(N''['' + ws.ValueJson + N'']'', ''$[0]'') ELSE ws.ValueJson END)) AS U0) AS w0 CROSS APPLY (SELECT CASE WHEN RIGHT(w0.U0, 1) = N''/'' THEN LEFT(w0.U0, LEN(w0.U0) - 1) ELSE w0.U0 END AS U) AS wu WHERE ws.Name = N''SIWeb_PublicBaseUrl'' AND ws.Scope = N''engine:management-web'')' ELSE N'CAST(NULL AS nvarchar(4000))' END;
 -- THE SAME ROWS AS THE PUSH (review 3.1.30): the columns of the output maps (u_source_run, u_changed_at and the envelope
 -- u_action / u_si_batch_id / u_si_cleared included); every date in WHOLE SECONDS, UTC -- the vulnerable items' datetime2(0),
 -- cut (never rounded) as the push's 'yyyy-MM-dd HH:mm:ss' is; u_row_hash and u_source_run worked out by the SAME SQL the push
@@ -5717,9 +5862,43 @@ SELECT LOWER(CONVERT(nvarchar(64), t.TaskId, 2)) AS u_si_task_id, t.CiId AS u_si
                  CASE WHEN NULLIF(LTRIM(RTRIM(t.CiOwner)), N'''') IS NULL THEN N'',u_owner'' END,
                  CASE WHEN NULLIF(LTRIM(RTRIM(t.CiDepartment)), N'''') IS NULL THEN N'',u_department'' END,
                  CASE WHEN NULLIF(LTRIM(RTRIM(st.Why)), N'''') IS NULL THEN N'',u_close_reason'' END,
-                 CASE WHEN st.ClosedAt IS NULL THEN N'',u_closed_at'' END), 1, 1, N''''), N'''') AS u_si_cleared
+                 CASE WHEN st.ClosedAt IS NULL THEN N'',u_closed_at'' END,
+                 CASE WHEN NULLIF(LTRIM(RTRIM(t.ApplicationVersion)), N'''') IS NULL THEN N'',u_application_version'' END,
+                 CASE WHEN NULLIF(LTRIM(RTRIM(t.DetectedPaths)), N'''') IS NULL THEN N'',u_detected_paths'' END,
+                 CASE WHEN NULLIF(LTRIM(RTRIM(t.RecommendedUpdate)), N'''') IS NULL THEN N'',u_recommended_update'' END,
+                 CASE WHEN NULLIF(LTRIM(RTRIM(t.RemediationSteps)), N'''') IS NULL THEN N'',u_remediation'' END,
+                 CASE WHEN NULLIF(LTRIM(RTRIM(t.CveList)), N'''') IS NULL THEN N'',u_cve_ids'' END,
+                 CASE WHEN NULLIF(LTRIM(RTRIM(t.HighestRiskRating)), N'''') IS NULL THEN N'',u_risk_rating'' END,
+                 CASE WHEN t.MaxWeightedRisk IS NULL THEN N'',u_weighted_risk'' END,
+                 CASE WHEN NULLIF(LTRIM(RTRIM(t.SecurityDomain)), N'''') IS NULL THEN N'',u_security_domain'' END,
+                 CASE WHEN t.ExploitAvailable IS NULL THEN N'',u_exploit_available'' END,
+                 CASE WHEN NULLIF(LTRIM(RTRIM(t.EndOfSupport)), N'''') IS NULL THEN N'',u_end_of_support'' END,
+                 CASE WHEN t.EndOfSupportDate IS NULL THEN N'',u_end_of_support_date'' END,
+                 CASE WHEN t.DueDate IS NULL THEN N'',u_due_date'' END,
+                 CASE WHEN t.FirstDetected IS NULL THEN N'',u_first_detected'' END,
+                 CASE WHEN NULLIF(LTRIM(RTRIM(t.WithinAcceptedLifecycle)), N'''') IS NULL THEN N'',u_within_accepted_lifecycle'' END,
+                 CASE WHEN NULLIF(LTRIM(RTRIM(t.AssetType)), N'''') IS NULL THEN N'',u_asset_type'' END,
+                 CASE WHEN NULLIF(LTRIM(RTRIM(t.AssetOs)), N'''') IS NULL THEN N'',u_os'' END,
+                 CASE WHEN NULLIF(LTRIM(RTRIM(t.AssetIp)), N'''') IS NULL THEN N'',u_ip_address'' END,
+                 CASE WHEN NULLIF(LTRIM(RTRIM(t.AssetEnvironment)), N'''') IS NULL THEN N'',u_environment'' END,
+                 CASE WHEN t.InternetExposed IS NULL THEN N'',u_internet_exposed'' END,
+                 CASE WHEN NULLIF(LTRIM(RTRIM(t.AlsoReportedBy)), N'''') IS NULL THEN N'',u_also_reported_by'' END,
+                 CASE WHEN wb.Web IS NULL THEN N'',u_si_more_info'' END), 1, 1, N''''), N'''') AS u_si_cleared,
+       t.WhatToDo AS u_what_to_do, t.ApplicationVersion AS u_application_version, t.DetectedPaths AS u_detected_paths,
+       t.RecommendedUpdate AS u_recommended_update, t.RemediationSteps AS u_remediation, t.CveList AS u_cve_ids,
+       t.HighestRiskRating AS u_risk_rating, t.MaxWeightedRisk AS u_weighted_risk, t.SecurityDomain AS u_security_domain, t.Channel AS u_tool,
+       CASE t.ExploitAvailable WHEN 1 THEN N''yes'' WHEN 0 THEN N''no'' END AS u_exploit_available, t.EndOfSupport AS u_end_of_support,
+       CONVERT(datetime2(0), CONVERT(char(19), t.EndOfSupportDate, 120), 120) AS u_end_of_support_date,
+       CONVERT(datetime2(0), CONVERT(char(19), t.DueDate, 120), 120) AS u_due_date,
+       CONVERT(datetime2(0), CONVERT(char(19), t.FirstDetected, 120), 120) AS u_first_detected,
+       t.WithinAcceptedLifecycle AS u_within_accepted_lifecycle, t.AssetType AS u_asset_type, t.AssetOs AS u_os, t.AssetIp AS u_ip_address,
+       t.AssetEnvironment AS u_environment, CASE t.InternetExposed WHEN 1 THEN N''yes'' WHEN 0 THEN N''no'' END AS u_internet_exposed,
+       t.AlsoReportedBy AS u_also_reported_by,
+       CASE WHEN wb.Web IS NOT NULL THEN CONCAT(wb.Web, N''/Remediations/Task?id='', LOWER(CONVERT(nvarchar(64), t.TaskId, 2))) END AS u_si_more_info,
+       LOWER(CONVERT(nvarchar(64), t.ContextHash, 2)) AS u_si_context_hash
 FROM sidata.RemediationTask AS t
 JOIN sidata.Collection AS c ON c.CollectionId = t.CollectionId
+CROSS APPLY (SELECT ' + @SIRemWeb + N' AS Web) AS wb
 CROSS APPLY (SELECT HASHBYTES(''SHA2_256'', t.RowHash + CONVERT(varbinary(max), ISNULL(t.AssetName, N''''))) AS H) AS rh
 CROSS APPLY (SELECT CONCAT(N''si-'', c.CollectionId, N''-'', CONVERT(nchar(8), c.CollectionTime, 112), REPLACE(CONVERT(nchar(8), c.CollectionTime, 108), N'':'', N'''')) AS Run) AS sr
 CROSS APPLY (SELECT COUNT(*) AS Sent,
@@ -5749,10 +5928,27 @@ SELECT LOWER(CONVERT(nvarchar(64), l.TaskId, 2)) AS u_si_task_id, t.CiId AS u_si
        N''update'' AS u_action, CAST(NULL AS nvarchar(160)) AS u_si_batch_id,
        ISNULL(STUFF(CONCAT(CASE WHEN NULLIF(LTRIM(RTRIM(l.Title)), N'''') IS NULL THEN N'',u_title'' END,
                  CASE WHEN NULLIF(LTRIM(RTRIM(l.Severity)), N'''') IS NULL THEN N'',u_severity'' END,
-                 CASE WHEN NULLIF(LTRIM(RTRIM(l.Version)), N'''') IS NULL THEN N'',u_product_version'' END), 1, 1, N''''), N'''') AS u_si_cleared
+                 CASE WHEN NULLIF(LTRIM(RTRIM(l.Version)), N'''') IS NULL THEN N'',u_product_version'' END,
+                 CASE WHEN lf.Cvss IS NULL THEN N'',u_cvss'' END,
+                 CASE WHEN l.RiskScore IS NULL THEN N'',u_risk_score'' END,
+                 CASE WHEN NULLIF(LTRIM(RTRIM(l.RiskRating)), N'''') IS NULL THEN N'',u_risk_rating'' END,
+                 CASE WHEN l.WeightedRisk IS NULL THEN N'',u_weighted_risk'' END,
+                 CASE WHEN lf.HasExploit IS NULL THEN N'',u_exploit_available'' END,
+                 CASE WHEN lf.SourceFirstDetected IS NULL THEN N'',u_first_detected'' END,
+                 CASE WHEN COALESCE(lf.FixDueDate, dst.DueAt) IS NULL THEN N'',u_due_date'' END,
+                 CASE WHEN wb.Web IS NULL THEN N'',u_si_more_info'' END), 1, 1, N''''), N'''') AS u_si_cleared,
+       lf.Cvss AS u_cvss, l.RiskScore AS u_risk_score, l.RiskRating AS u_risk_rating, l.WeightedRisk AS u_weighted_risk,
+       CASE lf.HasExploit WHEN 1 THEN N''yes'' WHEN 0 THEN N''no'' END AS u_exploit_available,
+       CONVERT(datetime2(0), CONVERT(char(19), lf.SourceFirstDetected, 120), 120) AS u_first_detected,
+       CONVERT(datetime2(0), CONVERT(char(19), COALESCE(lf.FixDueDate, dst.DueAt), 120), 120) AS u_due_date,
+       CASE WHEN wb.Web IS NOT NULL THEN CONCAT(wb.Web, N''/Remediations/Task?id='', LOWER(CONVERT(nvarchar(64), l.TaskId, 2))) END AS u_si_more_info
 FROM sidata.RemediationTaskFinding AS l
 JOIN sidata.RemediationTask AS t ON t.CollectionId = l.CollectionId AND t.TaskId = l.TaskId
 JOIN sidata.Collection AS c ON c.CollectionId = l.CollectionId
+LEFT JOIN sidata.Finding AS lf ON lf.CollectionId = l.CollectionId AND lf.FindingId = l.FindingId
+-- #1388 the due date: the provider''s own where it is set ("Provider''s date wins if set"), the finding model''s for the rest
+LEFT JOIN sidata.CiFindingState AS dst ON dst.OwnerKey = l.OwnerKey AND dst.FindingKey = l.FindingKey
+CROSS APPLY (SELECT ' + @SIRemWeb + N' AS Web) AS wb
 CROSS APPLY (SELECT CASE WHEN UPPER(l.FindingKey) LIKE N''CVE-%'' AND LEN(l.FindingKey) <= 100 THEN UPPER(l.FindingKey) WHEN LEN(l.FindingKey) <= 100 THEN l.FindingKey
                     ELSE LEFT(l.FindingKey, 59) + N''~'' + LOWER(CONVERT(varchar(40), HASHBYTES(''SHA1'', CONVERT(varchar(8000), UPPER(l.FindingKey))), 2)) END AS Vk) AS k
 WHERE l.CollectionId = (SELECT TOP (1) x.CollectionId FROM sidata.Collection AS x WHERE x.RemediationTasksAt IS NOT NULL ORDER BY x.CollectionTime DESC)
@@ -5829,3 +6025,710 @@ CREATE TABLE sidata.RaGraphST (              -- role scope -> Azure target in 0.
     T           BINARY(16)     NOT NULL,
     CONSTRAINT PK_RaGraphST PRIMARY KEY CLUSTERED (RunNo, S, T)
 );
+
+-- ---------------------------------------------------------------------------------------------
+-- ONE PARTITION PER COLLECTION (#1317, SCALE-2 #1314 (6f); built first as #1038 part 2) -- what lets a retired collection
+-- leave in seconds instead of in paced key ranges.
+--   sidata.Finding, sidata.Recommendation and sidata.IssueContext live on PS_SICollection (created at the top of this file):
+--   a new install creates them there; an existing install's tables are moved there by the index build job
+--   caj-si-index-build (the UPDATER's identity, db_ddladmin -- never the engine's), chunked and resumable, in idle windows
+--   only, and only while SI_Data_RetireByPartition is on -- the default (engine\pro-settings\SI-ProPartitionMove.ps1). The same job keeps
+--   empty boundaries ahead of the next collection ids and empties a retired collection's partition under the guard of
+--   today's marking. Nothing here changes a row; with the setting off (it is on by default) nothing reads these two tables and the
+--   clean-up removes rows in paced key ranges, as before. No procedure, no grant: the engine identity's rights are unchanged.
+--   sidata.PartitionMove: one row per table being moved (its state and plain note); sidata.PartitionMoveTouched: the
+--   collections whose rows changed in the old table after the move copied them (the move's own trigger writes them).
+-- ---------------------------------------------------------------------------------------------
+IF OBJECT_ID('sidata.PartitionMove') IS NULL
+CREATE TABLE sidata.PartitionMove (
+    TableName   NVARCHAR(128)  NOT NULL CONSTRAINT PK_PartitionMove PRIMARY KEY,
+    State       NVARCHAR(32)   NOT NULL,   -- copying | ready | swapped | checked | done | blocked
+    ScopeRows   BIGINT         NULL,       -- the rows of the collections that are moved (not retired)
+    CopiedRows  BIGINT         NULL,
+    SwappedAt   DATETIME2(0)   NULL,
+    CheckedAt   DATETIME2(0)   NULL,
+    Note        NVARCHAR(1000) NULL,
+    UpdatedAt   DATETIME2(0)   NOT NULL CONSTRAINT DF_PartitionMove_UpdatedAt DEFAULT SYSUTCDATETIME()
+);
+
+-- the collections whose rows changed in the old table after the move copied them (written by the move's own trigger on the
+-- old table; read and cleared by the move): such a collection is copied again before the swap
+IF OBJECT_ID('sidata.PartitionMoveTouched') IS NULL
+CREATE TABLE sidata.PartitionMoveTouched (
+    TableName    NVARCHAR(128) NOT NULL,
+    CollectionId INT           NOT NULL,
+    CONSTRAINT PK_PartitionMoveTouched PRIMARY KEY (TableName, CollectionId) WITH (IGNORE_DUP_KEY = ON)
+);
+
+-- ---------------------------------------------------------------------------------------------
+-- #1319 (SCALE-2 #1314) THE DATA SYNC WORKS ON WHAT CHANGED -- SI_Data_ChangedSet on (default) | shadow | off
+-- (engine\pro-data\_shared\SI-DataChangedSet.ps1). Nothing here is read or written while the setting is off.
+--   FindingHash        one content hash per finding of a collection: every column of sidata.Finding that reaches a view or a
+--                      connector (the joined ones included: tier, department, exemption, CI lifecycle, CMDB, ...) and the
+--                      finding's document without the run's own time -- never what the run moves (docs\DESIGN.md lists them)
+--   FindingHashState   per collection: the field list the hashes were made for (HashSet), how many, and when
+--   ChangedSetRun      per phase and collection: full or changed-set, and WHY; the base (the published collection); what was
+--                      carried, compared, how many rows differed (keys / column names only, never a value); the sample
+--   ChangedSetCarry    the working pairs of one phase: a finding of the new collection and the finding of the published one
+--                      with the same hash (its result is carried); Sample = one of the CIs the sample check builds in full
+-- Additive; the engine's schema rights cover them (sidata).
+-- ---------------------------------------------------------------------------------------------
+IF OBJECT_ID('sidata.FindingHash') IS NULL
+CREATE TABLE sidata.FindingHash (
+    CollectionId     INT            NOT NULL,
+    FindingId        BIGINT         NOT NULL,
+    FindingHash      BINARY(32)     NOT NULL,
+    CONSTRAINT PK_FindingHash PRIMARY KEY CLUSTERED (CollectionId, FindingId)
+);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_FindingHash_Hash' AND object_id = OBJECT_ID('sidata.FindingHash'))
+    CREATE INDEX IX_FindingHash_Hash ON sidata.FindingHash (CollectionId, FindingHash);
+IF OBJECT_ID('sidata.FindingHashState') IS NULL
+CREATE TABLE sidata.FindingHashState (
+    CollectionId     INT            NOT NULL CONSTRAINT PK_FindingHashState PRIMARY KEY,
+    HashSet          CHAR(16)       NOT NULL,
+    [Rows]           BIGINT         NOT NULL,
+    BuiltAt          DATETIME2(3)   NOT NULL CONSTRAINT DF_FindingHashState_BuiltAt DEFAULT SYSUTCDATETIME()
+);
+IF OBJECT_ID('sidata.ChangedSetRun') IS NULL
+CREATE TABLE sidata.ChangedSetRun (
+    ChangedSetRunId  BIGINT IDENTITY(1, 1) NOT NULL CONSTRAINT PK_ChangedSetRun PRIMARY KEY,
+    Phase            NVARCHAR(32)   NOT NULL,
+    CollectionId     INT            NOT NULL,
+    BaseCollectionId INT            NULL,
+    Mode             NVARCHAR(8)    NOT NULL,     -- shadow | on
+    Build            NVARCHAR(16)   NOT NULL,     -- full | shadow (both ways, the full result kept) | changed-set
+    Why              NVARCHAR(400)  NOT NULL,
+    Fingerprint      CHAR(64)       NULL,         -- the build fingerprint (#1331), the field list and the phase's own statement / settings
+    Findings         BIGINT         NULL,
+    Carried          BIGINT         NULL,
+    Compared         BIGINT         NULL,
+    Differences      BIGINT         NULL,
+    DiffDetail       NVARCHAR(1000) NULL,         -- column names and finding ids only, never a value
+    SampleSeed       INT            NULL,
+    SampleCis        BIGINT         NULL,
+    FellBack         BIT            NOT NULL CONSTRAINT DF_ChangedSetRun_FellBack DEFAULT 0,
+    Outcome          NVARCHAR(16)   NULL,         -- ok | failed (NULL = not finished)
+    StartedAt        DATETIME2(3)   NOT NULL CONSTRAINT DF_ChangedSetRun_StartedAt DEFAULT SYSUTCDATETIME(),
+    EndedAt          DATETIME2(3)   NULL
+);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_ChangedSetRun_Phase' AND object_id = OBJECT_ID('sidata.ChangedSetRun'))
+    CREATE INDEX IX_ChangedSetRun_Phase ON sidata.ChangedSetRun (Phase, CollectionId, Outcome) INCLUDE (Build, Fingerprint, StartedAt);
+IF OBJECT_ID('sidata.ChangedSetCarry') IS NULL
+CREATE TABLE sidata.ChangedSetCarry (
+    Phase            TINYINT        NOT NULL,     -- 1 the prepared view columns, 2 the findings per CI's work rows
+    CollectionId     INT            NOT NULL,
+    FindingId        BIGINT         NOT NULL,
+    BaseFindingId    BIGINT         NOT NULL,
+    Sample           BIT            NOT NULL,
+    OutHash          BINARY(32)     NULL,
+    CONSTRAINT PK_ChangedSetCarry PRIMARY KEY CLUSTERED (Phase, CollectionId, FindingId)
+);
+-- the findings per CI's work rows by finding: the published collection's rows are found (and taken away) by it
+IF OBJECT_ID('sidata.CiFindingDbWork') IS NOT NULL AND NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_CiFindingDbWork_FindingId' AND object_id = OBJECT_ID('sidata.CiFindingDbWork'))
+    CREATE INDEX IX_CiFindingDbWork_FindingId ON sidata.CiFindingDbWork (FindingId);
+-- #1319 review: a collection's own marks (status, kind, time, every rewrite mark) are recorded as ONE hash with its finding
+-- hashes and compared each time they are used -- a mark changed afterwards by anyone (set, cleared, put back) makes them
+-- stale, so the next build from that collection is a full one
+IF COL_LENGTH('sidata.FindingHashState', 'StampHash') IS NULL
+    ALTER TABLE sidata.FindingHashState ADD StampHash BINARY(32) NULL;
+-- #1331 (SCALE-3 track D) THE ROLLING FULL CHECK and THE BUILD FINGERPRINT, per phase record:
+--   RollingSlot  the part of all CIs (0..6: SHA-256 of the CI's AssetKey mod 7) this quick build built in full and compared;
+--                the next run takes the next part, so every CI is checked in full at least once in 7 runs (NULL = none:
+--                a build decided full, or a build before this one)
+--   BuildParts   the build fingerprint's parts (data-model files, typing statement, template set, settings that change what
+--                the build writes) -- the run says which one moved when a phase is built in full after an update
+IF COL_LENGTH('sidata.ChangedSetRun', 'RollingSlot') IS NULL
+    ALTER TABLE sidata.ChangedSetRun ADD RollingSlot TINYINT NULL;
+IF COL_LENGTH('sidata.ChangedSetRun', 'BuildParts') IS NULL
+    ALTER TABLE sidata.ChangedSetRun ADD BuildParts NVARCHAR(200) NULL;
+
+-- (#1317 stability + data quality, 2026-11-23) the collections whose copy was compared with the table -- rows AND a checksum
+-- of every value, range by range -- at the row count kept here; the swap needs one for every kept collection (and the check
+-- after it its own, TableName '<table>#check'). A run's change notes the collection (PartitionMoveTouched), which removes it.
+IF OBJECT_ID('sidata.PartitionMoveVerified') IS NULL
+CREATE TABLE sidata.PartitionMoveVerified (
+    TableName    NVARCHAR(128) NOT NULL,
+    CollectionId INT           NOT NULL,
+    [Rows]       BIGINT        NOT NULL,
+    VerifiedAt   DATETIME2(0)  NOT NULL CONSTRAINT DF_PartitionMoveVerified_At DEFAULT SYSUTCDATETIME(),
+    CONSTRAINT PK_PartitionMoveVerified PRIMARY KEY (TableName, CollectionId)
+);
+-- the windows in a row in which runs changed rows the move had copied (after SIPartitionGiveUpWindows it gives up and cleans up)
+IF COL_LENGTH('sidata.PartitionMove', 'Attempts') IS NULL ALTER TABLE sidata.PartitionMove ADD Attempts INT NULL;
+
+-- ---------------------------------------------------------------------------------------------
+-- #1332 / #1334 (SCALE-3 #1330 track B) THE FINDING HISTORY MODEL -- SI_Data_HistoryModel on (default) | shadow | off
+-- (engine\pro-data\_shared\SI-DataHistory.ps1; docs\DESIGN.md "Finding history model"). Beside sidata.Finding, never instead
+-- of it: every collection is ALSO recorded as content-addressed finding STATES (one row per distinct state) and a NARROW
+-- membership (one row per finding per collection: its FindingId, its state, the columns the run itself moves);
+-- sidata.FindingAt(@CollectionId) gives a collection back with exactly sidata.Finding's columns; the run's change set
+-- (FindingStateDelta) feeds the aggregates. Nothing here is read or written while the setting is off. Additive.
+--   FindingState        every column of sidata.Finding but the row's identity and the per-run columns; DetailJson with the
+--                       run's own fields emptied in place (the member keeps their values)
+--   FindingStateMember  (CollectionId, FindingId) -> StateId, the finding key's hash and the per-run columns
+--   HistoryRun          per collection: written / verified / differs, the resume mark, the counts, the collection's marks
+--   HistoryCompare      per collection and reader: the row-for-row comparison with the full rows (counts and outcome only)
+--   FindingStateDelta   per collection: the states whose count changed against the collection before it (keys only)
+-- FindingState's columns follow sidata.Finding's: created from the catalog here, and a column Finding gains later is added
+-- on the next schema apply (FindingAt is made again with it). The data sync checks the two match before it writes.
+-- ---------------------------------------------------------------------------------------------
+IF OBJECT_ID('sidata.FindingStateMember') IS NULL
+CREATE TABLE sidata.FindingStateMember (
+    CollectionId     INT            NOT NULL,
+    FindingId        BIGINT         NOT NULL,
+    StateId          BIGINT         NOT NULL,
+    KeyHash          BINARY(32)     NOT NULL,     -- the finding key (CI, issue, report) as What changed compares it
+    ImportanceRank   BIGINT         NULL,
+    RaSeq            BIGINT         NULL,
+    RaSort           FLOAT          NULL,
+    RaBucket         NVARCHAR(64)   NULL,
+    RaDedup          BINARY(16)     NULL,
+    RaReport         INT            NULL,
+    RaInView         BIT            NULL,
+    RaTraceHash      BINARY(16)     NULL,
+    RaTraceKey       NVARCHAR(450)  NULL,
+    RaTraceSuffixed  BIT            NULL,
+    RunValues        NVARCHAR(2000) NULL,         -- the document's run fields that were emptied in the state: [{k,t,v}]
+    CONSTRAINT PK_FindingStateMember PRIMARY KEY CLUSTERED (CollectionId, FindingId)
+) ON PS_SICollection (CollectionId);
+-- (#1332 storage, 2026-11-23) THE HISTORY ON THE COLLECTION PARTITIONS: the members on PS_SICollection by CollectionId and the
+-- states by HomeCollectionId (the collection a state was made in, or the newest one holding it after its home left), every
+-- index aligned -- so (1) #1317's cut and fold see the history's rows (only an EMPTY partition is ever cut or folded: a range
+-- the history still holds is never folded, no history row ever moves by a fold), and (2) the history leaves by partition
+-- (TRUNCATE ... WITH (PARTITIONS)), never by row deletes (engine\pro-settings\SI-ProPartitionMove.ps1, the index build job /
+-- the update's bounded step). A database whose history tables were made before this (unreleased builds) keeps them as they
+-- are: the data sync's paced removal serves it, as before.
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_FindingStateMember_State' AND object_id = OBJECT_ID('sidata.FindingStateMember'))
+    CREATE INDEX IX_FindingStateMember_State ON sidata.FindingStateMember (StateId) INCLUDE (CollectionId);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_FindingStateMember_Key' AND object_id = OBJECT_ID('sidata.FindingStateMember'))
+    CREATE INDEX IX_FindingStateMember_Key ON sidata.FindingStateMember (CollectionId, KeyHash) INCLUDE (StateId);
+IF OBJECT_ID('sidata.HistoryRun') IS NULL
+CREATE TABLE sidata.HistoryRun (
+    CollectionId     INT            NOT NULL CONSTRAINT PK_HistoryRun PRIMARY KEY,
+    State            NVARCHAR(16)   NOT NULL,     -- writing | written | verified | differs | failed
+    UptoFindingId    BIGINT         NULL,         -- the resume mark: every finding up to it is a member
+    Members          BIGINT         NULL,
+    NewStates        BIGINT         NULL,
+    PrevCollectionId INT            NULL,         -- the collection the change set is against
+    Opened           BIGINT         NULL,
+    Closed           BIGINT         NULL,
+    StampHash        BINARY(32)     NULL,         -- the collection's marks when its history was written (moved = written again)
+    ColumnSet        CHAR(16)       NULL,         -- the column list the states were made for (another list = written again)
+    Differences      BIGINT         NULL,
+    Diff             NVARCHAR(1000) NULL,         -- finding ids and column names only, never a value
+    StartedAt        DATETIME2(3)   NOT NULL CONSTRAINT DF_HistoryRun_StartedAt DEFAULT SYSUTCDATETIME(),
+    WrittenAt        DATETIME2(3)   NULL,
+    VerifiedAt       DATETIME2(3)   NULL
+);
+-- (#1332 storage) the compare resumes too: the mark up to which the collection was compared, the rows and differences so far,
+-- and the collection's CHECKSUM on both sides ('rows|s1|s2|s3|s4': sums of four 7-byte slices of every row's SHA-256 over
+-- every column -- additive, so the same whatever the ranges were); verified only when both sides are equal
+IF COL_LENGTH('sidata.HistoryRun', 'VerifyUpto') IS NULL ALTER TABLE sidata.HistoryRun ADD VerifyUpto BIGINT NULL;
+IF COL_LENGTH('sidata.HistoryRun', 'VerifyRows') IS NULL ALTER TABLE sidata.HistoryRun ADD VerifyRows BIGINT NULL;
+IF COL_LENGTH('sidata.HistoryRun', 'VerifyDiff') IS NULL ALTER TABLE sidata.HistoryRun ADD VerifyDiff BIGINT NULL;
+IF COL_LENGTH('sidata.HistoryRun', 'SumStored') IS NULL ALTER TABLE sidata.HistoryRun ADD SumStored NVARCHAR(200) NULL;
+IF COL_LENGTH('sidata.HistoryRun', 'SumHistory') IS NULL ALTER TABLE sidata.HistoryRun ADD SumHistory NVARCHAR(200) NULL;
+IF OBJECT_ID('sidata.HistoryCompare') IS NULL
+CREATE TABLE sidata.HistoryCompare (
+    HistoryCompareId BIGINT IDENTITY(1, 1) NOT NULL CONSTRAINT PK_HistoryCompare PRIMARY KEY,
+    CollectionId     INT            NOT NULL,
+    Reader           NVARCHAR(32)   NOT NULL,     -- collection | changes
+    [Rows]           BIGINT         NULL,
+    Differences      BIGINT         NULL,
+    Outcome          NVARCHAR(16)   NOT NULL,     -- same | differs | not-ready | failed
+    Detail           NVARCHAR(1000) NULL,
+    At               DATETIME2(3)   NOT NULL CONSTRAINT DF_HistoryCompare_At DEFAULT SYSUTCDATETIME()
+);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_HistoryCompare_Collection' AND object_id = OBJECT_ID('sidata.HistoryCompare'))
+    CREATE INDEX IX_HistoryCompare_Collection ON sidata.HistoryCompare (CollectionId, Reader, At DESC);
+IF OBJECT_ID('sidata.FindingStateDelta') IS NULL
+CREATE TABLE sidata.FindingStateDelta (
+    CollectionId     INT            NOT NULL,
+    PrevCollectionId INT            NOT NULL,
+    StateId          BIGINT         NOT NULL,
+    KeyHash          BINARY(32)     NOT NULL,
+    NPrev            INT            NOT NULL,
+    NNow             INT            NOT NULL,
+    CONSTRAINT PK_FindingStateDelta PRIMARY KEY CLUSTERED (CollectionId, StateId)
+);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_FindingStateDelta_Key' AND object_id = OBJECT_ID('sidata.FindingStateDelta'))
+    CREATE INDEX IX_FindingStateDelta_Key ON sidata.FindingStateDelta (CollectionId, KeyHash);
+-- FindingState: its columns from sidata.Finding's catalog (same type, nullable), the row's identity and the per-run columns
+-- (the member's) left out; then sidata.FindingAt, the point in time, made again from both catalogs
+DECLARE @SIHistDbColl sysname = CONVERT(sysname, DATABASEPROPERTYEX(DB_NAME(), 'Collation')), @SIHistSql nvarchar(max) = N'';
+DECLARE @SIHistCols TABLE (ColumnId int NOT NULL, Name sysname NOT NULL, TypeText nvarchar(300) NOT NULL, Member bit NOT NULL, Id bit NOT NULL);
+INSERT @SIHistCols (ColumnId, Name, TypeText, Member, Id)
+SELECT c.column_id, c.name,
+       CASE WHEN t.name IN (N'nvarchar', N'nchar') THEN t.name + N'(' + CASE WHEN c.max_length = -1 THEN N'max' ELSE CONVERT(nvarchar(10), c.max_length / 2) END + N')'
+            WHEN t.name IN (N'varchar', N'char', N'varbinary', N'binary') THEN t.name + N'(' + CASE WHEN c.max_length = -1 THEN N'max' ELSE CONVERT(nvarchar(10), c.max_length) END + N')'
+            WHEN t.name IN (N'decimal', N'numeric') THEN t.name + N'(' + CONVERT(nvarchar(5), c.precision) + N', ' + CONVERT(nvarchar(5), c.scale) + N')'
+            WHEN t.name IN (N'datetime2', N'time', N'datetimeoffset') THEN t.name + N'(' + CONVERT(nvarchar(5), c.scale) + N')'
+            ELSE t.name END
+       + CASE WHEN c.collation_name IS NOT NULL AND c.collation_name <> @SIHistDbColl THEN N' COLLATE ' + c.collation_name ELSE N'' END,
+       -- (#1354, 2026-11-24) the last three: which release wrote the row and how its insert typed it -- the writer, not the
+       -- finding (they moved with every release, so every finding was a new state in every collection); SI-DataHistory.ps1 Member
+       CASE WHEN c.name IN (N'ImportanceRank', N'RaSeq', N'RaSort', N'RaBucket', N'RaDedup', N'RaReport', N'RaInView', N'RaTraceHash', N'RaTraceKey', N'RaTraceSuffixed',
+                            N'RaRowSolutionVersion', N'TypedOnInsert', N'TypedStatement') THEN 1 ELSE 0 END,
+       CASE WHEN c.name IN (N'FindingId', N'CollectionId') THEN 1 ELSE 0 END
+FROM sys.columns AS c JOIN sys.types AS t ON t.user_type_id = c.user_type_id
+WHERE c.object_id = OBJECT_ID(N'sidata.Finding') AND c.is_computed = 0 AND t.name NOT IN (N'timestamp', N'rowversion');
+IF OBJECT_ID('sidata.FindingState') IS NULL
+BEGIN
+    SELECT @SIHistSql = N'CREATE TABLE sidata.FindingState (StateId BIGINT IDENTITY(1, 1) NOT NULL, '
+         + N'HomeCollectionId INT NOT NULL, '
+         + N'StateHash BINARY(32) NOT NULL, KeyHash BINARY(32) NOT NULL, FirstCollectionId INT NOT NULL, LastCollectionId INT NOT NULL, '
+         + N'CreatedAt DATETIME2(0) NOT NULL CONSTRAINT DF_FindingState_CreatedAt DEFAULT SYSUTCDATETIME(), '
+         + STRING_AGG(CONVERT(nvarchar(max), QUOTENAME(Name) + N' ' + TypeText + N' NULL'), N', ') WITHIN GROUP (ORDER BY ColumnId)
+         + N', CONSTRAINT PK_FindingState PRIMARY KEY CLUSTERED (StateId, HomeCollectionId)) ON PS_SICollection (HomeCollectionId);'
+    FROM @SIHistCols WHERE Member = 0 AND Id = 0;
+    EXEC (@SIHistSql);
+END
+-- a FindingState made by an earlier (unreleased) build: the home column added (NULL there; such a table is not on the
+-- partitions and its states leave in the data sync's paced removal)
+IF OBJECT_ID('sidata.FindingState') IS NOT NULL AND COL_LENGTH('sidata.FindingState', 'HomeCollectionId') IS NULL
+    EXEC (N'ALTER TABLE sidata.FindingState ADD HomeCollectionId INT NULL');
+DECLARE @SIHistTodo TABLE (N int IDENTITY(1, 1) NOT NULL, Stmt nvarchar(max) NOT NULL);
+INSERT @SIHistTodo (Stmt)
+SELECT N'ALTER TABLE sidata.FindingState ADD ' + QUOTENAME(k.Name) + N' ' + k.TypeText + N' NULL;'
+FROM @SIHistCols AS k WHERE k.Member = 0 AND k.Id = 0 AND COL_LENGTH(N'sidata.FindingState', k.Name) IS NULL ORDER BY k.ColumnId;
+DECLARE @SIHistI int = 1, @SIHistN int = (SELECT COUNT(*) FROM @SIHistTodo);
+WHILE @SIHistI <= @SIHistN BEGIN SELECT @SIHistSql = Stmt FROM @SIHistTodo WHERE N = @SIHistI; EXEC (@SIHistSql); SET @SIHistI += 1; END
+-- the hash index: on the partitions it cannot be UNIQUE without the home column (a unique aligned index must carry it), so
+-- there it is a plain index and the one writer (the data sync, under the install's lock) keeps a hash once -- its insert
+-- re-reads the hash under UPDLOCK + HOLDLOCK, and a second state of one hash would make a member twice (the member's key
+-- refuses it: the range rolls back, nothing partial). An earlier, unpartitioned table keeps its unique index.
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name IN ('UX_FindingState_Hash', 'IX_FindingState_Hash') AND object_id = OBJECT_ID('sidata.FindingState'))
+BEGIN
+    IF EXISTS (SELECT 1 FROM sys.indexes AS x JOIN sys.partition_schemes AS ps ON ps.data_space_id = x.data_space_id WHERE x.object_id = OBJECT_ID('sidata.FindingState') AND x.index_id = 1 AND ps.name = N'PS_SICollection')
+        EXEC (N'CREATE INDEX IX_FindingState_Hash ON sidata.FindingState (StateHash)');
+    ELSE
+        EXEC (N'CREATE UNIQUE INDEX UX_FindingState_Hash ON sidata.FindingState (StateHash)');
+END
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_FindingState_Last' AND object_id = OBJECT_ID('sidata.FindingState'))
+    EXEC (N'CREATE INDEX IX_FindingState_Last ON sidata.FindingState (LastCollectionId)');
+-- the point in time: one collection as sidata.Finding holds it -- the member's identity and per-run columns, the state's
+-- columns, and the document with the run's own fields put back from the member (each with its own JSON type)
+DECLARE @SIHistRf TABLE (N int NOT NULL, K nvarchar(64) NOT NULL);
+-- (#1354) 7 SolutionVersion: the release that wrote the row (SI-DataHistory.ps1 RunFields: the same list, the same order)
+INSERT @SIHistRf (N, K) VALUES (1, N'CollectionTime'), (2, N'TimeGenerated'), (3, N'si_collection_time'), (4, N'_TimeReceived'), (5, N'_ItemId'), (6, N'_BilledSize'), (7, N'SolutionVersion');
+DECLARE @SIHistDoc nvarchar(40) = N'd' + CONVERT(nvarchar(4), (SELECT MAX(N) FROM @SIHistRf)) + N'.D AS [DetailJson]';
+-- (#1354) each step names the document before it TWICE, never three times: the steps are expanded into one expression, so
+-- a step that reads its input three times makes the expression 3^steps long (729 at six steps; at seven the test server ran
+-- out of memory compiling it) -- two reads = 2^steps (128 at seven). A string run value is set by the inner JSON_MODIFY, a
+-- number by the outer one; the other of the two deletes a key no document has (lax: the text is returned as it is). The
+-- value put back is the same as before for every row.
+DECLARE @SIHistApply nvarchar(max) = (
+    SELECT STRING_AGG(CONVERT(nvarchar(max),
+           N' OUTER APPLY (SELECT TOP (1) x.t, x.v FROM OPENJSON(CASE WHEN m.RunValues IS NOT NULL AND CHARINDEX(N''"k":"' + K + N'"'', m.RunValues) > 0 THEN m.RunValues END) WITH (k nvarchar(64) ''$.k'', t int ''$.t'', v nvarchar(4000) ''$.v'') AS x WHERE x.k = N''' + K + N''') AS r' + CONVERT(nvarchar(4), N)
+         + N' CROSS APPLY (SELECT CASE WHEN r' + CONVERT(nvarchar(4), N) + N'.t IN (1, 2) THEN JSON_MODIFY(JSON_MODIFY(d' + CONVERT(nvarchar(4), N - 1) + N'.D, '
+         + N'CASE WHEN r' + CONVERT(nvarchar(4), N) + N'.t = 1 THEN N''$."' + K + N'"'' ELSE N''$."si~history~none"'' END, CASE WHEN r' + CONVERT(nvarchar(4), N) + N'.t = 1 THEN r' + CONVERT(nvarchar(4), N) + N'.v END), '
+         + N'CASE WHEN r' + CONVERT(nvarchar(4), N) + N'.t = 2 THEN N''$."' + K + N'"'' ELSE N''$."si~history~none"'' END, CASE WHEN r' + CONVERT(nvarchar(4), N) + N'.t = 2 THEN CONVERT(bigint, r' + CONVERT(nvarchar(4), N) + N'.v) END)'
+         + N' ELSE d' + CONVERT(nvarchar(4), N - 1) + N'.D END AS D) AS d' + CONVERT(nvarchar(4), N)), N'') WITHIN GROUP (ORDER BY N)
+    FROM @SIHistRf);
+-- #1332 READERS (2026-11-23): THE PAGE KEYS -- copies of the state's columns a page seeks, sorts or counts by, kept on the
+-- member as well (the state keeps them: its hash and the aggregates read them there), so the history is read off narrow
+-- indexes of the member as sidata.Finding is read off its (CollectionId, ...) indexes. sidata.FindingAt takes them from the
+-- member; the row-for-row compare of every run covers them. The member's indexes on them are built in the index-build window
+-- (engine\_shared\SI-IndexBuild.ps1, Invoke-SIHistoryIndexStep); until they are there the stored rows serve.
+DECLARE @SIHistKeys TABLE (K sysname NOT NULL PRIMARY KEY, TypeText nvarchar(300) NOT NULL);
+INSERT @SIHistKeys (K, TypeText) SELECT c.Name, c.TypeText FROM @SIHistCols AS c
+JOIN (VALUES (N'AssetKey'), (N'Severity'), (N'Tier'), (N'RiskScore'), (N'RiskScoreWeighted'), (N'Cvss'), (N'ExemptionId'),
+             (N'Cve'), (N'ConfigurationId'), (N'RiskAssetSide'), (N'RiskVulnSide'),
+             -- the columns the top pages SHOW (the findings list, the CI page): a shown row needs no state
+             (N'AssetName'), (N'RiskRating'), (N'Title'), (N'ReportName'), (N'SecurityDomain'), (N'CiLifecycle'), (N'HasExploit'), (N'Category'),
+             (N'Subcategory'), (N'DepartmentName')) AS v (K) ON v.K = c.Name
+WHERE c.Member = 0 AND c.Id = 0;
+DECLARE @SIHistKeyTodo TABLE (N int IDENTITY(1, 1) NOT NULL, Stmt nvarchar(max) NOT NULL);
+INSERT @SIHistKeyTodo (Stmt)
+SELECT N'ALTER TABLE sidata.FindingStateMember ADD ' + QUOTENAME(k.K) + N' ' + k.TypeText + N' NULL;'
+FROM @SIHistKeys AS k WHERE OBJECT_ID(N'sidata.FindingStateMember') IS NOT NULL AND COL_LENGTH(N'sidata.FindingStateMember', k.K) IS NULL;
+DECLARE @SIHistKeyN int = (SELECT COUNT(*) FROM @SIHistKeyTodo);
+SET @SIHistI = 1;
+WHILE @SIHistI <= @SIHistKeyN BEGIN SELECT @SIHistSql = Stmt FROM @SIHistKeyTodo WHERE N = @SIHistI; EXEC (@SIHistSql); SET @SIHistI += 1; END
+-- (#1354, 2026-11-24) a per-run column the member does not have yet (moved from the state to the member by a later build):
+-- added from the catalog. Members written before it hold NULL there and point at states written before it, which still carry
+-- the value -- sidata.FindingAt / vFinding read COALESCE(member, state) for such a column (below), so every collection
+-- written before reads back exactly as before; the history step writes the kept collections again under the new rule.
+DECLARE @SIHistMemTodo TABLE (N int IDENTITY(1, 1) NOT NULL, Stmt nvarchar(max) NOT NULL);
+INSERT @SIHistMemTodo (Stmt)
+SELECT N'ALTER TABLE sidata.FindingStateMember ADD ' + QUOTENAME(c.Name) + N' ' + c.TypeText + N' NULL;'
+FROM @SIHistCols AS c WHERE c.Member = 1 AND OBJECT_ID(N'sidata.FindingStateMember') IS NOT NULL AND COL_LENGTH(N'sidata.FindingStateMember', c.Name) IS NULL ORDER BY c.ColumnId;
+DECLARE @SIHistMemN int = (SELECT COUNT(*) FROM @SIHistMemTodo);
+SET @SIHistI = 1;
+WHILE @SIHistI <= @SIHistMemN BEGIN SELECT @SIHistSql = Stmt FROM @SIHistMemTodo WHERE N = @SIHistI; EXEC (@SIHistSql); SET @SIHistI += 1; END
+SET @SIHistKeyN = @SIHistKeyN + @SIHistMemN;
+-- which collection the readers are served from (sidata.FindingSourceOf below): set by the data sync's history step only after
+-- every compare of the collection was the same; any column added to the states or the members above = nothing is served
+-- from the history until its next history step wrote and compared it again
+IF COL_LENGTH('sidata.HistoryRun', 'Serves') IS NULL ALTER TABLE sidata.HistoryRun ADD Serves BIT NULL;
+IF COL_LENGTH('sidata.HistoryRun', 'ServedAt') IS NULL ALTER TABLE sidata.HistoryRun ADD ServedAt DATETIME2(3) NULL;
+IF COL_LENGTH('sidata.PublishedRun', 'FindingSource') IS NULL ALTER TABLE sidata.PublishedRun ADD FindingSource NVARCHAR(16) NULL;
+IF @SIHistN > 0 OR @SIHistKeyN > 0 EXEC (N'UPDATE sidata.HistoryRun SET Serves = 0 WHERE Serves = 1;');
+DECLARE @SIHistSel nvarchar(max) = (
+    SELECT STRING_AGG(CONVERT(nvarchar(max), CASE WHEN c.Member = 1 AND COL_LENGTH(N'sidata.FindingState', c.Name) IS NOT NULL THEN N'COALESCE(m.' + QUOTENAME(c.Name) + N', s.' + QUOTENAME(c.Name) + N') AS ' + QUOTENAME(c.Name)
+                                                  WHEN c.Id = 1 OR c.Member = 1 OR pk.K IS NOT NULL THEN N'm.' + QUOTENAME(c.Name) WHEN c.Name = N'DetailJson' THEN @SIHistDoc ELSE N's.' + QUOTENAME(c.Name) END), N', ') WITHIN GROUP (ORDER BY c.ColumnId)
+    FROM @SIHistCols AS c LEFT JOIN @SIHistKeys AS pk ON pk.K = c.Name);
+-- sidata.FindingAt (the row-for-row compare of every run) reconstructs from the STATE (the member's copies of its columns are
+-- compared by what the readers return, SI-DataHistoryServe.ps1): a state that differs is found, whatever the member carries
+DECLARE @SIHistSelAt nvarchar(max) = (
+    SELECT STRING_AGG(CONVERT(nvarchar(max), CASE WHEN c.Member = 1 AND COL_LENGTH(N'sidata.FindingState', c.Name) IS NOT NULL THEN N'COALESCE(m.' + QUOTENAME(c.Name) + N', s.' + QUOTENAME(c.Name) + N') AS ' + QUOTENAME(c.Name)
+                                                  WHEN c.Id = 1 OR c.Member = 1 THEN N'm.' + QUOTENAME(c.Name) WHEN c.Name = N'DetailJson' THEN @SIHistDoc ELSE N's.' + QUOTENAME(c.Name) END), N', ') WITHIN GROUP (ORDER BY c.ColumnId)
+    FROM @SIHistCols AS c);
+DECLARE @SIHistAt bit = 0;
+IF OBJECT_ID('sidata.FindingState') IS NOT NULL AND NOT EXISTS (SELECT 1 FROM @SIHistCols AS k WHERE k.Member = 0 AND k.Id = 0 AND COL_LENGTH(N'sidata.FindingState', k.Name) IS NULL)
+   AND NOT EXISTS (SELECT 1 FROM @SIHistKeys AS k WHERE COL_LENGTH(N'sidata.FindingStateMember', k.K) IS NULL)
+BEGIN
+    SELECT @SIHistSql = N'CREATE OR ALTER FUNCTION sidata.FindingAt (@CollectionId INT) RETURNS TABLE AS RETURN SELECT ' + @SIHistSelAt
+         + N' FROM sidata.FindingStateMember AS m JOIN sidata.FindingState AS s ON s.StateId = m.StateId CROSS APPLY (SELECT s.DetailJson AS D) AS d0'
+         + @SIHistApply + N' WHERE m.CollectionId = @CollectionId;';
+    EXEC (@SIHistSql);
+    SET @SIHistAt = 1;
+END
+-- ---------------------------------------------------------------------------------------------
+-- #1332 THE READERS ON THE HISTORY (2026-11-23; owner: the new model serves, the old model is built every run as the check).
+-- ONE view the readers read the findings through: sidata.vFinding = exactly sidata.Finding's columns, per collection EITHER its
+-- stored rows OR its history (sidata.FindingAt's rows), never both. Which one -- sidata.FindingSourceOf(@CollectionId):
+--   the HISTORY when the collection's history was the same in every compare of its run (HistoryRun.Serves = 1, 'verified'),
+--   its marks did not move since (a later rewrite of its rows = its stored rows until it is compared again), the setting
+--   SI_Data_HistoryModel is not off / shadow, and -- for the PUBLISHED collection -- the publish pointer names the history
+--   (PublishedRun.FindingSource, written when the run published: a run whose compare differed publishes 'stored', and its
+--   readers read the stored rows -- a difference never publishes unverified rows); else the STORED rows.
+--   SESSION_CONTEXT 'si.finding.source' = 'stored' | 'history' forces one (the run's reader compare, the tests).
+-- The web app, the MCP server and the engine's reader jobs send their READS of sidata.Finding / vExemptedFinding /
+-- vCurrentFinding to vFinding / vExemptedFindingServed / vCurrentFindingServed (a statement that writes the findings is never
+-- sent) once a collection is served from the history (sidata.FindingSourceActive); until then they read the tables as before.
+-- The data sync's own builders keep reading sidata.Finding (they run while the rows are rewritten). Additive.
+-- ---------------------------------------------------------------------------------------------
+DECLARE @SIHistStamp TABLE (N int NOT NULL, Name sysname NOT NULL);
+INSERT @SIHistStamp (N, Name) VALUES (1, N'DerivedAt'), (2, N'ResolvedAt'), (3, N'ServicesDerivedAt'), (4, N'ExemptedDerivedAt'), (5, N'CorrelatedAt'), (6, N'ContextAt'),
+    (7, N'CiLifecycleAt'), (8, N'RiskPartsAt'), (9, N'TypedAt'), (10, N'RaRowsAt'), (11, N'RemediationAt');
+-- the collection's marks as ONE hash -- the very expression the history step stores (SI-DataHistory.ps1, Get-SIDataHistoryStampHashExpr)
+DECLARE @SIHistStampExpr nvarchar(max) = N'HASHBYTES(''SHA2_256'', CONCAT(ISNULL(CONVERT(nvarchar(16), c.Status), N''-''), N''|'', ISNULL(CONVERT(nvarchar(16), c.Kind), N''-''), N''|'', ISNULL(CONVERT(nvarchar(30), c.CollectionTime, 126), N''-''), N''|'', ISNULL(CONVERT(nvarchar(30), c.RetiredAt, 126), N''-'')'
+    + ISNULL((SELECT STRING_AGG(CONVERT(nvarchar(max), N', N''|'', ISNULL(CONVERT(nvarchar(30), c.' + QUOTENAME(Name) + N', 126), N''-'')'), N'') WITHIN GROUP (ORDER BY N)
+              FROM @SIHistStamp WHERE COL_LENGTH(N'sidata.Collection', Name) IS NOT NULL), N'')
+    + N', N''|'', ISNULL((SELECT CONVERT(nvarchar(30), MAX(ps.BuiltAt), 126) FROM sidata.FindingPivotState AS ps WHERE ps.CollectionId = c.CollectionId), N''-'')))';
+SET @SIHistSql = N'CREATE OR ALTER FUNCTION sidata.HistoryStampOf (@CollectionId INT) RETURNS TABLE AS RETURN SELECT c.CollectionId, ' + @SIHistStampExpr
+    + N' AS Stamp FROM sidata.Collection AS c WHERE c.CollectionId = @CollectionId;'; EXEC (@SIHistSql);
+DECLARE @SIHistModeOn nvarchar(max) = CASE WHEN OBJECT_ID(N'cfg.Setting') IS NOT NULL
+    THEN N' AND NOT EXISTS (SELECT 1 FROM cfg.Setting AS st WHERE st.Name = N''SI_Data_HistoryModel'' AND st.Scope = N''solution'' AND LOWER(LTRIM(RTRIM(REPLACE(CONVERT(nvarchar(4000), st.ValueJson), N''"'', N'''')))) IN (N''off'', N''false'', N''0'', N''shadow''))'
+    ELSE N'' END;
+-- the history SERVES a collection: compared the same (Serves, verified), its marks unmoved, the setting on
+SET @SIHistSql = N'CREATE OR ALTER FUNCTION sidata.FindingHistoryServes (@CollectionId INT) RETURNS TABLE AS RETURN SELECT CONVERT(bit, 1) AS Serves '
+    + N'FROM sidata.HistoryRun AS h JOIN sidata.Collection AS c ON c.CollectionId = h.CollectionId '
+    + N'WHERE h.CollectionId = @CollectionId AND h.Serves = 1 AND h.State = N''verified'' AND h.StampHash = ' + @SIHistStampExpr + @SIHistModeOn + N';'; EXEC (@SIHistSql);
+-- what a reader of one collection reads: 1 = its history, 0 = its stored rows (the published collection: as its pointer says)
+EXEC (N'CREATE OR ALTER FUNCTION sidata.FindingSourceOf (@CollectionId INT) RETURNS TABLE AS RETURN
+SELECT CONVERT(bit, CASE o.V WHEN N''stored'' THEN 0 WHEN N''history'' THEN 1
+       ELSE CASE WHEN EXISTS (SELECT 1 FROM sidata.FindingHistoryServes(@CollectionId) AS hs)
+                  AND NOT EXISTS (SELECT 1 FROM sidata.PublishedRun AS p WHERE p.Name = N''current'' AND p.DetailedCollectionId = @CollectionId AND ISNULL(p.FindingSource, N'''') <> N''history'')
+            THEN 1 ELSE 0 END END) AS FromHistory
+FROM (SELECT CONVERT(nvarchar(16), SESSION_CONTEXT(N''si.finding.source'')) AS V) AS o;');
+-- is ANY collection served from the history (the readers' seams ask this, cached; no = they read the tables as before)
+EXEC (N'CREATE OR ALTER FUNCTION sidata.FindingSourceActive () RETURNS TABLE AS RETURN
+SELECT CONVERT(bit, CASE WHEN EXISTS (SELECT 1 FROM sidata.HistoryRun AS h CROSS APPLY sidata.FindingSourceOf(h.CollectionId) AS s WHERE h.Serves = 1 AND s.FromHistory = 1) THEN 1 ELSE 0 END) AS Active;');
+DECLARE @SIHistAll nvarchar(max) = (SELECT STRING_AGG(CONVERT(nvarchar(max), N'f.' + QUOTENAME(Name)), N', ') WITHIN GROUP (ORDER BY ColumnId) FROM @SIHistCols);
+-- the readers' SOURCE LISTS, decided ONCE per statement by the seam (cached a few seconds) and handed to the statement as
+-- session context: si.finding.served = the collections read from their history (JSON array of ids), si.finding.stored = every
+-- other collection AND the next ids a collection made after the answer can take (its stored rows), si.finding.maxid = the newest
+-- id known then. No context (a reader outside the seams) = the stored rows of every collection.
+EXEC (N'CREATE OR ALTER FUNCTION sidata.FindingSourceLists () RETURNS TABLE AS RETURN
+SELECT ISNULL((SELECT CONCAT(N''['', STRING_AGG(CONVERT(nvarchar(max), h.CollectionId), N'',''), N'']'') FROM sidata.HistoryRun AS h CROSS APPLY sidata.FindingSourceOf(h.CollectionId) AS s WHERE h.Serves = 1 AND s.FromHistory = 1), N''[]'') AS Served,
+       ISNULL((SELECT CONCAT(N''['', STRING_AGG(CONVERT(nvarchar(max), c.CollectionId), N'',''), N'']'') FROM sidata.Collection AS c
+               WHERE NOT EXISTS (SELECT 1 FROM sidata.HistoryRun AS h CROSS APPLY sidata.FindingSourceOf(h.CollectionId) AS s WHERE h.CollectionId = c.CollectionId AND h.Serves = 1 AND s.FromHistory = 1)), N''[]'') AS Stored,
+       ISNULL((SELECT MAX(c.CollectionId) FROM sidata.Collection AS c), 0) AS MaxId;');
+-- the served view: three branches, each read only for the collections its list names (a list is a constant of the statement:
+-- the optimizer seeks each collection's rows directly, no per-row decision); the history's shown columns come from the member
+-- (its state is read only for a column the member does not carry: OUTER APPLY TOP (1), left out when nothing of it is read)
+IF @SIHistAt = 1
+    SET @SIHistSql = N'CREATE OR ALTER VIEW sidata.vFinding AS SELECT ' + @SIHistAll
+        + N' FROM sidata.Finding AS f WHERE SESSION_CONTEXT(N''si.finding.served'') IS NULL'
+        + N' UNION ALL SELECT ' + @SIHistAll
+        + N' FROM OPENJSON(CONVERT(nvarchar(4000), SESSION_CONTEXT(N''si.finding.stored''))) WITH (Id int ''$'') AS sv JOIN sidata.Finding AS f ON f.CollectionId = sv.Id'
+        + N' UNION ALL SELECT ' + @SIHistSel
+        + N' FROM OPENJSON(CONVERT(nvarchar(4000), SESSION_CONTEXT(N''si.finding.served''))) WITH (Id int ''$'') AS hv JOIN sidata.FindingStateMember AS m ON m.CollectionId = hv.Id'
+        + N' OUTER APPLY (SELECT TOP (1) s0.* FROM sidata.FindingState AS s0 WHERE s0.StateId = m.StateId) AS s CROSS APPLY (SELECT s.DetailJson AS D) AS d0' + @SIHistApply + N';';
+ELSE
+    SET @SIHistSql = N'CREATE OR ALTER VIEW sidata.vFinding AS SELECT ' + @SIHistAll + N' FROM sidata.Finding AS f;'; EXEC (@SIHistSql);-- the two shared views' twins for the readers (the data sync's builders keep the originals: they read while rows are rewritten)
+EXEC (N'CREATE OR ALTER VIEW sidata.vExemptedFindingServed AS
+SELECT f.CollectionId, f.FindingId, f.AssetKey, f.AssetName, f.SecurityDomain, f.ReportName, f.Cve, f.ConfigurationId, f.Severity, f.Tier,
+       f.DepartmentId, f.ExemptionId, f.ExemptedUntil, f.ExemptionRequestId
+FROM sidata.vFinding AS f
+WHERE f.ExemptionId IS NOT NULL');
+EXEC (N'CREATE OR ALTER VIEW sidata.vCurrentFindingServed AS
+SELECT f.FindingId, f.CollectionId, l.CollectionTime, f.AssetKey, f.AssetName, f.ReportName, f.SecurityDomain,
+       f.ConfigurationId, f.Cve, f.Title, f.Severity, f.Tier, f.RiskScore, f.DetailJson
+FROM sidata.vFinding f
+JOIN sidata.vLatestCollection l ON l.CollectionId = f.CollectionId AND l.Kind = ''Detailed''');
+
+-- ---------------------------------------------------------------------------------------------
+-- #1334 THE FINDING LIFECYCLE'S CHANGE SIGNAL (owner 2026-11-23): sidata.CiFindingState.ChangedAt (ChangedRun is kept for a run
+-- id, not written yet) is set by the lifecycle's own statements in the same statement --
+-- ONLY when a column the key figures or the remediation tasks read really changes: OwnerKey, FindingKey, CiId, State,
+-- FirstDetected, ClosedAt, CloseReason (compared byte for byte, NULL kept apart). LastSeen / LastSnapshot / AbsentRuns (moved
+-- for every open row each run) and the columns no aggregate reads never set it. A row that leaves (a DELETE, or a key moved
+-- by an UPDATE) is written to sidata.CiFindingStateGone by that statement's OUTPUT. The every-run update of LastSeen is not
+-- touched (no trigger: measured +31 to +108 % at 1,000,000 rows). Additive; read only by the data sync's build from the changes.
+-- ---------------------------------------------------------------------------------------------
+IF COL_LENGTH('sidata.CiFindingState', 'ChangedAt') IS NULL ALTER TABLE sidata.CiFindingState ADD ChangedAt DATETIME2(3) NULL;
+IF COL_LENGTH('sidata.CiFindingState', 'ChangedRun') IS NULL ALTER TABLE sidata.CiFindingState ADD ChangedRun NVARCHAR(64) NULL;
+IF OBJECT_ID('sidata.CiFindingStateGone') IS NULL
+CREATE TABLE sidata.CiFindingStateGone (
+    GoneId      BIGINT IDENTITY(1, 1) NOT NULL CONSTRAINT PK_CiFindingStateGone PRIMARY KEY,
+    OwnerKey    NVARCHAR(450)  NOT NULL,
+    FindingKey  NVARCHAR(256)  NOT NULL,
+    CiId        NVARCHAR(64)   NULL,
+    GoneAt      DATETIME2(3)   NOT NULL CONSTRAINT DF_CiFindingStateGone_At DEFAULT SYSUTCDATETIME(),
+    GoneRun     NVARCHAR(64)   NULL
+);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_CiFindingStateGone_At' AND object_id = OBJECT_ID('sidata.CiFindingStateGone'))
+    CREATE INDEX IX_CiFindingStateGone_At ON sidata.CiFindingStateGone (GoneAt) INCLUDE (OwnerKey, FindingKey, CiId);
+-- (no index on ChangedAt in the schema apply: CiFindingState is a large table -- the change set reads it in one scan of the
+-- narrow columns, as the key figures already do)
+-- (2026-11-23, owner: the every-run lifecycle update must cost nothing) NO trigger: the statements that change a read column set
+-- the mark themselves (engine\pro-data\_shared\SI-DataCiLifecycle.ps1, the /*M{*/ parts; SI-CiBuildSql.ps1's merge). (The triggers
+-- an earlier, never released build of this branch made are not removed here: the schema stays additive.)
+
+-- ---------------------------------------------------------------------------------------------
+-- #1334 THE CI INPUTS OF THE KEY FIGURES, recorded by the key figures' own build (no trigger on sidata.Ci: the CI build moves
+-- CollectionTime / LastSeen on every CI each run, and a trigger there costs what it cost on the lifecycle). sidata.KeyFigureInput
+-- holds, per collection, a fingerprint of the CI rows the build read (#d: every column a CI figure reads) -- the count and two
+-- order-free sums of a SHA-256 per row; equal fingerprints = the CI figures' input is the same multiset.
+-- ---------------------------------------------------------------------------------------------
+IF OBJECT_ID('sidata.KeyFigureInput') IS NULL
+CREATE TABLE sidata.KeyFigureInput (
+    CollectionId  INT             NOT NULL CONSTRAINT PK_KeyFigureInput PRIMARY KEY,
+    CiRows        BIGINT          NOT NULL,
+    CiFp1         DECIMAL(38, 0)  NOT NULL,
+    CiFp2         DECIMAL(38, 0)  NOT NULL,
+    BuiltAt       DATETIME2(3)    NOT NULL CONSTRAINT DF_KeyFigureInput_BuiltAt DEFAULT SYSUTCDATETIME()
+);
+
+-- ---------------------------------------------------------------------------------------------
+-- #1355 (owner 2026-11-24: "i would like a filter on the security recommendations views (summary, detailed) to select actual
+-- risk vs. within accepted lifetime. default is actual risk (all)"): THE FINDINGS THE "WITHIN ACCEPTED LIFECYCLE" VIEW COUNTS,
+-- per collection -- written by the key figures' own build in the same transaction as the figures (SI-DataKeyFigures.ps1: the
+-- SAME per-finding verdict the wall board's findings_lifecycle counts, #pg.Life = 1), so the views filter with one key seek and
+-- never work the rule out per row. A collection without its marker (KeyFigure meta 'lifecycle_rows') has no rows here: the
+-- views do not offer the choice for it.
+--   FindingLifecycleRisk         (CollectionId, FindingId) of each such finding
+--   SummaryGroupLifecycle        the Summary groupings of those findings only (the SummaryGroup columns), built after the key
+--                                figures (SI-DataSummaryGroups.ps1 Invoke-SIDataSummaryGroupsLifecycle)
+--   SummaryGroupLifecycleState   one row per collection: when, from which definition, which groupings
+-- Additive; the retention removes a collection's rows with it (Get-SIDataPurgeCollectionSql).
+-- ---------------------------------------------------------------------------------------------
+IF OBJECT_ID('sidata.FindingLifecycleRisk') IS NULL
+CREATE TABLE sidata.FindingLifecycleRisk (
+    CollectionId  INT     NOT NULL,
+    FindingId     BIGINT  NOT NULL,
+    CONSTRAINT PK_FindingLifecycleRisk PRIMARY KEY CLUSTERED (CollectionId, FindingId)
+);
+
+IF OBJECT_ID('sidata.SummaryGroupLifecycle') IS NULL
+CREATE TABLE sidata.SummaryGroupLifecycle (
+    CollectionId             INT            NOT NULL,
+    GroupingId               VARCHAR(40)    NOT NULL,
+    Key1                     NVARCHAR(400)  NOT NULL,
+    Key2                     NVARCHAR(256)  NOT NULL,
+    Key3                     NVARCHAR(256)  NOT NULL,
+    Label                    NVARCHAR(1000) NULL,
+    Findings                 INT            NOT NULL,
+    Assets                   INT            NOT NULL,
+    Recommendations          INT            NOT NULL,
+    MaxRisk                  FLOAT          NULL,
+    TotalRisk                FLOAT          NULL,
+    BestTier                 TINYINT        NULL,
+    Tier0Findings            INT            NOT NULL,
+    CriticalFindings         INT            NOT NULL,
+    HighFindings             INT            NOT NULL,
+    RatedCriticalFindings    INT            NOT NULL,
+    RatedHighFindings        INT            NOT NULL,
+    CriticalRecommendations  INT            NOT NULL,
+    HighRecommendations      INT            NOT NULL,
+    ExploitedRecommendations INT            NOT NULL,
+    AttributesJson           NVARCHAR(MAX)  NULL,
+    GroupRowId               BIGINT IDENTITY(1, 1) NOT NULL,
+    CONSTRAINT PK_SummaryGroupLifecycle PRIMARY KEY CLUSTERED (CollectionId, GroupingId, GroupRowId)
+);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_SummaryGroupLifecycle_Findings' AND object_id = OBJECT_ID('sidata.SummaryGroupLifecycle'))
+CREATE INDEX IX_SummaryGroupLifecycle_Findings ON sidata.SummaryGroupLifecycle (CollectionId, GroupingId, Findings DESC) INCLUDE (Key1, Key2, Key3, Assets, MaxRisk);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_SummaryGroupLifecycle_Key' AND object_id = OBJECT_ID('sidata.SummaryGroupLifecycle'))
+CREATE INDEX IX_SummaryGroupLifecycle_Key ON sidata.SummaryGroupLifecycle (CollectionId, GroupingId, Key1);
+
+IF OBJECT_ID('sidata.SummaryGroupLifecycleState') IS NULL
+CREATE TABLE sidata.SummaryGroupLifecycleState (
+    CollectionId   INT            NOT NULL CONSTRAINT PK_SummaryGroupLifecycleState PRIMARY KEY,
+    BuiltAt        DATETIME2(3)   NOT NULL,
+    DefinitionHash VARCHAR(64)    NOT NULL,
+    Groups         INT            NOT NULL,
+    Findings       BIGINT         NOT NULL,
+    Groupings      NVARCHAR(2000) NULL
+);
+-- ---------------------------------------------------------------------------------------------
+-- THE DUPLICATE CHECK (ADDED 2026-11-25, REQUIREMENTS #1365 / #693 (6) (9); owner: "you cannot have 2 identical
+-- recommendations; only one" / "we cannot have 2 similar tasks"). Written by the data sync after the findings per CI and the
+-- remediation tasks (engine\pro-data\_shared\SI-DataDuplicateCheck.ps1): what is still TWO findings / tasks where the merge
+-- rules make ONE. A WARNING only -- nothing is blocked or changed by it. Additive.
+--   DuplicateCheck      one row per run x rule: the duplicates, the assets, up to 10 examples (JSON); kept 90 days
+--   DuplicateCheckWork  a run's working rows (the candidate assets and the facts of their findings), removed when the run
+--                       ends; a row a run left behind is removed after a day
+-- ---------------------------------------------------------------------------------------------
+IF OBJECT_ID('sidata.DuplicateCheck') IS NULL
+CREATE TABLE sidata.DuplicateCheck (
+    CheckId        UNIQUEIDENTIFIER NOT NULL,
+    CheckedAt      DATETIME2(0)   NOT NULL,
+    CollectionTime DATETIME2(3)   NULL,       -- the published findings' collection
+    RuleId         NVARCHAR(200)  NOT NULL,   -- fold:<group> | key | link | same-cve | task-update-restates-software
+    RuleKind       NVARCHAR(16)   NOT NULL,   -- fold | key | link | cve | task
+    Label          NVARCHAR(400)  NULL,
+    Duplicates     INT            NOT NULL,
+    Owners         INT            NOT NULL,   -- the assets (CIs) they are on
+    Status         NVARCHAR(16)   NOT NULL,
+    ExamplesJson   NVARCHAR(MAX)  NULL,
+    CONSTRAINT PK_DuplicateCheck PRIMARY KEY CLUSTERED (CheckedAt, CheckId, RuleId)
+);
+IF OBJECT_ID('sidata.DuplicateCheckWork') IS NULL
+CREATE TABLE sidata.DuplicateCheckWork (
+    CheckId    UNIQUEIDENTIFIER NOT NULL,
+    Kind       TINYINT        NOT NULL,       -- 0 = a candidate asset, 1 = the facts of one of its findings
+    KeyHash    BINARY(32)     NOT NULL,       -- SHA-256 of the owner (0) / '<owner>|<finding key, lower case>' (1)
+    Owner      NVARCHAR(450)  NULL,
+    FieldsJson NVARCHAR(MAX)  NULL,
+    CreatedAt  DATETIME2(0)   NOT NULL CONSTRAINT DF_DuplicateCheckWork_Created DEFAULT SYSUTCDATETIME(),
+    CONSTRAINT PK_DuplicateCheckWork PRIMARY KEY CLUSTERED (CheckId, Kind, KeyHash)
+);
+
+-- #1364 THE EVIDENCE ROWS: a finding a meaning rule of the recommendation equivalence folded onto another finding of the same
+-- CI (engine\pro-data\_shared\SI-DataFindingFold.ps1) is MOVED here out of sidata.Finding -- #693 "the evidence finding is NOT
+-- a finding of its own": no reader of sidata.Finding shows or counts it. Its whole row is kept (RowJson, every stored column
+-- of sidata.Finding as it was) so it moves back as its own finding when the fold no longer holds. CanonicalKey = the
+-- RaFindingKey of the finding it is evidence on; OwnKey = its own RaFindingKey. Additive; removed with its collection.
+IF OBJECT_ID('sidata.FindingEvidence') IS NULL
+CREATE TABLE sidata.FindingEvidence (
+    EvidenceId      BIGINT IDENTITY(1, 1) NOT NULL CONSTRAINT PK_FindingEvidence PRIMARY KEY,
+    CollectionId    INT            NOT NULL,
+    FindingId       BIGINT         NOT NULL,      -- the row's id while it was a finding
+    OwnKey          NVARCHAR(900)  NOT NULL,
+    CanonicalKey    NVARCHAR(900)  NOT NULL,
+    RuleId          NVARCHAR(128)  NULL,
+    ReportName      NVARCHAR(256)  NULL,
+    ConfigurationId NVARCHAR(256)  NULL,
+    Title           NVARCHAR(1000) NULL,
+    Severity        NVARCHAR(32)   NULL,          -- critical | high | medium | low | info
+    CarriedFrom     DATETIME2(3)   NULL,
+    MovedAt         DATETIME2(3)   NOT NULL,
+    RowJson         NVARCHAR(MAX)  NOT NULL
+);
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_FindingEvidence_Canonical' AND object_id = OBJECT_ID('sidata.FindingEvidence'))
+    CREATE INDEX IX_FindingEvidence_Canonical ON sidata.FindingEvidence (CollectionId, CanonicalKey) INCLUDE (OwnKey, ReportName, ConfigurationId, Title, Severity);
+
+-- ---------------------------------------------------------------------------------------------
+-- #1372 (ADDED 2026-11-25; owner: "Refresh stats in the run"): THE STATISTICS REFRESH v2 -- @Only = ONE table, for the data
+-- sync's refresh of the tables it rewrote at its end (engine\_shared\data-sql\SI-DataStatistics.ps1
+-- Invoke-SIDataStatisticsRefreshRewritten). Appended (this file only appends): these definitions come after the v1 ones above
+-- and override them; the work procedure keeps EXECUTE AS SELF and is made again only when its v2 marker is missing, older,
+-- or the identity it runs as is gone. The gate keeps its grant (above).
+-- ---------------------------------------------------------------------------------------------
+DECLARE @SIStatsProc2 nvarchar(max) = N'CREATE OR ALTER PROCEDURE sidata.StatisticsRefreshTable @After nvarchar(300) = NULL, @AsyncOnly bit = 0, @Table nvarchar(300) = NULL OUTPUT,
+    @Refreshed int = NULL OUTPUT, @Failed int = NULL OUTPUT, @Error nvarchar(2000) = NULL OUTPUT, @Async bit = NULL OUTPUT, @Only nvarchar(300) = NULL
+WITH EXECUTE AS SELF
+AS
+BEGIN
+    -- si-statistics-refresh v2
+    -- (it carries the first definition''s marker si-statistics-refresh v1 too, so the first definition above is not made
+    -- again over this one on every apply)
+    -- v2 (#1372): @Only = ONE table (its name; only matched against the catalog by OBJECT_ID, never run as text) -- the data
+    -- sync''s refresh of the tables it rewrote, at its end; the catalog is then read for that table only
+    -- the statistics of ONE table brought up to date (see the section header in sql\si-data-schema.sql). Changes no row.
+    SET NOCOUNT ON;
+    SELECT @Table = NULL, @Refreshed = 0, @Failed = 0, @Error = NULL;
+    SELECT @Async = d.is_auto_update_stats_async_on FROM sys.databases AS d WHERE d.database_id = DB_ID();
+    -- inside a caller''s transaction nothing is done: a database setting cannot change there, and a statistic is not updated
+    -- under a caller''s locks
+    IF @@TRANCOUNT > 0 BEGIN SET @Error = N''called inside a transaction -- nothing was done''; RETURN; END
+    -- THE SETTING (the first call of a pass): pages never wait for a statistic. A lock that does not come within 10 seconds =
+    -- not now (the next pass tries again), never a wait behind the readers.
+    IF @After IS NULL AND ISNULL(@Async, 0) = 0
+    BEGIN
+        BEGIN TRY
+            SET LOCK_TIMEOUT 10000;
+            ALTER DATABASE CURRENT SET AUTO_UPDATE_STATISTICS_ASYNC ON;
+            SET LOCK_TIMEOUT -1;
+        END TRY
+        BEGIN CATCH
+            -- the identity this runs as may not change the database (made by the updater), or the lock did not come: the
+            -- setting stays as it is (@Async says so); the statistics below are refreshed all the same
+            SET LOCK_TIMEOUT -1;
+        END CATCH
+        SELECT @Async = d.is_auto_update_stats_async_on FROM sys.databases AS d WHERE d.database_id = DB_ID();
+    END
+    IF @AsyncOnly = 1 RETURN;
+    -- every statistic of every user table, stale by the database''s own threshold; a statistic never computed counts once its
+    -- table holds more than 500 rows
+    DECLARE @st TABLE (ObjectId int NOT NULL, TableName nvarchar(300) NOT NULL, StatName sysname NOT NULL, StatsId int NOT NULL);
+    INSERT @st (ObjectId, TableName, StatName, StatsId)
+    SELECT s.object_id, QUOTENAME(SCHEMA_NAME(t.schema_id)) + N''.'' + QUOTENAME(t.name), s.name, s.stats_id
+    FROM sys.stats AS s
+    JOIN sys.tables AS t ON t.object_id = s.object_id AND t.is_ms_shipped = 0
+    LEFT JOIN sys.indexes AS i ON i.object_id = s.object_id AND i.index_id = s.stats_id AND s.auto_created = 0 AND s.user_created = 0
+    OUTER APPLY sys.dm_db_stats_properties(s.object_id, s.stats_id) AS sp
+    OUTER APPLY (SELECT SUM(p.rows) AS N FROM sys.partitions AS p WHERE p.object_id = s.object_id AND p.index_id IN (0, 1)) AS tr
+    WHERE ISNULL(i.is_hypothetical, 0) = 0
+      AND (@Only IS NULL OR s.object_id = OBJECT_ID(@Only))
+      -- never computed: only an unfiltered statistic (a filtered one whose filter matches no row stays empty after an update)
+      AND (   (sp.last_updated IS NULL AND s.has_filter = 0 AND ISNULL(tr.N, 0) > 500)
+           OR (sp.last_updated IS NOT NULL AND ISNULL(sp.modification_counter, 0) >
+                  CASE WHEN ISNULL(sp.rows, 0) <= 500 THEN 500.0
+                       WHEN 500.0 + 0.2 * sp.rows < SQRT(1000.0 * sp.rows) THEN 500.0 + 0.2 * sp.rows
+                       ELSE SQRT(1000.0 * sp.rows) END));
+    SELECT TOP (1) @Table = TableName FROM @st
+    WHERE @After IS NULL OR TableName COLLATE Latin1_General_BIN2 > @After COLLATE Latin1_General_BIN2
+    ORDER BY TableName COLLATE Latin1_General_BIN2;
+    IF @Table IS NULL RETURN;
+    DECLARE @list TABLE (N int IDENTITY(1, 1) NOT NULL, StatName sysname NOT NULL);
+    INSERT @list (StatName) SELECT StatName FROM @st WHERE TableName = @Table ORDER BY StatsId;
+    DECLARE @i int = 1, @n int = (SELECT COUNT(*) FROM @list), @name sysname, @sql nvarchar(max);
+    WHILE @i <= @n
+    BEGIN
+        SELECT @name = StatName FROM @list WHERE N = @i;
+        -- the database''s default sampling: never a full scan of a large table
+        SET @sql = N''UPDATE STATISTICS '' + @Table + N'' ('' + QUOTENAME(@name) + N'');'';
+        BEGIN TRY
+            EXEC (@sql);
+            SET @Refreshed += 1;
+        END TRY
+        BEGIN CATCH
+            SET @Failed += 1;
+            IF @Error IS NULL SET @Error = @Table + N'' '' + QUOTENAME(@name) + N'': '' + ERROR_MESSAGE();
+        END CATCH
+        SET @i += 1;
+    END
+END';
+IF OBJECT_ID(N'sidata.StatisticsRefreshTable') IS NULL
+   OR CHARINDEX(N'si-statistics-refresh v2', ISNULL(OBJECT_DEFINITION(OBJECT_ID(N'sidata.StatisticsRefreshTable')), N'')) = 0
+   OR NOT EXISTS (SELECT 1 FROM sys.sql_modules AS m JOIN sys.database_principals AS p ON p.principal_id = m.execute_as_principal_id
+                  WHERE m.object_id = OBJECT_ID(N'sidata.StatisticsRefreshTable'))
+    EXEC (@SIStatsProc2);
+EXEC (N'CREATE OR ALTER PROCEDURE sidata.StatisticsRefresh @After nvarchar(300) = NULL, @AsyncOnly bit = 0, @Table nvarchar(300) = NULL OUTPUT,
+    @Refreshed int = NULL OUTPUT, @Failed int = NULL OUTPUT, @Error nvarchar(2000) = NULL OUTPUT, @Async bit = NULL OUTPUT, @Only nvarchar(300) = NULL
+AS
+BEGIN
+    -- the gate (a job identity: db_datawriter / si_engine, or the owner), then the work -- sidata.StatisticsRefreshTable, reached
+    -- through this procedure only (same owner: no grant of its own). Answers through its OUTPUT parameters only.
+    SET NOCOUNT ON;
+    IF ISNULL(IS_ROLEMEMBER(N''db_datawriter''), 0) <> 1 AND ISNULL(IS_ROLEMEMBER(N''si_engine''), 0) <> 1 AND ISNULL(IS_ROLEMEMBER(N''db_owner''), 0) <> 1
+        THROW 51793, N''only a job identity may refresh the statistics -- nothing was changed'', 1;
+    EXEC sidata.StatisticsRefreshTable @After = @After, @AsyncOnly = @AsyncOnly, @Table = @Table OUTPUT, @Refreshed = @Refreshed OUTPUT,
+        @Failed = @Failed OUTPUT, @Error = @Error OUTPUT, @Async = @Async OUTPUT, @Only = @Only;
+END');
+
+-- ---------------------------------------------------------------------------------------------
+-- #1388 (owner 2026-11-25 "Verified/kit, build now"): per CVE of a collection, whether any of its findings has a VERIFIED exploit
+-- (si_exploit_verified / IsExploitVerified: Defender vulnerability management's exploitVerified, Exposure Graph's
+-- isExploitVerified, the public IP scan's verified) or one IN AN EXPLOIT KIT (si_in_exploit_kit / IsInExploitKit: Defender's
+-- exploitInKit, Exposure Graph's isInExploitKit). Filled by the data sync (Get-SIDataCveExploitSql) for the newest collection
+-- that has per-CVE rows; NULL = not worked out yet. The finding model's "Days to fix an actively exploited finding" reads them
+-- (never the exploit-available flag). Appended, guarded, additive.
+-- ---------------------------------------------------------------------------------------------
+IF COL_LENGTH('sidata.CveSummary', 'ExploitVerified') IS NULL ALTER TABLE sidata.CveSummary ADD ExploitVerified BIT NULL;
+
+IF COL_LENGTH('sidata.CveSummary', 'InExploitKit') IS NULL ALTER TABLE sidata.CveSummary ADD InExploitKit BIT NULL;

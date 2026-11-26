@@ -362,3 +362,47 @@ Describe 'WIRING: the product paths use the fast roll' {
         (Get-Content -Raw -LiteralPath (Join-Path $script:SIRoot 'container\updater\_shared\SI-UpdaterSelf.ps1')) | Should -Match 'Invoke-SIUpdaterFastBuild'
     }
 }
+
+Describe '#1311 (SUP-2026-00675): the self-roll finds the build this run queued, from any script''s scope' {
+    # live at several installations 2026-11-19..23: the first update after a code release could not move the updater itself --
+    # "the updater image could not be built: Cannot index into a null array" -- the queued-build table was $script:, $null in
+    # the scope the self-roll runs in
+    BeforeAll {
+        . (Join-Path $script:SIRoot 'container\updater\_shared\SI-UpdaterFastRoll.ps1')
+        function script:Write-UpdLog { param($m) $global:UpdLog += , [string]$m }   # $global: -- called from the child script (its own $script:)
+        function script:Get-SIUpdaterRest { { } }
+        # a release folder with a fast-roll library whose build wait answers from $global:WaitAnswer (no Azure)
+        $script:Rel = Join-Path ([IO.Path]::GetTempPath()) ('si-1311-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+        New-Item -ItemType Directory -Force -Path (Join-Path $script:Rel 'setup\_shared') | Out-Null
+        [IO.File]::WriteAllText((Join-Path $script:Rel 'setup\_shared\SI-FastRoll.ps1'), 'function Wait-SIAcrBuilds { param($Rest, $AcrName, $SubscriptionId, $Builds, $TimeoutMinutes, $Log) $global:Waited += , @($Builds); @([pscustomobject]@{ Status = $global:WaitAnswer }) }')
+        # another script: its own $script: scope, as the updater's self-roll step
+        $script:Child = Join-Path $script:Rel 'self-roll.ps1'
+        [IO.File]::WriteAllText($script:Child, 'param($Root) Invoke-SIUpdaterFastBuild -SIRoot $Root -AcrName a -SubscriptionId s -Image ''si-updater:t1'' -File ''container/updater/Dockerfile''')
+    }
+    AfterAll { Remove-Item -LiteralPath $script:Rel -Recurse -Force -ErrorAction SilentlyContinue; $global:SIUpdaterQueued = @{}; $global:Waited = $null; $global:WaitAnswer = $null; $global:UpdLog = $null }
+    BeforeEach { $global:UpdLog = @(); $global:Waited = @(); $global:WaitAnswer = 'Succeeded'; $global:SIUpdaterQueued = @{} }
+    It 'a build queued at the start of the run is WAITED FOR from another script -- no "null array", nothing built twice' {
+        $global:SIUpdaterQueued['si-updater:t1'] = [pscustomobject]@{ RunId = 'r1'; Registry = 'a' }
+        $r = & $script:Child -Root $script:Rel
+        $r | Should -BeTrue
+        @($global:Waited).Count | Should -Be 1
+        @($global:Waited)[0][0].RunId | Should -Be 'r1'
+        $global:SIUpdaterQueued.ContainsKey('si-updater:t1') | Should -BeFalse -Because 'a build waited for is taken off the table'
+        ($global:UpdLog -join '|') | Should -Match 'waiting for the build queued at the start of this run'
+    }
+    It 'no table at all (a run that queued nothing): nothing is read from $null, the release without a fast roll is built the old way' {
+        $global:SIUpdaterQueued = $null
+        { Get-SIUpdaterQueuedBuild -Image 'si-updater:t1' } | Should -Not -Throw
+        Get-SIUpdaterQueuedBuild -Image 'si-updater:t1' | Should -BeNullOrEmpty
+        $noLib = Join-Path $script:Rel 'no-fast-roll'; New-Item -ItemType Directory -Force -Path $noLib | Out-Null
+        & $script:Child -Root $noLib | Should -BeFalse
+    }
+    It 'the table is the process''s ($global:), set only when absent, and nothing reads a $script: one' {
+        $src = Get-Content -Raw -LiteralPath (Join-Path $script:SIRoot 'container\updater\_shared\SI-UpdaterFastRoll.ps1')
+        $src | Should -Not -Match '\$script:SIUpdaterQueued'
+        $src | Should -Match ([regex]::Escape('if (-not ($global:SIUpdaterQueued -is [hashtable])) { $global:SIUpdaterQueued = @{} }'))
+        $global:SIUpdaterQueued = @{ keep = 1 }
+        . (Join-Path $script:SIRoot 'container\updater\_shared\SI-UpdaterFastRoll.ps1')
+        $global:SIUpdaterQueued.ContainsKey('keep') | Should -BeTrue -Because 'a reload in the run never drops a queued build'
+    }
+}

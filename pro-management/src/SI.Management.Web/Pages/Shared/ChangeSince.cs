@@ -21,18 +21,28 @@ public sealed record ChangeSince(double? Now, double? Then, Better Better, Chang
     private double Round(double v) => Kind == ChangeKind.Percent ? Math.Round(v, 1) : Math.Round(v, MidpointRounding.AwayFromZero);
 
     /// good | bad | neutral (no change) | none (nothing to compare with).
-    public string Tone => Shown is not { } d ? "none" : d == 0 ? "neutral" : (d < 0) == (Better == Better.Lower) ? "good" : "bad";
+    public string Tone => Shown is not { } d ? "none" : d == 0 || NotComparable is not null ? "neutral" : (d < 0) == (Better == Better.Lower) ? "good" : "bad";
 
     /// The word after the numbers: better / worse / no change.
     public string Meaning => Tone switch { "good" => "better", "bad" => "worse", "neutral" => "no change", _ => "" };
 
+    /// #1382 (owner 2026-11-25: "this is for executives"): the unit after a percentage change -- " pp" by default; the
+    /// Protection Score says " points" (a score out of 100).
+    public string PercentUnit { get; init; } = " pp";
+
+    /// #1382: the two values were worked out in different ways (the Protection Score's new calculation, #1361 / 3.1.46): the
+    /// change is shown with this note instead of "better" / "worse", in no colour -- it is no real improvement or decline.
+    public string? NotComparable { get; init; }
+
     /// "+3", "-1.234", or "no change".
     public string DeltaText => Shown is not { } d ? "" : d == 0 ? "no change"
-        : Kind == ChangeKind.Percent ? Fmt.Signed(d, 1) + " pp"
+        : Kind == ChangeKind.Percent ? Fmt.Signed(d, 1) + PercentUnit
         : Kind == ChangeKind.Score ? Fmt.SignedScore(d) : Fmt.Signed(d, 0);
 
     /// The whole line: "+3 since 2026-10-17 (worse)", "no change since 2026-10-17".
-    public string Text => Shown is not { } d ? "" : d == 0
+    public string Text => Shown is not { } d ? "" : NotComparable is { } nc
+        ? DeltaText + (Since is null ? "" : " since " + Since) + " – " + nc
+        : d == 0
         ? "no change" + (Since is null ? "" : " since " + Since)
         : DeltaText + (Since is null ? "" : " since " + Since) + " (" + Meaning + ")";
 

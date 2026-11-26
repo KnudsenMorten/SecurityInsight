@@ -28,19 +28,21 @@ function Get-SISettingDocUrl {
 function Split-SISettingEffect {
     <#
         PURE. An on/off setting's effect text "Off: ... On: ..." (either order) -> @{ On; Off }; a part not present is ''.
-        Only a sentence-starting, capitalised "On:" / "Off:" counts (never "on" inside a sentence).
+        Only a sentence-starting, capitalised "On:" / "Off:" counts (never "on" inside a sentence) -- and "On," / "Off," at the
+        start of the text or of a sentence ("Off, every run probes again ... On, a changed query ...").
     #>
     param([AllowEmptyString()][string]$Effect)
     $r = @{ On = ''; Off = '' }
     if ([string]::IsNullOrWhiteSpace($Effect)) { return $r }
-    $ms = [regex]::Matches($Effect, '(?<![A-Za-z])(On|Off):\s*')
+    $ms = [regex]::Matches($Effect, '(?<![A-Za-z])(On|Off):\s*|(?:^|(?<=[.!?;]\s))(On|Off),\s*')
     if ($ms.Count -eq 0) { return $r }
     for ($i = 0; $i -lt $ms.Count; $i++) {
         $m = $ms[$i]
         $start = $m.Index + $m.Length
         $end = if ($i + 1 -lt $ms.Count) { $ms[$i + 1].Index } else { $Effect.Length }
         $text = $Effect.Substring($start, $end - $start).Trim()
-        if ($text) { $r[$m.Groups[1].Value] = $text }
+        $st = if ($m.Groups[1].Success) { $m.Groups[1].Value } else { $m.Groups[2].Value }
+        if ($text) { $r[$st] = $text }
     }
     $r
 }
@@ -103,8 +105,9 @@ function Get-SISettingInfo {
         # the default text usually describes the default state; the effect describes changing away from it
         if (-not $on -and $defState -eq 'on') { $on = Remove-SISettingStatePrefix $defaultText }
         if (-not $off -and $defState -eq 'off') { $off = Remove-SISettingStatePrefix $defaultText }
-        if (-not $on -and $effect -and ($defState -ne 'on')) { $on = $effect }
-        if (-not $off -and $effect -and ($defState -eq 'on')) { $off = $effect }
+        # (never the other state's words: an effect that has only an "On" part says nothing about off, and the reverse)
+        if (-not $on -and $effect -and ($defState -ne 'on') -and -not $sp.Off) { $on = $effect }
+        if (-not $off -and $effect -and ($defState -eq 'on') -and -not $sp.On) { $off = $effect }
         # a default that is neither on nor off ("Not set: ... decides") describes the state when it is not switched on
         if (-not $off -and $defState -eq '' -and $defaultText) { $off = $defaultText }
         if (-not $on) {

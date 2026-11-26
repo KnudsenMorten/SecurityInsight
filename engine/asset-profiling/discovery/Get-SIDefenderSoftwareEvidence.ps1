@@ -139,7 +139,7 @@ function Read-SIDefenderSoftwareEvidence {
             foreach ($x in $rowsD) { $pageRows.Add($x) }
             $pageDevs.Add(@{ DeviceId = $d; State = 'read'; Rows = $rowsD.Count })
             $part = ConvertTo-SISoftwareEvidencePart -Rows $rowsD
-            if ($null -ne $part -and (Get-Command -Name Add-SIRecordPart -ErrorAction SilentlyContinue)) {
+            if ($null -ne $part -and (Test-Path -Path 'function:Add-SIRecordPart')) {
                 try { Add-SIRecordPart -Provider 'mde' -RecordType 'device' -Key $d -Part 'softwareEvidence' -Object $part } catch { }
             }
         }

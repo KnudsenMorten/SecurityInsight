@@ -502,7 +502,9 @@ function Invoke-SIExemptionMailCore {
     }
     $s = ConvertTo-SIExemptionMailSettings -Rows (Read-SIExemptionRows -Invoke $invoke -Sql (Get-SIExemptionMailSettingsSql))
     if (-not $s.MailEnabled) { $res.Skipped = 'exemption mails are switched off (SIWeb_ExemptionMailEnabled) -- nothing was sent.'; & $Log 'INFO' $res.Skipped; return $res }
-    if (-not $SmtpReady) { $res.Skipped = 'mail is not set up, or is off (SI_Mail_Mode) -- the exemption mails wait in the outbox.'; & $Log 'WARN' $res.Skipped; return $res }
+    # mail off (or not set up) is the customer's choice: an INFORMATION line, never a warning -- the step succeeds and the
+    # mails stay queued (live 2026-11-23, SUP-2026-00682: a mail job with everything off was reported as a failed run)
+    if (-not $SmtpReady) { $res.Skipped = 'mail is switched off or not set up (SI_Mail_Mode) -- the exemption mails stay queued in the outbox until it is on.'; & $Log 'INFO' $res.Skipped; return $res }
 
     if (-not $OutboxOnly -and -not $NoPlan) {
         $plan = Get-SIExemptionMailPlan -Exemptions (Read-SIExemptionRows -Invoke $invoke -Sql (Get-SIExemptionMailExemptionsSql)) `

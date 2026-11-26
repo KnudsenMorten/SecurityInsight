@@ -74,6 +74,19 @@ public abstract class DepartmentAdminModel : PageModel
             return new WriteResult(WriteStatus.Refused, $"{what} could not be saved -- the Pro database answered: {ViewerError.Text(ex)}");
         }
     }
+
+    /// <summary>
+    /// #995b: after a saved change of a department's people, everyone of it still kept by e-mail address only is looked up
+    /// in the directory once (exactly one account with the address gets its object id stored); what was found is added to
+    /// the message. Never changes whether the save stood.
+    /// </summary>
+    public static async Task<WriteResult> WithObjectIdsAsync(HttpContext? http, WriteResult r, int? departmentId, CancellationToken ct)
+    {
+        if (r.Status != WriteStatus.Saved || departmentId is not > 0) return r;
+        if (http?.RequestServices.GetService(typeof(GuestObjectIdResolver)) is not GuestObjectIdResolver resolver) return r;
+        var words = await resolver.AfterSaveAsync(departmentId.Value, ct);
+        return words.Length == 0 ? r : r with { Message = r.Message + " -- " + words };
+    }
 }
 
 // ---- the people table (#335): the same on the New department form and on a department's page ------------------------
@@ -161,6 +174,7 @@ public sealed class IndexModel(DepartmentRepository repo, DepartmentPeopleResolv
             r = await Safely(async () => { saved = await Repo.SaveAsync(new DepartmentInput(null, form.Name ?? "", form.Mail, form.Description, form.MatchValues, null), members, User.ChangeName(), ct); return saved.Result; },
                 "The department");
             id = saved.DepartmentId;
+            r = await WithObjectIdsAsync(HttpContext, r, id, ct);
         }
         if (r.Status == WriteStatus.Saved && id is not null) return Done(r, "/Admin/Departments/Edit", new { id });
         // refused: the page again, the reason on it, the form as typed (the toast also tells the audit trail it was refused)
@@ -234,6 +248,7 @@ public sealed class EditModel(DepartmentRepository repo, DepartmentPeopleResolve
         var r = problems.Count > 0
             ? new WriteResult(WriteStatus.Refused, string.Join("; ", problems) + " -- nothing was saved")
             : await Safely(() => Repo.SetPeopleAsync(Id, members, User.ChangeName(), ct), "The people");
+        r = await WithObjectIdsAsync(HttpContext, r, Id, ct);
         if (r.Status == WriteStatus.Saved) return Done(r, "/Admin/Departments/Edit", new { id = Id });
         Refusal = "The people were not saved: " + r.Message;
         TempData["toast"] = Refusal;

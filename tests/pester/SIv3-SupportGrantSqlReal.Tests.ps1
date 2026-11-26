@@ -244,6 +244,36 @@ Describe 'REAL SQL: the Invardia Support app''s just-in-time grant (#1021)' -Ski
         (& $script:Member 'db_owner') | Should -Be 0
     }
 
+    It '#1374 the re-sign drops the PREDECESSOR signer (and a leftover one that signs nothing) with its db_owner user, in the same batch; the current signer stays' {
+        $px = (Get-SISupportGrantContract).SignerPrefix
+        $names = { @(& $script:A ("SELECT name FROM sys.certificates WHERE name LIKE N'{0}%' ORDER BY name" -f $px) @{} 'rows' | ForEach-Object { [string]$_['name'] }) }
+        $certUsersInOwner = { [int](& $script:A ("SELECT COUNT(*) FROM sys.database_role_members m JOIN sys.database_principals u ON u.principal_id = m.member_principal_id WHERE m.role_principal_id = DATABASE_PRINCIPAL_ID(N'db_owner') AND u.[type] = 'C' AND u.name LIKE N'{0}%'" -f $px) @{} 'scalar') }
+        # a leftover as seen live 2026-11-25: a support signer of 2026-11-04 that signs nothing, its user in db_owner
+        $lo = '{0}_20261104000000000' -f $px
+        & $script:A ("CREATE CERTIFICATE [{0}] ENCRYPTION BY PASSWORD = N'{1}' WITH SUBJECT = 'leftover', EXPIRY_DATE = '20991231'; CREATE USER [{0}] FROM CERTIFICATE [{0}]; ALTER ROLE db_owner ADD MEMBER [{0}];" -f $lo, ('P' + [guid]::NewGuid().ToString('N') + '!a1')) @{} 'nonquery'
+        $before = & $names
+        $before | Should -Contain $lo
+        $before.Count | Should -BeGreaterThan 1
+        # the re-sign: the open made again (its signature is gone), the sign step signs all four with a NEW certificate
+        $def = Get-SISupportGrantProcedureText -Name Open
+        & $script:A 'DROP PROCEDURE cfg.SupportGrantOpen;' @{} 'nonquery'
+        & $script:A $def @{} 'nonquery'
+        & $script:A 'GRANT EXECUTE ON OBJECT::cfg.SupportGrantOpen TO [si_engine];' @{} 'nonquery'
+        $sign = @($script:Steps | Where-Object Step -eq 'sign')[0]
+        [string](& $script:A $sign.Sql @{} 'scalar') | Should -Be '4'
+        $after = & $names
+        $after.Count | Should -Be 1 -Because 'the predecessor and the leftover sign nothing: both dropped'
+        $before | Should -Not -Contain $after[0] -Because 'the one left is the new signer'
+        (& $certUsersInOwner) | Should -Be 1 -Because 'only the current signer''s user stays in db_owner'
+        $st = ConvertFrom-SISupportGrantState -Row (@(& $script:A (Get-SISupportGrantStateSql -ClientId $script:App) @{} 'rows')[0])
+        $st.Signed | Should -Be 4; $st.SignerOwner | Should -BeTrue
+        $r = & $script:Open 'setup' 30
+        [int]$r['RoleHeld'] | Should -Be 1
+        $null = & $script:Close
+        # a second run: nothing to sign, nothing to drop -- the current signer signs all four
+        $null = & $script:A $sign.Sql @{} 'scalar'
+        (& $names) | Should -Be $after
+    }
     It 'an install with the EARLIER open (24 h): the admin steps replace it with this release''s, sign it, and it refuses 9 h; a hand-changed text is never dropped' {
         # the install as an earlier release left it: the 24 h open, signed (by an admin step of that release)
         $old = ([IO.File]::ReadAllText((Join-Path $script:SIRoot 'tests\fixtures\support-grant-open-24h.sql.txt')) -replace "`r", '').TrimEnd()

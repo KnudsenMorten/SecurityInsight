@@ -14,7 +14,12 @@ public sealed record ServerSortLink(string Href, string AriaSort, string Arrow, 
 /// dates and booleans typed), and optionally the words on screen, a link, whether it is a number.
 /// </summary>
 public sealed record DataColumn(string Key, string Label, Func<object, object?> Value, bool Number = false, bool Shown = true,
-    Func<object, string?>? Link = null, Func<object, string?>? Text = null, string? Description = null);
+    Func<object, string?>? Link = null, Func<object, string?>? Text = null, string? Description = null)
+{
+    /// #1382 (owner 2026-11-25: "some dont have a title"): the title is words, never a raw field name -- the header, the
+    /// chooser and the exports read the same (DataColumnKeys.Title); the key stays the column's id.
+    public string Label { get; init; } = SI.Management.Core.ProData.DataColumnKeys.Title(Label);
+}
 
 /// <summary>
 /// #589: a data view's table that is not a SQL grid (CMDB, exemptions, tasks, the management drill-downs, findings,
@@ -165,7 +170,8 @@ public sealed class DataTable
             for (var i = 2; !keys.Add(k); i++) k = key + i.ToString(CultureInfo.InvariantCulture);
             var name = n;
             // a heading of its own: the name, said to be the bag's when another column already reads so
-            var label = n.Trim();
+            // #1382: in words (a raw name reads as the column's title will), so a clash is seen before the title is made
+            var label = SI.Management.Core.ProData.DataColumnKeys.Title(n.Trim());
             if (!headings.Add(label))
             {
                 var said = label + " (" + (string.IsNullOrWhiteSpace(what) ? "other" : what.Trim()) + ")";

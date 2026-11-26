@@ -85,8 +85,12 @@ Describe 'a closed run while an update holds the install (the fault of 2026-11-1
     }
     It 'Failed / Stopped / Cancelled with the copies written: their own state, never running' {
         (Beat (Cfg -State 'Failed')).state | Should -Be 'failed'
-        (Beat (Cfg -State 'Stopped')).state | Should -Be 'idle' -Because "'stopped' is behind its own switch (not yet agreed): idle"
-        (Beat (Cfg -State 'Cancelled')).state | Should -Be 'idle'
+        # Invardia accepts 'stopped' since 2026-11-20 (PipelineStoppedRings = every ring): a stopped / cancelled run says so
+        (Beat (Cfg -State 'Stopped')).state | Should -Be 'stopped'
+        (Beat (Cfg -State 'Cancelled')).state | Should -Be 'stopped'
+        # an install's 'off' still reads 'idle'
+        $off = $script:Sw.Clone(); $off['PipelineStopped'] = $false
+        (New-SIHeartbeatFields -Ring 1 -NowUtc $script:Now -Switch $off -CfgRows (Cfg -State 'Stopped') -DataInvoke $script:Data -Log { param($l) })['Pipeline'].state | Should -Be 'idle'
     }
     It 'the copies being written leave the state exactly as without them' {
         $without = New-SIHeartbeatFields -Ring 1 -NowUtc $script:Now -Switch $script:Sw -CfgRows (Cfg) -Log { param($l) }

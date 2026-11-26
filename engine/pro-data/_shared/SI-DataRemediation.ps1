@@ -133,6 +133,7 @@ function Get-SIDataUnremediatedSql {
         from it) and whose remediations are not built -- or were built before the context was prepared again. Newest first.
     #>
     $live = ''; if (Get-Command -Name Get-SIDataLiveFilter -ErrorAction SilentlyContinue) { $live = Get-SIDataLiveFilter }
+    if (Get-Command -Name Get-SIDataBuildFilter -ErrorAction SilentlyContinue) { $live += Get-SIDataBuildFilter }   # #1226
     "SELECT CollectionId, CollectionTime FROM sidata.Collection WHERE Kind = N'Detailed' AND Status = 'Complete' AND ContextAt IS NOT NULL AND (RemediationAt IS NULL OR RemediationAt < ContextAt)$live ORDER BY CollectionTime DESC"
 }
 

@@ -91,6 +91,8 @@ public sealed class WallboardModel : PageModel
     public string ViewKey => ExecutiveFigures.ProtectionView(View);
     public long Opened7 { get; private set; }
     public long Closed7 { get; private set; }
+    /// #1382: the closes of the week that were fixes (CloseReason Remediated), null = a day of the week has no split by reason.
+    public long? Fixed7 { get; private set; }
     public long? OpenNow { get; private set; }
     /// #292: the top Tier-0 assets by Very High, then High vulnerabilities, then risk (the Top-50 issues table was dropped).
     public IReadOnlyList<Tier0Asset> Tier0 { get; private set; } = Array.Empty<Tier0Asset>();
@@ -119,8 +121,11 @@ public sealed class WallboardModel : PageModel
         {
             var days = (await _q.LifecycleAsync(8, ct)).Data;
             var since = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-7));
-            Opened7 = days.Where(d => d.Day > since).Sum(d => d.Opened);
-            Closed7 = days.Where(d => d.Day > since).Sum(d => d.Closed);
+            var week = days.Where(d => d.Day > since).ToList();
+            Opened7 = week.Sum(d => d.Opened);
+            Closed7 = week.Sum(d => d.Closed);
+            // #1382: "Fixed" only when every day of the week has its closes split by reason (#855 W9), else the tile says "Closed"
+            Fixed7 = week.Count > 0 && week.All(d => d.ClosedFixed is not null) ? week.Sum(d => d.ClosedFixed!.Value) : null;
             OpenNow = days.LastOrDefault(d => d.OpenAtEndOfDay is not null)?.OpenAtEndOfDay;
         }
         catch (Exception ex) when (ex is not OperationCanceledException) { _log.LogError(ex, "wallboard lifecycle"); Errors.Add("Vulnerability flow unavailable"); }

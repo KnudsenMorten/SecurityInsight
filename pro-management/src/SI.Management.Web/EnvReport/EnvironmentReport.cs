@@ -20,7 +20,7 @@ public sealed record EnvironmentReport(DateTime ReadUtc, ReportSummary Summary, 
 {
     public string ToJson() => JsonSerializer.Serialize(new
     {
-        report = "SecurityInsight environment report", schema = 1, readUtc = ReadUtc, summary = Summary,
+        report = "SecurityInsight System Documentation", schema = 1, readUtc = ReadUtc, summary = Summary,
         architecture = new
         {
             Azure.SubscriptionId, Azure.ResourceGroup, error = Azure.Error, azureReadUtc = Azure.ReadUtc,

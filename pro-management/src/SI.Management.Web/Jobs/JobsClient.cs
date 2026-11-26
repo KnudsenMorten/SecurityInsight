@@ -11,7 +11,8 @@ using SI.Management.Core;
 namespace SI.Management.Web.Jobs;
 
 /// Where the installation's Container Apps jobs live (section "Jobs"). Read through ARM with the web app's managed
-/// identity: Reader on the resource group lists them; "Container Apps Jobs Contributor" changes and starts them.
+/// identity (Container Apps Jobs Reader on the resource group). Since SECURE-WEB-1 (3.1.18) the web app holds no right that
+/// changes or starts a job: #1252 its starts are requests on the job request queue (JobRequestQueue.cs).
 public sealed class JobsOptions
 {
     public const string Section = "Jobs";
@@ -72,6 +73,10 @@ public static partial class JobRules
 {
     /// The tag that remembers a disabled job's schedule, so enabling restores exactly what was there.
     public const string DisabledCronTag = "si-disabled-cron";
+
+    /// #1252 (Invardia decision 2026-11-25; never reworded): what a start or change says while the web app has no right on the
+    /// job request queue yet. The updater's log says the same line.
+    public const string NeedsQueueRight = "Run now / Stop / schedule changes / template release / mail send-now from the web app need one more right: ask your admin to re-run the Invardia Support app setup script, Setup level (it gives the web app 'Storage Queue Data Message Sender' on the queue si-job-requests only). Until then these buttons work as before.";
 
     [GeneratedRegex(@"^[a-z0-9][a-z0-9\-]{0,31}$", RegexOptions.CultureInvariant)] public static partial Regex JobName();
     [GeneratedRegex(@"^[0-9*/,\-]{1,40}( [0-9*/,\-]{1,40}){4}$", RegexOptions.CultureInvariant)] public static partial Regex Cron();
@@ -241,8 +246,10 @@ public sealed class ArmJobsClient : IJobsClient
         var text = await resp.Content.ReadAsStringAsync(ct);
         if (!resp.IsSuccessStatusCode)
         {
+            // #1252 (Invardia 2026-11-25): a start / change the web app may not make -- the one line that says what is missing
+            if (resp.StatusCode == System.Net.HttpStatusCode.Forbidden && m != HttpMethod.Get) throw new InvalidOperationException(JobRules.NeedsQueueRight);
             var hint = resp.StatusCode == System.Net.HttpStatusCode.Forbidden
-                ? " -- the web app's identity needs Reader (to list) and Container Apps Jobs Contributor (to change or start) on the resource group"
+                ? " -- the web app's identity needs Container Apps Jobs Reader on the resource group to list the jobs (the update gives it)"
                 : "";
             var why = JobRules.ArmError(text) is { } e ? ": " + e : "";
             throw new InvalidOperationException($"ARM {m} returned {(int)resp.StatusCode}{why}{hint}");

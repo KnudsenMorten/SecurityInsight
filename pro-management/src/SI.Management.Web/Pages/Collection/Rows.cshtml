@@ -1,6 +1,8 @@
 @page
 @model SI.Management.Web.Pages.Collection.RowsModel
 <partial name="_Header" model="Model" />
+@* #1355 the wall board's choice: Actual Risks (the default) | Within Accepted Lifecycle *@
+@if (Model.RiskChoice is { } riskChoice) { <partial name="_AcceptedLifecycleChoice" model="riskChoice" /> }
 @if (Model.FixNote is { } fixNote)
 {
     @* #864: a fix's link opens exactly its findings and says so -- never narrowed silently by a remembered filter *@

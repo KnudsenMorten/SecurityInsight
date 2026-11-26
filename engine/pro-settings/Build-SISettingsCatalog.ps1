@@ -76,6 +76,8 @@ $ranges = @{ SI_Pro_DataRetentionDays = @{ min = 1 }; SI_PatchCycle_CatchUpDays 
             # #860: the grace of the findings that are not patches (Get-SIProtectionScoreSettings takes 0..3650)
             SI_ProtectionScore_OtherGraceDays_Device = @{ min = 0; max = 3650 }; SI_ProtectionScore_OtherGraceDays_Identity = @{ min = 0; max = 3650 }
             SI_ProtectionScore_OtherGraceDays_CloudResource = @{ min = 0; max = 3650 }; SI_ProtectionScore_OtherGraceDays_PublicIp = @{ min = 0; max = 3650 }
+            # #1361: Medium + Low points per asset, at most (Get-SIProtectionScoreSettings takes 0..100)
+            SI_ProtectionScore_MinorPointsCap = @{ min = 0; max = 100 }
  SI_Pro_DataLookbackDays = @{ min = 1 }; SI_VulnSync_CloseAfterRuns = @{ min = 1 }
             SI_Pro_AuditRetentionMonths = @{ min = 13 }; SI_Pro_ConfigBackupRetentionDays = @{ min = 1 }; SI_Pro_ConfigJournalRetentionDays = @{ min = 1 }; SI_Pro_CmdbSql_RetireAfterRuns = @{ min = 1 }; SI_Pro_CmdbSql_SeenWithinDays = @{ min = 1 }; SI_Cmdb_RetireAfterDays = @{ min = 1 }
             Mail_CloseLoop_Daily_SendTimeUtc = @{ pattern = '^([01][0-9]|2[0-3]):[0-5][0-9]$'; patternHint = 'HH:mm, UTC' }
@@ -122,6 +124,8 @@ $ranges = @{ SI_Pro_DataRetentionDays = @{ min = 1 }; SI_PatchCycle_CatchUpDays 
             # #494: the days a finding has to be fixed, per severity (0 = no due date)
             SI_Pro_FindingSla_CriticalDays = @{ min = 0; max = 3650 }; SI_Pro_FindingSla_HighDays = @{ min = 0; max = 3650 }
             SI_Pro_FindingSla_MediumDays = @{ min = 0; max = 3650 }; SI_Pro_FindingSla_LowDays = @{ min = 0; max = 3650 }
+            # #1388: the days a finding with a known exploit has to be fixed, whatever its severity (0 = off)
+            SI_Pro_FindingSla_ExploitedDays = @{ min = 0; max = 3650 }
             # #577: the data-quality warnings' limits (percent / percentage points, against the median of the last 3 runs)
             SI_Pro_DataQuality_AssetDropPercent = @{ min = 1; max = 100 }; SI_Pro_DataQuality_ReportDropPercent = @{ min = 1; max = 100 }
             SI_Pro_DataQuality_FillDropPoints = @{ min = 1; max = 100 }; SI_Pro_DataQuality_TierShiftPercent = @{ min = 1; max = 100 }
@@ -129,8 +133,20 @@ $ranges = @{ SI_Pro_DataRetentionDays = @{ min = 1 }; SI_PatchCycle_CatchUpDays 
             SI_Pro_SourceDropout_HoldDeliveryDays = @{ min = 0; max = 365 }; SI_Pro_Pipeline_FirstRunRestarts = @{ min = 0 }
             # a collection that completes with far fewer assets: keep the last good one until confirmed, or take it at once
             SI_Pro_SourceDropout_AssetDropAction = @{ type = 'enum'; values = @('confirm', 'accept') }; SI_Pro_LifecycleStaleOpenRepair = @{ type = 'enum'; values = @('off', 'count', 'apply') }
+            # #1318: the view values worked out as Risk Analysis stores each finding (default on; shadow = troubleshooting)
+            SI_Data_ParseAtInsert = @{ type = 'enum'; values = @('off', 'shadow', 'on') }
+            # #1336: the large writes in bulk batches, each counted and checked back (default on; shadow = troubleshooting)
+            SI_Data_BulkLoad = @{ type = 'enum'; values = @('off', 'shadow', 'on') }
+            # #1337: the views' prepared context filled per report as Risk Analysis finishes each one (default on)
+            SI_Data_LoadPerReport = @{ type = 'enum'; values = @('off', 'shadow', 'on') }
             # the database write pace: the load (percent) above which the large writers slow down, and below which they go back
-            SI_SqlPacing_HighPercent = @{ min = 1; max = 100 }; SI_SqlPacing_LowPercent = @{ min = 0; max = 99 } }
+            SI_SqlPacing_HighPercent = @{ min = 1; max = 100 }; SI_SqlPacing_LowPercent = @{ min = 0; max = 99 }
+            # #1321: how Risk Analysis reads advanced hunting answers (default on)
+            SI_RA_HuntingStreamRead = @{ type = 'enum'; values = @('off', 'on') }
+            # 2026-11-23: a small Risk Analysis part asked with its partner (default on); how often a worker reads the run's budget
+            SI_RA_SliceMerge = @{ type = 'enum'; values = @('off', 'on') }; SI_RA_PartsBudgetSeconds = @{ min = 1 }
+            # #1320: how the vulnerability connector compares (on = only what changed, the default)
+            SI_VulnLoop_ChangedSet = @{ type = 'enum'; values = @('on', 'off', 'shadow') } }
 
 # Settings ONLY setup reads (Bootstrap-ContainerAppJob.ps1, Bootstrap-Auth.ps1, setup\*): marked setupOnly. Held to the code by
 # SIv3-SettingsHonoured.Tests.ps1 (every one is read by setup only, and every catalog setting read by setup only is listed).
@@ -198,7 +214,7 @@ foreach ($d in @(Get-ChildItem -LiteralPath (Join-Path $SIRoot 'launcher') -Dire
     foreach ($e in @(Get-Entries (Join-Path $d.FullName 'LauncherConfig.defaults.ps1') $d.Name 'default')) { $all.Add($e) }
     foreach ($e in @(Get-Entries (Join-Path $d.FullName 'LauncherConfig.custom.sample.ps1') $d.Name 'sample')) { $all.Add($e) }
 }
-foreach ($f in @(Get-ChildItem -LiteralPath (Join-Path $SIRoot 'config') -Filter '*.sample.ps1')) {
+foreach ($f in @(Get-ChildItem -LiteralPath (Join-Path $SIRoot 'config') -Filter '*.sample.ps1' | Sort-Object Name)) {   # (by name: the same order on every file system)
     foreach ($e in @(Get-Entries $f.FullName '' 'sample')) { $all.Add($e) }
 }
 
@@ -327,7 +343,9 @@ $settings = foreach ($g in @($all | Where-Object { $retired -notcontains $_.Name
             if ($vl.Count) { $entry['valueLabels'] = $vl }
         }
     }
-    if ($ranges.ContainsKey($name)) { foreach ($k in $ranges[$name].Keys) { $entry[$k] = $ranges[$name][$k] } }
+    # (the keys in name order: a hashtable's own order changes from one process to the next, and a catalog that moves its
+    # lines at every rebuild reads like lost lines in a merge -- seen 2026-11-23 with SI_Mail_Mode's editor and labels)
+    if ($ranges.ContainsKey($name)) { foreach ($k in @($ranges[$name].Keys | Sort-Object -CaseSensitive)) { $entry[$k] = $ranges[$name][$k] } }
     # the Settings page layout: the card it sits on, its one short hint, the on/off setting it needs
     if ($cardOf.ContainsKey($name)) { $entry['card'] = $cardOf[$name] }
     foreach ($f in 'hint', 'needs') { $hv = Get-HelpValue $name $f; if ($hv) { $entry[$f] = [string]$hv } }

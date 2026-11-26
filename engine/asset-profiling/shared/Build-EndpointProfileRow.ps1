@@ -31,6 +31,39 @@ if (-not (Get-Command -Name Get-SIDefaultTierValue -ErrorAction SilentlyContinue
 # #562 the asset type / subtype come from the ONE classification (the CI build's rows and value maps).
 if (-not (Get-Command -Name Get-SIProfileAssetClassification -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot '..\..\data-model\SI-ProfileClassification.ps1') }
 
+# #1389 THE PER-ROW HELPERS ARE LOADED ONCE, HERE (owner 2026-11-25: "Yes, all builders"; same output, same path for every
+# size). MEASURED on the test runner (pwsh 7.6.10): `Get-Command -Name X` costs 8.3 ms per call, found or not, and this
+# builder asked ~15 times per row. Worse, a dot-source INSIDE the row function defines the helpers in that one call's scope,
+# so they were gone when the row returned and the next row parsed the file again (SI-SolutionVersion.ps1's load also reset
+# its cache, so every row re-read VERSION from disk). Loaded here they live as long as the builder does. A guard that must
+# stay (degrade, do not die) is `Test-Path function:<name>` (0.08 ms), and a missing file is said ONCE, not once per row.
+foreach ($__siRowHelper in @(
+        @{ Fn = 'Resolve-SIAssetIdentityPair'; File = '..\..\_shared\SI-AssetIdentity.ps1' }
+        @{ Fn = 'Get-SISolutionVersion';       File = 'SI-SolutionVersion.ps1' }
+        @{ Fn = 'ConvertTo-SICleanedEgBlob';   File = 'Convert-EgBlob.ps1' }
+        @{ Fn = 'Get-SIEndpointRiskFactors';   File = 'Get-SIRiskFactors.ps1' }
+    )) {
+    if (-not (Test-Path -Path ('function:' + $__siRowHelper.Fn))) { . (Join-Path $PSScriptRoot $__siRowHelper.File) }
+}
+# DEGRADE, DO NOT DIE: each of these only explains, reduces or projects -- a missing file must never cost an inventory row.
+if (-not (Test-Path -Path 'function:Get-SITierAttribution')) {
+    try { . (Join-Path $PSScriptRoot 'Get-SITierAttribution.ps1') } catch {
+        Write-Warning ("tier attribution unavailable ({0}) -- SI_TierSetBy/Reason/Claims will be empty for this run; the tier itself is unaffected." -f $_.Exception.Message)
+    }
+}
+if (-not (Test-Path -Path 'function:Resolve-SITierClaims')) { try { . (Join-Path $PSScriptRoot 'Resolve-SITierClaims.ps1') } catch { } }
+if (-not (Test-Path -Path 'function:Get-SITierTrustList')) { try { . (Join-Path $PSScriptRoot 'Get-SITierTrustList.ps1') } catch { } }
+if (-not (Test-Path -Path 'function:Select-SIPayloadBucket')) {
+    try { . (Join-Path $PSScriptRoot 'Get-SIPayloadProfile.ps1') } catch {
+        Write-Warning ("payload profile unavailable ({0}) -- Properties emitted unprojected (all collected metadata)." -f $_.Exception.Message)
+    }
+}
+# The operator decisions (#61) are read only when a run has decisions; the reason a load failed is kept for that warning.
+$script:_SIEndpointDecisionsLoadError = $null
+if (-not (Test-Path -Path 'function:Resolve-SIAssetDecisions')) {
+    try { . (Join-Path $PSScriptRoot 'Resolve-SIAssetDecisions.ps1') } catch { $script:_SIEndpointDecisionsLoadError = $_.Exception.Message }
+}
+
 if (-not (Get-Variable -Name _SISchemaCache -Scope Script -ErrorAction SilentlyContinue)) {
     $script:_SISchemaCache = @{}
 }
@@ -78,6 +111,24 @@ function Get-SIEndpointSchema {
         }
     )
     return $schema
+}
+
+function Get-SIEndpointHashFieldNames {
+    <# #1389 the four per-stage hash field lists (CollectHash / EnrichHash / PostureHash / ClassifyHash), built ONCE per schema
+       object and cached beside EndpointEmitFields. They were rebuilt from every schema field through Where-Object /
+       ForEach-Object on every row; the expressions are unchanged, so the lists -- and the hashes -- are identical. #>
+    param([Parameter(Mandatory)] $Schema)
+    $c = $script:_SISchemaCache['EndpointHashFieldNames']
+    if ($null -ne $c -and [object]::ReferenceEquals($c.Schema, $Schema)) { return $c }
+    $c = @{
+        Schema   = $Schema
+        Collect  = @($Schema.fields | Where-Object { $_.stage.writtenBy -eq 'collect'         -and $_.purpose -notin 'enrichment','forensic','raw' } | ForEach-Object { $_.name })
+        Enrich   = @($Schema.fields | Where-Object { $_.stage.writtenBy -eq 'enrich'          -and $_.purpose -notin 'enrichment','forensic','raw' } | ForEach-Object { $_.name })
+        Posture  = @($Schema.fields | Where-Object { $_.stage.writtenBy -eq 'posture_analyze' -and $_.purpose -notin 'enrichment','forensic','raw' } | ForEach-Object { $_.name })
+        Classify = @($Schema.fields | Where-Object { $_.stage.writtenBy -eq 'classify'        -and $_.name -notmatch '^(CollectHash|EnrichHash|PostureHash|ClassifyHash)$' } | ForEach-Object { $_.name })
+    }
+    $script:_SISchemaCache['EndpointHashFieldNames'] = $c
+    return $c
 }
 
 function Get-SIEndpointCatalogVersion {
@@ -401,9 +452,7 @@ function Get-SIEndpointIdentityPair {
         return $Context['_SIIdentityPair']
     }
 
-    if (-not (Get-Command Resolve-SIAssetIdentityPair -ErrorAction SilentlyContinue)) {
-        . (Join-Path $PSScriptRoot '..\..\_shared\SI-AssetIdentity.ps1')
-    }
+    # #1389 SI-AssetIdentity.ps1 is loaded once at the top of this file, not per row
 
     $chain = @(
         @{ NameKeys = 'ENTRA_DisplayName'; IdType = 'AadDeviceId';     Source = 'entra' }
@@ -485,7 +534,7 @@ function Get-SIDerivedValue {
         # the nightly runs the released code, so without this a profile row cannot be attributed to the
         # code that produced it. Risk Analysis has stamped it since v2.1 -- which is exactly why the two
         # trees interleaving was visible in the RA tables and invisible here.
-        'SolutionVersion'   { if (-not (Get-Command Get-SISolutionVersion -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot 'SI-SolutionVersion.ps1') }; return (Get-SISolutionVersion) }
+        'SolutionVersion'   { return (Get-SISolutionVersion) }   # #1389 loaded once at the top of this file
         'CollectionTime'    { return $Context.RunContext.CollectionTime }
         'EndpointTieringCatalogVersion' { return $Context.CatalogVersion }
         # AssetName: cross-engine alias resolved by walking provider sources
@@ -662,9 +711,7 @@ function Get-SIDerivedValue {
         # 📌 Guarded AFTER shortening, because the shortened value is what would be published -- and a
         # 40-hex id has no dot, so it survives the shortening unchanged and must still be refused.
         'DisplayName' {
-            if (-not (Get-Command Test-SINameIsIdentifier -ErrorAction SilentlyContinue)) {
-                . (Join-Path $PSScriptRoot '..\..\_shared\SI-AssetIdentity.ps1')
-            }
+            # #1389 Test-SINameIsIdentifier (SI-AssetIdentity.ps1) is loaded once at the top of this file
             $pid_ = [string]$Context.PrimaryEntityId
 
             $entraName = $null
@@ -876,18 +923,10 @@ function Build-SIEndpointProfileRow {
     # known gaps -- audit #34), the plain MIN stands. Tiering is the product; arbitrating it is not
     # worth losing it for.
     $reducedFrom = $null
-    if (-not (Get-Command -Name Get-SITierFromAssetTags -ErrorAction SilentlyContinue)) {
-        try { . (Join-Path $PSScriptRoot 'Get-SITierAttribution.ps1') } catch { }
-    }
-    if (-not (Get-Command -Name Resolve-SITierClaims -ErrorAction SilentlyContinue)) {
-        try { . (Join-Path $PSScriptRoot 'Resolve-SITierClaims.ps1') } catch { }
-    }
-    if (-not (Get-Command -Name Get-SITierTrustList -ErrorAction SilentlyContinue)) {
-        try { . (Join-Path $PSScriptRoot 'Get-SITierTrustList.ps1') } catch { }
-    }
-    if ((Get-Command -Name Resolve-SITierClaims    -ErrorAction SilentlyContinue) -and
-        (Get-Command -Name Get-SITierTrustList     -ErrorAction SilentlyContinue) -and
-        (Get-Command -Name Get-SITierFromAssetTags -ErrorAction SilentlyContinue)) {
+    # #1389 the three files are loaded once at the top of this file; the guards stay, at 0.08 ms instead of 8 ms each
+    if ((Test-Path -Path 'function:Resolve-SITierClaims') -and
+        (Test-Path -Path 'function:Get-SITierTrustList') -and
+        (Test-Path -Path 'function:Get-SITierFromAssetTags')) {
         try {
             $rClaims = New-Object System.Collections.Generic.List[object]
 
@@ -1012,10 +1051,7 @@ function Build-SIEndpointProfileRow {
         }
     }
 
-    # strip *@odata.type keys recursively from EG rawData blob.
-    if (-not (Get-Command -Name ConvertTo-SICleanedEgBlob -ErrorAction SilentlyContinue)) {
-        . (Join-Path $PSScriptRoot 'Convert-EgBlob.ps1')
-    }
+    # strip *@odata.type keys recursively from EG rawData blob. (#1389 Convert-EgBlob.ps1 is loaded once at the top.)
     $collectEg = ConvertTo-SICleanedEgBlob -Value $collectEg
 
     # drop classify.proofs from Properties. Per-source proofs are already
@@ -1030,13 +1066,9 @@ function Build-SIEndpointProfileRow {
     # customer at once and Log Analytics keeps ~30 days with no backfill.
     # DEGRADE, DO NOT DIE: Properties is metadata, not the inventory. If the projection file is missing
     # (sync/ PreservePatterns has known gaps -- audit #34) the row still ships, unprojected.
-    if (-not (Get-Command -Name Select-SIPayloadBucket -ErrorAction SilentlyContinue)) {
-        try { . (Join-Path $PSScriptRoot 'Get-SIPayloadProfile.ps1') } catch {
-            Write-Warning ("payload profile unavailable ({0}) -- Properties emitted unprojected (all collected metadata)." -f $_.Exception.Message)
-        }
-    }
+    # #1389 Get-SIPayloadProfile.ps1 is loaded once at the top of this file (and said once when it is missing)
     $payloadDropped = @()
-    if (Get-Command -Name Select-SIPayloadBucket -ErrorAction SilentlyContinue) {
+    if (Test-Path -Path 'function:Select-SIPayloadBucket') {
         try {
             $prof = Get-SIPayloadProfileName
             foreach ($b in @(
@@ -1063,7 +1095,7 @@ function Build-SIEndpointProfileRow {
             schema_authority        = 'v2.2/asset-profiling-schema/endpoint.schema.locked.json'
             # Which projection produced this bag. Without it a consumer cannot tell a field that is
             # ABSENT from one the profile REMOVED, and those are different facts about the estate.
-            payload_profile         = if (Get-Command -Name Get-SIPayloadProfileName -ErrorAction SilentlyContinue) { Get-SIPayloadProfileName } else { 'cmdb' }
+            payload_profile         = if (Test-Path -Path 'function:Get-SIPayloadProfileName') { Get-SIPayloadProfileName } else { 'cmdb' }
         }
         collect = @{
             mde           = $collectMde
@@ -1080,7 +1112,7 @@ function Build-SIEndpointProfileRow {
     # Through the accessor, never by touching a $script: variable in the other file -- the two are not
     # always dot-sourced into the same scope, and a counter that silently stays 0 looks exactly like a
     # feature that is switched off. $hostName, NOT $row['AssetName']: $row is built BELOW this block.
-    if (Get-Command -Name Add-SIPayloadMeasurement -ErrorAction SilentlyContinue) {
+    if (Test-Path -Path 'function:Add-SIPayloadMeasurement') {
         try {
             [void](Add-SIPayloadMeasurement -Properties $properties -Schema $schema `
                     -AssetName ([string]$hostName) -Dropped $payloadDropped)
@@ -1205,10 +1237,7 @@ function Build-SIEndpointProfileRow {
     # The flat `cmdbCriticality` string column (set above) is still on every
     # Profile row, which is all the model needs.
 
-    # ---- profile-time risk-factor derivations ----
-    if (-not (Get-Command -Name Get-SIEndpointRiskFactors -ErrorAction SilentlyContinue)) {
-        . (Join-Path $PSScriptRoot 'Get-SIRiskFactors.ps1')
-    }
+    # ---- profile-time risk-factor derivations ---- (#1389 Get-SIRiskFactors.ps1 is loaded once at the top of this file)
     # v2.2.374 -- avoid Add-Member-per-key loop. Same hashtable-union trick as v2.2.371 Azure.
     $rfHash = @{} + $row
     $rfHash['Verdict']  = $verdict
@@ -1235,12 +1264,13 @@ function Build-SIEndpointProfileRow {
     $row['SI_TierBeforeOverride'] = ''
     $row['SI_TierOverrideBy']     = ''
     if ($global:SI_AssetDecisions -and @($global:SI_AssetDecisions).Count -gt 0) {
-        if (-not (Get-Command -Name Resolve-SIAssetDecisions -ErrorAction SilentlyContinue)) {
-            try { . (Join-Path $PSScriptRoot 'Resolve-SIAssetDecisions.ps1') } catch {
-                Write-Warning ("operator decisions unavailable ({0}) -- overrides will NOT be applied this run; computed tiers stand." -f $_.Exception.Message)
-            }
+        # #1389 Resolve-SIAssetDecisions.ps1 is loaded once at the top of this file; the reason it could not be is kept there
+        $decisionsReady = Test-Path -Path 'function:Resolve-SIAssetDecisions'
+        if (-not $decisionsReady -and $null -ne $script:_SIEndpointDecisionsLoadError) {
+            Write-Warning ("operator decisions unavailable ({0}) -- overrides will NOT be applied this run; computed tiers stand." -f $script:_SIEndpointDecisionsLoadError)
+            $script:_SIEndpointDecisionsLoadError = $null   # said once per run, not once per row
         }
-        if (Get-Command -Name Resolve-SIAssetDecisions -ErrorAction SilentlyContinue) {
+        if ($decisionsReady) {
             try {
                 $assetName = if ($row['Hostname']) { [string]$row['Hostname'] } else { [string]$row['DisplayName'] }
                 $dec = Resolve-SIAssetDecisions -Decisions @($global:SI_AssetDecisions) -Asset $assetName -Now ([datetime]::UtcNow)
@@ -1279,11 +1309,7 @@ function Build-SIEndpointProfileRow {
     # dot-source would throw and take down EVERY endpoint row build, trading a complete profile run for
     # an explanatory column. That trade is never worth making: the customer would lose their entire
     # endpoint inventory to gain nothing.
-    if (-not (Get-Command -Name Get-SITierAttribution -ErrorAction SilentlyContinue)) {
-        try { . (Join-Path $PSScriptRoot 'Get-SITierAttribution.ps1') } catch {
-            Write-Warning ("tier attribution unavailable ({0}) -- SI_TierSetBy/Reason/Claims will be empty for this run; the tier itself is unaffected." -f $_.Exception.Message)
-        }
-    }
+    # #1389 Get-SITierAttribution.ps1 is loaded once at the top of this file (and said once when it is missing)
     $tierSourcesForAttribution = @{
         PostureRuleTargetTier = $perSource.PostureRuleTargetTier
     }
@@ -1348,7 +1374,7 @@ function Build-SIEndpointProfileRow {
     # and the claim is marked FeedsTier=$false because nothing consumes it yet, so it is reported as an
     # assertion the engine did not act on rather than counted as a source that set the tier.
     if ($null -ne $row['AssetTags'] -and "$($row['AssetTags'])" -ne '' -and
-        (Get-Command -Name Get-SITierFromAssetTags -ErrorAction SilentlyContinue)) {
+        (Test-Path -Path 'function:Get-SITierFromAssetTags')) {
         $tagVerdict = $null
         try {
             $tagVerdict = Get-SITierFromAssetTags -Tags $row['AssetTags'] -TagPattern (Get-SITierTagPatternFromSchema -Schema $schema)
@@ -1365,7 +1391,7 @@ function Build-SIEndpointProfileRow {
     $row['SI_TierSetBy']  = ''
     $row['SI_TierReason'] = ''
     $row['SI_TierClaims'] = '[]'
-    if (Get-Command -Name Get-SITierAttribution -ErrorAction SilentlyContinue) {
+    if (Test-Path -Path 'function:Get-SITierAttribution') {
         try {
             # #244: an operator override that MOVED the tier is what set it -- say so, instead of "unattributed"
             $ovBy = $null; $ovFrom = $null
@@ -1387,7 +1413,7 @@ function Build-SIEndpointProfileRow {
     # roles come from what the CI reads (Exposure Graph deviceRole / isDomainController / Exchange / ADFS flags) plus the
     # profile's own role detections (SIRules) -- NOT the IsDomainController column, whose hostname heuristic calls a
     # thermostat named 'Nest-DC14' a domain controller. The verdict's value stays only when no classification can run.
-    if (Get-Command -Name ConvertTo-SIEndpointClassificationItem -ErrorAction SilentlyContinue) {
+    if (Test-Path -Path 'function:ConvertTo-SIEndpointClassificationItem') {
         $clsItem = ConvertTo-SIEndpointClassificationItem -Maps (Get-SIProfileValueMaps) -DeviceType ([string]$row['DeviceType']) `
             -DeviceCategory ([string]$row['DeviceCategory']) -DeviceSubtype ([string]$row['DeviceSubtype']) -OsPlatform ([string]$row['OsPlatform']) `
             -DeviceRoles $row['DeviceRole'] -IsDomainController ((ConvertTo-SIBoolOrNull (Get-SIEgValue $meta 'isDomainController')) -eq $true) `
@@ -1397,16 +1423,13 @@ function Build-SIEndpointProfileRow {
         if ($null -ne $cls) { $row['AssetType'] = $cls.Type; $row['AssetSubtype'] = $cls.Subtype }
     }
 
-    # ---- Hashes (4 per-stage) over schema-declared fields by writtenBy ----
-    $collectFieldNames  = @($schema.fields | Where-Object { $_.stage.writtenBy -eq 'collect'         -and $_.purpose -notin 'enrichment','forensic','raw' } | ForEach-Object { $_.name })
-    $enrichFieldNames   = @($schema.fields | Where-Object { $_.stage.writtenBy -eq 'enrich'          -and $_.purpose -notin 'enrichment','forensic','raw' } | ForEach-Object { $_.name })
-    $postureFieldNames  = @($schema.fields | Where-Object { $_.stage.writtenBy -eq 'posture_analyze' -and $_.purpose -notin 'enrichment','forensic','raw' } | ForEach-Object { $_.name })
-    $classifyFieldNames = @($schema.fields | Where-Object { $_.stage.writtenBy -eq 'classify'        -and $_.name -notmatch '^(CollectHash|EnrichHash|PostureHash|ClassifyHash)$' } | ForEach-Object { $_.name })
+    # ---- Hashes (4 per-stage) over schema-declared fields by writtenBy ---- (#1389 the field lists are cached per schema)
+    $hashNames = Get-SIEndpointHashFieldNames -Schema $schema
 
-    $row['CollectHash']  = Get-SIRowHash (_SIHashBag $collectFieldNames  $row)
-    $row['EnrichHash']   = Get-SIRowHash (_SIHashBag $enrichFieldNames   $row)
-    $row['PostureHash']  = Get-SIRowHash (_SIHashBag $postureFieldNames  $row)
-    $row['ClassifyHash'] = Get-SIRowHash (_SIHashBag $classifyFieldNames $row)
+    $row['CollectHash']  = Get-SIRowHash (_SIHashBag $hashNames.Collect  $row)
+    $row['EnrichHash']   = Get-SIRowHash (_SIHashBag $hashNames.Enrich   $row)
+    $row['PostureHash']  = Get-SIRowHash (_SIHashBag $hashNames.Posture  $row)
+    $row['ClassifyHash'] = Get-SIRowHash (_SIHashBag $hashNames.Classify $row)
 
     return [pscustomobject]$row
 }

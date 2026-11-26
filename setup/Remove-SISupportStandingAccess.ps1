@@ -493,7 +493,7 @@ if ($gid) { Write-Line ('admin group      : {0} -- the Support app is {1}a membe
 foreach ($p in $pre) { Write-Line ('{0} {1}: {2}' -f $(if ($p.Ok) { '[ok]     ' } else { '[NOT OK] ' }), $p.Name, $p.Detail) $(if ($p.Ok) { 'Gray' } else { 'Yellow' }) }
 foreach ($k in $want) { Write-Line ('{0,-12}: {1}' -f $k, $planLines[$k]) $(if ($planLines[$k] -match '^nothing|^not known') { 'DarkGray' } else { 'White' }) }
 $result.Plan = @($want | ForEach-Object { '{0}: {1}' -f $_, $planLines[$_] })
-Write-Line 'Today Invardia''s daily support check and a re-run of Grant-SISupportAccess / Grant-SISupportAppDatabase / a support repair of the database setup job add both rights again -- after the change the heartbeat names it when a standing right is back.' 'DarkGray'
+Write-Line 'No SecurityInsight install, update, repair or private-network step adds either right again (#1374): only Grant-SISupportAccess / Grant-SISupportAppDatabase -LegacyStandingAccess (on Invardia''s word) and -Rollback do -- after the change the heartbeat names it when a standing right is back.' 'DarkGray'
 
 if (-not $endBefore) { Write-Line 'already in the end state (read in this run): no db_owner in any product database, not a member of the SQL admin group -- -Apply changes nothing and records it for the heartbeat (cfg.InstallState SupportStanding)' 'White' }
 

@@ -149,21 +149,41 @@ public static class BucketText
         "probe" => "sized again by probing (1, 2, 4, 8 ...)",
         "measured" => "sized from its last measured result",
         "down" => "sized down: the last runs were far below every limit",
+        "fit" => "sized to fit what it returned",
         "raised" => "raised: a bucket was too large and had to be split",
         "configured" => "the configured count",
         "incomplete" => "kept: the report was NOT COMPLETE, so its answers sized nothing",
         _ => decided ?? "",
     };
 
+    /// #1378 A last run this many days old is said as such (Risk Analysis runs daily).
+    public const int StaleDays = 2;
+
+    /// #1378 The last run in plain words. A count sized to fit says what it fitted: "Last run: sized to fit (12 rows -> 1
+    /// bucket)." Every other way says how it was decided, as before.
+    public static string LastRunText(BucketRun last)
+    {
+        if (last.Decided == "fit")
+        {
+            var rows = last.ResultRows ?? 0;
+            return $"Last run: sized to fit ({rows.ToString("N0", CultureInfo.InvariantCulture)} {(rows == 1 ? "row" : "rows")} -> {last.Count.ToString(CultureInfo.InvariantCulture)} {(last.Count == 1 ? "bucket" : "buckets")}). The next run uses that count; a bucket that is too large raises it again in that run.";
+        }
+        return "Last run: " + DecidedLabel(last.Decided) + ".";
+    }
+
     /// What the row means, in plain words.
-    public static string Note(BucketRow r)
+    public static string Note(BucketRow r, DateTime? nowUtc = null)
     {
         var parts = new List<string>();
+        // #1378: a row whose last run is days old is not today's sizing -- the report has not run under this template since
+        // (live 2026-11-25: a row last written 2026-10-19 read as the current count of a small tenant)
+        if (nowUtc is { } now && r.Last is { } old && old.RunUtc > DateTime.MinValue && (now - old.RunUtc).TotalDays >= StaleDays)
+            parts.Add($"Not run under this template since {old.RunUtc.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)}: the numbers are from that run.");
         if (r.Reset is { } p)
             parts.Add($"Reset asked by {p.RequestedBy} on {p.RequestedUtc.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture)} UTC: the next run sizes this report again.");
         if (r.Jump)
             parts.Add("Far more buckets than usual (4 times its usual count, or above 256): the report's query or its data may be wrong. Check the report; reset it if the count is wrong.");
-        if (r.Last is { } last) parts.Add("Last run: " + DecidedLabel(last.Decided) + ".");
+        if (r.Last is { } last) parts.Add(LastRunText(last));
         if (parts.Count == 0) parts.Add("Not run since bucket sizing moved to the database.");
         return string.Join(" ", parts);
     }

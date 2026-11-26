@@ -23,7 +23,20 @@
     without it is built and rolled the old way. Never throws (a prebuild that fails is simply built again later).
 #>
 
-$script:SIUpdaterQueued = @{}
+# #1311 (several installations, 2026-11-19..23): the run's queued builds (image -> build) are $global: (#836):
+# the self-roll reads them from another script's scope, where a $script: table was $null -- "Cannot index into a null array",
+# and the updater kept its old image for one more run. Set only when absent (a reload in the run never drops a queued build);
+# every read goes through Get-SIUpdaterQueuedBuild.
+if (-not ($global:SIUpdaterQueued -is [hashtable])) { $global:SIUpdaterQueued = @{} }
+
+function Get-SIUpdaterQueuedBuild {
+    <# The build this run queued for -Image (Start-SIUpdaterPrebuilds), or $null. -Remove: taken off the table. NEVER throws. #>
+    param([Parameter(Mandatory)][string]$Image, [switch]$Remove)
+    if (-not ($global:SIUpdaterQueued -is [hashtable]) -or -not $global:SIUpdaterQueued.ContainsKey($Image)) { return $null }
+    $b = $global:SIUpdaterQueued[$Image]
+    if ($Remove) { $global:SIUpdaterQueued.Remove($Image) }
+    $b
+}
 
 function Get-SIUpdaterFastRollPath {
     <# The release's fast-roll library, or '' when this release has none (built and rolled the old way). #>
@@ -56,7 +69,7 @@ function Start-SIUpdaterPrebuilds {
     <#
         Queues, in parallel with the engine roll, every OTHER image this release needs: the web app and the MCP server (only
         when their sources changed and the app exists here), and the updater's own image (thin layer on its cached base).
-        Records each queued build in $script:SIUpdaterQueued (image -> build) for Invoke-SIUpdaterFastBuild. Returns the
+        Records each queued build in $global:SIUpdaterQueued (image -> build) for Invoke-SIUpdaterFastBuild. Returns the
         queued image names. Never throws.
     #>
     param([Parameter(Mandatory)][string]$SIRoot, [Parameter(Mandatory)][string]$ResourceGroup, [Parameter(Mandatory)][string]$AcrName,
@@ -64,6 +77,7 @@ function Start-SIUpdaterPrebuilds {
           [string]$UpdaterJob = 'caj-si-updater', [switch]$SelfOff)
     $lib = Get-SIUpdaterFastRollPath -SIRoot $SIRoot
     if (-not $lib) { return @() }
+    if (-not ($global:SIUpdaterQueued -is [hashtable])) { $global:SIUpdaterQueued = @{} }
     $queued = New-Object System.Collections.Generic.List[string]
     $temp = New-Object System.Collections.Generic.List[string]
     try {
@@ -88,7 +102,7 @@ function Start-SIUpdaterPrebuilds {
                     $bf = Join-Path $work 'Dockerfile.base'; [IO.File]::WriteAllText($bf, $plan.BaseDockerfile)
                     Push-Location -LiteralPath $ctx
                     try { $b = Start-SIAcrBuild @bArgs -Image $plan.BaseImage -File $bf } finally { Pop-Location }
-                    $script:SIUpdaterQueued[$plan.BaseImage] = $b; $queued.Add($plan.BaseImage)
+                    $global:SIUpdaterQueued[$plan.BaseImage] = $b; $queued.Add($plan.BaseImage)
                 } else {
                     $f = 'container/updater/Dockerfile'
                     if ($plan.HasBase) {
@@ -103,7 +117,7 @@ function Start-SIUpdaterPrebuilds {
         if ($want.Count) {
             Invoke-SIUpdaterBuildInContext -SIRoot $SIRoot -Action {
                 foreach ($w in $want) {
-                    try { $b = Start-SIAcrBuild @bArgs -Image $w.Image -File $w.File; $script:SIUpdaterQueued[$w.Image] = $b; $queued.Add($w.Image) }
+                    try { $b = Start-SIAcrBuild @bArgs -Image $w.Image -File $w.File; $global:SIUpdaterQueued[$w.Image] = $b; $queued.Add($w.Image) }
                     catch { Write-UpdLog ("NOTE: {0} could not be queued ({1}) -- it is built when it is needed" -f $w.Image, $_.Exception.Message) }
                 }
             }
@@ -125,7 +139,7 @@ function Invoke-SIUpdaterFastBuild {
     param([Parameter(Mandatory)][string]$SIRoot, [Parameter(Mandatory)][string]$AcrName, [Parameter(Mandatory)][string]$SubscriptionId,
           [Parameter(Mandatory)][string]$Image, [Parameter(Mandatory)][string]$File, [string]$LoginServer = '', [int]$TimeoutMinutes = 30)
     $lib = Get-SIUpdaterFastRollPath -SIRoot $SIRoot
-    $q = $script:SIUpdaterQueued[$Image]
+    $q = Get-SIUpdaterQueuedBuild -Image $Image
     if (-not $lib) { return $false }
     . $lib
     # #521: the run's REST seam -- the release's build functions take it (no az)
@@ -134,7 +148,7 @@ function Invoke-SIUpdaterFastBuild {
     if ($q) {
         Write-UpdLog ("{0}: waiting for the build queued at the start of this run" -f $Image)
         $q = @(Wait-SIAcrBuilds @bArgs -Builds @($q) -TimeoutMinutes $TimeoutMinutes -Log $log)[0]
-        $script:SIUpdaterQueued.Remove($Image)
+        $null = Get-SIUpdaterQueuedBuild -Image $Image -Remove
         if ($q.Status -eq 'Succeeded') { return $true }
         Write-UpdLog ("{0}: the queued build ended {1} -- building it once more" -f $Image, $q.Status)
     }
@@ -146,10 +160,10 @@ function Invoke-SIUpdaterFastBuild {
     try {
         $buildFile = $File
         if ($plan.HasBase -and $LoginServer) {
-            $bq = $script:SIUpdaterQueued[$plan.BaseImage]
+            $bq = Get-SIUpdaterQueuedBuild -Image $plan.BaseImage
             if ($bq) {
                 $bq = @(Wait-SIAcrBuilds @bArgs -Builds @($bq) -TimeoutMinutes $TimeoutMinutes -Log $log)[0]
-                $script:SIUpdaterQueued.Remove($plan.BaseImage)
+                $null = Get-SIUpdaterQueuedBuild -Image $plan.BaseImage -Remove
             }
             if (-not (Test-SIAcrTag @bArgs -Repo $plan.BaseRepo -Tag $plan.BaseTag -LoginServer $LoginServer)) {
                 Write-UpdLog ("building the base {0} (only when its Dockerfile lines, FROM image or week change)" -f $plan.BaseImage)

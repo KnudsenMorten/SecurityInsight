@@ -1,0 +1,173 @@
+[
+  {
+    "button": "P1 Run the pipeline now (Operations > Jobs): the runner woken to take the queued run",
+    "job": "caj-si-flow",
+    "id": "a1b2c3d4e5f6",
+    "by": "admin@contoso.com",
+    "env": {
+      "SI_AUDIT_CID": "5f0c2a9e8b7d4c1fa3e6b2d9c8a7f001",
+      "SI_AUDIT_STARTED_BY": "admin@contoso.com",
+      "SI_FLOW_DRAIN": "1",
+      "SI_FLOW_TRIGGER": "manual"
+    },
+    "message": "{\"SI_JOBREQ_ACTION\":\"start\",\"SI_JOBREQ_JOB\":\"caj-si-flow\",\"SI_JOBREQ_ENV\":{\"SI_AUDIT_CID\":\"5f0c2a9e8b7d4c1fa3e6b2d9c8a7f001\",\"SI_AUDIT_STARTED_BY\":\"admin@contoso.com\",\"SI_FLOW_DRAIN\":\"1\",\"SI_FLOW_TRIGGER\":\"manual\"},\"SI_JOBREQ_ID\":\"a1b2c3d4e5f6\",\"SI_AUDIT_STARTED_BY\":\"admin@contoso.com\"}"
+  },
+  {
+    "button": "P2 Run one step (Operations > Jobs > a step): the runner woken to take the queued step",
+    "job": "caj-si-flow",
+    "id": "b2c3d4e5f6a1",
+    "by": "admin@contoso.com",
+    "env": {
+      "SI_AUDIT_CID": "5f0c2a9e8b7d4c1fa3e6b2d9c8a7f001",
+      "SI_AUDIT_STARTED_BY": "admin@contoso.com",
+      "SI_FLOW_DRAIN": "1",
+      "SI_FLOW_TRIGGER": "manual"
+    },
+    "message": "{\"SI_JOBREQ_ACTION\":\"start\",\"SI_JOBREQ_JOB\":\"caj-si-flow\",\"SI_JOBREQ_ENV\":{\"SI_AUDIT_CID\":\"5f0c2a9e8b7d4c1fa3e6b2d9c8a7f001\",\"SI_AUDIT_STARTED_BY\":\"admin@contoso.com\",\"SI_FLOW_DRAIN\":\"1\",\"SI_FLOW_TRIGGER\":\"manual\"},\"SI_JOBREQ_ID\":\"b2c3d4e5f6a1\",\"SI_AUDIT_STARTED_BY\":\"admin@contoso.com\"}"
+  },
+  {
+    "button": "P2 Run one step on an older Pro database (no run queue): the step itself",
+    "job": "caj-si-flow",
+    "id": "c3d4e5f6a1b2",
+    "by": "admin@contoso.com",
+    "env": {
+      "SI_AUDIT_CID": "5f0c2a9e8b7d4c1fa3e6b2d9c8a7f001",
+      "SI_AUDIT_STARTED_BY": "admin@contoso.com",
+      "SI_FLOW_STEP": "ptc",
+      "SI_FLOW_TRIGGER": "manual"
+    },
+    "message": "{\"SI_JOBREQ_ACTION\":\"start\",\"SI_JOBREQ_JOB\":\"caj-si-flow\",\"SI_JOBREQ_ENV\":{\"SI_AUDIT_CID\":\"5f0c2a9e8b7d4c1fa3e6b2d9c8a7f001\",\"SI_AUDIT_STARTED_BY\":\"admin@contoso.com\",\"SI_FLOW_STEP\":\"ptc\",\"SI_FLOW_TRIGGER\":\"manual\"},\"SI_JOBREQ_ID\":\"c3d4e5f6a1b2\",\"SI_AUDIT_STARTED_BY\":\"admin@contoso.com\"}"
+  },
+  {
+    "button": "P3 Cancel the running pipeline run: the runner started to stop its jobs",
+    "job": "caj-si-flow",
+    "id": "d4e5f6a1b2c3",
+    "by": "admin@contoso.com",
+    "env": {
+      "SI_AUDIT_CID": "5f0c2a9e8b7d4c1fa3e6b2d9c8a7f001",
+      "SI_AUDIT_STARTED_BY": "admin@contoso.com",
+      "SI_FLOW_CANCEL": "1",
+      "SI_FLOW_CANCEL_REASON": "test",
+      "SI_FLOW_CANCEL_RUN": "90335503",
+      "SI_FLOW_CANCEL_RUNNER": "caj-si-flow-abc12",
+      "SI_FLOW_TRIGGER": "manual"
+    },
+    "message": "{\"SI_JOBREQ_ACTION\":\"start\",\"SI_JOBREQ_JOB\":\"caj-si-flow\",\"SI_JOBREQ_ENV\":{\"SI_AUDIT_CID\":\"5f0c2a9e8b7d4c1fa3e6b2d9c8a7f001\",\"SI_AUDIT_STARTED_BY\":\"admin@contoso.com\",\"SI_FLOW_CANCEL\":\"1\",\"SI_FLOW_CANCEL_REASON\":\"test\",\"SI_FLOW_CANCEL_RUN\":\"90335503\",\"SI_FLOW_CANCEL_RUNNER\":\"caj-si-flow-abc12\",\"SI_FLOW_TRIGGER\":\"manual\"},\"SI_JOBREQ_ID\":\"d4e5f6a1b2c3\",\"SI_AUDIT_STARTED_BY\":\"admin@contoso.com\"}"
+  },
+  {
+    "button": "P4 Refresh / Run now of one job (Operations > Jobs): as configured",
+    "job": "caj-si-risk-analysis",
+    "id": "e5f6a1b2c3d4",
+    "by": "admin@contoso.com",
+    "env": {
+      "SI_AUDIT_CID": "5f0c2a9e8b7d4c1fa3e6b2d9c8a7f001",
+      "SI_AUDIT_STARTED_BY": "admin@contoso.com"
+    },
+    "message": "{\"SI_JOBREQ_ACTION\":\"start\",\"SI_JOBREQ_JOB\":\"caj-si-risk-analysis\",\"SI_JOBREQ_ENV\":{\"SI_AUDIT_CID\":\"5f0c2a9e8b7d4c1fa3e6b2d9c8a7f001\",\"SI_AUDIT_STARTED_BY\":\"admin@contoso.com\"},\"SI_JOBREQ_ID\":\"e5f6a1b2c3d4\",\"SI_AUDIT_STARTED_BY\":\"admin@contoso.com\"}"
+  },
+  {
+    "button": "P5 Update now (Operations > Performance): the updater as configured",
+    "job": "caj-si-updater",
+    "id": "f6a1b2c3d4e5",
+    "by": "admin@contoso.com",
+    "env": {
+      "SI_AUDIT_CID": "5f0c2a9e8b7d4c1fa3e6b2d9c8a7f001",
+      "SI_AUDIT_STARTED_BY": "admin@contoso.com"
+    },
+    "message": "{\"SI_JOBREQ_ACTION\":\"start\",\"SI_JOBREQ_JOB\":\"caj-si-updater\",\"SI_JOBREQ_ENV\":{\"SI_AUDIT_CID\":\"5f0c2a9e8b7d4c1fa3e6b2d9c8a7f001\",\"SI_AUDIT_STARTED_BY\":\"admin@contoso.com\"},\"SI_JOBREQ_ID\":\"f6a1b2c3d4e5\",\"SI_AUDIT_STARTED_BY\":\"admin@contoso.com\"}"
+  },
+  {
+    "button": "P5 Apply settings now (a secret handed over): the updater's short run",
+    "job": "caj-si-updater",
+    "id": "a6b5c4d3e2f1",
+    "by": "admin@contoso.com",
+    "env": {
+      "SI_AUDIT_CID": "5f0c2a9e8b7d4c1fa3e6b2d9c8a7f001",
+      "SI_AUDIT_STARTED_BY": "admin@contoso.com",
+      "SI_UPDATER_MODE": "apply-settings"
+    },
+    "message": "{\"SI_JOBREQ_ACTION\":\"start\",\"SI_JOBREQ_JOB\":\"caj-si-updater\",\"SI_JOBREQ_ENV\":{\"SI_AUDIT_CID\":\"5f0c2a9e8b7d4c1fa3e6b2d9c8a7f001\",\"SI_AUDIT_STARTED_BY\":\"admin@contoso.com\",\"SI_UPDATER_MODE\":\"apply-settings\"},\"SI_JOBREQ_ID\":\"a6b5c4d3e2f1\",\"SI_AUDIT_STARTED_BY\":\"admin@contoso.com\"}"
+  },
+  {
+    "button": "P6 Send a test mail (Settings > Email): the mail job's verify run",
+    "job": "caj-si-close-loop-mail",
+    "id": "b6a5c4d3e2f1",
+    "by": "admin@contoso.com",
+    "env": {
+      "SI_AUDIT_CID": "5f0c2a9e8b7d4c1fa3e6b2d9c8a7f001",
+      "SI_AUDIT_STARTED_BY": "admin@contoso.com",
+      "SI_EXEMPTION_MAIL_ONLY": "1",
+      "SI_MAIL_VERIFY": "1"
+    },
+    "message": "{\"SI_JOBREQ_ACTION\":\"start\",\"SI_JOBREQ_JOB\":\"caj-si-close-loop-mail\",\"SI_JOBREQ_ENV\":{\"SI_AUDIT_CID\":\"5f0c2a9e8b7d4c1fa3e6b2d9c8a7f001\",\"SI_AUDIT_STARTED_BY\":\"admin@contoso.com\",\"SI_EXEMPTION_MAIL_ONLY\":\"1\",\"SI_MAIL_VERIFY\":\"1\"},\"SI_JOBREQ_ID\":\"b6a5c4d3e2f1\",\"SI_AUDIT_STARTED_BY\":\"admin@contoso.com\"}"
+  },
+  {
+    "button": "Mail send now (an exemption, a reminder): the mail job, outbox only",
+    "job": "caj-si-close-loop-mail",
+    "id": "c6b5a4d3e2f1",
+    "by": "admin@contoso.com",
+    "env": {
+      "SI_AUDIT_CID": "5f0c2a9e8b7d4c1fa3e6b2d9c8a7f001",
+      "SI_AUDIT_STARTED_BY": "admin@contoso.com",
+      "SI_EXEMPTION_MAIL_ONLY": "1"
+    },
+    "message": "{\"SI_JOBREQ_ACTION\":\"start\",\"SI_JOBREQ_JOB\":\"caj-si-close-loop-mail\",\"SI_JOBREQ_ENV\":{\"SI_AUDIT_CID\":\"5f0c2a9e8b7d4c1fa3e6b2d9c8a7f001\",\"SI_AUDIT_STARTED_BY\":\"admin@contoso.com\",\"SI_EXEMPTION_MAIL_ONLY\":\"1\"},\"SI_JOBREQ_ID\":\"c6b5a4d3e2f1\",\"SI_AUDIT_STARTED_BY\":\"admin@contoso.com\"}"
+  },
+  {
+    "button": "Template release (Changes > apply)",
+    "job": "caj-si-templates",
+    "id": "d6c5b4a3e2f1",
+    "by": "admin@contoso.com",
+    "env": {
+      "SI_AUDIT_CID": "5f0c2a9e8b7d4c1fa3e6b2d9c8a7f001",
+      "SI_AUDIT_STARTED_BY": "admin@contoso.com",
+      "SI_TEMPLATES_ACCEPT_FINGERPRINT": "sha256-0f1e2d",
+      "SI_TEMPLATES_MODE": "release",
+      "SI_TEMPLATES_PACK": "1.13",
+      "SI_TEMPLATES_REQUESTED_BY": "admin@contoso.com"
+    },
+    "message": "{\"SI_JOBREQ_ACTION\":\"start\",\"SI_JOBREQ_JOB\":\"caj-si-templates\",\"SI_JOBREQ_ENV\":{\"SI_AUDIT_CID\":\"5f0c2a9e8b7d4c1fa3e6b2d9c8a7f001\",\"SI_AUDIT_STARTED_BY\":\"admin@contoso.com\",\"SI_TEMPLATES_ACCEPT_FINGERPRINT\":\"sha256-0f1e2d\",\"SI_TEMPLATES_MODE\":\"release\",\"SI_TEMPLATES_PACK\":\"1.13\",\"SI_TEMPLATES_REQUESTED_BY\":\"admin@contoso.com\"},\"SI_JOBREQ_ID\":\"d6c5b4a3e2f1\",\"SI_AUDIT_STARTED_BY\":\"admin@contoso.com\"}"
+  },
+  {
+    "button": "Resend: send this collection again to a connector (Operations > Resend)",
+    "job": "caj-si-asset-vulnerabilities",
+    "id": "e6d5c4b3a2f1",
+    "by": "admin@contoso.com",
+    "env": {
+      "SI_AUDIT_CID": "5f0c2a9e8b7d4c1fa3e6b2d9c8a7f001",
+      "SI_AUDIT_STARTED_BY": "admin@contoso.com",
+      "SI_VulnSync_CollectionTime": "2026-11-25T18:32:10.123Z",
+      "SI_VulnSync_Connector": "sql-main",
+      "SI_VulnSync_SendId": "41"
+    },
+    "message": "{\"SI_JOBREQ_ACTION\":\"start\",\"SI_JOBREQ_JOB\":\"caj-si-asset-vulnerabilities\",\"SI_JOBREQ_ENV\":{\"SI_AUDIT_CID\":\"5f0c2a9e8b7d4c1fa3e6b2d9c8a7f001\",\"SI_AUDIT_STARTED_BY\":\"admin@contoso.com\",\"SI_VulnSync_CollectionTime\":\"2026-11-25T18:32:10.123Z\",\"SI_VulnSync_Connector\":\"sql-main\",\"SI_VulnSync_SendId\":\"41\"},\"SI_JOBREQ_ID\":\"e6d5c4b3a2f1\",\"SI_AUDIT_STARTED_BY\":\"admin@contoso.com\"}"
+  },
+  {
+    "button": "Resend: undo the last run into a connector (Operations > Resend)",
+    "job": "caj-si-asset-vulnerabilities",
+    "id": "f1e6d5c4b3a2",
+    "by": "admin@contoso.com",
+    "env": {
+      "SI_AUDIT_CID": "5f0c2a9e8b7d4c1fa3e6b2d9c8a7f001",
+      "SI_AUDIT_STARTED_BY": "admin@contoso.com",
+      "SI_VulnSync_Connector": "sql-main",
+      "SI_VulnSync_SendId": "42",
+      "SI_VulnSync_UndoRunId": "run-20261125-1832"
+    },
+    "message": "{\"SI_JOBREQ_ACTION\":\"start\",\"SI_JOBREQ_JOB\":\"caj-si-asset-vulnerabilities\",\"SI_JOBREQ_ENV\":{\"SI_AUDIT_CID\":\"5f0c2a9e8b7d4c1fa3e6b2d9c8a7f001\",\"SI_AUDIT_STARTED_BY\":\"admin@contoso.com\",\"SI_VulnSync_Connector\":\"sql-main\",\"SI_VulnSync_SendId\":\"42\",\"SI_VulnSync_UndoRunId\":\"run-20261125-1832\"},\"SI_JOBREQ_ID\":\"f1e6d5c4b3a2\",\"SI_AUDIT_STARTED_BY\":\"admin@contoso.com\"}"
+  },
+  {
+    "button": "Resend: send this collection again to a ServiceNow connector",
+    "job": "caj-si-asset-vulns-servicenow",
+    "id": "a2f1e6d5c4b3",
+    "by": "admin@contoso.com",
+    "env": {
+      "SI_AUDIT_CID": "5f0c2a9e8b7d4c1fa3e6b2d9c8a7f001",
+      "SI_AUDIT_STARTED_BY": "admin@contoso.com",
+      "SI_VulnSync_CollectionTime": "2026-11-25T18:32:10.123Z",
+      "SI_VulnSync_Connector": "servicenow-prod",
+      "SI_VulnSync_SendId": "43"
+    },
+    "message": "{\"SI_JOBREQ_ACTION\":\"start\",\"SI_JOBREQ_JOB\":\"caj-si-asset-vulns-servicenow\",\"SI_JOBREQ_ENV\":{\"SI_AUDIT_CID\":\"5f0c2a9e8b7d4c1fa3e6b2d9c8a7f001\",\"SI_AUDIT_STARTED_BY\":\"admin@contoso.com\",\"SI_VulnSync_CollectionTime\":\"2026-11-25T18:32:10.123Z\",\"SI_VulnSync_Connector\":\"servicenow-prod\",\"SI_VulnSync_SendId\":\"43\"},\"SI_JOBREQ_ID\":\"a2f1e6d5c4b3\",\"SI_AUDIT_STARTED_BY\":\"admin@contoso.com\"}"
+  }
+]

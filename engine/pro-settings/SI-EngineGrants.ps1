@@ -48,6 +48,13 @@ $script:SIEngineDenies = @(
     @{ Object = 'sidata.CiOverride'; Verbs = 'INSERT, UPDATE, DELETE' }
     # an Admin's per-server software exception: written by the web app only (Review & commit); the engine and the updater read it
     @{ Object = 'sidata.CiSoftwareException'; Verbs = 'INSERT, UPDATE, DELETE' }
+    # #1317 (defense in depth): the collection partitions' move record and its touched collections are written only by the
+    # index build job (the updater's identity, engine\pro-settings\SI-ProPartitionMove.ps1). An engine that set State =
+    # 'checked' would let the job drop <T>_Unpartitioned, one that cleared the touched rows would let a changed collection
+    # swap unseen. The engine only READS them. The move's trigger on the old table still notes a collection the engine's
+    # write changes: the trigger and sidata.PartitionMoveTouched have one owner, so the insert is not checked (ownership chain).
+    @{ Object = 'sidata.PartitionMove';        Verbs = 'INSERT, UPDATE, DELETE' }
+    @{ Object = 'sidata.PartitionMoveTouched'; Verbs = 'INSERT, UPDATE, DELETE' }
     # What the engine must never read or change, DENIED to the role -- a DENY beats db_datareader / db_datawriter, so an
     # install that still has the broad roles is held to it too (every update applies this list through the signed grant
     # procedure). The web app's sign-in key ring and the secret hand-over are never read; who may sign in, the settings and
@@ -227,8 +234,12 @@ $script:SIEngineNotEngine = @(
     @{ File = 'engine/_shared/SI-IndexBuild.ps1';               Function = 'Measure-SIIndexReadRate';       Why = 'the updater''s schema step: a timed sample read' }
     @{ File = 'engine/_shared/SI-IndexBuild.ps1';               Function = 'Get-SIIndexBuildRunSql';        Why = 'caj-si-index-build (the updater''s identity): the index build''s statement' }
     @{ File = 'engine/_shared/SI-IndexBuild.ps1';               Function = 'Get-SIIndexBuildPauseSql';      Why = 'caj-si-index-build (the updater''s identity): the pause of its build' }
+    @{ File = 'engine/_shared/SI-IndexBuild.ps1';               Function = 'Get-SIColumnstoreRemoveRowSql'; Why = 'the updater''s columnstore step (Invoke-SIColumnstoreIndexStep) and caj-si-index-build, both the updater''s identity: a columnstore index''s waiting row removed' }
     @{ File = 'engine/index-build/SI-IndexBuildJob.ps1';        Function = '*';  Why = 'caj-si-index-build: runs as the updater''s identity (the install''s lock, cfg.IndexBuild, the index DDL)' }
+    @{ File = 'engine/_shared/SI-IndexBuild.ps1';               Function = 'Get-SIHistoryIndexDefinitions'; Why = 'the finding history''s page indexes (#1332): their statements, run only by caj-si-index-build, the updater''s identity' }
     @{ File = 'engine/index-build/Invoke-SIIndexBuildJob.ps1';  Function = '*';  Why = 'caj-si-index-build: runs as the updater''s identity' }
+    @{ File = 'engine/_shared/SI-IndexBuild.ps1';               Function = 'Get-SIColumnstoreRemoveRowSql'; Why = 'the updater''s columnstore step (caj-si-updater, Invoke-SIColumnstoreIndexStep): a recorded columnstore index row taken off when the setting is off' }
+    @{ File = 'engine/pro-settings/SI-ProPartitionMove.ps1';    Function = '*';  Why = 'the collection partitions (the move of an existing install''s large tables, the boundaries ahead, a retired collection''s partition emptied): caj-si-index-build, the updater''s identity, in an idle window' }
     @{ File = 'engine/pro-settings/SI-EngineGrants.ps1';        Function = '*';  Why = 'this file: setup, the cut-over script and the updater''s check' }
     @{ File = 'engine/pro-settings/SI-GrantProcedure.ps1';      Function = '*';  Why = 'the signed grant procedure: the admin run (setup, the cut-over) and the updater' }
     @{ File = 'engine/pro-settings/SI-ProOverrideMigration.ps1'; Function = '*'; Why = 'setup\Publish-SITemplates.ps1' }
@@ -265,6 +276,9 @@ $script:SIEngineNotEngine = @(
     @{ File = 'engine/pro-settings/SI-SupportGrantSql.ps1';     Function = 'ConvertFrom-SISupportGrantState'; Why = 'the support grant''s schema, procedures and admin steps: setup, the guided install and the updater (the engine calls only Get-SISupportGrantCallSql)' }
     @{ File = 'engine/pro-settings/SI-SupportGrantSql.ps1';     Function = 'Get-SISupportStandingOffSql'; Why = 'the Support app''s standing db_owner off, run only by the database setup job (caj-si-dbinit) when the updater names the Support app -- never by the engine' }
     @{ File = 'engine/pro-settings/SI-SupportGrantSql.ps1';     Function = 'Get-SISupportGrantErrorResult'; Why = 'the support grant''s schema, procedures and admin steps: setup, the guided install and the updater (the engine calls only Get-SISupportGrantCallSql)' }
+    # #1368 (Invardia 2026-11-25, SEC-CHANGE-1 point 1: no right for a log line): the grant job's read of the open grants is NOT
+    # granted to si_engine -- where the role refuses it the job says it could not read the other open grants and closes as before
+    @{ File = 'engine/support-grant/SI-SupportGrant.ps1';      Function = 'Get-SISupportGrantOpenGrantsSql'; Why = 'a read si_engine is NOT granted on purpose (#1368, SEC-CHANGE-1 point 1): answered only where the engine still has db_datareader; refused = the grant job''s line says it could not read the other open grants' }
     @{ File = 'engine/_shared/SI-ReleaseControl.ps1';           Function = 'Get-SIReleaseScopeSaveSql';     Why = 'the updater (Save-SIReleaseScopeRecords: the component fingerprints of the release it installed)' }
 )
 

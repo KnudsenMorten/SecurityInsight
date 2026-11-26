@@ -75,9 +75,12 @@ public abstract class TaskReportPageModel(ICollectionViews views, ILogger log) :
                 var spec = RemediationTaskReports.Values(Visibility);
                 var vp = new Dictionary<string, object?>(p);
                 if (Visibility is not null) foreach (var kv in Visibility.Parameters) vp[kv.Key] = kv.Value;
-                var rows = (await Views.ExportAsync(new GridQuery(spec, vp, Current.Version + "|remtaskvalues|" + (Visibility?.Key ?? "all"), new GridRequest { Size = 500 }), ct)).Data.Rows;
-                DimValues = rows.GroupBy(r => Convert.ToString(r["Dim"], System.Globalization.CultureInfo.InvariantCulture) ?? "")
-                    .ToDictionary(g => g.Key, g => (IReadOnlyList<string>)g.Select(r => Convert.ToString(r["Value"], System.Globalization.CultureInfo.InvariantCulture) ?? "").OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList(), StringComparer.OrdinalIgnoreCase);
+                // #1372: cached long per collection (+ visibility); only the department names are read live (cached briefly)
+                var rows = (await Views.ChoicesAsync(new GridQuery(spec, vp, Current.Version + "|remtaskvalues|" + (Visibility?.Key ?? "all"), new GridRequest { Size = 500 }), ct)).Data.Rows;
+                IReadOnlyList<IReadOnlyDictionary<string, object?>> names = [];
+                if (rows.Any(r => string.Equals(Convert.ToString(r["Dim"], System.Globalization.CultureInfo.InvariantCulture), "Department", StringComparison.OrdinalIgnoreCase)))
+                    names = (await Views.ChoicesAsync(new GridQuery(RemediationTaskReports.DepartmentNames, new Dictionary<string, object?>(), "-|remtaskdeptnames", new GridRequest { Size = 500 }), ct)).Data.Rows;
+                DimValues = RemediationTaskReports.ValuesByDimension(rows, names);
             }
             catch (Exception ex) when (ex is not OperationCanceledException) { Log.LogWarning(ex, "the task report dimension values could not be read; the choices are typed"); }
         }

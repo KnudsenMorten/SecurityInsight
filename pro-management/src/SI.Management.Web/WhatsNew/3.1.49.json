@@ -1,0 +1,38 @@
+{
+  "version": "3.1.49",
+  "date": "2026-11-25",
+  "type": "feature",
+  "summary": "Duplicate recommendations are merged into one finding, and each task sent to ServiceNow carries its full context.",
+  "new": [
+    {
+      "title": "Full task context to ServiceNow and SQL",
+      "text": "Each remediation task carries what to do first, paths, the recommended update, CVE ids, risk, due date, the asset and a link to its page. Add the new columns from the connector page's table definition."
+    },
+    {
+      "title": "Duplicates not merged are shown",
+      "text": "Operations > Data quality shows duplicates not merged, and the run log warns with examples."
+    }
+  ],
+  "fixes": [
+    {
+      "title": "Duplicate recommendations are merged",
+      "text": "An 'Update <software>' recommendation for software whose CVEs are already on the asset becomes evidence on those CVE findings ('Also reported by')."
+    },
+    {
+      "title": "A merged recommendation closes as 'Linked'",
+      "text": "It is sent to ServiceNow and the SQL hand-off as closed 'Linked' to the CVE finding, never as fixed and never dropped."
+    },
+    {
+      "title": "The job buttons work again",
+      "text": "Run now, Stop, schedule changes, template release and mail send-now go to the installation through a queue."
+    },
+    {
+      "title": "Support access answers each request in turn",
+      "text": "A support session's close no longer cancels another session's waiting request."
+    },
+    {
+      "title": "Guests are recognised again at sign-in",
+      "text": "Guests kept by e-mail address are looked up once and stored, with no object id to enter by hand."
+    }
+  ]
+}

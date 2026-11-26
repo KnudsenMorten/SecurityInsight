@@ -344,6 +344,14 @@ if ((Test-Path -LiteralPath (Join-Path $PSScriptRoot 'engine\pro-settings\SI-Pro
     (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'engine/support-grant/Invoke-SISupportGrant.ps1')) -and @($Engines) -notcontains 'support-grant') {
     $Engines = @($Engines) + @('support-grant')
 }
+# #1252: the job request job (caj-si-job-requests: starts the job a person asks for in the web app, on a message the web app puts
+# on the queue si-job-requests) is infrastructure the same way -- never a timer, never a step; STARTED BY ITS QUEUE as the engine
+# identity. An existing install gets it from the update (setup\_shared\SI-MissingJobs.ps1); the queue and the web app's one
+# right on it are the updater's (setup\_shared\SI-JobRequestsUpdate.ps1).
+if ((Test-Path -LiteralPath (Join-Path $PSScriptRoot 'engine\pro-settings\SI-ProSettings.ps1')) -and
+    (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'engine/job-requests/Invoke-SIJobRequests.ps1')) -and @($Engines) -notcontains 'job-requests') {
+    $Engines = @($Engines) + @('job-requests')
+}
 # #412: asset-properties is RETIRED as a job -- with SI_AssetProperties = 'full' the endpoint, identity and azure profilers
 # read each source once and publish the full asset metadata themselves. An explicit list that still names it (an older
 # SI_Bootstrap_Engines) does not create it; a job an earlier Bootstrap created is left alone (it ends at once, said) and
@@ -1114,7 +1122,7 @@ foreach ($engine in $Engines) {
     # #235: the template publish job is MANUAL only -- the web app starts it with the accepted fingerprint; never KEDA, no cron.
     # #1038 (1): the data-out job too -- started by the data sync on its mark and by a person to resend; never a timer.
     # #1021: the support grant job too -- started only by the Invardia Support session, with its request on the queue.
-    $isManualOnly = ($engine -eq 'templates-publish') -or ($engine -eq 'data-out') -or ($engine -eq 'support-grant')
+    $isManualOnly = ($engine -eq 'templates-publish') -or ($engine -eq 'data-out') -or ($engine -eq 'support-grant') -or ($engine -eq 'job-requests')
 
     # Container App Jobs name max 32 chars. Engine names longer than ~18 chars
     # need a shortened alias for the job-name slot (the SI_ENGINE env var still
@@ -1196,6 +1204,7 @@ foreach ($engine in $Engines) {
     $trigPlan = Get-SIBootstrapTriggerPlan -Engine $engine -Mode $orch.Mode -Cron $schedule -Map $flowMap
     $existingManual = ($existing -and [string]$existing.properties.configuration.triggerType -eq 'Manual')
     $triggerNote = if ($engine -eq 'support-grant') { 'started by its queue si-support-requests' }
+                   elseif ($engine -eq 'job-requests') { 'started by its queue si-job-requests' }
                    elseif ($isManualOnly) { 'manual trigger only' }
                    elseif ($existingManual) { 'manual trigger kept (in the flow, or disabled)' }
                    elseif (-not $existing -and $trigPlan.Trigger -eq 'Manual') { $(if ($isFlow) { 'waits -- schedules mode' } else { 'in the flow' }) + (' (timer "{0}" remembered)' -f $schedule) }
@@ -1463,6 +1472,14 @@ foreach ($engine in $Engines) {
             $sgEvent = $true
         } catch { Write-Warning ('[{0}] stays manual: {1}' -f $jobName, $_.Exception.Message) }
     }
+    # #1252: the job request job -- started by ITS queue si-job-requests the same way (manual, said, until it can be)
+    $jrEvent = $false
+    if ($engine -eq 'job-requests') {
+        try {
+            $createArgs = @(ConvertTo-SISupportGrantEventCreateArgs -CreateArgs $createArgs -StorageAccount ([string]$global:SI_StorageAccount) -IdentityResourceId ([string]$engAuth.IdentityResourceId) -Queue 'si-job-requests')
+            $jrEvent = $true
+        } catch { Write-Warning ('[{0}] stays manual: {1}' -f $jobName, $_.Exception.Message) }
+    }
     $createArgs += @('--tags', $siBuildTag) + $siSizeTags
     $createArgs += $engRegistry
     if ($engAuth.IdentityResourceId) {
@@ -1515,6 +1532,9 @@ foreach ($engine in $Engines) {
             # existing manual one is converted by the update -- setup never changes an existing job's trigger)
             if ($sgEvent -and [string]$existing.properties.configuration.triggerType -eq 'Event') {
                 $upd['ScaleRule'] = ConvertFrom-SIScaleRuleArgs -ScaleArgs @(Get-SISupportGrantTriggerArgs -StorageAccount ([string]$global:SI_StorageAccount) -IdentityResourceId ([string]$engAuth.IdentityResourceId))
+            }
+            if ($jrEvent -and [string]$existing.properties.configuration.triggerType -eq 'Event') {
+                $upd['ScaleRule'] = ConvertFrom-SIScaleRuleArgs -ScaleArgs @(Get-SISupportGrantTriggerArgs -StorageAccount ([string]$global:SI_StorageAccount) -IdentityResourceId ([string]$engAuth.IdentityResourceId) -Queue 'si-job-requests')
             }
             # #209: the identity is on the job in the same write as a Key Vault-referenced secret it resolves
             if ($engAuth.IdentityResourceId) { $upd['AddIdentity'] = [string]$engAuth.IdentityResourceId }

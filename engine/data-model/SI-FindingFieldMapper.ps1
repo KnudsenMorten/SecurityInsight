@@ -189,6 +189,106 @@ function Resolve-SIFindingFieldSource {
     , (Get-SIFindingFieldFlat (Resolve-SISourcePath -Object $Item -Path $Source))
 }
 
+#region #1384 A FINDING IN SEVERAL PRODUCTS (one CVE in nodejs and .net). The source fills the product, version and vendor lists
+# independently (unpaired, in any order); the pairs are the finding's own affected software ("<name> <version> (<vendor>)" per
+# copy). ONE place for the rule the task build (one task per product and version) and every output's grouping value (all
+# those task names, sorted, "; " -- owner 2026-11-25 "Sorted, stable list") both read.
+
+function Get-SIFindingFieldList {
+    <# PURE. An item field's values as distinct non-blank texts (a list, or a ';'-separated text), in order. #>
+    param($Item, [string]$Path)
+    $out = New-Object 'System.Collections.Generic.List[string]'
+    $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    foreach ($v in (Get-SIFindingFieldFlat (Resolve-SISourcePath -Object $Item -Path $Path))) {
+        foreach ($p in ([string]$v).Split(';')) { $t = $p.Trim(); if ($t -and $seen.Add($t)) { $out.Add($t) } }
+    }
+    , $out.ToArray()
+}
+
+function Get-SIFindingSoftwarePairs {
+    <#
+    .SYNOPSIS  PURE. The software of one finding as aligned pairs: each item of -Software ("<name> <version> (<vendor>)", the
+               source's own text) whose product is one of -Products (exactly; the longest first) -> @{ Product (as the list
+               has it); Version and Vendor (the item's own -- the source caps each list at 8 values on its own; the vendor as
+               the list has it, lower case) }, one per product / version / vendor, sorted (ordinal, case-insensitive). An item
+               naming no product of the finding is left out (never guessed).
+    #>
+    param([string[]]$Products = @(), [string[]]$Vendors = @(), $Software)
+    $out = New-Object System.Collections.Generic.List[object]
+    $items = New-Object 'System.Collections.Generic.List[string]'
+    foreach ($v in (Get-SIFindingFieldFlat ([System.Collections.Generic.List[object]]@(, $Software)))) { foreach ($p in ([string]$v).Split(';')) { $t = $p.Trim(); if ($t) { $items.Add($t) } } }
+    if ($items.Count -eq 0 -or @($Products).Count -eq 0) { return , $out.ToArray() }
+    $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    $pl = @($Products | Sort-Object -Property @{ Expression = { $_.Length }; Descending = $true }, @{ Expression = { $_ } })
+    foreach ($it in $items) {
+        $rest0 = $it; $d = ''
+        $m = [regex]::Match($it, '^(.*?)\s*\(([^()]*)\)$')
+        if ($m.Success) { $rest0 = $m.Groups[1].Value.Trim(); $d = $m.Groups[2].Value.Trim() }
+        $hit = $null
+        foreach ($p in $pl) {
+            $v = $null
+            if ([string]::Equals($rest0, $p, [StringComparison]::OrdinalIgnoreCase)) { $v = '' }
+            elseif ($rest0.StartsWith($p + ' ', [StringComparison]::OrdinalIgnoreCase)) { $v = $rest0.Substring($p.Length).Trim(); if ($v -match '\s') { $v = $null } }
+            if ($null -eq $v) { continue }
+            $dv = $d
+            foreach ($x in @($Vendors)) { if ([string]::Equals($x, $d, [StringComparison]::OrdinalIgnoreCase)) { $dv = $x; break } }
+            $hit = @{ Product = $p; Version = $v; Vendor = $dv.ToLowerInvariant() }
+            break
+        }
+        if ($null -eq $hit) { continue }
+        if ($seen.Add(('{0}|{1}|{2}' -f $hit.Product, $hit.Version, $hit.Vendor))) { $out.Add([pscustomobject]$hit) }
+    }
+    $out.Sort([Comparison[object]] { param($a, $b)
+            $c = [StringComparer]::OrdinalIgnoreCase.Compare($a.Product, $b.Product); if ($c -ne 0) { return $c }
+            $c = [StringComparer]::Ordinal.Compare($a.Version, $b.Version); if ($c -ne 0) { return $c }
+            [StringComparer]::OrdinalIgnoreCase.Compare($a.Vendor, $b.Vendor) })
+    , $out.ToArray()
+}
+
+function Get-SIFindingSoftwareVariants {
+    <#
+    .SYNOPSIS  PURE. The software variants of one finding item: @() when it names at most one product (nothing to split);
+               else one per product and version, each @{ si_affected_product; si_affected_version; si_affected_vendor;
+               NoVersion } -- the pairs of its affected software; without pairs and one version: one per product (the vendors,
+               when several, sorted); without pairs and several versions: one per product, its version not named (NoVersion).
+    #>
+    param($Item)
+    $prods = Get-SIFindingFieldList $Item 'si_affected_product'
+    if ($prods.Count -le 1) { return , @() }
+    $vers = Get-SIFindingFieldList $Item 'si_affected_version'
+    $vends = Get-SIFindingFieldList $Item 'si_affected_vendor'
+    $sortedVend = { $x = New-Object 'System.Collections.Generic.List[string]'; foreach ($i in $vends) { $x.Add($i) }; $x.Sort([StringComparer]::OrdinalIgnoreCase); ($x.ToArray() -join ';') }
+    $out = New-Object System.Collections.Generic.List[object]
+    $pairs = Get-SIFindingSoftwarePairs -Products $prods -Vendors $vends -Software (Resolve-SISourcePath -Object $Item -Path 'si_affected_software')
+    if (@($pairs).Count -gt 0) {
+        foreach ($s in @($pairs)) { $out.Add(@{ si_affected_product = $s.Product; si_affected_version = $s.Version; si_affected_vendor = $s.Vendor; NoVersion = $false }) }
+    } elseif ($vers.Count -le 1) {
+        $vv = $(if ($vers.Count -eq 1) { $vers[0] } else { '' })
+        foreach ($p in $prods) { $out.Add(@{ si_affected_product = $p; si_affected_version = $vv; si_affected_vendor = $(if ($vends.Count -eq 1) { $vends[0] } else { & $sortedVend }); NoVersion = $false }) }
+    } else {
+        foreach ($p in $prods) { $out.Add(@{ si_affected_product = $p; si_affected_version = ''; si_affected_vendor = $(if ($vends.Count -eq 1) { $vends[0] } else { '' }); NoVersion = $true }) }
+    }
+    , $out.ToArray()
+}
+
+function Get-SIFindingNoVersionName {
+    <# PURE. The product's own task over every installed version, when no version is named: "Update <product> (<vendor>)". #>
+    param([hashtable]$Variant)
+    $nm = ('Update {0}' -f $Variant['si_affected_product']); if ($Variant['si_affected_vendor']) { $nm = ('{0} ({1})' -f $nm, $Variant['si_affected_vendor']) }
+    $nm
+}
+
+function New-SIFindingFieldOverlay {
+    <# PURE. A copy of an item (dictionary or object) with some fields replaced -- the item itself is never changed. #>
+    param($Item, [System.Collections.IDictionary]$Set)
+    $h = [ordered]@{}
+    if ($Item -is [System.Collections.IDictionary]) { foreach ($k in $Item.Keys) { $v = $Item[$k]; if ($v -is [System.DBNull]) { $v = $null }; $h[[string]$k] = $v } }
+    elseif ($null -ne $Item) { foreach ($p in $Item.PSObject.Properties) { $h[$p.Name] = $p.Value } }
+    foreach ($k in $Set.Keys) { if ($k -ne 'NoVersion') { $h[[string]$k] = $Set[$k] } }
+    [pscustomobject]$h
+}
+#endregion
+
 function ConvertTo-SIFindingFieldValues {
     <#
     .SYNOPSIS  PURE. One finding item (the data-out item: the finding document with its CI's values) -> its mapped values,
@@ -215,12 +315,46 @@ function ConvertTo-SIFindingFieldValues {
     $out = [ordered]@{}
     $all = [ordered]@{}
     $labels = @{}
+    $variants = $null
     foreach ($field in $Plan.Fields) {
         if ($null -ne $work -and -not $work.ContainsKey($field)) { continue }
         foreach ($it in $Plan.Items[$field]) {
             if ($it.Types -notcontains '*' -and $it.Types -notcontains $type) { continue }
             if ($null -ne $it.When -and -not (Test-SICondition -Condition $it.When -Item $Item)) { continue }
             $got = $null
+            # #1384 an item whose text names the affected product, for a finding in SEVERAL products: the item worked out once
+            # per product and version (the task build's own variants), every name it gives, sorted, "; " -- never the lists'
+            # own order (which moves run to run)
+            $multi = $false
+            foreach ($src in $it.Sources) { if (([string]$src).StartsWith('$template:') -and ([string]$src).Contains('{si_affected_product}')) { $multi = $true; break } }
+            if ($multi) {
+                if ($null -eq $variants) { $variants = Get-SIFindingSoftwareVariants -Item $Item }
+                if (@($variants).Count -gt 1) {
+                    $names = New-Object System.Collections.Generic.List[object]
+                    foreach ($var in @($variants)) {
+                        $ov = New-SIFindingFieldOverlay -Item $Item -Set $var
+                        $one = $null
+                        foreach ($src in $it.Sources) {
+                            $vals = Resolve-SIFindingFieldSource -Item $ov -Source $src -Labels $labels -Done $all
+                            if ($vals.Count -eq 0) { continue }
+                            foreach ($st in $it.Steps) { $vals = Invoke-SIFindingFieldStep -Values $vals -Op $st.Op -Arg $st.Arg -ValueMaps $ValueMaps; if ($vals.Count -eq 0) { break } }
+                            foreach ($v in $vals) { $s = ([string]$v).Trim(); if ($s -and -not $never.Contains($s)) { $one = $s; break } }
+                            if ($null -ne $one) { break }
+                        }
+                        if ($null -eq $one -and $var['NoVersion'] -and $type -eq 'cve') { $one = Get-SIFindingNoVersionName $var; if ($never.Contains($one)) { $one = $null } }
+                        if ($null -ne $one) { $names.Add($one) }
+                    }
+                    $joined = Get-SIFindingFieldSortedText -Values $names -Separator '; '
+                    if ($joined) { $got = $joined }
+                    if ($null -ne $got) {
+                        $labels[$field] = $it.Label
+                        $all[$field] = $got
+                        if ($null -eq $want -or $want.Contains($field)) { $out[$field] = $got }
+                        break
+                    }
+                    continue
+                }
+            }
             foreach ($src in $it.Sources) {
                 $vals = Resolve-SIFindingFieldSource -Item $Item -Source $src -Labels $labels -Done $all
                 if ($vals.Count -eq 0) { continue }

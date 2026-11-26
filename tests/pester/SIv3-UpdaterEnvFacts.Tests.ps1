@@ -79,7 +79,7 @@ Describe 'the step writes them to the Pro database and reads them back (Invoke-S
         $s = New-Store
         $r = Invoke-SIUpdaterEnvFactsStep -Store $s -SubscriptionId 's' -ResourceGroup 'rg-si' -Arm (New-Arm).Arm -NowUtc ([datetime]'2026-11-15T18:30:00Z').ToUniversalTime()
         $r.Ok | Should -BeTrue -Because $r.Line
-        $r.Line | Should -Be 'environment report facts recorded: 3 resource(s), 2 role assignment(s) at the resource group (read back)'
+        $r.Line | Should -Be 'System Documentation facts recorded: 3 resource(s), 2 role assignment(s) at the resource group (read back)'
         $s.State.Writes.Count | Should -Be 1; $w0 = $s.State.Writes[0]
         $w0.Sql | Should -Match "cfg\.EnvironmentFacts"; $w0.Sql | Should -Match "Name = N'install'"; $w0.Mode | Should -Be 'reader'
         [string]$w0.P['ReadUtc'] | Should -Be '2026-11-15 18:30:00'
@@ -87,7 +87,7 @@ Describe 'the step writes them to the Pro database and reads them back (Invoke-S
     }
     It 'no row read back (a schema without the table): a warning, never a failure of the update; no Pro database: nothing' {
         $r = Invoke-SIUpdaterEnvFactsStep -Store (New-Store -NoTable) -SubscriptionId 's' -ResourceGroup 'rg-si' -Arm (New-Arm).Arm
-        $r.Ok | Should -BeFalse; $r.Line | Should -Match '^WARNING: environment report facts: written, but the row does not read back'
+        $r.Ok | Should -BeFalse; $r.Line | Should -Match '^WARNING: System Documentation facts: written, but the row does not read back'
         (Invoke-SIUpdaterEnvFactsStep -Store $null -SubscriptionId 's' -ResourceGroup 'rg-si').Line | Should -Match 'no Pro database'
         { Invoke-SIUpdaterEnvFactsStep -Store (New-Store) -SubscriptionId 's' -ResourceGroup 'rg-si' -Arm { throw 'boom' } } | Should -Not -Throw
     }

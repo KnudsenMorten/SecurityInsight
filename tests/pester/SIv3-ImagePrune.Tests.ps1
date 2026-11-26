@@ -1135,7 +1135,7 @@ Describe 'IMAGE-PRUNE amendment (Invardia 2026-11-14): the previous image goes o
     }
     It 'WIRING: the later run proves and cleans up on every run that did not swap itself' {
         $u = Get-Content -Raw -LiteralPath (Join-Path $script:SIRoot 'container\updater\_shared\SI-UpdaterInvardia.ps1')
-        $u | Should -Match ([regex]::Escape('if (-not $imageOnlyRan) {'))
+        $u | Should -Match 'if \(-not \$imageOnlyRan( -and -not \$imgCheck)?\) \{'   # #1344: an image check run leaves the clean-up to the next update run
         $u | Should -Match ([regex]::Escape('Invoke-SIUpdaterImageOnlyPendingPrune -ResourceGroup $ResourceGroup -AcrName $AcrName -SubscriptionId $SubscriptionId -Store $Store'))
         $u | Should -Match ([regex]::Escape('-Get $get -ReadSecret $s[''ReadSecret''] -WriteSecret $s[''WriteSecret'']')) -Because 'the record is written before the first delete of a proven swap too'
     }

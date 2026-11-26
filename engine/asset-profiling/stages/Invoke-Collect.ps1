@@ -507,7 +507,7 @@ function Invoke-SICollect {
             $di = Find-SIDeviceInfo -Index $deviceInfoByName -DeviceIds @([string]$metadata['MDE_DeviceId'], [string]$metadata['EG_MdeDeviceId']) -NameKey $nameKey
             if ($di) {
                 # v3 data model: the DeviceInfo row is the 'deviceInfo' part of the device's MDE record (key = its Defender device id)
-                if (Get-Command -Name Add-SIRecordPart -ErrorAction SilentlyContinue) { Add-SIRecordPart -Provider 'mde' -RecordType 'device' -Key ([string]$di.DeviceId) -Part 'deviceInfo' -Object (ConvertTo-SIDeviceInfoPart -Row $di); [void]$defenderCtxIds.Add([string]$di.DeviceId) }
+                if (Test-Path -Path 'function:Add-SIRecordPart') { Add-SIRecordPart -Provider 'mde' -RecordType 'device' -Key ([string]$di.DeviceId) -Part 'deviceInfo' -Object (ConvertTo-SIDeviceInfoPart -Row $di); [void]$defenderCtxIds.Add([string]$di.DeviceId) }
                 if (-not $metadata['MDE_PublicIp'] -and $di.PublicIP)           { $metadata['MDE_PublicIp']      = $di.PublicIP }
                 if (-not $metadata['MDE_LoggedOnUsers'] -and $di.LoggedOnUsers) { $metadata['MDE_LoggedOnUsers'] = $di.LoggedOnUsers }
                 if ($di.IPAddresses) {
@@ -592,7 +592,7 @@ function Invoke-SICollect {
             $di = Find-SIDeviceInfo -Index $deviceInfoByName -DeviceIds @([string]$a.MDE_DeviceId, [string]$a.EG_MdeDeviceId) -NameKey $nameKey
             if ($di) {
                 # v3 data model: the DeviceInfo row is the 'deviceInfo' part of the device's MDE record (key = its Defender device id)
-                if (Get-Command -Name Add-SIRecordPart -ErrorAction SilentlyContinue) { Add-SIRecordPart -Provider 'mde' -RecordType 'device' -Key ([string]$di.DeviceId) -Part 'deviceInfo' -Object (ConvertTo-SIDeviceInfoPart -Row $di); [void]$defenderCtxIds.Add([string]$di.DeviceId) }
+                if (Test-Path -Path 'function:Add-SIRecordPart') { Add-SIRecordPart -Provider 'mde' -RecordType 'device' -Key ([string]$di.DeviceId) -Part 'deviceInfo' -Object (ConvertTo-SIDeviceInfoPart -Row $di); [void]$defenderCtxIds.Add([string]$di.DeviceId) }
                 $metadata['MDE_DeviceId']         = $di.DeviceId
                 $metadata['MDE_DeviceName']       = $di.DeviceName
                 $metadata['MDE_PublicIP']         = $di.PublicIP
@@ -821,7 +821,7 @@ function Invoke-SICollect {
         $skipReason = $null
         # #397: a record another edition wrote (a 2.x run before the upgrade) never skips -- the first v3 run profiles
         # every asset, because v3 readers no longer read 2.x rows (engine/_shared/SI-InstallRows.ps1).
-        if ($null -ne $cached -and (Get-Command -Name Test-SIFingerprintRecordIsThisEdition -ErrorAction SilentlyContinue) -and
+        if ($null -ne $cached -and (Test-Path -Path 'function:Test-SIFingerprintRecordIsThisEdition') -and
             -not (Test-SIFingerprintRecordIsThisEdition -Record $cached)) { $cached = $null }
         if (-not $RunContext.ForceFullRun -and $null -ne $cached) {
             $cachedTier = if ($cached.PSObject.Properties['si_tier']) { [string]$cached.si_tier } else { $null }

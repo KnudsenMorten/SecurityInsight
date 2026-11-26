@@ -16,7 +16,10 @@
          as the SPN, by certificate;
       3. creates or updates the job: scheduled, one replica, the SPN's certificate as a Key Vault REFERENCE (or none
          with -UseManagedIdentity; this script never reads or passes a secret value), the customer's own hosting values
-         and the update ring (-UpdateRing -> SI_UPDATER_RING) as environment.
+         and the update ring (-UpdateRing -> SI_UPDATER_RING) as environment;
+      4. creates or updates the image check job caj-si-image-check next to it: every 15 minutes ('*/15 * * * *' UTC) it asks
+         Invardia for a newer image-only (security) release of the ring and installs only that, at once -- the updater's own
+         image, identity and settings (no new right). A code release stays on the nightly update.
 
     ONE SOURCE: Invardia's platform (operator 2026-10-06: "one solution: invardia"; framework UPDATE-1.7). SecurityInsight's
     own update feed (a storage container + read-only link, channel.json) is RETIRED: -Source feed and -SourceUrlSecretName
@@ -393,6 +396,15 @@ if (-not $existing) {
     if ($dropSecrets -contains 'src-url') { Info 'removed the update feed link (src-url) from the job -- it now takes releases from Invardia' }
     Info "updated $JobName"
 }
+# #1344 (owner IMAGE-30MIN-1, framework SEC-LANE-1 G5): THE IMAGE CHECK next to the updater -- caj-si-image-check, every 15 minutes
+# ('*/15 * * * *' UTC): it asks Invardia for a newer IMAGE-ONLY (security) release of the ring and installs only that, at once
+# (a code release stays on the nightly update). Made from the updater job just written: the same image, identity, registry
+# and Key Vault references -- no new right (setup\_shared\SI-ImageCheckJob.ps1), read back. Every update keeps it present.
+Step '3b. The image check (every 15 minutes)'
+. (Join-Path $PSScriptRoot '_shared/SI-ImageCheckJob.ps1')
+$icArm = { param([string]$Method, [string]$Path, $Body) Invoke-SIArm -Method $Method -Path $Path -ApiVersion (Get-SIImageCheckJobNames).AppApi -Body $Body -AllowNotFound:($Method -eq 'GET') }
+$ic = Invoke-SIImageCheckJobEnsure -Arm $icArm -SubscriptionId $sub -ResourceGroup $ResourceGroupName -UpdaterJob $JobName
+if ($ic.Ok) { Info $ic.Reason } else { Write-Warning $ic.Reason }
 # #352: the updater applies the release's database schema + grants before it rolls code -- its identity needs the rights
 if ($ProSqlServer -and $ProSqlDatabase) {
     Step '4. The updater''s rights on the Pro database'

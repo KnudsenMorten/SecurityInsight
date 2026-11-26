@@ -184,7 +184,9 @@ $script:SICiBuildVersion = 15
 # last good tier): no CI that is built comes out different; every CI is the same: re-baselined, version 15.
 # 2026-11-17 (owner): a failed read of the manual CI overrides or the per-server exceptions applies their LAST GOOD read (kept
 # after every good read) and the build goes on -- every CI comes out as with a good read: re-baselined, version 15.
-$script:SICiBuildLogicHash = '127a8d65deab98a497e58abc7c3ddde74dec23f095aad7c8b63713e38fbcd10f'
+# 2026-11-25 (#1389): per-CI `Get-Command` guards became `Test-Path function:` (the same answer for a function, 0.08 ms
+# instead of 8 ms) -- nothing the build decides changed; every CI is the same: re-baselined, version unchanged.
+$script:SICiBuildLogicHash = 'cfacba9f6783bc62b1b1c9b3babcff4cbd0dc02c534f79c657d3ac9dc38da7c6'
 # a CI's fields that change without the CI changing (left out of its content hash)
 # (#406 si_not_seen_days: the days since a not seen / retired CI was last seen -- it grows every day by itself)
 $script:SICiVolatileFields = @('si_collection_time', 'si_run_id', 'si_days_inactive', 'si_ci_action', 'si_last_seen', 'si_field_sources', 'si_not_seen_days')
@@ -563,7 +565,7 @@ function ConvertTo-SICiSplitLedgerKeys {
         if (-not $t -or -not $v -or -not $from) { continue }
         $out[(Get-SILedgerKey -Type $t -Value $v)] = $from
         # a long value is held in the ledger's table in its short form (ConvertTo-SILedgerStoredValue): that key too
-        if (Get-Command -Name ConvertTo-SILedgerStoredValue -ErrorAction SilentlyContinue) {
+        if (Test-Path -Path 'function:ConvertTo-SILedgerStoredValue') {
             $sv = ConvertTo-SILedgerStoredValue -Value $v.ToLowerInvariant()
             if ($sv -and $sv -ne $v.ToLowerInvariant()) { $out[(Get-SILedgerKey -Type $t -Value $sv)] = $from }
         }
@@ -2046,15 +2048,28 @@ BEGIN
 END;
 IF OBJECT_ID('sidata.CiFindingState') IS NOT NULL
 BEGIN
+    -- #1334 the lifecycle's change marks: every row this moves or changes is noted (OUTPUT), marked below where the database has the mark
+    DECLARE @lcm TABLE (OwnerKey NVARCHAR(450) NOT NULL, FindingKey NVARCHAR(256) NOT NULL, OldOwner NVARCHAR(450) NULL, OldCi NVARCHAR(64) NULL);
     UPDATE st SET OwnerKey = x.IntoCiId, CiId = x.IntoCiId
+    OUTPUT inserted.OwnerKey, inserted.FindingKey, deleted.OwnerKey, deleted.CiId INTO @lcm (OwnerKey, FindingKey, OldOwner, OldCi)
     FROM sidata.CiFindingState st JOIN @r x ON st.OwnerKey = x.CiId
     WHERE NOT EXISTS (SELECT 1 FROM sidata.CiFindingState s WHERE s.OwnerKey = x.IntoCiId AND s.FindingKey = st.FindingKey) /* one-statement-ok: only the merged twins of this build (@r) and their survivors */;
     SET @sm = @@ROWCOUNT;
     -- a finding both had: the survivor's lifecycle row keeps the EARLIER first detection
     UPDATE s SET FirstDetected = st.FirstDetected
+    OUTPUT inserted.OwnerKey, inserted.FindingKey, NULL, NULL INTO @lcm (OwnerKey, FindingKey, OldOwner, OldCi)
     FROM sidata.CiFindingState s JOIN @r x ON s.OwnerKey = x.IntoCiId
     JOIN sidata.CiFindingState st ON st.OwnerKey = x.CiId AND st.FindingKey = s.FindingKey
     WHERE st.FirstDetected < s.FirstDetected /* one-statement-ok: only the merged twins of this build (@r) and their survivors */;
+    -- the marks: the moved and changed rows get ChangedAt, the keys they left go to the tombstones (a database without the
+    -- mark yet: nothing -- the statement text never names the column, so it compiles there)
+    IF EXISTS (SELECT 1 FROM @lcm) AND COL_LENGTH('sidata.CiFindingState', 'ChangedAt') IS NOT NULL AND OBJECT_ID('sidata.CiFindingStateGone') IS NOT NULL
+    BEGIN
+        -- (the noted rows go to the marks as JSON: no temporary table, nothing created or removed by this statement)
+        DECLARE @lcmj NVARCHAR(MAX) = (SELECT OwnerKey AS o, FindingKey AS k, OldOwner AS oo, OldCi AS oc FROM @lcm FOR JSON PATH);
+        EXEC sp_executesql N'UPDATE s SET ChangedAt = SYSUTCDATETIME() FROM sidata.CiFindingState AS s JOIN (SELECT DISTINCT o, k FROM OPENJSON(@j) WITH (o NVARCHAR(450), k NVARCHAR(256))) AS m ON m.o = s.OwnerKey AND m.k = s.FindingKey /* one-statement-ok: only the rows this merge moved or changed (@lcm) */;
+               INSERT sidata.CiFindingStateGone (OwnerKey, FindingKey, CiId) SELECT x.oo, x.k, x.oc FROM OPENJSON(@j) WITH (k NVARCHAR(256), oo NVARCHAR(450), oc NVARCHAR(64)) AS x WHERE x.oo IS NOT NULL;', N'@j NVARCHAR(MAX)', @j = @lcmj;
+    END
 END;
 -- the totals as the data sync counts them (open, not exempted; a retired CI has none), for the CIs this touched
 IF OBJECT_ID('sidata.CiFinding') IS NOT NULL AND EXISTS (SELECT 1 FROM @r)
@@ -2393,7 +2408,7 @@ function Get-SICiCmdbRefKeys {
         }
     }
     # #496 the business-service keys the CI used (its CMDB page links, the service model rules, each service it is in)
-    if (Get-Command -Name Get-SICiServiceRefKeys -ErrorAction SilentlyContinue) {
+    if (Test-Path -Path 'function:Get-SICiServiceRefKeys') {
         foreach ($k in (Get-SICiServiceRefKeys -Ci $Ci)) { if ($k -and -not $keys.Contains($k)) { $keys.Add($k) } }
     }
     $keys.ToArray()

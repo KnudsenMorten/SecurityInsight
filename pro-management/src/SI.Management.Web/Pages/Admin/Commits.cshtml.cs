@@ -25,8 +25,19 @@ public sealed class CommitsModel : PageModel
     private readonly ConfigApplier _applier;
     private readonly ChangeService _changes;
     private readonly ILogger<CommitsModel> _log;
-    public CommitsModel(IConfigJournalStore journal, ConfigEntities entities, ConfigApplier applier, ChangeService changes, ILogger<CommitsModel> log)
-    { _journal = journal; _entities = entities; _applier = applier; _changes = changes; _log = log; }
+    private readonly ICommitNamesReader _names;
+    public CommitsModel(IConfigJournalStore journal, ConfigEntities entities, ConfigApplier applier, ChangeService changes, ICommitNamesReader names, ILogger<CommitsModel> log)
+    { _journal = journal; _entities = entities; _applier = applier; _changes = changes; _names = names; _log = log; }
+
+    /// #1377: Who / Approved by by name (the install's identities, the Support app); the stored value is the tooltip.
+    public CommitNames Names { get; private set; } = CommitNames.None;
+
+    /// #1377: a commit's records, a page at a time (a template pack install is ONE commit of every row it wrote).
+    public IReadOnlyList<ConfigUndo.Item> PlanPage { get; private set; } = Array.Empty<ConfigUndo.Item>();
+
+    /// #1377: a template install's ONE commit reads "Template pack 1.17 installed by the product: N rows" (the line is the
+    /// commit's reason, stamped by the publish); every other commit lists the kinds of records it changed, as before.
+    public static bool IsGroupedInstall(string source, string? reason) => source == "template" && !string.IsNullOrWhiteSpace(reason);
 
     /// #857: the viewer's rows per page (one of GridSql.PageChoices; anything else the default).
     [BindProperty(SupportsGet = true, Name = "size")] public int Size { get; set; } = SI.Management.Core.ProData.GridSql.DefaultPageSize;
@@ -63,7 +74,16 @@ public sealed class CommitsModel : PageModel
         {
             HasTable = await _journal.ExistsAsync(ct);
             if (!HasTable) return;
-            if (!string.IsNullOrWhiteSpace(Id)) { await LoadCommitAsync(Id, ct); return; }
+            Names = await _names.ReadAsync(ct);
+            if (!string.IsNullOrWhiteSpace(Id))
+            {
+                await LoadCommitAsync(Id, ct);
+                var at = Math.Max(1, PageNo);
+                if ((at - 1) * PageSize >= Plan.Count) at = 1;
+                PageNo = at;
+                PlanPage = Plan.Skip((at - 1) * PageSize).Take(PageSize).ToList();
+                return;
+            }
             var page = Math.Max(1, PageNo);
             // "What" takes several kinds (one parameter per value, or '|'-joined): only names the journal knows travel on
             ChosenEntities = MultiFilter.ValuesOf(Request.Query, "entity").Select(e => _entities.Find(e)?.Name).Where(n => n is not null).Select(n => n!).Distinct().ToList();
@@ -143,6 +163,10 @@ public sealed class CommitsModel : PageModel
     };
 
     public static string OpWords(string op) => op switch { "Add" => "added", "Remove" => "removed", _ => "changed" };
+
+    /// #1377: one page of a commit's records.
+    public string RecordsLink(int page, int? size = null) => "/Admin/Commits?" + string.Join("&", new[] { ("id", Id), ("size", (size ?? PageSize) == SI.Management.Core.ProData.GridSql.DefaultPageSize ? null : (size ?? PageSize).ToString(CultureInfo.InvariantCulture)), ("p", page.ToString(CultureInfo.InvariantCulture)) }
+        .Where(x => !string.IsNullOrEmpty(x.Item2)).Select(x => x.Item1 + "=" + Uri.EscapeDataString(x.Item2!)));
 
     public string Link(int page, int? size = null) => "/Admin/Commits?" + string.Join("&", new[] { ("entity", Entity), ("q", Q), ("size", (size ?? PageSize) == SI.Management.Core.ProData.GridSql.DefaultPageSize ? null : (size ?? PageSize).ToString(CultureInfo.InvariantCulture)), ("p", page.ToString(CultureInfo.InvariantCulture)) }
         .Where(x => !string.IsNullOrEmpty(x.Item2)).Select(x => x.Item1 + "=" + Uri.EscapeDataString(x.Item2!)));

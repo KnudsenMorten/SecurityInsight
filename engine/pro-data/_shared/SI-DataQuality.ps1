@@ -240,6 +240,14 @@ DECLARE @live nvarchar(400) =
     + CASE WHEN COL_LENGTH('sidata.Collection', 'RaCompletedAt') IS NOT NULL THEN N' AND (c.Status = N''Complete'' OR c.RaCompletedAt IS NOT NULL)' ELSE N' AND c.Status = N''Complete''' END;
 DECLARE @carried nvarchar(100) = CASE WHEN COL_LENGTH('sidata.Finding', 'CarriedFrom') IS NOT NULL THEN N' AND f.CarriedFrom IS NULL' ELSE N'' END;
 DECLARE @c int = NULL, @t datetime2(3) = NULL;
+-- #1364 a report's rows are its findings AND its evidence rows (a finding a meaning rule moved to sidata.FindingEvidence is
+-- still a row the report gave -- never fewer than the source)
+DECLARE @srcT nvarchar(max) = N'sidata.Finding', @srcJ nvarchar(max) = N'sidata.Finding';
+IF OBJECT_ID('sidata.FindingEvidence') IS NOT NULL
+BEGIN
+    SET @srcJ = N'(SELECT CollectionId, ReportName, CarriedFrom, DetailJson FROM sidata.Finding UNION ALL SELECT e.CollectionId, j.ReportName, j.CarriedFrom, j.DetailJson FROM sidata.FindingEvidence AS e CROSS APPLY OPENJSON(e.RowJson) WITH (ReportName nvarchar(256) ''$.ReportName'', CarriedFrom datetime2(3) ''$.CarriedFrom'', DetailJson nvarchar(max) ''$.DetailJson'') AS j)';
+    SET @srcT = N'(SELECT CollectionId, ReportName, CarriedFrom, RaRowCriticalityTier, RaRowSiComponent, RaFillRiskFactorProbability, RaFillRiskFactorConsequence FROM sidata.Finding UNION ALL SELECT e.CollectionId, j.ReportName, j.CarriedFrom, j.RaRowCriticalityTier, j.RaRowSiComponent, j.RaFillRiskFactorProbability, j.RaFillRiskFactorConsequence FROM sidata.FindingEvidence AS e CROSS APPLY OPENJSON(e.RowJson) WITH (ReportName nvarchar(256) ''$.ReportName'', CarriedFrom datetime2(3) ''$.CarriedFrom'', RaRowCriticalityTier nvarchar(4000) ''$.RaRowCriticalityTier'', RaRowSiComponent nvarchar(4000) ''$.RaRowSiComponent'', RaFillRiskFactorProbability bit ''$.RaFillRiskFactorProbability'', RaFillRiskFactorConsequence bit ''$.RaFillRiskFactorConsequence'') AS j)';
+END
 DECLARE @pick nvarchar(max) = N'SELECT TOP (1) @c = c.CollectionId, @t = c.CollectionTime FROM sidata.Collection AS c WHERE c.Kind = N''Detailed'' AND c.CollectionTime >= DATEADD(day, -$days, SYSUTCDATETIME())' + @live + N' ORDER BY c.CollectionTime DESC;';
 EXEC sp_executesql @pick, N'@c int OUTPUT, @t datetime2(3) OUTPUT', @c = @c OUTPUT, @t = @t OUTPUT;
 IF @c IS NULL RETURN;
@@ -249,14 +257,14 @@ IF $typedTest
 IF @typed = 1
 BEGIN
     DECLARE @tq nvarchar(max) = N'SELECT ISNULL(f.ReportName, N'''') AS Report, CONVERT(nvarchar(30), @t, 126) AS CollectionTime, COUNT_BIG(*) AS [Rows]$($tFills -join '' -replace "'", "''")
-FROM sidata.Finding AS f
+FROM ' + @srcT + N' AS f
 WHERE f.CollectionId = @c AND f.CarriedFrom IS NULL
 GROUP BY f.ReportName;';
     EXEC sp_executesql @tq, N'@c int, @t datetime2(3)', @c = @c, @t = @t;
     RETURN;
 END
 DECLARE @q nvarchar(max) = N'SELECT ISNULL(f.ReportName, N'''') AS Report, CONVERT(nvarchar(30), @t, 126) AS CollectionTime, COUNT_BIG(*) AS [Rows]$($fills -join '' -replace "'", "''")
-FROM sidata.Finding AS f CROSS APPLY (SELECT CASE WHEN ISJSON(f.DetailJson) = 1 THEN f.DetailJson END AS d) AS j
+FROM ' + @srcJ + N' AS f CROSS APPLY (SELECT CASE WHEN ISJSON(f.DetailJson) = 1 THEN f.DetailJson END AS d) AS j
 WHERE f.CollectionId = @c' + @carried + N'
 GROUP BY f.ReportName;';
 EXEC sp_executesql @q, N'@c int, @t datetime2(3)', @c = @c, @t = @t;
@@ -1481,7 +1489,10 @@ function Invoke-SIDataQuality {
           [int]$LookbackDays = 3, [switch]$DryRun, [scriptblock]$Log = { param($l, $m) }, [string]$DataModelRoot,
           # #1053 the correlation gatekeeper's result of this run (Invoke-SICorrelationSuspects, run at the start of the data
           # sync): its key numbers (kind corr) and its warnings (rule correlation-suspect) join the run's -- none = not checked
-          $CorrelationSuspects)
+          $CorrelationSuspects,
+          # #1365 the duplicate check's result of this run (Invoke-SIDataDuplicateCheck): its key numbers (kind dup, dup.*) join the
+          # run's -- stored for the trend, never compared, never a warning of this check (its own WARN line and run issue say it)
+          $DuplicateCheck)
     $res = [ordered]@{ Status = ''; RunId = $RunId; CollectionTime = $null; Metrics = @(); Anomalies = @(); Learning = $true; EarlierRuns = 0; Lines = @(); Mailed = $false; MailNote = ''; MailState = ''; Problems = @(); NotRun = @() }
     if (-not $SettingsInvoke) { $SettingsInvoke = $Invoke }
     try {
@@ -1511,6 +1522,10 @@ function Invoke-SIDataQuality {
         # #1053 the correlation suspects' numbers (kind corr: stored with the run for the trend, never compared)
         if ($CorrelationSuspects -and [string]$CorrelationSuspects.Status -in @('ok', 'no-schema')) {
             $metrics = @($metrics) + @(@($CorrelationSuspects.Metrics) | Where-Object { $_ } | ForEach-Object { New-SIDataQualityMetric -Key ([string]$_.Key) -Kind 'corr' -Label ([string]$_.Label) -Value ([double]$_.Value) -Step ([string]$_.Step) })
+        }
+        # #1365 the duplicate check's numbers (kind dup: stored with the run for the trend, never compared)
+        if ($DuplicateCheck -and [string]$DuplicateCheck.Status -eq 'ok') {
+            $metrics = @($metrics) + @(@($DuplicateCheck.Metrics) | Where-Object { $_ } | ForEach-Object { New-SIDataQualityMetric -Key ([string]$_.Key) -Kind 'dup' -Label ([string]$_.Label) -Value ([double]$_.Value) -Step ([string]$_.Step) })
         }
         $res.Metrics = $metrics
         $cmp = Find-SIDataQualityAnomalies -Metrics $metrics -History $history -Settings $settings

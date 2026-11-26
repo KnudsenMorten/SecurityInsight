@@ -375,7 +375,8 @@ function Get-SISupportGrantAdminSteps {
           consent  the consent row (-Level, -Source customer | derived) -- a customer consent replaces a derived one; a
                    derived one never replaces a customer one
           sign     only a procedure whose text is THIS release's is signed (else refused, nothing signed); a new
-                   certificate (2099, private key removed) whose user is in db_owner -- only when not signed yet
+                   certificate (2099, private key removed) whose user is in db_owner -- only when not signed yet; then (#1374)
+                   every predecessor support signer certificate that signs nothing is dropped with its db_owner user
           grants   EXECUTE as the contract says (si_engine, si_web), DENY of writes on the three tables to the product's
                    roles, DENY ALTER on the procedures to si_updater
         -Level '' leaves the consent step out (a database whose consent is copied later).
@@ -413,7 +414,7 @@ SELECT [Level] + N'|' + Source AS Value FROM cfg.SupportConsent WHERE Id = 1;
 "@ })
     }
     $hashes = foreach ($n in 'Open', 'Close', 'Sweep', 'Status') { "(N'cfg.SupportGrant$n', $(Get-SISupportGrantProcedureSha256 -Name $n))" }
-    $steps.Add([pscustomobject]@{ Step = 'sign'; Purpose = 'sign the four procedures with a new in-database certificate in db_owner (expiry 2099, private key removed) -- only this release''s text, only when unsigned'; Sql = @"
+    $steps.Add([pscustomobject]@{ Step = 'sign'; Purpose = 'sign the four procedures with a new in-database certificate in db_owner (expiry 2099, private key removed) -- only this release''s text, only when unsigned; a predecessor support signer that signs nothing is dropped with its user (#1374)'; Sql = @"
 DECLARE @want TABLE (Name sysname PRIMARY KEY, Sha varbinary(32));
 INSERT @want (Name, Sha) VALUES $($hashes -join ', ');
 IF EXISTS (SELECT 1 FROM @want AS w WHERE OBJECT_ID(w.Name) IS NULL)
@@ -445,6 +446,21 @@ BEGIN
     CLOSE w; DEALLOCATE w;
     SET @s = N'ALTER CERTIFICATE ' + QUOTENAME(@cert) + N' REMOVE PRIVATE KEY;'; EXEC sys.sp_executesql @s;
 END
+-- #1374: a PREDECESSOR support signer that signs nothing any more (after a re-sign above, or a leftover of an earlier one --
+-- seen live 2026-11-25: a 2026-11-04 signer signed nothing) is dropped in this same batch: first its certificate-mapped user
+-- (its db_owner membership goes with it), then the certificate. A support signer that still signs anything is never touched.
+DECLARE @oldc sysname, @oldu sysname, @ds nvarchar(400);
+DECLARE oldsig CURSOR LOCAL FAST_FORWARD FOR
+    SELECT c.name FROM sys.certificates AS c WHERE c.name LIKE N'$px%' AND NOT EXISTS (SELECT 1 FROM sys.crypt_properties AS cp WHERE cp.thumbprint = c.thumbprint);
+OPEN oldsig; FETCH NEXT FROM oldsig INTO @oldc;
+WHILE @@FETCH_STATUS = 0
+BEGIN
+    SET @oldu = (SELECT TOP (1) u.name FROM sys.database_principals AS u JOIN sys.certificates AS c ON c.sid = u.sid WHERE c.name = @oldc AND u.[type] = 'C');
+    IF @oldu IS NOT NULL BEGIN SET @ds = N'DROP USER ' + QUOTENAME(@oldu) + N';'; EXEC sys.sp_executesql @ds; END
+    SET @ds = N'DROP CERTIFICATE ' + QUOTENAME(@oldc) + N';'; EXEC sys.sp_executesql @ds;
+    FETCH NEXT FROM oldsig INTO @oldc;
+END
+CLOSE oldsig; DEALLOCATE oldsig;
 SELECT CONVERT(nvarchar(10), COUNT(*)) AS Value FROM @want AS w WHERE EXISTS (SELECT 1 FROM sys.crypt_properties AS cp JOIN sys.certificates AS c ON c.thumbprint = cp.thumbprint
                                                      WHERE cp.major_id = OBJECT_ID(w.Name) AND c.name LIKE N'$px%' AND c.pvt_key_encryption_type = 'NA');
 "@ })

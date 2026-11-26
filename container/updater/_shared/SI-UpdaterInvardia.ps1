@@ -244,6 +244,12 @@ function Invoke-SIUpdaterFromInvardia {
           [Parameter(Mandatory)][string]$AcrName, [string[]]$Blocked = @(), $Store, [AllowEmptyString()][string]$Deployed,
           [string]$AcceptFingerprint, [string]$SIRoot, [hashtable]$Seams, [string]$Work)
     $get = { param($k) $v = if ($Env.ContainsKey($k)) { $Env[$k] } else { [Environment]::GetEnvironmentVariable($k) }; if ([string]::IsNullOrWhiteSpace($v)) { '' } else { "$v".Trim() } }
+    # #1344 THE IMAGE CHECK (SI_UPDATER_MODE = image-check, caj-si-image-check every 15 minutes; SI-UpdaterImageCheck.ps1): the
+    # same client asks the same question, and acts ONLY on an image-only release of what runs. Nothing to do = one INFO line,
+    # nothing saved (the nightly update's state and its last error stay as they are); its lines are held until it acts.
+    $imgCheck = ((& $get 'SI_UPDATER_MODE') -ieq 'image-check')
+    if ($imgCheck -and $null -eq $global:SI_UpdaterQuiet -and (Get-Command -Name Start-SIUpdaterQuiet -ErrorAction SilentlyContinue)) { Start-SIUpdaterQuiet }
+    $icIdle = { param($line) if (Get-Command -Name Stop-SIUpdaterQuiet -ErrorAction SilentlyContinue) { Stop-SIUpdaterQuiet }; $global:SI_ImageCheckIdle = $true; Write-UpdLog $line }
     # CR5 step 1 (#655): the web app, MCP server and updater job are named by the install record this run resolved
     # (Get-SIUpdaterInstallName in Start-SIUpdater.ps1), then the job's variable, then today's name -- never a literal here
     $nameOf = { param($role) if (Get-Command -Name Get-SIUpdaterInstallName -ErrorAction SilentlyContinue) { Get-SIUpdaterInstallName -Role $role -Env $Env }
@@ -297,7 +303,7 @@ function Invoke-SIUpdaterFromInvardia {
         $state.code.appliedSequence = [long]-1; $state.code.appliedWave = ''
     }
     $state.channel = $route
-    $state.source = $route; $state.lastCheckUtc = $now; $state.lastError = ''
+    $state.source = $route; if (-not $imgCheck) { $state.lastCheckUtc = $now; $state.lastError = '' }
     # The from-version: what this updater recorded when it last applied a release (state.code.appliedVersion) when the
     # jobs' image tags know only its base version (images are tagged by content: v3.0.0-<hash>) -- never anything else
     $Deployed = Resolve-SIUpdaterRunningRelease -Deployed $Deployed -AppliedVersion ([string]$state.code.appliedVersion)
@@ -405,11 +411,12 @@ function Invoke-SIUpdaterFromInvardia {
         # ---- 1. the install key: stored, or claimed (never in a loop after a 409) ----
         # 'claim it again' (one-shot): the request is taken away BEFORE the claim, so it is used once whatever the answer
         $global:SI_UpdaterStep = 'claim'
-        $again = Receive-SIUpdaterClaimAgain -EnvValue (& $get 'SI_UPDATER_CLAIM_AGAIN') -Store $Store
+        $again = if ($imgCheck) { [pscustomobject]@{ Asked = $false; Reason = ''; By = '' } } else { Receive-SIUpdaterClaimAgain -EnvValue (& $get 'SI_UPDATER_CLAIM_AGAIN') -Store $Store }
         if ($again.Reason) { Write-UpdLog ("install key, claim again: {0}" -f $again.Reason) }
         $force = [bool]($again.Asked -and $state.claimResult -eq 'conflict')
         if ($again.Asked -and -not $force) { Write-UpdLog ("install key, claim again: the claim is not held (last claim: {0}) -- nothing to claim again" -f $(if ($state.claimResult) { $state.claimResult } else { 'none' })) }
-        $claim = if ($connected) { Request-SIInvardiaInstallKey -State $state -Seams $s -BaseUrl $base -NowUtc $now -Force:$force -Community:($route -eq 'community') }
+        $claim = if ($imgCheck) { $icKey = ''; try { $icKey = "$(& $s.ReadSecret $script:SIInvardiaUpdateSecretKey)".Trim() } catch { $icKey = '' }; [pscustomobject]@{ Action = 'present'; Reason = 'the image check reads the stored install key only (it never claims one)'; HasKey = [bool]$icKey } }
+                  elseif ($connected) { Request-SIInvardiaInstallKey -State $state -Seams $s -BaseUrl $base -NowUtc $now -Force:$force -Community:($route -eq 'community') }
                   else { [pscustomobject]@{ Action = 'off'; Reason = (Get-SIInvardiaConnectSkipText -What 'no install key claim'); HasKey = $false } }
         if ($force) {
             $state.claimAgainResult = [string]$claim.Action; $state.claimAgainBy = [string]$again.By; $state.claimAgainUtc = $now
@@ -423,10 +430,10 @@ function Invoke-SIUpdaterFromInvardia {
             if (-not $al.Assigned) { Write-UpdLog ('{0} ({1})' -f $script:SIAwaitLicenceText, $al.Reason) }
         }
         # the install route needs the key; the Community route is anonymous and goes on without one (the same steps follow)
-        if (-not $claim.HasKey -and $route -ne 'community') { & $save; return 0 }
+        if (-not $claim.HasKey -and $route -ne 'community') { if ($imgCheck) { & $icIdle 'image check: this install has no Invardia install key yet -- the nightly update claims it; nothing checked'; return 0 }; & $save; return 0 }
         # framework INSTALL-1: the licence is assigned and the key claimed -- the jobs the install parked go on now (only those
         # marked si-awaits-licence; a job an administrator disabled stays disabled). Never fails the run: the next run tries again.
-        if ($claim.HasKey -and (Get-Command -Name Resume-SIAwaitingLicenceJobs -ErrorAction SilentlyContinue)) {
+        if (-not $imgCheck -and $claim.HasKey -and (Get-Command -Name Resume-SIAwaitingLicenceJobs -ErrorAction SilentlyContinue)) {
             try {
                 $parkedNow = if ($s['ListJobs']) { @(& $s.ListJobs) } elseif ($real) { @(Get-SIUpdaterJobs -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId) } else { @() }
                 $patchJob = if ($s['PatchJob']) { $s['PatchJob'] } else { { param($j, $b) $null = Invoke-SIUpdaterArm -Method PATCH -Path ([string]$j.id) -Body $b; $true } }
@@ -476,7 +483,7 @@ function Invoke-SIUpdaterFromInvardia {
         # ---- 2. templates: is a pack released for this ring at all? (the template channel is a licensed feature: asked on
         # the install route only; a Community install takes the release's own templates through the template gate) ----
         $tpl = $null; $channel = $false
-        if ($Store -and $route -ne 'community') { $tpl = & $ask 'templates'; $channel = [bool]($tpl -and $tpl.Action -in @('update', 'current', 'hold')) }
+        if ($Store -and $route -ne 'community' -and -not $imgCheck) { $tpl = & $ask 'templates'; $channel = [bool]($tpl -and $tpl.Action -in @('update', 'current', 'hold')) }
 
         # the release package of a verified code result, by the route's package source: @{ Ok; Reason; Root; Commit; Version }
         # (the install route: the Pro package, size + SHA-256, its shape and VERSION; the Community route: the public zip)
@@ -502,8 +509,16 @@ function Invoke-SIUpdaterFromInvardia {
         $code = $null; $siNow = $null; $runs = $Deployed; $dec = $null; $roll = $null; $relCommit = ''; $imageOnly = $false; $imageOnlyRan = $false
         if ($Blocked -contains 'engine-image') { Write-UpdLog 'code: the customer blocks engine-image updates -- not asked' }
         else { $code = & $ask 'code' }
+        if ($imgCheck -and -not $code) { & $icIdle (Get-SIImageCheckCandidate -Result $null).Line; return 0 }
         if ($code) {
             $dec = Get-SIUpdaterInvardiaCodeDecision -Result $code -Deployed $Deployed -AppliedSequence $state.code.appliedSequence -AppliedWave ([string]$state.code.appliedWave)
+            if ($imgCheck) {
+                # #1344: only an image-only release of what runs goes on -- a code release stays on the nightly update
+                $cand = Get-SIImageCheckCandidate -Result $code -Decision $dec -Deployed "$Deployed" -Ring $ringPick.Ring
+                if (-not $cand.Go) { & $icIdle $cand.Line; return 0 }
+                Stop-SIUpdaterQuiet -Flush
+                Write-UpdLog $cand.Line
+            }
             if ($dec.Hold) { $state.code.hold = $dec.Hold }
             if ($dec.Applied) { Set-SIInvardiaUpdateApplied -State $state -Result $code -NowUtc $now }
             Write-UpdLog ("code: {0}" -f $dec.Reason)
@@ -530,6 +545,7 @@ function Invoke-SIUpdaterFromInvardia {
                 elseif (Get-Command -Name Get-SIUpdaterImageOnlyDecision -ErrorAction SilentlyContinue) { $io = Get-SIUpdaterImageOnlyDecision -SIRoot $si -Version "$($code.Version)" -Deployed "$Deployed" -Store $Store }
                 $imageOnly = [bool]($io -and $io.ImageOnly)
                 if ($io) { Write-UpdLog ("image-only: {0} -- {1}" -f $(if ($imageOnly) { 'yes, the short image-only update path' } else { 'no, the full update' }), $io.Why) }
+                if ($imgCheck -and -not $imageOnly) { Write-UpdLog ('image check: {0} is not an image-only release of what runs ({1}) -- not installed by this check; the nightly update installs it' -f $code.Version, $(if ($io) { $io.Why } else { 'not decided' })); return 0 }
                 # never roll under a manual deploy; a running pipeline run holds the update (owner 2026-10-23, the run gate
                 # below -- replaces the 2026-10-12 rule); a release that says it must be installed while no SI job runs at
                 # all still waits for them here (SI_UPDATER_WAIT_MINUTES is that wait) -- never an image-only one
@@ -538,6 +554,15 @@ function Invoke-SIUpdaterFromInvardia {
                 if (-not $pre.Go) {
                     $state.code.lastAction = 'deferred'; $state.code.lastReason = $pre.Reason
                     Write-UpdLog ("code: deferred -- {0}" -f $pre.Reason); & $track 'waiting' $pre.Reason; & $save; return 0
+                }
+                # #1344: an image check never waits in the run: a release that must be installed while nothing runs
+                # (UPDATE-NEEDS-QUIET.txt) waits for the next check while a job runs -- nothing is stopped
+                if ($imgCheck) {
+                    $needQ = Get-SIUpdaterNeedsQuiet -SIRoot $si
+                    if ($needQ) {
+                        $busyNow = if ($s['ImageCheckBusy']) { @(& $s.ImageCheckBusy) } elseif ($real -and $pre.Environment) { @(Get-SIUpdaterBusyJobs -JobNames @($pre.Environment.JobNames) -ResourceGroup $ResourceGroup -SubscriptionId $SubscriptionId) } else { @() }
+                        if ($busyNow.Count) { Write-UpdLog ('image check: {0} must be installed while no SecurityInsight job runs ({1}) -- {2} run(s) now and are not stopped; it waits, and the next check in 15 minutes tries again' -f $code.Version, $needQ, ($busyNow -join ', ')); return 0 }
+                    }
                 }
                 # a manual deploy of exactly this release (fast-deploy records si-installed = the released version on the
                 # updater job): it runs already -- counted as applied, nothing is built or rolled twice
@@ -588,6 +613,17 @@ function Invoke-SIUpdaterFromInvardia {
                 elseif ($real -and (Get-Command -Name Invoke-SIUpdaterImageOnlyPruneStep -ErrorAction SilentlyContinue)) {
                     $null = Invoke-SIUpdaterImageOnlyPruneStep -ResourceGroup $ResourceGroup -AcrName $AcrName -SubscriptionId $SubscriptionId -Healthy $ioHealthy `
                                 -UpdaterJob (& $nameOf 'updater') -Get $get -Store $Store -Version "$($code.Version)" -Apps @((& $nameOf 'web'), (& $nameOf 'mcp'))
+                }
+                # #1344: after the image check's swap -- this job onto the updater's image, then EVERY job's image digest read back
+                # against the digest its build produced (framework RELEASE-DRYRUN-1 case (h)); not proven = the run fails, said why
+                if ($imgCheck -and [int]$ioRes.Code -eq 0) {
+                    if ($s['ImageCheckJob']) { $null = & $s.ImageCheckJob } elseif ($real -and (Get-Command -Name Invoke-SIUpdaterImageCheckJob -ErrorAction SilentlyContinue)) { $null = Invoke-SIUpdaterImageCheckJob -SubscriptionId $SubscriptionId -ResourceGroup $ResourceGroup -UpdaterJob (& $nameOf 'updater') }
+                    $proof = if ($s['DigestProof']) { & $s.DigestProof "$($code.Version)" } elseif ($real -and (Get-Command -Name Invoke-SIImageCheckDigestProof -ErrorAction SilentlyContinue)) { Invoke-SIImageCheckDigestProof -Version "$($code.Version)" -ResourceGroup $ResourceGroup -AcrName $AcrName -SubscriptionId $SubscriptionId -LoginServer $(if ($pre.Environment) { [string]$pre.Environment.LoginServer } else { '' }) } else { $null }
+                    if ($proof) {
+                        foreach ($pl in @($proof.Lines)) { Write-UpdLog ('digest read-back: ' + $pl) }
+                        Write-UpdLog ('image check: digest read-back -- ' + $proof.Why)
+                        if (-not $proof.Ok) { $rc = 1; $state.lastError = ('code: image-only update {0}: the digest read-back did not prove it -- {1}' -f $code.Version, $proof.Why); & $fail 'post-roll' $state.lastError }
+                    }
                 }
                 $roll = [pscustomobject]@{ Code = [int]$ioRes.Code; Held = $false; Reason = ''; ImageOnly = $true }
                 $dec = [pscustomobject]@{ Act = $false }
@@ -675,7 +711,7 @@ function Invoke-SIUpdaterFromInvardia {
         # settings set still apply on every daily run, not only when new code is installed (live 2026-10-19: S2 set, the code
         # current, the database stayed S3). Only the size steps run (Invoke-SIUpdaterSizingPass: SQL database, jobs, web app);
         # nothing is built or rolled. A roll that ran this run sized them already. Never fails the run.
-        if (-not $roll -or $roll.Held) {
+        if (-not $imgCheck -and (-not $roll -or $roll.Held)) {
             # held: a manual step Invardia named (Action hold), the forward-only / minimum-version rule
             $isHeld = [bool]($code -and $code.Action -eq 'hold') -or [bool]($dec -and $dec.PSObject.Properties['Hold'] -and $dec.Hold) -or [bool]($roll -and $roll.Held)
             $why = if ($code -and $code.Action -in @('update', 'current') -and -not $isHeld) { "the code is current ({0})" -f $(if ("$global:SI_UpdaterEngineVersion".Trim()) { "$global:SI_UpdaterEngineVersion".Trim() } else { "$($code.Version)" }) }
@@ -690,7 +726,7 @@ function Invoke-SIUpdaterFromInvardia {
         }
         # #350 (c): nothing rolled this run, but an earlier run could not move the updater itself -- try that again (the image
         # in the registry; a failed build is rebuilt with the next release). A failure here never fails the run.
-        if (-not $siNow -and -not ((& $get 'SI_UPDATER_SELF_UPDATE') -match '^(?i)(0|false|off|no)$')) {
+        if (-not $imgCheck -and -not $siNow -and -not ((& $get 'SI_UPDATER_SELF_UPDATE') -match '^(?i)(0|false|off|no)$')) {
             if ($s['SelfRetry']) { $null = & $s.SelfRetry } else { $null = Invoke-SIUpdaterInvardiaSelfRetry -ResourceGroup $ResourceGroup -AcrName $AcrName -SubscriptionId $SubscriptionId `
                                                                         -UpdaterJob (& $nameOf 'updater') }
         }
@@ -708,7 +744,7 @@ function Invoke-SIUpdaterFromInvardia {
         if ($pendFp -and -not $pendAccepted -and -not "$($state.templates.hold)".Trim()) {
             $state.templates.hold = 'the template change of the release the jobs run waits for an Admin (fingerprint {0}): accept it on the Template releases page, or with SI_UPDATER_ACCEPT_TEMPLATE_FINGERPRINT on the updater job' -f $pendFp.Substring(0, [Math]::Min(12, $pendFp.Length))
         }
-        if ($pendAccepted -and $Store -and -not $siNow -and
+        if (-not $imgCheck -and $pendAccepted -and $Store -and -not $siNow -and
             $code -and $code.Action -in @('update', 'current') -and $runs -and (Compare-SIInvardiaVersion $code.Version $runs) -eq 0 -and (& $templatesGo)) {
             try {
                 $cf = & $fetchCode $code (Join-Path $Work 'installed') ('installed-' + $runs) -Quiet
@@ -760,7 +796,7 @@ function Invoke-SIUpdaterFromInvardia {
         # run that did not swap itself -- proven first (each swapped job SUCCEEDED on its new image since the swap, the web app's
         # new revision healthy), only then the old images go (only what runs stays); not proven = everything kept, one line.
         # A run that swapped this time only recorded its swap (above). No pending record = nothing, nothing said.
-        if (-not $imageOnlyRan) {
+        if (-not $imageOnlyRan -and -not $imgCheck) {
             if ($s['ImageOnlyPendingPrune']) { $null = & $s.ImageOnlyPendingPrune }
             elseif ($real -and $Store -and (Get-Command -Name Invoke-SIUpdaterImageOnlyPendingPrune -ErrorAction SilentlyContinue)) {
                 $null = Invoke-SIUpdaterImageOnlyPendingPrune -ResourceGroup $ResourceGroup -AcrName $AcrName -SubscriptionId $SubscriptionId -Store $Store `
@@ -768,6 +804,7 @@ function Invoke-SIUpdaterFromInvardia {
             }
         }
     } catch {
+        if ($imgCheck -and (Get-Command -Name Stop-SIUpdaterQuiet -ErrorAction SilentlyContinue)) { Stop-SIUpdaterQuiet -Flush }
         $state.lastError = (Hide-SIInvardiaSecret $_.Exception.Message)
         Write-UpdLog ("updates from Invardia FAILED: {0}" -f $state.lastError)
         & $fail $(if ("$global:SI_UpdaterStep".Trim()) { "$global:SI_UpdaterStep" } else { 'updater' }) $state.lastError
@@ -786,7 +823,8 @@ function Invoke-SIUpdaterFromInvardia {
         }
         # a wait mark this run neither renewed nor cleared at the gate (it ended before it got there: no new code, refused,
         # failed): taken away, so the pipeline runner never holds its queue for an update that is not waiting any more
-        if (-not $gate.Deferred -and -not $gate.Cleared) {
+        # #1344: an image check never touches the nightly update's wait mark (it reads and writes no tag)
+        if (-not $gate.Deferred -and -not $gate.Cleared -and -not $imgCheck) {
             & $readTag
             if ($gate.Tag) { & $writeTag ''; Write-UpdLog 'the update''s wait mark is taken away: this update run ended before it reached its install step (see above)' }
         }

@@ -39,7 +39,7 @@ public sealed class IndexModel : SI.Management.Web.Columns.DataViewPageModel
     public int Expiring => InDomain.Count(e => e.IsExpiringWithin(Now, Math.Max(Settings.ExpiryWarningDays, 1)));
     public int Expired => InDomain.Count(e => e.State(Now) == ExemptionStates.Expired);
     public int Overdue => InDomain.Count(e => e.IsReviewOverdue(Now, Settings.ReviewOverdueDays));
-    public bool MayReviewAny => User.IsAdmin() || Roster.IsAnyOwner(Me);
+    public bool MayReviewAny => User.IsAdmin() || Roster.IsAnyOwner(SI.Management.Web.Exemptions.RosterWho.Of(User));
 
     public IReadOnlyList<RequestRow> ShownRequests => Current switch
     {

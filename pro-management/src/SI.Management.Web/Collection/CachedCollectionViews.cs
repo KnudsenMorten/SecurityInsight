@@ -72,6 +72,15 @@ public sealed class CachedCollectionViews : ICollectionViews, IDisposable
     };
 
     public Task<QueryResult<GridPage>> ExportAsync(GridQuery query, CancellationToken ct) => _inner.ExportAsync(query, ct);
+
+    /// #1372 a page's choices list (every row, like an export -- but it is the page's own small list, never a person's file):
+    /// kept like a grid of its spec, under its own key ("choices"), so a repeat visit reads nothing.
+    public Task<QueryResult<GridPage>> ChoicesAsync(GridQuery query, CancellationToken ct)
+    {
+        var st = GridSql.Normalize(query.Spec, query.Request);
+        var shape = "choices|" + st.Shape() + "|" + string.Join("|", query.SourceParameters.OrderBy(p => p.Key, StringComparer.Ordinal).Select(p => p.Key + "=" + Fmt(p.Value)));
+        return Get(Key(query.Spec.Name, query.ScopeKey, shape), TtlFor(query.Spec), () => _inner.ChoicesAsync(query, ct));
+    }
     /// #287: the counts per value of a filter column, read live when a filter is opened
     public Task<QueryResult<IReadOnlyList<CountRow>>> ValueCountsAsync(GridQuery query, string column, CancellationToken ct) => _inner.ValueCountsAsync(query, column, ct);
 

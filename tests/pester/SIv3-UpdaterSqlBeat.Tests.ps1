@@ -297,7 +297,7 @@ Describe 'the update runs every database statement under the beat (setup\Invoke-
     It 'one wave of the published copies runs under the beat; the engine driver hands -Wave on (and an older driver gets the call as before)' {
         $script:Update | Should -Match ([regex]::Escape("`$copyWave['Wave'] = { param(`$info, `$ranges) Invoke-SIUpdateSqlBeat -What '9j. PUBLISHED COPIES' -Action { Invoke-SIPublishedCopyRangeWave -Info `$info -Ranges `$ranges } }"))
         $script:Update | Should -Match ([regex]::Escape("if ((Get-Command -Name Invoke-SIPublishedCopyCatchUp).Parameters.ContainsKey('Wave'))"))
-        $script:Update | Should -Match ([regex]::Escape('$r = Invoke-SIPublishedCopyCatchUp -Invoke $dataSql -WhatIf:(-not $Apply -or $DetectOnly) -Beat $copyBeat @copyWave'))
+        $script:Update | Should -Match ([regex]::Escape('$r = Invoke-SIPublishedCopyCatchUp -Invoke $dataSql -WhatIf:(-not $Apply -or $DetectOnly) -Log $copyLog -Beat $copyBeat @copyWave'))
         $pr = [IO.File]::ReadAllText((Join-Path $script:SIRoot 'engine\_shared\data-sql\SI-DataPublishedRun.ps1'))
         # (the driver names it -RangeWave: its own $wave is the list of ranges -- PowerShell names are not case-sensitive)
         $pr | Should -Match ([regex]::Escape("`$rfWave = @{}; if (`$Wave) { `$rfWave['RangeWave'] = `$Wave }"))

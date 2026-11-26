@@ -17,11 +17,11 @@ else
         <h2 id="h-state">State</h2>
         @if (Model.Adopted)
         {
-            <p data-enforced>Enforced since @Model.AdoptedUtc?.ToString("yyyy-MM-dd HH:mm")Z (adopted by @Model.AdoptedBy). A change without a verified signed request holds new pipeline runs until it is undone or made again signed in.</p>
+            <p data-enforced>Enforced since @Fmt.Time(Model.AdoptedUtc, zone: true) (adopted by @Model.AdoptedBy). A change without a verified signed request holds new pipeline runs until it is undone or made again signed in.</p>
         }
         else
         {
-            <p data-waiting><strong>@SI.Management.Web.Pages.Admin.SignedRequestsModel.Waiting</strong> - observe only since @Model.RecordedUtc?.ToString("yyyy-MM-dd HH:mm")Z. Nothing is held or refused now.</p>
+            <p data-waiting><strong>@SI.Management.Web.Pages.Admin.SignedRequestsModel.Waiting</strong> - observe only since @Fmt.Time(Model.RecordedUtc, zone: true). Nothing is held or refused now.</p>
             <p data-would>In the last 14 days, @Model.WouldRefuse change(s) would have been refused (the audit trail lists them: signedrequest.change.would-refuse).</p>
         }
     </section>
@@ -29,7 +29,7 @@ else
         <h2 id="h-recorded">The recorded configuration</h2>
         <p>Recorded hash: <code data-recorded-hash>@Model.RecordedHash</code></p>
         <div class="table-wrap">
-            <table>
+            <table class="findings" data-sortable>
                 <thead><tr><th>Kind</th><th class="num">Rows</th><th>SHA-256</th></tr></thead>
                 <tbody>
                     @foreach (var k in Model.Kinds) { <tr><td>@k.Name</td><td class="num">@k.Rows</td><td><code>@k.Sha256</code></td></tr> }
@@ -50,7 +50,7 @@ else
         <section class="card" aria-labelledby="h-requests" data-requests>
             <h2 id="h-requests">Adoption requests</h2>
             <ul>
-                @foreach (var r in Model.Requests) { <li>@r.By, @r.At?.ToString("yyyy-MM-dd HH:mm")Z: @(r.Decision ?? "waiting for the engine")@(r.Reason is null ? "" : " - " + r.Reason)</li> }
+                @foreach (var r in Model.Requests) { <li>@r.By, @Fmt.Time(r.At, zone: true): @(r.Decision ?? "waiting for the engine")@(r.Reason is null ? "" : " - " + r.Reason)</li> }
             </ul>
         </section>
     }

@@ -132,7 +132,11 @@ Describe 'the admin steps ONLY ADD (4a) and sign only this release''s text' {
     It 'in order: schema, user, consent, sign, grants -- and nothing removes a role, a user or a right' {
         $script:Steps.Step -join ';' | Should -Be 'schema;user;consent;sign;grants'
         foreach ($s in $script:Steps | Where-Object Step -ne 'schema') {
-            $s.Sql | Should -Not -Match '(?i)DROP USER|DROP MEMBER|REVOKE |DELETE FROM'
+            # #1374: the sign step's ONE drop is a predecessor support signer's certificate user (held by the test below) --
+            # never the Support app, a product identity, a role or a right
+            $sql = $s.Sql
+            if ($s.Step -eq 'sign') { $sql = $sql.Replace("SET @ds = N'DROP USER ' + QUOTENAME(@oldu) + N';'", '') }
+            $sql | Should -Not -Match '(?i)DROP USER|DROP MEMBER|REVOKE |DELETE FROM'
         }
     }
     It 'user: the Support app''s own user by SID (its client id) when it has none, and the READ-ONLY role (metadata and health, no data)' {
@@ -155,6 +159,17 @@ Describe 'the admin steps ONLY ADD (4a) and sign only this release''s text' {
         $s | Should -Match "EXPIRY_DATE = ''20991231''"
         $s | Should -Match 'ALTER ROLE db_owner ADD MEMBER '' \+ QUOTENAME\(@cert\)'
         $s.IndexOf('ADD SIGNATURE') | Should -BeLessThan $s.IndexOf('REMOVE PRIVATE KEY')
+    }
+    It '#1374 sign: a predecessor support signer that signs NOTHING is dropped in the same batch -- its certificate user first, then the certificate; one that still signs is never touched' {
+        $s = @($script:Steps | Where-Object Step -eq 'sign')[0].Sql
+        $px = (Get-SISupportGrantContract).SignerPrefix
+        $s | Should -Match ([regex]::Escape("SELECT c.name FROM sys.certificates AS c WHERE c.name LIKE N'$px%' AND NOT EXISTS (SELECT 1 FROM sys.crypt_properties AS cp WHERE cp.thumbprint = c.thumbprint)"))
+        $s | Should -Match ([regex]::Escape("WHERE c.name = @oldc AND u.[type] = 'C'")) -Because 'only the certificate''s own user'
+        $s.IndexOf("N'DROP USER ' + QUOTENAME(@oldu)") | Should -BeLessThan $s.IndexOf("N'DROP CERTIFICATE ' + QUOTENAME(@oldc)")
+        $s.IndexOf('REMOVE PRIVATE KEY') | Should -BeLessThan $s.IndexOf('DECLARE oldsig CURSOR') -Because 'after the re-sign, in the same batch'
+        $s.IndexOf('DECLARE oldsig CURSOR') | Should -BeLessThan $s.LastIndexOf('SELECT CONVERT(nvarchar(10), COUNT(*)) AS Value') -Because 'the read-back counts after the clean-up'
+        @([regex]::Matches($s, '(?i)DROP\s+(USER|CERTIFICATE)')).Count | Should -Be 2
+        $s | Should -Not -Match '(?i)DROP\s+(ROLE|LOGIN|PROCEDURE|TABLE)'
     }
     It 'grants: EXECUTE for the engine (4) and the web app (sweep); DENY writes on the tables to the product roles; DENY ALTER to the updater' {
         $g = @($script:Steps | Where-Object Step -eq 'grants')[0].Sql

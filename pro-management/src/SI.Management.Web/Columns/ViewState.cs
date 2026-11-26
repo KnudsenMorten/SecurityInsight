@@ -281,11 +281,43 @@ public static class ViewState
         return result;
     }
 
-    /// The widths as they are stored (well-formed column keys, whole pixels within the limits, in order); null = none.
+    /// <summary>
+    /// #1386 (owner 2026-11-25: "it must be supported to adjust the width and then it must show more, like fx paths it is
+    /// important we can see all info"): the columns the person shows IN FULL (every line, no two-line cap), kept with the
+    /// widths under <see cref="FullTextKey"/> -- so "Save for me", a saved layout and its restore carry them the same way.
+    /// </summary>
+    public const string FullTextKey = "$full";
+
+    /// The columns shown in full: well-formed column keys, once each, in order (empty for nothing or anything else).
+    public static IReadOnlyList<string> ParseFullText(string? json)
+    {
+        var result = new List<string>();
+        if (string.IsNullOrWhiteSpace(json)) return result;
+        try
+        {
+            using var d = JsonDocument.Parse(json);
+            if (d.RootElement.ValueKind != JsonValueKind.Object || !d.RootElement.TryGetProperty(FullTextKey, out var full) || full.ValueKind != JsonValueKind.Array) return result;
+            foreach (var e in full.EnumerateArray())
+            {
+                if (result.Count >= ColumnLayout.MaxColumns) break;
+                if (e.ValueKind == JsonValueKind.String && e.GetString() is { } k && WellFormedColumn(k) && !result.Contains(k, StringComparer.Ordinal)) result.Add(k);
+            }
+        }
+        catch (JsonException) { result.Clear(); }
+        return result;
+    }
+
+    /// The widths as they are stored (well-formed column keys, whole pixels within the limits, in order, then the columns
+    /// shown in full under <see cref="FullTextKey"/>); null = none.
     public static string? WidthsJson(string? posted)
     {
         var w = ParseWidths(posted);
-        return w.Count == 0 ? null : JsonSerializer.Serialize(w);
+        var full = ParseFullText(posted);
+        if (w.Count == 0 && full.Count == 0) return null;
+        var o = new System.Text.Json.Nodes.JsonObject();
+        foreach (var (k, px) in w) o[k] = px;
+        if (full.Count > 0) o[FullTextKey] = new System.Text.Json.Nodes.JsonArray(full.Select(k => (System.Text.Json.Nodes.JsonNode?)k).ToArray());
+        return o.ToJsonString();
     }
 
     /// A key a layout may hold: a plain column key of a view, or a well-formed extra column key.

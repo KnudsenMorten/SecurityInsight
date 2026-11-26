@@ -51,16 +51,33 @@ if (-not (Get-Command -Name Get-SIGuardHealDecision -ErrorAction SilentlyContinu
     if ([System.IO.File]::Exists($sgh)) { . $sgh }
 }
 
-$script:SIGuard = @{
-    SIRoot      = (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
-    WindowHours = 24
-    Catalog     = $null
-    IdPattern   = '^[a-z][a-z0-9-]*(\.[a-z][a-z0-9-]*){2}$'
-    NamePattern = '^[a-z][A-Za-z0-9]{0,30}$'
-    Sources     = @('job', 'web', 'setup', 'engine')
-    AuditAction = 'guard.event.trip'
-    Product     = 'securityinsight'
+# #1392 (owner's click test on internal 3.1.50, 2026-11-25): THE GUARD'S OWN STATE IS READ THROUGH Get-SIGuardState, never
+# $script:SIGuard directly. A function reads $script: from the script that CALLS it, not the one that loaded this file: the
+# container entrypoint loads this file (the collection run gate), then runs the engine as its own script; the engine found
+# Send-SIGuardEvent defined, did not load the file again, and its guard calls read $script:SIGuard from the ENGINE's scope,
+# where it was never set -- "The property 'Catalog' cannot be found on this object" in every such run's log (the privilege
+# tier classifier's), and every guard event of that engine refused ("not a guard source ()"). The getters set the state in
+# whatever script calls them when it is not there.
+$script:SIGuardFileRoot = $PSScriptRoot
+function Get-SIGuardState {
+    <# The guard's settings + catalog cache, in the calling script's scope (set there when missing). #>
+    if ($null -eq $script:SIGuard) {
+        $here = $PSScriptRoot
+        if (-not $here) { $here = $script:SIGuardFileRoot }
+        $script:SIGuard = @{
+            SIRoot      = (Split-Path -Parent (Split-Path -Parent $here))
+            WindowHours = 24
+            Catalog     = $null
+            IdPattern   = '^[a-z][a-z0-9-]*(\.[a-z][a-z0-9-]*){2}$'
+            NamePattern = '^[a-z][A-Za-z0-9]{0,30}$'
+            Sources     = @('job', 'web', 'setup', 'engine')
+            AuditAction = 'guard.event.trip'
+            Product     = 'securityinsight'
+        }
+    }
+    $script:SIGuard
 }
+$null = Get-SIGuardState
 if ($null -eq $global:SI_GuardHealth) { $global:SI_GuardHealth = @{ Events = 0; Failed = 0; LastError = '' } }
 
 # =====================================================================================================================
@@ -68,11 +85,11 @@ if ($null -eq $global:SI_GuardHealth) { $global:SI_GuardHealth = @{ Events = 0; 
 # =====================================================================================================================
 function Get-SIGuardCatalog {
     <# The closed list of guards (config\guard-catalog.locked.json): outcomes, severity per outcome, guards. Cached. #>
-    param([string]$SIRoot = $script:SIGuard.SIRoot, [switch]$Refresh)
-    if ($script:SIGuard.Catalog -and -not $Refresh -and -not $PSBoundParameters.ContainsKey('SIRoot')) { return $script:SIGuard.Catalog }
+    param([string]$SIRoot = (Get-SIGuardState).SIRoot, [switch]$Refresh)
+    if ((Get-SIGuardState).Catalog -and -not $Refresh -and -not $PSBoundParameters.ContainsKey('SIRoot')) { return (Get-SIGuardState).Catalog }
     $p = [System.IO.Path]::Combine($SIRoot, 'config', 'guard-catalog.locked.json')
     $c = ConvertFrom-Json -InputObject ([System.IO.File]::ReadAllText($p))
-    if (-not $PSBoundParameters.ContainsKey('SIRoot')) { $script:SIGuard.Catalog = $c }
+    if (-not $PSBoundParameters.ContainsKey('SIRoot')) { (Get-SIGuardState).Catalog = $c }
     $c
 }
 
@@ -300,16 +317,16 @@ function New-SIGuardEvent {
         [object[]]$Values = @(), [long]$HeldCount = 0, [string]$Action, [string]$Link,
         [string]$RunId, [datetime]$NowUtc = [datetime]::UtcNow, [string]$Source = 'job'
     )
-    if ($GuardId -notmatch $script:SIGuard.IdPattern) { throw ("'{0}' is not a guard id (area.object.what, lower-case)" -f $GuardId) }
+    if ($GuardId -notmatch (Get-SIGuardState).IdPattern) { throw ("'{0}' is not a guard id (area.object.what, lower-case)" -f $GuardId) }
     $def = Get-SIGuardDefinition -Id $GuardId
     $sev = Get-SIGuardSeverity -Outcome $Outcome
-    if ($script:SIGuard.Sources -notcontains $Source) { throw ("'{0}' is not a guard source ({1})" -f $Source, ($script:SIGuard.Sources -join ', ')) }
+    if ((Get-SIGuardState).Sources -notcontains $Source) { throw ("'{0}' is not a guard source ({1})" -f $Source, ((Get-SIGuardState).Sources -join ', ')) }
     if ($HeldCount -lt 0) { $HeldCount = 0 }
     $vals = New-Object System.Collections.Generic.List[object]
     foreach ($v in @($Values)) {
         if ($null -eq $v) { continue }
         $name = [string]$(if ($v -is [System.Collections.IDictionary]) { $v['Name'] } else { $v.Name })
-        if ($name -notmatch $script:SIGuard.NamePattern) { throw ("guard value name '{0}' must be camelCase letters and digits (it is a telemetry field)" -f $name) }
+        if ($name -notmatch (Get-SIGuardState).NamePattern) { throw ("guard value name '{0}' must be camelCase letters and digits (it is a telemetry field)" -f $name) }
         $get = { param($k) if ($v -is [System.Collections.IDictionary]) { $v[$k] } elseif ($v.PSObject.Properties[$k]) { $v.$k } else { $null } }
         $label = [string](& $get 'Label'); if (-not $label) { $label = $name }
         $vo = [pscustomobject]@{ Name = $name; Label = $label; Measured = (ConvertTo-SIGuardNumber (& $get 'Measured')); Limit = (ConvertTo-SIGuardNumber (& $get 'Limit')); Unit = [string](& $get 'Unit') }
@@ -702,7 +719,8 @@ function New-SIGuardSqlStateStore {
 # #937 (owner 2026-10-28, "Stop the mail"): a check whose catalog entry says "mail": "never" sends no mail whatever its
 # outcome -- collection.source.asset-drop accepts a real drop by itself on the next complete collection, so its mail asked
 # nothing of anyone. Its event, the Guards page, the run report and the report to Invardia are unchanged.
-$script:SIGuardWarningMails = @('licence.state.grace')
+# #1392: through a function, so it exists in whatever script calls it (see Get-SIGuardState)
+function Get-SIGuardWarningMails { , @('licence.state.grace') }
 function Test-SIGuardNeverMails {
     <# PURE over the catalog. Does the guard's catalog entry say "mail": "never"? Unknown id / unreadable catalog: $false. #>
     param([AllowNull()][AllowEmptyString()][string]$GuardId)
@@ -717,7 +735,7 @@ function Test-SIGuardOutcomeMails {
        never for a guard the catalog marks "mail": "never". #>
     param([Parameter(Mandatory)]$Event)
     if (Test-SIGuardNeverMails -GuardId ([string]$Event.GuardId)) { return $false }
-    ([string]$Event.Outcome -ine 'warning') -or ($script:SIGuardWarningMails -contains [string]$Event.GuardId)
+    ([string]$Event.Outcome -ine 'warning') -or ((Get-SIGuardWarningMails) -contains [string]$Event.GuardId)
 }
 
 function ConvertTo-SIGuardTextHtml {
@@ -857,8 +875,10 @@ function ConvertTo-SIGuardMail {
 # =====================================================================================================================
 #  Telemetry -- PURE builder of the GUARD-1 record (Invardia's receiver: Schema 2, Kind 'guard')
 # =====================================================================================================================
-$script:SIGuardWire = @{
-    GuardIdPattern  = '^[a-z0-9][a-z0-9.-]{0,99}$'
+# #1392: through a function, so it exists in whatever script calls it (see Get-SIGuardState)
+function Get-SIGuardWire {
+@{
+    GuardIdPattern  ='^[a-z0-9][a-z0-9.-]{0,99}$'
     KeyPattern      = '^[a-z][A-Za-z0-9]{0,30}$'
     Outcomes        = @('halted', 'refused', 'held', 'skipped', 'warning')   # 'warning': GUARD-1.3 (recorded and shown, no ticket, no release-health alert)
     Severities      = @('critical', 'warning')
@@ -873,6 +893,7 @@ $script:SIGuardWire = @{
                         # owner 2026-10-17 (Invardia DESIGN "A guard report that says cleared"): GuardOutcome 'cleared'
                         'ClearedBy', 'ClearedUtc')
     IdentifiedOnly  = @('ClaimedTenantId', 'Host', 'ActionText', 'Link')
+}
 }
 
 function Resolve-SIGuardHealOutcomesSwitch {
@@ -922,7 +943,7 @@ function ConvertTo-SIGuardWireOutcome {
        really held something (HeldCount > 0). #>
     param([Parameter(Mandatory)][string]$Outcome, [long]$HeldCount = 0)
     if ($Outcome -eq 'held' -and $HeldCount -le 0) { return 'warning' }
-    if ($script:SIGuardWire.Outcomes -contains $Outcome) { return $Outcome }
+    if ((Get-SIGuardWire).Outcomes -contains $Outcome) { return $Outcome }
     throw ("'{0}' is not a guard outcome" -f $Outcome)
 }
 
@@ -939,7 +960,7 @@ function New-SIGuardTelemetryRecord {
         A value outside the receiver's lists is refused here (it would reject the whole report).
     #>
     param([Parameter(Mandatory)]$Event, [Parameter(Mandatory)]$Trip, [Parameter(Mandatory)]$Context, [string]$HostName, $Now)
-    $w = $script:SIGuardWire
+    $w = Get-SIGuardWire
     $anon = ([string]$Context.Mode -eq 'anonymous')
     $iso = { param($v) $u = ConvertTo-SIGuardUtc $v; if ($null -eq $u) { $null } else { $u.ToString('yyyy-MM-ddTHH:mm:ssZ', [System.Globalization.CultureInfo]::InvariantCulture) } }
     $gid = [string]$Event.GuardId
@@ -951,7 +972,7 @@ function New-SIGuardTelemetryRecord {
         if ($null -ne $v.Measured -and $measured.Count -lt $w.MaxValues) { $measured[$v.Name] = $v.Measured }
         if ($null -ne $v.Limit -and $limits.Count -lt $w.MaxValues) { $limits[$v.Name] = $v.Limit }
     }
-    $r = [ordered]@{ Schema = 2; Kind = 'guard'; Product = $script:SIGuard.Product }
+    $r = [ordered]@{ Schema = 2; Kind = 'guard'; Product = (Get-SIGuardState).Product }
     $ver = "$($Context.Version)".Trim(); if ($ver) { $r.Version = $ver }
     if ($Context.PSObject.Properties['Ring'] -and $null -ne $Context.Ring -and "$($Context.Ring)" -ne '') { $r.Ring = [int]$Context.Ring }
     foreach ($k in 'Edition', 'Hosting', 'RuntimeIdentity', 'LicenceState') { $val = "$($Context.$k)".Trim(); if ($val) { $r[$k] = $val } }
@@ -1167,7 +1188,7 @@ function Send-SIGuardEvent {
         }
         if ($accepted) { $NoMail = $true }
         $mailOn = (Test-SIGuardMailEnabled -Globals $Globals) -and (Test-SIGuardMailOn -GuardId $ev.GuardId -Globals $Globals) -and -not $NoMail -and (Test-SIGuardOutcomeMails -Event $ev)
-        $trip = Get-SIGuardTripState -Previous $prev -NowUtc $nowUtc -WindowHours $script:SIGuard.WindowHours -MailEnabled $mailOn
+        $trip = Get-SIGuardTripState -Previous $prev -NowUtc $nowUtc -WindowHours (Get-SIGuardState).WindowHours -MailEnabled $mailOn
         $res.Trip = $trip
 
         # ---- (c) MAIL ----
@@ -1298,7 +1319,7 @@ function Send-SIGuardEvent {
             $after = [ordered]@{ guard = $ev.GuardId; area = $ev.Area; outcome = $ev.Outcome; severity = $ev.Severity; held = [long]$ev.HeldCount
                                  measured = (Format-SIGuardValues -Values $ev.Values); trips = [int]$trip.TripCount; mail = $mailState; telemetry = $telState }
             $actor = if (Get-Command -Name Get-SIAuditActor -ErrorAction SilentlyContinue) { Get-SIAuditActor -Job $(if ($ev.Engine) { $ev.Engine } else { 'guard' }) } else { 'guard' }
-            $ok = Write-SIAuditEvent -Invoke $Invoke -Action $script:SIGuard.AuditAction -Actor $actor -ActorSource $(if ($ev.Source -eq 'web') { 'web' } elseif ($ev.Source -eq 'setup') { 'setup' } else { 'job' }) `
+            $ok = Write-SIAuditEvent -Invoke $Invoke -Action (Get-SIGuardState).AuditAction -Actor $actor -ActorSource $(if ($ev.Source -eq 'web') { 'web' } elseif ($ev.Source -eq 'setup') { 'setup' } else { 'job' }) `
                     -Target $(if ($ev.Subject) { '{0} ({1})' -f $ev.GuardId, $ev.Subject } else { $ev.GuardId }) -Reason $ev.Protected `
                     -Outcome $(if ($ev.Severity -eq 'critical') { 'refused' } else { 'held' }) -OutcomeText $(if ($ev.Detail) { $ev.Detail } else { $ev.Action }) `
                     -CorrelationId $ev.RunId -After $after -Log { param($l, $m) }

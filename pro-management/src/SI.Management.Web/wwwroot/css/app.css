@@ -67,6 +67,12 @@ td.fieldname[style*="max-width"] { overflow: hidden; text-overflow: ellipsis; }
 .update-banner .update-later { padding: 4px 12px; border: 1px solid var(--bar-on); border-radius: 4px; background: transparent; color: var(--bar-on); cursor: pointer; }
 .update-banner button:focus-visible { outline: 2px solid var(--bar-on); outline-offset: 2px; }
 .update-banner[hidden], .update-banner [hidden] { display: none; }
+/* the module guard (_Layout): out of sight while the page's scripts start; main.js removes it -- still here after 4 s =
+   no script ran (an expired sign-in answers the .js with the sign-in page). data-now: a module failed, shown at once. */
+@keyframes module-guard-show { to { visibility: visible; } }
+.update-banner.module-guard { position: fixed; top: 0; left: 0; right: 0; visibility: hidden; animation: module-guard-show 0s 4s forwards; }
+.update-banner.module-guard[data-now] { visibility: visible; animation: none; }
+.update-banner a.update-reload { text-decoration: none; display: inline-block; }
 
 /* ---- #765 Admin > Access: the row the last save wrote ---- */
 tr.is-saved > td { background: var(--surface-1); box-shadow: inset 0 2px 0 var(--good), inset 0 -2px 0 var(--good); }
@@ -286,6 +292,31 @@ a.wb-kpi.wb-score.chosen { outline: 3px solid var(--focus, #1a73e8); outline-off
 .ps-explain { color: var(--text-secondary); line-height: 1.35; margin-top: .4em; white-space: normal; overflow-wrap: anywhere; }
 .wb-kpi .ps-explain { font-size: .85em; }
 .tile .ps-explain { font-size: .8rem; }
+/* #1382 (owner 2026-11-25: "the formula is also missing"): the hint that points at the (i), and the line under each wall board
+   tile's value that says what the number is */
+.ps-explain.ps-hint { font-style: italic; }
+.wb-kpi .wb-sub { color: var(--text-secondary); font-size: .8em; line-height: 1.3; margin-top: .3em; white-space: normal; overflow-wrap: anywhere; }
+/* #1360 (owner 2026-11-25: "people ask how it is calc. add to gui" -- "Info box on score"): the (i) with the formula beside
+   every Protection Score tile. .ps-host holds the tile's link and the <details> (a link may not hold a control); the tile keeps
+   its look, the (i) sits in its top-right corner, the box opens below it. Theme tokens only, so light and dark both hold. */
+.ps-host { position: relative; display: flex; min-width: 0; }
+.ps-host > .tile, .ps-host > .wb-kpi { flex: 1 1 auto; min-width: 0; }
+.ps-host > a .ps-cap { padding-right: 1.9rem; }
+.ps-info { position: absolute; top: .45rem; right: .45rem; z-index: 5; }
+.ps-info > summary { list-style: none; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; width: 1.6rem; height: 1.6rem; border: 2px solid var(--accent); border-radius: 999px; background: var(--surface-0); color: var(--accent); font: italic 700 .95rem/1 Georgia, "Times New Roman", serif; }
+.ps-info > summary::-webkit-details-marker { display: none; }
+.ps-info > summary:hover, .ps-info[open] > summary { color: var(--text-primary); border-color: var(--accent); }
+.ps-info > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ps-info-pop { position: absolute; top: calc(100% + .35rem); right: 0; width: min(30rem, calc(100vw - 2rem)); padding: .7rem .85rem; background: var(--surface-1); color: var(--text-primary); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: 0 6px 24px rgb(0 0 0 / 25%); font-size: .85rem; font-style: normal; font-weight: 400; line-height: 1.4; text-align: left; white-space: normal; overflow-wrap: anywhere; }
+.ps-info-pop p { margin: 0 0 .45rem; }
+.ps-info-pop p:last-child { margin-bottom: 0; }
+.ps-info-pop ul { margin: 0 0 .45rem; padding-left: 1.1rem; }
+.ps-info-title, .ps-info-head { color: var(--text-heading); }
+/* the (i) beside a score in a line of text (the Protection Score block): in the line, the box opens below it, to the right */
+.ps-info.inline { position: relative; top: auto; right: auto; display: inline-block; vertical-align: middle; margin-left: .35rem; }
+.ps-info.inline > summary { width: 1.25rem; height: 1.25rem; font-size: .75rem; }
+.ps-info.inline .ps-info-pop { left: 0; right: auto; }
+@media print { .ps-info { display: none; } }
 table.rs-table td.tot { color: var(--text-heading); }
 table.rs-table tfoot th, table.rs-table tfoot td { font-weight: 800; font-size: 1.08em; border-top: 2px solid var(--text-heading); border-bottom: 0; }
 .rs-note { margin: .6em 0 0; color: var(--text-secondary); font-size: .95em; }
@@ -317,6 +348,10 @@ table.grid tr.colfilters td { padding: .2rem .3rem; background: var(--surface-1)
 table.grid tr.colfilters input { width: 100%; min-width: 4.5rem; font-size: .78rem; padding: .15rem .3rem; }
 .gridbar select { width: auto; }
 table.grid td.wrap { overflow-wrap: break-word; min-width: 5rem; }
+/* a list column (paths): every item in full, one per line, never cut (owner 2026-11-24) */
+table.grid .cell-lines .cell-line { display: block; overflow-wrap: anywhere; white-space: normal; }
+table.grid details.cell-lines > summary { cursor: pointer; color: var(--link, var(--accent)); }
+table.grid td.col-sized:has(.cell-lines) { overflow: visible; text-overflow: clip; }
 /* Risk factors on a laptop (owner 2026-10-27: "looks cramped"): a select + Stage pair keeps its own cell -- the select sizes
    to its words (never the cell's 100 %, which pushed Stage over the State column) and Stage wraps under it when narrow;
    a short name never breaks inside the word */
@@ -593,6 +628,18 @@ dl.guard-parts ol { margin: 0; padding-left: 1.2rem; }
 .card.no-service h2 { font-size: 1rem; margin: 0; }
 button.expander { padding: 0 .4rem; margin-right: .35rem; min-width: 1.6rem; line-height: 1.4; }
 tr.expand-row > td { background: var(--surface-2); padding: .4rem .6rem .6rem 2.2rem; }
+/* #1351: Configuration > Profiling rules -- one collapsible section per condition kind (rule-kinds.js) */
+table[data-rules-by-kind] tbody.kind-head th { text-align: left; background: var(--surface-2); border-top: 1px solid var(--border); padding: .35rem .6rem; font-weight: 600; }
+table[data-rules-by-kind] .kind-toggle { cursor: pointer; display: inline-flex; gap: .4rem; align-items: center; color: var(--text-heading); position: relative; }
+table[data-rules-by-kind] .kind-open { position: absolute; opacity: 0; width: 1px; height: 1px; margin: 0; }
+table[data-rules-by-kind] .kind-toggle:has(.kind-open:focus-visible) { outline: var(--focus, 2px solid var(--accent)); outline-offset: 2px; }
+table[data-rules-by-kind] .kind-arrow { display: inline-block; min-width: 1em; color: var(--text-secondary); }
+table[data-rules-by-kind] .kind-arrow::before { content: "▸"; }
+table[data-rules-by-kind] .kind-open:checked + .kind-arrow::before { content: "▾"; }
+/* collapsed by default; the section's checkbox opens it -- no script needed (3.1.50: the script-only toggle did not open) */
+table[data-rules-by-kind] tbody[data-kind-rows] { display: none; }
+table[data-rules-by-kind] tbody.kind-head:has(.kind-open:checked) + tbody[data-kind-rows] { display: table-row-group; }
+table[data-rules-by-kind] tbody.kind-head[hidden] { display: none; }
 table.nested { width: 100%; font-size: .9em; }
 .pivot-builder { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: .6rem; margin: .4rem 0 .8rem; }
 .pivot-zone { border: 1px dashed var(--border); border-radius: var(--radius); padding: .4rem .5rem; min-height: 4.5rem; }
@@ -961,6 +1008,40 @@ table.grid tr.colfilters .multifilter .mf-panel input[type=checkbox] { width: au
 .view-scope .vs-info { margin-top: .3rem; font-size: .85rem; }
 .view-scope .vs-info dt { font-weight: 600; }
 .view-scope .vs-info dd { margin: 0 0 .3rem; }
+/* #1386 (owner 2026-11-25, "One line"): the title with "About this page" on its right, then ONE line -- the row count and the
+   collection picker (the one place the date is shown); the explanation opens under the title, the grid starts right after */
+.view-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: .2rem 1rem; }
+.view-head > h1 { margin-bottom: .15rem; }
+.view-head > details.about { margin-left: auto; font-size: .85rem; }
+.view-head > details.about[open] { flex-basis: 100%; margin-left: 0; }
+details.about > summary { cursor: pointer; color: var(--link, var(--accent)); }
+details.about > summary:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+details.about[open] > .lede, details.about[open] > .view-scope { margin-top: .35rem; }
+.view-line { display: flex; flex-wrap: wrap; align-items: center; gap: .3rem .5rem; margin: 0 0 .5rem; font-size: .9rem; }
+.view-line .vs-sep { color: var(--text-muted); }
+.view-line form.picker { display: inline-flex; align-items: center; gap: .35rem; margin: 0; max-width: none; }
+.view-line form.picker label { font-size: inherit; color: var(--text-secondary); }
+.view-line form.picker select { width: auto; padding: .15rem .4rem; }
+.view-line [data-older-collection] { font-size: .78rem; }
+.chips.view-chips { margin: 0 0 .5rem; }
+/* #1386 (owner 2026-11-25, "Auto width + 2-line cap"; js/app/grid-cells.js): every data view's cell sizes to its content up
+   to a maximum, shows at most two lines cut with "…", the whole text on hover and one click away; a long-text column (a list
+   -- compliance, paths, affected software -- or text that runs long) gets a wider minimum so a row is not ten lines high.
+   A width the person dragged (.col-sized) and a column or row shown in full win. Print shows everything. */
+table.cells-fit .cell-clamp { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; max-width: 26rem; overflow-wrap: anywhere; }
+table.cells-fit td[data-col-kind=list] .cell-clamp, table.cells-fit td[data-col-kind=long] .cell-clamp { min-width: 14rem; max-width: 34rem; }
+table.cells-fit td.col-sized .cell-clamp { max-width: none; min-width: 0; }
+table.cells-fit .cell-clamp .cell-line { display: inline; }
+table.cells-fit .cell-clamp .cell-line + .cell-line::before { content: "; "; }
+table.cells-fit td.col-full .cell-clamp, table.cells-fit tr.row-full .cell-clamp { display: block; -webkit-line-clamp: unset; line-clamp: none; overflow: visible; }
+table.cells-fit td.col-full .cell-clamp .cell-line, table.cells-fit tr.row-full .cell-clamp .cell-line { display: block; }
+table.cells-fit td.col-full .cell-clamp .cell-line + .cell-line::before, table.cells-fit tr.row-full .cell-clamp .cell-line + .cell-line::before { content: none; }
+table.cells-fit .cell-clamp[data-cut] { cursor: zoom-in; }
+table.cells-fit tr.row-full .cell-clamp[data-cut] { cursor: zoom-out; }
+.row-full-toggle { padding: 0 .25rem; margin-left: .2rem; line-height: 1.2; font-size: .8em; min-width: 0; }
+.th-tools .th-full { padding: 0 .3rem; margin: 0; line-height: 1.3; font-size: .85em; min-width: 0; }
+.th-tools .th-full[aria-pressed=true] { background: var(--brand); color: var(--on-brand, #fff); }
+@media print { table.cells-fit .cell-clamp { display: block; -webkit-line-clamp: unset; overflow: visible; max-width: none; } .row-full-toggle { display: none !important; } }
 .tab-count { color: var(--text-muted); font-weight: 400; }
 .add-filter-hint { flex-basis: 100%; margin: 0; }
 

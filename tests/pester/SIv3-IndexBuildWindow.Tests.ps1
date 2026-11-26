@@ -230,6 +230,135 @@ Describe '#1050 the idle window' {
     }
 }
 
+Describe '#1316 follow-up: an install whose runs go back to back still gets its indexes -- built in the gap before a scheduled run' {
+    BeforeAll {
+        $script:CsStmt = 'CREATE NONCLUSTERED COLUMNSTORE INDEX NCCI_Finding_Load ON sidata.Finding (CollectionId, FindingId)'
+        function script:CsRow([int]$Est = 95, [datetime]$Since = $script:T0, $LastStart = $null, $Forced = $null, [string]$State = 'waiting', [switch]$Plain) {
+            $stmt = if ($Plain) { 'CREATE INDEX IX_Finding_Category ON sidata.Finding (CollectionId, Category)' } else { $script:CsStmt }
+            [pscustomobject]@{ Table = 'sidata.Finding'; Name = $(if ($Plain) { 'IX_Finding_Category' } else { 'NCCI_Finding_Load' }); Statement = $stmt; State = $State
+                               EstMinutes = $(if ($Est -gt 0) { $Est } else { $null }); SinceUtc = $Since; ForcedUtc = $Forced; LastStartUtc = $LastStart; Why = '' }
+        }
+        $script:Idle2 = [pscustomobject]@{ Busy = $false; Why = '' }
+        # THE BUSY INSTALL: a run of 10 h, then the next one due at once -- every 5-minute wake-up is either under a run
+        # (RunDue) or the scheduled start right after it (StartDue). Returns the first decision that starts, with its time.
+        function script:Invoke-BusyDays([object]$Row, [int]$Days = 3, [bool]$Recent = $false) {
+            $t = $script:T0
+            while ($t -lt $script:T0.AddDays($Days)) {
+                $sinceRunStart = ($t - $script:T0).TotalMinutes % 600
+                $startDue = $sinceRunStart -lt 5
+                $d = Get-SIIndexBuildWindowDecision -Rows @($Row) -NowUtc $t -NextRunUtc $t -Busy $script:Idle2 -RunDue (-not $startDue) -StartDue $startDue -IndexJobStartedRecently $Recent
+                if ($d.Start) { return [pscustomobject]@{ At = $t; D = $d; StartDue = $startDue } }
+                $t = $t.AddMinutes(5)
+            }
+            $null
+        }
+    }
+    It 'A BUSY INSTALL (a run always going): the columnstore index is started in the gap before a scheduled run after 24 h -- never under a run -- and the run starts late' {
+        $first = Invoke-BusyDays -Row (CsRow -Est 95)
+        $first | Should -Not -BeNullOrEmpty -Because 'without the gap no idle window ever comes and the index is never built'
+        $first.StartDue | Should -BeTrue -Because 'never while a run runs'
+        ($first.At - $script:T0).TotalHours | Should -BeGreaterOrEqual 24
+        ($first.At - $script:T0).TotalHours | Should -BeLessThan 34 -Because 'the first scheduled start after 24 h of waiting'
+        $first.D.HoldsRun | Should -BeTrue; $first.D.Resumable | Should -BeFalse; $first.D.Force | Should -BeFalse
+        $first.D.Minutes | Should -Be (Get-SIIndexBuildContract).GapLateMinutes
+        $first.D.Why | Should -Match 'about 1 h 35 min, built in the gap before the scheduled run .* the next run starts late, after it'
+    }
+    It 'without -StartDue (the old decision) the same busy install never builds it in 3 days' {
+        $t = $script:T0; $started = 0
+        while ($t -lt $script:T0.AddDays(3)) {
+            if ((Get-SIIndexBuildWindowDecision -Rows @((CsRow)) -NowUtc $t -NextRunUtc $t -Busy $script:Idle2 -RunDue $true).Start) { $started++ }
+            $t = $t.AddMinutes(5)
+        }
+        $started | Should -Be 0
+    }
+    It 'BOUNDED: a non-resumable index longer than the late limit waits (built once after 7 days); an unknown time waits too; a resumable one pauses at the limit' {
+        $long = Get-SIIndexBuildWindowDecision -Rows @((CsRow -Est 400 -Since $script:T0.AddDays(-2))) -NowUtc $script:T0 -NextRunUtc $script:T0 -Busy $script:Idle2 -StartDue $true
+        $long.Start | Should -BeFalse; $long.Why | Should -Match 'more than the 3 h a run may start late'
+        (Get-SIIndexBuildWindowDecision -Rows @((CsRow -Est 0 -Since $script:T0.AddDays(-2))) -NowUtc $script:T0 -NextRunUtc $script:T0 -Busy $script:Idle2 -StartDue $true).Start | Should -BeFalse
+        $once = Get-SIIndexBuildWindowDecision -Rows @((CsRow -Est 400 -Since $script:T0.AddDays(-7))) -NowUtc $script:T0 -NextRunUtc $script:T0 -Busy $script:Idle2 -StartDue $true
+        $once.Start | Should -BeTrue; $once.Force | Should -BeTrue; $once.HoldsRun | Should -BeTrue; $once.Why | Should -Match 'built now, once, in the gap'
+        (Get-SIIndexBuildWindowDecision -Rows @((CsRow -Est 400 -Since $script:T0.AddDays(-9) -Forced $script:T0.AddDays(-1))) -NowUtc $script:T0 -NextRunUtc $script:T0 -Busy $script:Idle2 -StartDue $true).Start | Should -BeFalse -Because 'the one-time build was spent'
+        $r = Get-SIIndexBuildWindowDecision -Rows @((CsRow -Plain -Est 900 -Since $script:T0.AddDays(-2))) -NowUtc $script:T0 -NextRunUtc $script:T0 -Busy $script:Idle2 -StartDue $true
+        $r.Start | Should -BeTrue; $r.Resumable | Should -BeTrue; $r.HoldsRun | Should -BeTrue; $r.Minutes | Should -Be 180; $r.Why | Should -Match 'it pauses there'
+    }
+    It 'AT MOST ONE LATE RUN A DAY per index, and never run after run when the job did not take the install' {
+        $p = CsRow -Plain -State paused -Since $script:T0.AddDays(-3) -LastStart $script:T0.AddHours(-5)
+        $d = Get-SIIndexBuildWindowDecision -Rows @($p) -NowUtc $script:T0 -NextRunUtc $script:T0 -Busy $script:Idle2 -StartDue $true
+        $d.Start | Should -BeFalse; $d.Why | Should -Match 'at most one late run a day'
+        $p.LastStartUtc = $script:T0.AddHours(-25)
+        (Get-SIIndexBuildWindowDecision -Rows @($p) -NowUtc $script:T0 -NextRunUtc $script:T0 -Busy $script:Idle2 -StartDue $true).Start | Should -BeTrue
+        (Get-SIIndexBuildWindowDecision -Rows @($p) -NowUtc $script:T0 -NextRunUtc $script:T0 -Busy $script:Idle2 -StartDue $true -IndexJobStartedRecently $true).Start | Should -BeFalse
+        (Invoke-BusyDays -Row (CsRow) -Recent $true) | Should -BeNullOrEmpty -Because 'a recent start (or one that cannot be read) never holds a run'
+    }
+    It 'NEVER while an update waits or runs, the index build job runs, a data sync / data out / open step is busy, or a run runs / resumes / is asked for' {
+        $old = CsRow -Since $script:T0.AddDays(-2)
+        $args0 = @{ Rows = @($old); NowUtc = $script:T0; NextRunUtc = $script:T0; Busy = $script:Idle2; StartDue = $true }
+        (Get-SIIndexBuildWindowDecision @args0).Start | Should -BeTrue
+        (Get-SIIndexBuildWindowDecision @args0 -UpdateWaits 'update waits').Start | Should -BeFalse
+        (Get-SIIndexBuildWindowDecision @args0 -UpdaterRunning 'caj-si-updater-x').Start | Should -BeFalse
+        (Get-SIIndexBuildWindowDecision @args0 -IndexJobRunning 'caj-si-index-build-x').Start | Should -BeFalse
+        (Get-SIIndexBuildWindowDecision @args0 -RunDue $true).Start | Should -BeFalse
+        $a = @{} + $args0; $a.Busy = [pscustomobject]@{ Busy = $true; Why = 'a data sync is running' }
+        (Get-SIIndexBuildWindowDecision @a).Start | Should -BeFalse
+    }
+    It 'the index build job''s last start: within an hour = recent; older = not; unreadable = recent (a run is never held on a guess)' {
+        $ex = { param($m) [pscustomobject]@{ name = 'x'; properties = [pscustomobject]@{ startTime = $script:T0.AddMinutes(-$m).ToString('o') } } }
+        Test-SIIndexBuildJobStartedRecently -Executions @((& $ex 20)) -NowUtc $script:T0 | Should -BeTrue
+        Test-SIIndexBuildJobStartedRecently -Executions @((& $ex 200)) -NowUtc $script:T0 | Should -BeFalse
+        Test-SIIndexBuildJobStartedRecently -Executions @([pscustomobject]@{ name = 'x'; properties = [pscustomobject]@{ startTime = $script:T0.AddMinutes(-200) } }) -NowUtc $script:T0 | Should -BeFalse
+        Test-SIIndexBuildJobStartedRecently -Executions @() -NowUtc $script:T0 | Should -BeFalse
+        Test-SIIndexBuildJobStartedRecently -Executions @([pscustomobject]@{ name = 'x'; properties = [pscustomobject]@{ startTime = 'not a time' } }) -NowUtc $script:T0 | Should -BeTrue
+    }
+    It 'WIRING: the runner passes the scheduled start (never a Run now) and the job''s last start, and a held run is a Blocked wake-up that starts no run before the drain' {
+        $w = [IO.File]::ReadAllText((Join-Path $script:SIRoot 'engine\flow\Invoke-SIJobFlowRun.ps1'))
+        $w | Should -Match ([regex]::Escape('$ixStartDue = ([string]$ixDue.Action -eq ''Start'') -and -not [bool]$pipeRequest'))
+        $w | Should -Match ([regex]::Escape('-RunDue ([string]$ixDue.Action -in @(''Resume'', ''Busy'') -or [bool]$pipeRequest) -StartDue $ixStartDue -IndexJobStartedRecently $ixRecent'))
+        $w | Should -Match ([regex]::Escape('$ixRecent = Test-SIIndexBuildJobStartedRecently -Executions @($ixEx.value) -NowUtc $ixNow'))
+        $w | Should -Match ([regex]::Escape('if ($ixHoldsRun) { $drain = [pscustomobject]@{ Outcome = ''Blocked''; Runs = @(); Lock = [pscustomobject]@{ What = $ixHoldsRun } } }'))
+        $w.IndexOf('if ($ixHoldsRun) { $drain =') | Should -BeLessThan $w.IndexOf('$drain = Invoke-SIPipelineDrain')
+        $w | Should -Match 'the scheduled run starts late: index \{0\} on \{1\} is built first'
+        # a Blocked drain does no upkeep and exits 0 (the run waits; nothing fails)
+        $pl = [IO.File]::ReadAllText((Join-Path $script:SIRoot 'engine\_shared\SI-Pipeline.ps1'))
+        $pl | Should -Match ([regex]::Escape("if ([string]`$Drain.Outcome -in @('Busy', 'Blocked')) { return [pscustomobject]@{ Run = `$false"))
+        $w | Should -Match ([regex]::Escape("if (`$drain.Outcome -in @('Busy', 'Blocked')) {"))
+    }
+}
+
+Describe 'review item 6: the gap before a run keeps its 3-hour limit, and at most one held run a day per install' {
+    BeforeAll {
+        $script:CsStmt6 = 'CREATE NONCLUSTERED COLUMNSTORE INDEX NCCI_Finding_Load ON sidata.Finding (CollectionId, FindingId)'
+        $script:Idle6 = [pscustomobject]@{ Busy = $false; Why = '' }
+        function script:Row6([int]$Est = 400, [int]$DaysAgo = 8, [string]$Name = 'NCCI_Finding_Load') {
+            [pscustomobject]@{ Table = 'sidata.Finding'; Name = $Name; Statement = $script:CsStmt6; State = 'waiting'; EstMinutes = $Est; SinceUtc = $script:T0.AddDays(-$DaysAgo); ForcedUtc = $null; LastStartUtc = $null; Why = '' }
+        }
+    }
+    It 'the forced build in the gap is CAPPED at the late limit (Minutes = 180, never 0 = no limit); the one in a true idle window still has none' {
+        $g = Get-SIIndexBuildWindowDecision -Rows @((Row6)) -NowUtc $script:T0 -NextRunUtc $script:T0 -Busy $script:Idle6 -StartDue $true
+        $g.Start | Should -BeTrue; $g.Force | Should -BeTrue; $g.HoldsRun | Should -BeTrue
+        $g.Minutes | Should -Be (Get-SIIndexBuildContract).GapLateMinutes
+        $g.Cap | Should -BeTrue
+        $g.Why | Should -Match 'at most 3 h'
+        $i = Get-SIIndexBuildWindowDecision -Rows @((Row6)) -NowUtc $script:T0 -NextRunUtc $script:T0.AddMinutes(90) -Busy $script:Idle6
+        $i.Start | Should -BeTrue; $i.Force | Should -BeTrue; $i.HoldsRun | Should -BeFalse
+        [bool]($i.PSObject.Properties['Cap'] -and $i.Cap) | Should -BeFalse -Because 'an idle window''s forced build takes as long as it needs'
+    }
+    It 'at most ONE held run a day for the install, whichever index asks' {
+        $args6 = @{ Rows = @((Row6 -Name 'NCCI_Finding_Load')); NowUtc = $script:T0; NextRunUtc = $script:T0; Busy = $script:Idle6; StartDue = $true }
+        (Get-SIIndexBuildWindowDecision @args6 -LastGapHoldUtc $script:T0.AddHours(-3)).Start | Should -BeFalse
+        (Get-SIIndexBuildWindowDecision @args6 -LastGapHoldUtc $script:T0.AddHours(-3)).Why | Should -Match 'at most one late run a day'
+        (Get-SIIndexBuildWindowDecision @args6 -LastGapHoldUtc $script:T0.AddHours(-25)).Start | Should -BeTrue
+        (Get-SIIndexBuildWindowDecision @args6).Start | Should -BeTrue
+    }
+    It 'the runner reads the install''s last held run before a scheduled start, records it when it holds one, and hands the cap to the job' {
+        $src = [IO.File]::ReadAllText((Join-Path $script:SIRoot 'engine\flow\Invoke-SIJobFlowRun.ps1'))
+        $src | Should -Match '-LastGapHoldUtc \$\(if \(\$ixStartDue\) \{ Read-SIIndexBuildGapHold -Invoke \$proStore\.Invoke'
+        $src | Should -Match "if \(\`$ixDec\.HoldsRun\) \{\s+\`$null = Save-SIIndexBuildGapHold"
+        $src | Should -Match "SI_INDEXBUILD_CAP = "
+        (Read-SIIndexBuildGapHold -Invoke { throw 'down' } -NowUtc $script:T0) | Should -Be $script:T0 -Because 'unreadable = held just now: never a second hold on a guess'
+        (Read-SIIndexBuildGapHold -Invoke { '' } -NowUtc $script:T0) | Should -BeNullOrEmpty
+    }
+}
+
 Describe '#1050 REAL SQL: the build command beats the lock while it runs; the row store; the pages; the sample read' -Skip:(-not $script:HasSql) {
     BeforeAll {
         $script:Db = 'si_test_ixwin_' + [guid]::NewGuid().ToString('N').Substring(0, 8)

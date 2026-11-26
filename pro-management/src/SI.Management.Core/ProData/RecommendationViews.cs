@@ -288,12 +288,19 @@ WHERE s.CollectionId = {ThisCollection} AND s.GroupingId = N'{g.Id}'
 
     // ---- the key figures ----------------------------------------------------------------------------------------------
 
-    /// Every figure of one collection.
+    /// Every figure of one collection. #1382: plus, when it has figures, the solution version of its run (meta / run_version, the
+    /// version in Note) -- how a run figured before the protection_model marker calculated its Protection Score
+    /// (ExecutiveFigures.ScoreModelOf). A collection without figures stays without rows.
     public const string KeyFigures = """
 SELECT k.Block, k.Figure, k.Dim1, k.Dim2, k.Value, k.Assets, k.Total, CONVERT(int, k.Available) AS Available, k.Note, k.Items, k.VeryHigh, k.Servers, k.Clients
 FROM sidata.KeyFigure AS k
 WHERE k.CollectionId = TRY_CONVERT(int, @CollectionId)
-ORDER BY k.Block, k.Figure, k.Dim1, k.Dim2;
+UNION ALL
+SELECT N'meta', N'run_version', N'', N'', NULL, NULL, NULL, 1, c.SolutionVersion, NULL, NULL, NULL, NULL
+FROM sidata.Collection AS c
+WHERE c.CollectionId = TRY_CONVERT(int, @CollectionId) AND c.SolutionVersion IS NOT NULL
+  AND EXISTS (SELECT 1 FROM sidata.KeyFigure AS kx WHERE kx.CollectionId = c.CollectionId)
+ORDER BY Block, Figure, Dim1, Dim2;
 """;
 
     /// The headline figures (no dimension) of every complete collection of the last @Days days: the trend.

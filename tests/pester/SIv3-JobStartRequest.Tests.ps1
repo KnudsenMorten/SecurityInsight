@@ -239,7 +239,8 @@ Describe 'SIv3-JobStartRequest: the pipeline runner starts what a person asked f
         $pass = $src.IndexOf('$null = Invoke-SIJobRunnerStarts'); $exit = $src.IndexOf('if ($housekeepingOnly) {')
         $pass | Should -BeGreaterThan 0
         $pass | Should -BeLessThan $exit
-        $src | Should -Match "if \(\`$HostKind -eq 'Container' -and \`$proStore -and \`$armSeams\) \{\s+try \{\s+\`$jsr = "
+        # OPEN-04 (772b42cd8) added "-and -not $signedHold.Text" to this condition: a held run makes no starts either
+        $src | Should -Match "if \(\`$HostKind -eq 'Container' -and \`$proStore -and \`$armSeams( -and -not \`$signedHold\.Text)?\) \{\s+try \{\s+\`$jsr = "
     }
 }
 

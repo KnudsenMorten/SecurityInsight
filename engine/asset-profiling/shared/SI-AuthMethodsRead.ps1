@@ -133,6 +133,39 @@ function Get-SIAuthMethodItemRetryAfter {
     $null
 }
 
+function ConvertTo-SIAuthMethodThrottlePercent {
+    <# PURE. #1144 P3: Microsoft Graph's x-ms-throttle-limit-percentage (sent only above 0.8 of the limit; 0.8 .. 1.8) as a
+       fraction; a value written as a percent (85) is read as 0.85. $null when it does not read as a number. #>
+    param([AllowNull()]$Value)
+    if ($null -eq $Value) { return $null }
+    $v = 0.0
+    if (-not [double]::TryParse(([string]$Value).Trim().TrimEnd('%'), [Globalization.NumberStyles]::Float, [Globalization.CultureInfo]::InvariantCulture, [ref]$v)) { return $null }
+    if ($v -gt 5) { $v = $v / 100.0 }
+    $v
+}
+
+function Test-SIAuthMethodWaveNearLimit {
+    <#
+        PURE. #1144 P3: did Microsoft say, anywhere in one wave's outcomes, that the tenant is above 0.8 of its limit -- on the
+        $batch request itself (ThrottlePercent) or on one of its answers (the item's x-ms-throttle-limit-percentage header)?
+    #>
+    param([AllowNull()][object[]]$Outcomes, [double]$Above = 0.8)
+    foreach ($o in @($Outcomes)) {
+        if ($null -eq $o) { continue }
+        if ($o.PSObject.Properties['ThrottlePercent'] -and $null -ne $o.ThrottlePercent -and [double]$o.ThrottlePercent -gt $Above) { return $true }
+        $r = $o.Response
+        if ($null -eq $r -or -not $r.PSObject.Properties['responses']) { continue }
+        foreach ($it in @($r.responses)) {
+            if ($null -eq $it -or -not $it.PSObject.Properties['headers'] -or $null -eq $it.headers) { continue }
+            $hs = @(); if ($it.headers -is [System.Collections.IDictionary]) { $hs = @(foreach ($k in $it.headers.Keys) { [pscustomobject]@{ Name = [string]$k; Value = $it.headers[$k] } }) } else { $hs = @($it.headers.PSObject.Properties) }
+            foreach ($h in $hs) {
+                if ([string]$h.Name -ieq 'x-ms-throttle-limit-percentage') { $p = ConvertTo-SIAuthMethodThrottlePercent $h.Value; if ($null -ne $p -and $p -gt $Above) { return $true } }
+            }
+        }
+    }
+    $false
+}
+
 function Get-SIAuthMethodsMissingLine {
     <# PURE. The one plain line a run prints when the sign-in methods could not be read for every user. Customer text. #>
     param([Parameter(Mandatory)]$State)
@@ -147,13 +180,22 @@ function Update-SIAuthMethodConcurrency {
     <#
         PURE (changes -State). #874: how many $batch requests the next wave sends -- one more after a wave Microsoft answered
         without a 429, half (never below one) after a throttled wave. Returns the new number.
+        #1144 P2/P3 (the background read): while -State.Doubling is on (the background read starts so, until Microsoft first
+        asks to slow down) a clean wave DOUBLES it instead; the first throttled wave turns doubling off for good (then +1 /
+        half). -Hold: Microsoft said the tenant is near its limit (x-ms-throttle-limit-percentage above 0.8) -- the number
+        stays as it is (counted in -State.HeldWaves). No fixed ceiling: Microsoft's answers decide.
     #>
-    param([Parameter(Mandatory)]$State, [bool]$Throttled)
+    param([Parameter(Mandatory)]$State, [bool]$Throttled, [bool]$Hold = $false)
     $c = [Math]::Max(1, [int]$State.Concurrency)
+    $dbl = [bool]($State.PSObject.Properties['Doubling'] -and $State.Doubling)
     if ($Throttled) {
         $c = [Math]::Max(1, [int][Math]::Floor($c / 2))
         if ($State.PSObject.Properties['ThrottledWaves']) { $State.ThrottledWaves = [int]$State.ThrottledWaves + 1 }
-    } else { $c = $c + 1 }
+        if ($State.PSObject.Properties['Doubling']) { $State.Doubling = $false }
+    } elseif ($Hold) {
+        if ($State.PSObject.Properties['HeldWaves']) { $State.HeldWaves = [int]$State.HeldWaves + 1 }
+    } elseif ($dbl) { $c = $c * 2 }
+    else { $c = $c + 1 }
     $State.Concurrency = $c
     $c
 }
@@ -188,11 +230,14 @@ function Invoke-SIAuthMethodBatchRequests {
                 $ra = $null
                 # (PowerShell hands a Nullable<T> over as T or $null: .Delta is a TimeSpan here, .Date a DateTimeOffset)
                 try { $rah = $resp.Headers.RetryAfter; if ($rah) { if ($null -ne $rah.Delta) { $ra = [int][Math]::Ceiling(([TimeSpan]$rah.Delta).TotalSeconds) } elseif ($null -ne $rah.Date) { $ra = [int][Math]::Max(0, [Math]::Ceiling((([DateTimeOffset]$rah.Date).UtcDateTime - [datetime]::UtcNow).TotalSeconds)) } } } catch { }
+                # #1144 P3: how near the tenant is to Microsoft's limit (0..1, $null when Microsoft did not say)
+                $pct = $null
+                try { $hv = $null; if ($resp.Headers.TryGetValues('x-ms-throttle-limit-percentage', [ref]$hv)) { $pct = ConvertTo-SIAuthMethodThrottlePercent @($hv)[0] } } catch { }
                 $text = $resp.Content.ReadAsStringAsync().GetAwaiter().GetResult()
                 $parsed = $null
                 if ($status -eq 200 -and $text) { try { $parsed = $text | ConvertFrom-Json } catch { $parsed = $null } }
                 $err = ''; if ($status -ne 200) { $err = ('{0} {1}' -f $status, [string]$resp.ReasonPhrase) }
-                $out.Add([pscustomobject]@{ Response = $parsed; Status = $status; RetryAfter = $ra; Error = $err })
+                $out.Add([pscustomobject]@{ Response = $parsed; Status = $status; RetryAfter = $ra; Error = $err; ThrottlePercent = $pct })
                 $resp.Dispose()
             } catch {
                 $m = $_.Exception.Message; if ($_.Exception.InnerException) { $m = $_.Exception.InnerException.Message }
@@ -203,11 +248,200 @@ function Invoke-SIAuthMethodBatchRequests {
     , $out.ToArray()
 }
 
+# =====================================================================================================================
+#  MANY PER-OBJECT GRAPH READS THROUGH $batch (#1383, owner 2026-11-25 "Batch the Graph calls"). Measured on the internal
+#  install: the identity collection spent ~460 s on its 194 privilege-holding groups (members, PIM for Groups schedules,
+#  activated memberships) and ~120 s on 1,617 service principals' application permissions -- every read one call at a time.
+#  These reads now go 20 per $batch request, several requests in flight together, at the SAME pace as the sign-in methods
+#  read above (Invoke-SIAuthMethodBatchRequests, Update-SIAuthMethodConcurrency, Test-SIAuthMethodWaveNearLimit,
+#  Get-SIAuthMethodItemRetryAfter: a clean wave doubles the next until Microsoft first asks to slow down, then +1 / half;
+#  held near Microsoft's limit; each Retry-After waited once per wave). The same path for every tenant size; no cap.
+# =====================================================================================================================
+function Invoke-SIGraphBatchWave {
+    <# One wave: the $batch bodies sent AT ONCE with the run's current Graph token (Get-SIGraphToken when it is loaded;
+       -ForceRefresh after a 401). Outcomes as Invoke-SIAuthMethodBatchRequests. The seam the tests replace. #>
+    param([string]$Token, [string[]]$Bodies = @(), [switch]$ForceRefresh)
+    $tk = $Token
+    if (Get-Command -Name Get-SIGraphToken -ErrorAction SilentlyContinue) {
+        try { $t2 = if ($ForceRefresh) { [string](Get-SIGraphToken -Resource Graph -ForceRefresh) } else { [string](Get-SIGraphToken -Resource Graph) }; if ($t2) { $tk = $t2 } } catch { }
+    }
+    Invoke-SIAuthMethodBatchRequests -Token $tk -Bodies $Bodies
+}
+
+function ConvertTo-SIGraphBatchUrl {
+    <# PURE. A Graph URL as one $batch item names it: relative to v1.0, a space written %20 (the text of a $filter). #>
+    param([string]$Url)
+    $u = [string]$Url
+    if ($u -match '^https://graph\.microsoft\.com/v1\.0(/.*)$') { $u = $Matches[1] }
+    $u.Replace(' ', '%20')
+}
+
+function Invoke-SIGraphBatchGet {
+    <#
+        GET each request's URL through Microsoft Graph $batch (20 per request; the waves as above) and answer EVERY request:
+          -Requests  @( @{ Key; Url } ... )  -- Url relative to v1.0 ('/groups/<id>/transitiveMembers?$select=id')
+        Returns @{ Items = @{ <Key> = @{ Status; Rows; Error; Code } }; Requests; Waves; MaxConcurrency; ThrottledWaves;
+        HeldWaves; SleptSeconds; Stopped }:
+          Status 200 -- Rows = the answer's value (every page: an answer with an @odata.nextLink is read on through
+                        Invoke-SIGraphPaged, as the single read did); an answer that is one object = that object
+          Status <the item's HTTP status> -- a permanent answer (400 / 401 after a new token / 403 / 404 ...): Error and Code
+                        (the Graph error code, e.g. Request_ResourceNotFound) say what
+          Status 429 / 502 / 503 / 504 / 0 -- still transient after -MaxRounds (5 = the attempts Invoke-SIGraphPaged makes)
+          Status -1  -- not asked: -StopOnStatus answered first (e.g. 401 / 403: refused for the whole tenant)
+        The caller handles a non-200 item exactly as it handled the failed single read it replaces. NEVER THROWS.
+        The pace of the run's last batched read is where the next one starts ($script:_SICache 'GraphBatchPace').
+        Seams: -PostMany { param([string[]]$Bodies) } (default Invoke-SIGraphBatchWave), -Sleep { param($Seconds) }.
+    #>
+    param([string]$Token, [AllowNull()][object[]]$Requests = @(), [scriptblock]$PostMany, [scriptblock]$Sleep,
+          [int]$MaxRounds = 5, [int]$MaxDelaySeconds = 60, [int[]]$StopOnStatus = @(), [string]$Label = '')
+    if (-not (Get-Variable -Name _SICache -Scope Script -ErrorAction SilentlyContinue) -or $null -eq $script:_SICache) { $script:_SICache = @{} }
+    $start = 1; $dbl = $true
+    if ($script:_SICache.ContainsKey('GraphBatchPace') -and $script:_SICache['GraphBatchPace']) {
+        $start = [Math]::Max(1, [int]$script:_SICache['GraphBatchPace'].Concurrency); $dbl = [bool]$script:_SICache['GraphBatchPace'].Doubling
+    }
+    $res = [pscustomobject]@{ Items = @{}; Requests = 0; Waves = 0; Concurrency = $start; MaxConcurrency = 0; ThrottledWaves = 0; HeldWaves = 0
+        Doubling = $dbl; SleptSeconds = 0.0; Stopped = $false }
+    $byKey = @{}; $pending = New-Object System.Collections.Generic.List[string]
+    foreach ($r in @($Requests)) {
+        if ($null -eq $r) { continue }
+        $k = [string]$r.Key; if (-not $k -or $byKey.ContainsKey($k)) { continue }
+        $byKey[$k] = ConvertTo-SIGraphBatchUrl ([string]$r.Url); $pending.Add($k)
+    }
+    if ($pending.Count -eq 0) { return $res }
+    if (-not $Sleep) { $Sleep = { param($Seconds) Start-Sleep -Seconds $Seconds } }
+    $renew = $false; $renewed = $false
+    if (-not $PostMany) { $PostMany = { param([string[]]$Bodies) Invoke-SIGraphBatchWave -Token $Token -Bodies $Bodies -ForceRefresh:$renew } }
+    $last = @{}   # key -> the last transient answer (Status / Error), for a request still transient after the last round
+    $final = { param($Key, $Status, $Rows, $Err, $Code) $res.Items[$Key] = [pscustomobject]@{ Status = [int]$Status; Rows = @($Rows); Error = [string]$Err; Code = [string]$Code } }
+    $readOn = {
+        param($Key, $Body)
+        $rows = New-Object System.Collections.Generic.List[object]
+        if ($Body -and $Body.PSObject.Properties['value']) { foreach ($v in @($Body.value)) { if ($null -ne $v) { $rows.Add($v) } } }
+        elseif ($Body -and $Body.PSObject.Properties['id']) { $rows.Add($Body) }
+        $next = $null; if ($Body -and $Body.PSObject.Properties['@odata.nextLink']) { $next = [string]$Body.'@odata.nextLink' }
+        if ($next) {
+            if (-not (Get-Command -Name Invoke-SIGraphPaged -ErrorAction SilentlyContinue)) { & $final $Key 0 @() 'an answer of more than one page could not be read on (the pager is not loaded)' ''; return }
+            try { foreach ($v in @(Invoke-SIGraphPaged -RelativeUrl $next -Token $Token)) { if ($null -ne $v) { $rows.Add($v) } } }
+            catch {
+                $st = 0; if (Get-Command -Name Get-SIGraphHttpStatus -ErrorAction SilentlyContinue) { try { $st = [int](Get-SIGraphHttpStatus -ErrorRecord $_) } catch { $st = 0 } }
+                & $final $Key $st @() ([string]$_.Exception.Message) ''; return
+            }
+        }
+        & $final $Key 200 $rows.ToArray() '' ''
+    }
+    for ($round = 1; $round -le $MaxRounds -and $pending.Count -gt 0 -and -not $res.Stopped; $round++) {
+        $retry = New-Object System.Collections.Generic.List[string]
+        $wait = 0
+        $chunks = New-Object System.Collections.Generic.List[object]
+        for ($i = 0; $i -lt $pending.Count; $i += $script:SIAuthMethodBatchSize) { $chunks.Add(@($pending.GetRange($i, [Math]::Min($script:SIAuthMethodBatchSize, $pending.Count - $i)))) }
+        $next = 0; $paid = $false; $lastWaveThrottled = $false
+        while ($next -lt $chunks.Count -and -not $res.Stopped) {
+            $width = [Math]::Max(1, [Math]::Min([int]$res.Concurrency, $chunks.Count - $next))
+            $wave = $chunks.GetRange($next, $width).ToArray(); $next += $width
+            $bodies = foreach ($chunk in $wave) {
+                $reqs = for ($j = 0; $j -lt $chunk.Count; $j++) { @{ id = [string]($j + 1); method = 'GET'; url = $byKey[$chunk[$j]]; headers = @{ ConsistencyLevel = 'eventual' } } }
+                ConvertTo-Json -InputObject @{ requests = @($reqs) } -Depth 6 -Compress
+            }
+            if ($width -gt [int]$res.MaxConcurrency) { $res.MaxConcurrency = $width }
+            $outcomes = & $PostMany @($bodies)
+            $outcomes = @($outcomes)
+            $renew = $false
+            $res.Requests = [int]$res.Requests + $wave.Count; $res.Waves = [int]$res.Waves + 1
+            $waveThrottled = $false; $waveWait = 0
+            for ($w = 0; $w -lt $wave.Count; $w++) {
+                $chunk = @($wave[$w])
+                $o = $null; if ($w -lt $outcomes.Count) { $o = $outcomes[$w] }
+                if ($null -eq $o -or [int]$o.Status -eq -1) { foreach ($k in $chunk) { $retry.Add($k) }; continue }   # not sent
+                $resp = $o.Response
+                if ([int]$o.Status -ne 200 -or $null -eq $resp) {
+                    $st = [int]$o.Status
+                    # an answer that could not be read is no answer (never "no rows"): asked again
+                    if ($st -eq 200) { $st = 0 }
+                    if ($st -eq 401 -and -not $renewed) { $renewed = $true; $renew = $true; foreach ($k in $chunk) { $retry.Add($k) }; continue }
+                    if ($st -in 429, 502, 503, 504 -or $st -eq 0) {
+                        if ($st -eq 429) { $waveThrottled = $true }
+                        if ($null -ne $o.RetryAfter -and [int]$o.RetryAfter -gt $waveWait) { $waveWait = [int]$o.RetryAfter }
+                        foreach ($k in $chunk) { $retry.Add($k); $last[$k] = @{ Status = $st; Error = [string]$o.Error } }
+                        continue
+                    }
+                    # the whole request was answered for good (400 ...): every item in it gets that answer
+                    foreach ($k in $chunk) { & $final $k $st @() ('HTTP {0} {1}' -f $st, [string]$o.Error) '' }
+                    if ($StopOnStatus -contains $st) { $res.Stopped = $true }
+                    continue
+                }
+                $answered = @{}
+                foreach ($item in @($resp.responses)) {
+                    if ($null -eq $item) { continue }
+                    $n = 0; if (-not [int]::TryParse([string]$item.id, [ref]$n) -or $n -lt 1 -or $n -gt $chunk.Count) { continue }
+                    $key = $chunk[$n - 1]; $answered[$key] = $true
+                    $st = [int]$item.status
+                    if ($st -eq 200) { & $readOn $key $item.body; continue }
+                    $msg = ''; $code = ''
+                    if ($item.PSObject.Properties['body'] -and $item.body -and $item.body.PSObject.Properties['error'] -and $item.body.error) {
+                        $code = [string]$item.body.error.code; $msg = [string]$item.body.error.message
+                    }
+                    if ($st -eq 401 -and -not $renewed) { $renewed = $true; $renew = $true; $retry.Add($key); continue }
+                    if ($st -in 429, 502, 503, 504) {
+                        if ($st -eq 429) { $waveThrottled = $true }
+                        $ra = Get-SIAuthMethodItemRetryAfter -Item $item
+                        if ($null -ne $ra -and $ra -gt $waveWait) { $waveWait = $ra }
+                        $retry.Add($key); $last[$key] = @{ Status = $st; Error = ('HTTP {0} {1}' -f $st, $msg).Trim() }
+                        continue
+                    }
+                    & $final $key $st @() ('HTTP {0} {1}: {2}' -f $st, $code, $msg).Trim() $code
+                    if ($StopOnStatus -contains $st) { $res.Stopped = $true }
+                }
+                foreach ($k in $chunk) { if (-not $answered.ContainsKey($k)) { $retry.Add($k) } }
+            }
+            if ($waveWait -gt $wait) { $wait = $waveWait }
+            if ($res.Stopped) { break }
+            $null = Update-SIAuthMethodConcurrency -State $res -Throttled $waveThrottled -Hold (Test-SIAuthMethodWaveNearLimit -Outcomes $outcomes)
+            $lastWaveThrottled = $waveThrottled
+            if ($waveThrottled -and $next -lt $chunks.Count) {
+                $d = if ($waveWait -gt 0) { $waveWait } else { 1 }
+                if ($d -gt $MaxDelaySeconds) { $d = $MaxDelaySeconds }
+                & $Sleep $d
+                $res.SleptSeconds = [double]$res.SleptSeconds + [double]$d
+                $paid = $true
+            }
+        }
+        # the requests of a wave not sent after the stop are asked again only when there was no stop
+        if ($res.Stopped) { foreach ($k in $chunks.GetRange($next, $chunks.Count - $next) | ForEach-Object { $_ }) { $retry.Add([string]$k) } }
+        $pending = New-Object System.Collections.Generic.List[string]
+        foreach ($k in $retry) { if (-not $res.Items.ContainsKey($k) -and -not $pending.Contains($k)) { $pending.Add($k) } }
+        if ($res.Stopped) { break }
+        if ($paid -and -not $lastWaveThrottled) { continue }
+        if ($pending.Count -gt 0 -and $round -lt $MaxRounds) {
+            $d = if ($wait -gt 0) { $wait } else { [int][Math]::Pow(2, $round - 1) }
+            if ($d -gt $MaxDelaySeconds) { $d = $MaxDelaySeconds }
+            & $Sleep $d
+            $res.SleptSeconds = [double]$res.SleptSeconds + [double]$d
+        }
+    }
+    foreach ($k in $pending) {
+        if ($res.Items.ContainsKey($k)) { continue }
+        if ($res.Stopped) { & $final $k -1 @() 'not asked: Microsoft refused an earlier read of the same kind' ''; continue }
+        $l = $last[$k]; if ($l) { & $final $k $l.Status @() ('still not answered after {0} attempt(s): {1}' -f $MaxRounds, $l.Error) '' } else { & $final $k 0 @() ('still not answered after {0} attempt(s)' -f $MaxRounds) '' }
+    }
+    $script:_SICache['GraphBatchPace'] = [pscustomobject]@{ Concurrency = [int]$res.Concurrency; Doubling = [bool]$res.Doubling }
+    if ($Label) {
+        $line = ('[perms] {0}: {1:N0} read(s) in {2:N0} request(s) of up to 20, up to {3} at once' -f $Label, $byKey.Count, [int]$res.Requests, [int]$res.MaxConcurrency)
+        if ([int]$res.ThrottledWaves -gt 0) { $line += ('; Microsoft asked to slow down {0:N0} time(s)' -f [int]$res.ThrottledWaves) }
+        if ([double]$res.SleptSeconds -gt 0) { $line += ('; {0} s waited' -f ([Math]::Round([double]$res.SleptSeconds, 1)).ToString('0.0', [Globalization.CultureInfo]::InvariantCulture)) }
+        if (Get-Command -Name Write-SIInfo -ErrorAction SilentlyContinue) { Write-SIInfo $line } else { Write-Verbose $line }
+    }
+    $res
+}
+
 function Get-SIAuthMethodsPaceLine {
     <# PURE. #874: how the read went -- the requests, the most sent at once, how often Microsoft asked to slow down. Plain text. #>
     param([Parameter(Mandatory)]$State)
     if (-not $State.PSObject.Properties['Requests'] -or [int]$State.Requests -eq 0) { return $null }
     $line = ('[perms] sign-in methods: {0:N0} request(s) of 20 users, up to {1} at once; Microsoft asked to slow down {2:N0} time(s)' -f [int]$State.Requests, [int]$State.MaxConcurrency, [int]$State.ThrottledWaves)
+    # #1144: where the read started (the pace the last background run ended on) and how often it held its pace because
+    # Microsoft said the tenant was near its limit -- said only when it applies
+    if ($State.PSObject.Properties['StartConcurrency'] -and [int]$State.StartConcurrency -gt 1) { $line += ('; started at {0} at once (where the last run ended)' -f [int]$State.StartConcurrency) }
+    if ($State.PSObject.Properties['HeldWaves'] -and [int]$State.HeldWaves -gt 0) { $line += ('; held its pace {0:N0} time(s) near Microsoft''s limit' -f [int]$State.HeldWaves) }
     # #1049 F0: how long the read waited before asking again (only said when it waited at all)
     if ($State.PSObject.Properties['SleptSeconds'] -and [double]$State.SleptSeconds -gt 0) {
         $line += ('; {0} s waited before asking again' -f ([Math]::Round([double]$State.SleptSeconds, 1)).ToString('0.0', [Globalization.CultureInfo]::InvariantCulture))
@@ -254,7 +488,12 @@ function Get-SIEntraPasswordlessByUser {
         [int]$MaxDelaySeconds = 60,
         # read the device behind each Windows Hello for Business / Microsoft Authenticator method too ($expand=device). The
         # identity discovery always asks for it; off only keeps the method read on its own (the read's own tests).
-        [switch]$ReadDevices
+        [switch]$ReadDevices,
+        # #1144 P2 (the background read): the number of requests the FIRST wave of this process sends -- the pace the last
+        # run ended on; 0 / 1 = one, as before. Only used when the run state is made (later calls carry the pace on).
+        [int]$StartConcurrency = 0,
+        # #1144 P2: a clean wave doubles the next one until Microsoft first asks to slow down (then +1 / half, as before)
+        [switch]$Doubling
     )
     $result = @{}
     if (-not $script:_SICache.ContainsKey('AuthMethodsState') -or $null -eq $script:_SICache['AuthMethodsState']) {
@@ -283,10 +522,14 @@ function Get-SIEntraPasswordlessByUser {
     # for every tenant size, no fixed number. A throttled wave's Retry-After is waited ONCE for the whole wave (never one
     # sleep per request) before the next wave; the throttled users are asked again in the next round, as before.
     if (-not $state.PSObject.Properties['Concurrency']) {
-        $state | Add-Member -NotePropertyName Concurrency -NotePropertyValue 1
+        $start = [Math]::Max(1, $StartConcurrency)
+        $state | Add-Member -NotePropertyName Concurrency -NotePropertyValue $start
         $state | Add-Member -NotePropertyName MaxConcurrency -NotePropertyValue 1
         $state | Add-Member -NotePropertyName ThrottledWaves -NotePropertyValue 0
         $state | Add-Member -NotePropertyName Requests -NotePropertyValue 0
+        $state | Add-Member -NotePropertyName StartConcurrency -NotePropertyValue $start
+        $state | Add-Member -NotePropertyName Doubling -NotePropertyValue ([bool]$Doubling)
+        $state | Add-Member -NotePropertyName HeldWaves -NotePropertyValue 0
     }
     if (-not $state.PSObject.Properties['SleptSeconds']) { $state | Add-Member -NotePropertyName SleptSeconds -NotePropertyValue 0.0 }
     if (-not $PostMany) {
@@ -398,7 +641,8 @@ function Get-SIEntraPasswordlessByUser {
             if ($refused) { break }
             # measure -> adapt: a wave Microsoft throttled halves the next one and its Retry-After is waited ONCE before the
             # next wave of this round (the round's own end waits for the last one); a clean wave lets the next send one more
-            $null = Update-SIAuthMethodConcurrency -State $state -Throttled $waveThrottled
+            # #1144 P3: Microsoft said the tenant is above 0.8 of its limit -> the pace holds (no more requests next wave)
+            $null = Update-SIAuthMethodConcurrency -State $state -Throttled $waveThrottled -Hold (Test-SIAuthMethodWaveNearLimit -Outcomes $outcomes)
             $lastWaveThrottled = $waveThrottled
             if ($waveThrottled -and $next -lt $chunks.Count) {
                 $d = if ($waveWait -gt 0) { $waveWait } else { 1 }
@@ -592,7 +836,7 @@ function Add-SIAuthMethodsRecordPart {
     <# Writes one user's part (New-SIAuthMethodsPart) to its Entra record. Never throws. #>
     param([AllowNull()]$User, [AllowNull()]$Result, [datetime]$ReadAt = [datetime]::UtcNow)
     if ($null -eq $User -or $null -eq $Result -or -not [bool]$Result.ReadComplete) { return }
-    if (-not (Get-Command -Name Add-SIRecordPart -ErrorAction SilentlyContinue)) { return }
+    if (-not (Test-Path -Path 'function:Add-SIRecordPart')) { return }
     $ms = @(); if ($Result.PSObject.Properties['Methods']) { $ms = @($Result.Methods) }
     $dr = $true; if ($Result.PSObject.Properties['DevicesRead']) { $dr = [bool]$Result.DevicesRead }
     try { Add-SIRecordPart -Provider 'entra' -RecordType 'user' -Key ([string]$User.id) -Part 'authenticationMethods' -Object (New-SIAuthMethodsPart -User $User -Methods $ms -DevicesRead $dr -ReadAt $ReadAt) } catch { }
@@ -642,7 +886,7 @@ function Add-SIAuthMethodDevices {
             for ($x = 0; $x -lt $width; $x++) { if ($x -lt $wave.Count) { $outcomes.Add($wave[$x]) } else { $outcomes.Add($null) } }
             $next += $width
             $thr = @($wave | Where-Object { $null -ne $_ -and ([int]$_.Status -eq 429 -or ($null -ne $_.Response -and @($_.Response.responses | Where-Object { $null -ne $_ -and [int]$_.status -eq 429 }).Count -gt 0)) }).Count -gt 0
-            if ($State -and $State.PSObject.Properties['Concurrency']) { $null = Update-SIAuthMethodConcurrency -State $State -Throttled $thr }
+            if ($State -and $State.PSObject.Properties['Concurrency']) { $null = Update-SIAuthMethodConcurrency -State $State -Throttled $thr -Hold (Test-SIAuthMethodWaveNearLimit -Outcomes $wave) }
             if ($thr -and $next -lt $bodies.Count) { $d = [Math]::Max(1, [Math]::Min($MaxDelaySeconds, $wait)); & $Sleep $d }
         }
         $sent += $bodies.Count

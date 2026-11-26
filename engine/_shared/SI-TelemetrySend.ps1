@@ -367,7 +367,7 @@ function ConvertTo-SITelemetryWire {
     $w = New-AitUplinkReport @a
     # #719: the framework client keeps the first 40 Counts keys by name (10 before main's 2026-10-13 copy); Invardia takes up
     # to 40 per record -- SI still shapes the identified
-    # heartbeat's Counts itself (SI-TelemetryCounts.ps1: the agreed names, whole numbers >= 0, at most 38)
+    # heartbeat's Counts itself (SI-TelemetryCounts.ps1: the agreed names, whole numbers >= 0, at most 40 -- #1387)
     if ($w -and $a.ContainsKey('Counts') -and $Record.Kind -eq 'heartbeat' -and (Get-Command -Name ConvertTo-SITelemetryCountsWire -ErrorAction SilentlyContinue)) {
         $cw = ConvertTo-SITelemetryCountsWire -Counts $a.Counts
         if ($cw) { $w | Add-Member -NotePropertyName 'Counts' -NotePropertyValue $cw -Force }

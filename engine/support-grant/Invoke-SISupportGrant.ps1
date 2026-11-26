@@ -51,11 +51,12 @@ $queue = (Get-SISupportGrantJobContract).Queue
 $receive = {
     if (-not $account.Trim()) { throw 'the install names no storage account (SI_StorageAccount)' }
     $all = [System.Collections.Generic.List[object]]::new()
-    # up to 4 reads of 32 -- every message on the queue is read and deleted (the newest fresh one is the request)
+    # up to 4 reads of 32 -- every message on the queue is read and deleted (each read on its own: a close wins, else the newest fresh open)
     for ($i = 0; $i -lt 4; $i++) {
         $r = Invoke-SIStorageRequest -Method GET -Uri (Get-SIStorageUri -Account $account -Service queue -Path ("$queue/messages") -Query 'numofmessages=32&visibilitytimeout=120') -Headers @{ Accept = 'application/xml' } -AllowNotFound -What ("Read the queue '{0}'" -f $queue)
         if ($null -eq $r) { break }
-        $got = @(ConvertFrom-SISupportGrantQueueXml -Xml ([string]$r.Content))
+        # #1356: the read's batch opened up into one item per message (@( ) alone kept the batch as ONE item)
+        $got = @(ConvertFrom-SISupportGrantQueueXml -Xml ([string]$r.Content) | ForEach-Object { $_ } | Where-Object { $null -ne $_ })
         foreach ($m in $got) { $all.Add($m) }
         if ($got.Count -lt 32) { break }
     }

@@ -162,7 +162,8 @@ Describe 'WIRING -- every Resource Graph pager uses the shared contract' {
     }
     It 'the SP discovery resets the failure counter before the loop and reports after it' {
         $c = Get-CodeNoComments (Join-Path $script:Disc 'Get-DiscoveryFromEntraServicePrincipals.ps1')
-        $c | Should -Match '(?s)Reset-SIPermissionFetchFailures\s*\n\s*foreach \(\$sp in \$rows\)'
+        # #1383: the batched permission read runs between the reset and the loop (its failures are counted, never reset away)
+        $c | Should -Match '(?s)Reset-SIPermissionFetchFailures\s*\n\s*\$spAppPerms = & \$readAppPerms @\(\$rows\)\s*\n\s*foreach \(\$sp in \$rows\)'
         $c | Should -Match 'Write-SIPermissionFetchSummary'
     }
 }

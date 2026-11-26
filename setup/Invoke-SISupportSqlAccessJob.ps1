@@ -2,8 +2,9 @@
 .SYNOPSIS
     SecurityInsight Pro: gives the Invardia Support app its own database user on an install whose database is PRIVATE
     (public network access off) -- FROM INSIDE: a one-time job in the install's own private environment creates the user
-    from the application's client id, adds it to the database owner role, reads both back, and the job is removed.
-    Nothing is opened. PLAN by default.
+    from the application's client id, adds it to the READ-ONLY role si_support_read (never db_owner: admin comes only just
+    in time, through the signed support grant procedures -- framework SECAUDIT-1a, #1374), reads both back, and the job is
+    removed. Nothing is opened. PLAN by default.
 
 .DESCRIPTION
     #681 (owner 2026-10-19: "same config as pim. when we say it is private, it stays that way"). PIM's way, the same:
@@ -21,7 +22,7 @@
     options. It never gives a role, a membership or a permission, and it never opens the public endpoint.
 
     Run by Invardia support inside the environment's Support session (every request recorded in your audit log). The
-    membership of the admin group is not part of this script: it is given from outside before the database goes private.
+    Support app is never made a member of the admin group (SECAUDIT-1a) -- by this script or any other.
 
 .EXAMPLE
     . C:\claude-sessions\Invardia\tools\Connect-InvardiaSupport.ps1 -Environment <handle> -Reason 'support database access'
@@ -79,5 +80,5 @@ if (-not $Apply) {
 }
 $r = Invoke-SISupportSqlJob -Arm $seams.Arm -Plan $plan -UserName $DbUserName -TimeoutSeconds $TimeoutSeconds -PollSeconds $PollSeconds -Sleep $Sleep
 foreach ($l in $r.Lines) { Write-Host ('   ' + $l) -ForegroundColor $(if ($r.Ok) { 'Green' } else { 'Red' }) }
-Write-Host ('{0}: {1}' -f $r.Verdict, $(if ($r.Ok) { 'the Support app''s own database user, with the owner role, was read back inside the network' } else { 'see the lines above; the job''s own log (its console lines in the install''s workspace) says why' })) -ForegroundColor $(if ($r.Ok) { 'Green' } else { 'Red' })
+Write-Host ('{0}: {1}' -f $r.Verdict, $(if ($r.Ok) { 'the Support app''s own read-only database user (si_support_read, no db_owner) was read back inside the network' } else { 'see the lines above; the job''s own log (its console lines in the install''s workspace) says why' })) -ForegroundColor $(if ($r.Ok) { 'Green' } else { 'Red' })
 [pscustomobject]@{ Mode = 'apply'; Verdict = $r.Verdict; Plan = $plan; Result = $r }

@@ -29,8 +29,13 @@ public enum GridFilter { None, Contains, Values, Tokens, Range, Dates }
 /// sorts or searches on it.
 public sealed record GridColumn(string Key, string Label, GridType Type = GridType.Text, GridFilter Filter = GridFilter.None,
     bool Search = false, bool Sortable = true, string? SortSql = null, bool Hidden = false, string? AnyOf = null, string? FilterNote = null,
-    string? LateSql = null)
+    string? LateSql = null, bool Lines = false)
 {
+    /// #1382 (owner 2026-11-25: "some dont have a title"): the title is words, never a raw field name (DataColumnKeys.Title).
+    public string Label { get; init; } = DataColumnKeys.Title(Label);
+
+    // <paramref name="Lines"/> (owner 2026-11-24, "detected paths is cut off"): a list column (paths, one per line or ';'
+    // separated) -- on screen EVERY item in full, one per line (a long list folds into "N paths" that opens), never cut.
     /// #431: the asset-kind column of a grid whose source selects <see cref="ProDataSql.AssetKindsExpr"/> AS AssetKinds.
     public static GridColumn AssetKind(string label = "Kind") =>
         new("AssetKind", label, Filter: GridFilter.Values, AnyOf: "AssetKinds", FilterNote: ProDataSql.KindOverlapNote);

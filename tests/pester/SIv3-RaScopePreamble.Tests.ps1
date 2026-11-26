@@ -122,11 +122,11 @@ Describe 'Per scope part: every report that declares it changes with the setting
         }
     }
 
-    It 'the two hygiene reports and the disabled-is-the-finding reports are "include"; the seven #533 reports are "setting"' {
-        foreach ($b in 'Identity_GuestWithPrivilegedRole', 'Identity_SPN_OwnsResourcePublicAccess', 'Identity_DisabledAccount_ActivePIMAssignment', 'Identity_DisabledPrivilegedUser', 'Identity_DisabledUser_StillInCriticalGroup') {
+    It 'the guest hygiene report and the disabled-is-the-finding reports are "include"; the seven #533 reports and SPN_OwnsResourcePublicAccess (#1353) are "setting"' {
+        foreach ($b in 'Identity_GuestWithPrivilegedRole', 'Identity_DisabledAccount_ActivePIMAssignment', 'Identity_DisabledPrivilegedUser', 'Identity_DisabledUser_StillInCriticalGroup') {
             foreach ($k in 'Summary', 'Detailed') { (script:SpecOf "${b}_$k").Scope.disabled | Should -Be 'include' -Because "${b}_$k" }
         }
-        foreach ($b in 'Identity_SPN_ExpiringCredentials', 'Identity_SPN_Orphan_NoOwner', 'Identity_SPN_OverCredentialed', 'Identity_MultiTenant_HighPermission_SPN', 'Identity_SPN_MailboxImpersonation', 'Identity_BreakGlass_Anomaly', 'Identity_HighRiskFactorComposite4Plus') {
+        foreach ($b in 'Identity_SPN_ExpiringCredentials', 'Identity_SPN_Orphan_NoOwner', 'Identity_SPN_OverCredentialed', 'Identity_MultiTenant_HighPermission_SPN', 'Identity_SPN_MailboxImpersonation', 'Identity_BreakGlass_Anomaly', 'Identity_HighRiskFactorComposite4Plus', 'Identity_SPN_OwnsResourcePublicAccess') {
             foreach ($k in 'Summary', 'Detailed') { (script:SpecOf "${b}_$k").Scope.disabled | Should -Be 'setting' -Because "${b}_$k" }
         }
     }

@@ -209,6 +209,52 @@
           ]
         }
       }
+    },
+    {
+      "id": "report-slice-cves-2026-11-23",
+      "decided": "owner 2026-11-23 (\"push harder, get it all out\" -- the CVE report stays on Kusto and gets faster, with the same rows)",
+      "description": "The exposed-devices count of the Detailed CVE report (si_exposed_devices) grouped EVERY CVE of the tenant in every query slice. It now counts only the CVEs the slice's own rows can carry (the graph's findings of the slice's assets and the vulnerability-management CVEs of the slice's devices), still over every device of the tenant -- each CVE's count is the same, so every row and every column is the same; only the query text changed, so the fingerprint is carried and nothing closes as report changed.",
+      "reports": {
+        "Device_Missing_CVEs_Detailed": {
+          "restoreText": [
+            {
+              "now": "// The CVEs of THIS slice first: every CVE a row of the union below can carry -- the graph's findings of the slice's // assets and the vulnerability-management CVEs of the slice's devices. The tenant's devices are counted for those // CVEs only: each CVE's count is the same as before, and a slice no longer groups every CVE of the tenant. let _sliceCves = union (_Findings | project _sliceCve = toupper(tostring(FindingName))), (DeviceTvmSoftwareVulnerabilities | where tolower(tostring(DeviceId)) in (_sliceTvmDevices) | project _sliceCve = toupper(tostring(CveId))) | where isnotempty(_sliceCve) | distinct _sliceCve; let _cveExposedDevices = DeviceTvmSoftwareVulnerabilities | where toupper(tostring(CveId)) in (_sliceCves) | summarize by _expCve",
+              "was": "let _cveExposedDevices = DeviceTvmSoftwareVulnerabilities | summarize by _expCve"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "report-spn-disabled-scope-2026-11-24",
+      "decided": "owner 2026-11-24 (\"a disabled spn should not count as a vulnerabille asset - it must be handled similar to a disabled user\")",
+      "description": "The service principal public-access reports now follow the disabled-asset setting like every other identity report: a disabled service principal is left out unless the installation keeps disabled assets. The scope change never closes a finding as report changed: enabled service principals keep their findings unchanged, and the findings of disabled ones follow the disabled-asset rule (frozen, not remediated).",
+      "reports": {
+        "Identity_SPN_OwnsResourcePublicAccess_Detailed": {
+          "restoreText": [
+            {
+              "now": "let SI_ScopeIncludeDisabled = false;",
+              "was": "let SI_ScopeIncludeDisabled = true;"
+            },
+            {
+              "now": "| where coalesce(tobool(column_ifexists(\"si_account_enabled\", bool(null))), true) and not(si_tags_ has_any (dynamic([\"--excluded--si\"])))",
+              "was": "| where not(si_tags_ has_any (dynamic([\"--excluded--si\"])))"
+            }
+          ]
+        },
+        "Identity_SPN_OwnsResourcePublicAccess_Summary": {
+          "restoreText": [
+            {
+              "now": "let SI_ScopeIncludeDisabled = false;",
+              "was": "let SI_ScopeIncludeDisabled = true;"
+            },
+            {
+              "now": "| where coalesce(tobool(column_ifexists(\"si_account_enabled\", bool(null))), true) and not(si_tags_ has_any (dynamic([\"--excluded--si\"])))",
+              "was": "| where not(si_tags_ has_any (dynamic([\"--excluded--si\"])))"
+            }
+          ]
+        }
+      }
     }
   ]
 }

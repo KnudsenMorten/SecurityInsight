@@ -323,7 +323,12 @@ public abstract class CollectionPageModel : PageModel
         var ci = RowCi(spec);
         var (fk, _) = RowFindings(spec);
         var probe = new DataViewLayout { View = LayoutKey(spec), Own = GridLayout.Own(spec), Ci = ci, Findings = fk };
-        var layout = new DataViewLayout { View = probe.View, Own = probe.Own, Ci = ci, Findings = fk, Shipped = DataViewDefaults.ForGrid(spec, ci, fk, probe.Known) };
+        var layout = new DataViewLayout
+        {
+            View = probe.View, Own = probe.Own, Ci = ci, Findings = fk, Shipped = DataViewDefaults.ForGrid(spec, ci, fk, probe.Known),
+            // owner 2026-11-25: a task grid keeps the application columns next to the task, whatever layout is remembered
+            Order = DataViewDefaults.IsTaskGrid(spec) ? DataViewDefaults.TaskOrder : null,
+        };
         ViewLayout = await layout.LoadAsync(HttpContext, Log, ct);
         Plan = Plan with { Spec = GridLayout.Apply(spec, layout.Layout) };
         DisplayColumns = GridLayout.Display(Plan.Spec, layout);

@@ -370,6 +370,15 @@ function Invoke-SISqlPacingHousekeeping {
     if ([double]$load.Max -ge $hkHigh) { $P.HkWaiting = $true; $shrink = $true }
     if (-not $P.HkWaiting) {
         if ($P.SaidState -eq 'pacing' -and $since -ge 60) { & $say (Format-SISqlPacingLine -State 'normal' -Load $load); $P.SaidState = 'normal' }
+        # #1372 (owner 2026-11-25; measured at internal: the clean-up's batches of 2-7 s each, back to back, while the pages were
+        # read): BETWEEN the housekeeping marks -- the database busy, not at its limit -- the clean-up takes a breath after each
+        # statement as long as the statement itself took, so the pages get half the database's time; below the low mark (calm)
+        # it goes at full pace, as before. Never past the deadline; the same rows, the same order.
+        if ([double]$load.Max -ge $hkLow -and $LastBatchMs -gt 0) {
+            $ms = [long][Math]::Min([double]$LastBatchMs, $leftMs)
+            if ($ms -gt 0) { & $sleep $ms; $P.Pauses++ }
+            return (& $result $ms $false 'breather' $load ([double]$LastBatchMs -ge $leftMs))
+        }
         return (& $result 0L $false 'normal' $load)
     }
     if (($P.SaidState -ne 'pacing' -and $since -ge 60) -or $since -ge 300) {

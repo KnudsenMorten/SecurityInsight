@@ -622,7 +622,8 @@ function Get-SIProfileRoleReadComplete {
         $b = ConvertTo-SIBoolOrNull $stamp
         if ($null -ne $b) { return $b }
     }
-    if ($null -ne $global:SI_EntraRoleReadState -and (Get-Command -Name Test-SIEntraRoleReadComplete -ErrorAction SilentlyContinue)) {
+    # #1389 asked per identity row: `Test-Path function:` (0.08 ms), not Get-Command (8 ms)
+    if ($null -ne $global:SI_EntraRoleReadState -and (Test-Path -Path 'function:Test-SIEntraRoleReadComplete')) {
         return [bool](Test-SIEntraRoleReadComplete -State $global:SI_EntraRoleReadState)
     }
     return $null

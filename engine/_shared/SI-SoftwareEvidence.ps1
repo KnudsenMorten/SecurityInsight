@@ -11,7 +11,10 @@
       ConvertTo-SIEvidencePathInfo     one path -> PathType, Drive, InstallKind (before the bundled rule), the product folder
       Get-SIEvidenceFolderApplication  the product folder a path lies in ("C:\Program Files\Adobe\Acrobat DC\x.dll" ->
                                        "Adobe Acrobat DC"; WindowsApps -> the package; Common Files and the Windows driver
-                                       store one level deeper; a registry path -> none)
+                                       store one level deeper; the install-folder table $script:SIEvInstallFolders
+                                       first: Azure VM extensions (C:\Packages\Plugins\<Publisher.Type>\<version>,
+                                       /var/lib/waagent/<Publisher.Type>-<version>) -> the extension's name, an OEM recovery
+                                       copy of a drive -> as on that drive; a registry path -> none)
       Resolve-SIEvidenceApplication    the folder matched to the device's OWN Defender software inventory (name + version,
                                        source 'inventory'); unmatched = the folder name (source 'folder')
       ConvertTo-SISoftwareEvidenceRows evidence + inventory of one device -> the rows of sidata.SoftwareEvidence
@@ -228,6 +231,169 @@ function Get-SIEvWebRootIndex {
     return -1
 }
 
+# ---------------------------------------------------------------------------------------------------------------------
+#  Install folders beyond the standard roots -- ONE table, path shapes only, never a list of applications (owner
+#  2026-11-24: "it should detect the folder where it is installed like Azure Monitor Agent"). Each row: the path style, the
+#  shape (a regex over the path below the drive / root, its segments joined by '\' (windows) or '/' (unix), case ignored)
+#  and how the application is named from it:
+#    extension  the group 'x' is an Azure VM extension's folder (<Publisher>.<Type>): named by Get-SIEvExtensionName; the
+#               version folder below it is never part of the name (an extension updated keeps the same task)
+#    reroot     the group 'd' is a drive letter and 'r' the path below it (an OEM recovery image's copy of a drive): the
+#               application of that path as if it lay on that drive
+# ---------------------------------------------------------------------------------------------------------------------
+$script:SIEvInstallFolders = @(
+    @{ Style = 'windows'; Shape = '^packages\\plugins\\(?<x>[^\\]+)\\';           Name = 'extension' }   # C:\Packages\Plugins\<Publisher.Type>\<version>\...
+    @{ Style = 'windows'; Shape = '^recovery\\oem\\(?<d>[a-z])\\(?<r>.+)$';       Name = 'reroot' }      # C:\Recovery\OEM\C\Windows\...
+    @{ Style = 'unix';    Shape = '^var/lib/waagent/(?<x>[^/]+?)-\d[^/]*/';        Name = 'extension' }   # /var/lib/waagent/<Publisher.Type>-<version>/...
+)
+
+# The special cases of the 'extension' rule: an extension folder Defender reports in lower case cannot be split into words,
+# so the well-known Azure VM extensions are named here (key: the folder, lower case). Any other extension: its type (the
+# last part of <Publisher>.<Type>; "Windows" / "Linux" alone take the part before them too), split into words when its
+# case is known ("AzureMonitorWindowsAgent" -> "Azure Monitor Windows Agent").
+$script:SIEvExtensionNames = @{
+    'microsoft.azure.monitor.azuremonitorwindowsagent'                      = 'Azure Monitor Windows Agent'
+    'microsoft.azure.monitor.azuremonitorlinuxagent'                        = 'Azure Monitor Linux Agent'
+    'microsoft.guestconfiguration.configurationforwindows'                  = 'Guest Configuration for Windows'
+    'microsoft.guestconfiguration.configurationforlinux'                    = 'Guest Configuration for Linux'
+    'microsoft.enterprisecloud.monitoring.microsoftmonitoringagent'         = 'Microsoft Monitoring Agent'
+    'microsoft.enterprisecloud.monitoring.omsagentforlinux'                 = 'OMS Agent for Linux'
+    'microsoft.azure.monitoring.dependencyagent.dependencyagentwindows'     = 'Dependency Agent Windows'
+    'microsoft.azure.monitoring.dependencyagent.dependencyagentlinux'       = 'Dependency Agent Linux'
+    'microsoft.azure.azuredefenderforservers.mde.windows'                   = 'Microsoft Defender for Endpoint (Windows)'
+    'microsoft.azure.azuredefenderforservers.mde.linux'                     = 'Microsoft Defender for Endpoint (Linux)'
+    'microsoft.azure.security.iaasantimalware'                              = 'Microsoft Antimalware'
+    'microsoft.azure.security.monitoring.azuresecuritywindowsagent'         = 'Azure Security Windows Agent'
+    'microsoft.azure.security.monitoring.azuresecuritylinuxagent'           = 'Azure Security Linux Agent'
+    'microsoft.compute.customscriptextension'                               = 'Custom Script Extension'
+    'microsoft.azure.extensions.customscript'                               = 'Custom Script'
+    'microsoft.cplat.core.runcommandwindows'                                = 'Run Command Windows'
+    'microsoft.cplat.core.runcommandlinux'                                  = 'Run Command Linux'
+    'microsoft.cplat.core.runcommandhandlerwindows'                         = 'Run Command Handler Windows'
+    'microsoft.azure.activedirectory.aadloginforwindows'                    = 'AAD Login for Windows'
+    'microsoft.azure.activedirectory.aadsshloginforlinux'                   = 'AAD SSH Login for Linux'
+    'microsoft.compute.vmaccessagent'                                       = 'VM Access Agent'
+    'microsoft.compute.bginfo'                                              = 'BGInfo'
+    'microsoft.azure.keyvault.keyvaultforwindows'                           = 'Key Vault for Windows'
+    'microsoft.azure.keyvault.keyvaultforlinux'                             = 'Key Vault for Linux'
+    'microsoft.azure.automation.hybridworker.hybridworkerforwindows'        = 'Hybrid Worker for Windows'
+    'microsoft.azure.automation.hybridworker.hybridworkerforlinux'          = 'Hybrid Worker for Linux'
+    'microsoft.software.management.windowsosupdateextension'                = 'Windows OS Update Extension'
+    'microsoft.azure.networkwatcher.networkwatcheragentwindows'             = 'Network Watcher Agent Windows'
+    'microsoft.azure.networkwatcher.networkwatcheragentlinux'               = 'Network Watcher Agent Linux'
+    'microsoft.azure.diagnostics.iaasdiagnostics'                           = 'Azure Diagnostics'
+    'microsoft.azure.recoveryservices.vmsnapshot'                           = 'VM Snapshot (Azure Backup)'
+}
+
+function Get-SIEvExtensionName {
+    <# PURE. An Azure VM extension's folder (<Publisher>.<Type>) -> its display name (see $script:SIEvExtensionNames). #>
+    param([string]$Folder)
+    $f = ([string]$Folder).Trim()
+    if (-not $f) { return $null }
+    $k = $f.ToLowerInvariant()
+    if ($script:SIEvExtensionNames.ContainsKey($k)) { return $script:SIEvExtensionNames[$k] }
+    $parts = @($f.Split('.') | Where-Object { $_ })
+    if ($parts.Count -eq 0) { return $f }
+    $t = [string]$parts[$parts.Count - 1]
+    if ($parts.Count -gt 1 -and $t.ToLowerInvariant() -in 'windows', 'linux') { $t = ('{0} {1}' -f $parts[$parts.Count - 2], $t) }
+    if ($t -cmatch '[a-z]' -and $t -cmatch '[A-Z]') { $t = [regex]::Replace($t, '(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])', ' ') }
+    return $t
+}
+
+# The known application names (owner 2026-11-24: "make title tidied consistent"): an application's name as SI shows it,
+# whether it comes from the folder or from Defender's inventory. Key: the name in lower case, '_' / '-' as spaces, versions
+# left out (Format-SIEvApplicationName). Any other name: Title Case words, spaces for underscores, no version.
+$script:SIEvApplicationNames = @{
+    'acrobat reader dc'         = 'Adobe Acrobat Reader DC'
+    'adobe acrobat reader dc'   = 'Adobe Acrobat Reader DC'
+    'acrobat dc'                = 'Adobe Acrobat DC'
+    'adobe acrobat dc'          = 'Adobe Acrobat DC'
+    'imyfone lockwiper'         = 'iMyFone LockWiper'
+    'microsoft onedrive'        = 'Microsoft OneDrive'
+    'onedrive'                  = 'Microsoft OneDrive'
+    'githubdesktop'             = 'GitHub Desktop'
+    'githubdesktop app'         = 'GitHub Desktop'
+    'github desktop'            = 'GitHub Desktop'
+    'microsoft sdks azure'      = 'Microsoft SDKs Azure'
+    'jdk'                       = 'JDK'
+    'jre'                       = 'JRE'
+}
+
+function Format-SIEvApplicationName {
+    <# PURE. ONE RULE for an application's name as SI shows it (a bundled task's name and its Application column), whatever
+       gave it -- the install folder, the extension table or Defender's inventory: the known name from
+       $script:SIEvApplicationNames, else Title Case words (a word already in mixed / upper case is kept: "DC", "LockWiper"),
+       spaces for underscores, every version left out (the version is never part of the name). '' for none. #>
+    param([string]$Name)
+    $n = ([string]$Name).Trim()
+    if (-not $n) { return '' }
+    $plain = [regex]::Replace($n, '[_]+', ' ')
+    $plain = [regex]::Replace($plain, '(?i)(^|[\s_-])v?\d+(?:[._-]\d+)*(?=$|[\s)])', ' ')
+    $plain = ([regex]::Replace($plain, '\s+', ' ')).Trim(' ', '-', '_', '.')
+    if (-not $plain) { $plain = [regex]::Replace($n, '[_]+', ' ').Trim() }
+    $k = ([regex]::Replace($plain.ToLowerInvariant().Replace('-', ' '), '\s+', ' ')).Trim()
+    if ($script:SIEvApplicationNames.ContainsKey($k)) { return $script:SIEvApplicationNames[$k] }
+    $words = New-Object System.Collections.Generic.List[string]
+    foreach ($w in ($plain -split ' ')) {
+        if (-not $w) { continue }
+        # a small word inside the name stays lower case ("Guest Configuration for Windows")
+        if ($words.Count -gt 0 -and $w -cin 'for', 'of', 'and', 'the', 'to', 'in', 'on', 'with', 'by') { $words.Add($w); continue }
+        if ($w -cmatch '^[a-z]') { $words.Add($w.Substring(0, 1).ToUpperInvariant() + $w.Substring(1)) } else { $words.Add($w) }
+    }
+    return ($words.ToArray() -join ' ')
+}
+
+function Get-SIEvidenceApplicationVersion {
+    <# PURE. The version of the application a copy lies in (owner 2026-11-24: "Yes, separate column" -- the task's
+       "Application version"; never part of its name or key): Defender's version where its inventory names the application,
+       else the version folder of the path (an Azure VM extension's <version> folder -- 1.47.1.0 -- or the first folder that is
+       a version: \1.2.3\), else a version the application's folder name ends in (jdk-17.0.2, app-3.5.8, Python 3.11). '' when
+       none is known. #>
+    param($Row)
+    if ([string](Get-SIEvValue $Row 'ApplicationSource') -eq 'inventory') {
+        $iv = ([string](Get-SIEvValue $Row 'ApplicationVersion')).Trim(); if ($iv) { return $iv }
+    }
+    $p = [string](Get-SIEvValue $Row 'FullPath')
+    if ($p -and [string](Get-SIEvValue $Row 'PathType') -ne 'registry') {
+        $x = ConvertTo-SIEvSegments $p
+        $folders = @(Get-SIEvFolders $x.Segs)
+        if ($x.Style -eq 'windows') {
+            $m = [regex]::Match((@($x.Segs) -join '\'), '^packages\\plugins\\[^\\]+\\(?<v>[^\\]+)\\', 'IgnoreCase')
+            if ($m.Success) { return $m.Groups['v'].Value }
+        }
+        if ($x.Style -eq 'unix') {
+            $m = [regex]::Match((@($x.Segs) -join '/'), '^var/lib/waagent/[^/]+?-(?<v>\d[^/]*)/', 'IgnoreCase')
+            if ($m.Success) { return $m.Groups['v'].Value }
+        }
+        foreach ($f in $folders) { $m = [regex]::Match([string]$f, '^[vV]?(?<v>\d+(\.\d+)+)$'); if ($m.Success) { return $m.Groups['v'].Value } }
+    }
+    $an = [string](Get-SIEvValue $Row 'Application')
+    if ($an) { $m = [regex]::Match($an, '(^|[\s_-])[vV]?(?<v>\d+([._]\d+)+)$'); if ($m.Success) { return $m.Groups['v'].Value } }
+    return ''
+}
+
+function Join-SIEvVersions {
+    <# PURE. Versions as one text: distinct, sorted as versions (1.9 before 1.10), ', ' between. #>
+    param([AllowEmptyCollection()][string[]]$Versions = @())
+    $d = @($Versions | Where-Object { $_ } | ForEach-Object { $_.Trim() } | Where-Object { $_ } | Select-Object -Unique)
+    $sorted = $d | Sort-Object { $v = $null; if ([version]::TryParse((($_ -replace '[^\d.]', '.') -replace '\.+', '.').Trim('.'), [ref]$v)) { $v } else { [version]'0.0' } }, { $_ }
+    return (@($sorted) -join ', ')
+}
+
+function Get-SIEvInstallFolderApplication {
+    <# PURE. The application of a path by the install-folder table ($script:SIEvInstallFolders); $null when no row fits.
+       -Below: the path below the drive / root, its segments joined by '\' (windows) or '/' (unix). #>
+    param([string]$Style, [string]$Below)
+    foreach ($row in $script:SIEvInstallFolders) {
+        if ($row.Style -ne $Style) { continue }
+        $m = [regex]::Match($Below, $row.Shape, 'IgnoreCase')
+        if (-not $m.Success) { continue }
+        if ($row.Name -eq 'extension') { return (Get-SIEvExtensionName $m.Groups['x'].Value) }
+        if ($row.Name -eq 'reroot') { return (Get-SIEvidenceFolderApplication ('{0}:\{1}' -f $m.Groups['d'].Value, $m.Groups['r'].Value)) }
+    }
+    return $null
+}
+
 function Get-SIEvidenceFolderApplication {
     <#
     .SYNOPSIS  PURE. The product folder a disk path lies in, as a name -- $null when the path names none (a registry path, a
@@ -238,6 +404,11 @@ function Get-SIEvidenceFolderApplication {
     $folders = Get-SIEvFolders $x.Segs
     if ($folders.Count -eq 0) { return $null }
     $f0 = ([string]$folders[0]).ToLowerInvariant()
+    if ($x.Style -in 'windows', 'unix') {
+        $sep = $(if ($x.Style -eq 'windows') { '\' } else { '/' })
+        $byTable = Get-SIEvInstallFolderApplication -Style $x.Style -Below (@($x.Segs) -join $sep)
+        if ($byTable) { return $byTable }
+    }
     switch ($x.Style) {
         'windows' {
             if ($f0 -match '^program files( \((x86|arm)\))?$') {

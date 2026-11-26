@@ -155,7 +155,8 @@ function Get-SIIdentityMoveSqlModuleNames {
     <# PURE. The procedures SecurityInsight makes WITH EXECUTE AS SELF (by the marker in their text) -- the only modules the
        move re-makes as the new user. Today one: sidata.StatisticsRefreshTable (sql\si-data-schema.sql), made by whoever
        applies the schema -- on an existing install the updater, so it runs as the updater's user. #>
-    @('si-statistics-refresh v1')
+    # #1372 v2 (the data sync's refresh of the tables it rewrote); v1 still named: a database whose procedure is not made again yet
+    @('si-statistics-refresh v1', 'si-statistics-refresh v2')
 }
 
 function Get-SIIdentityMoveSqlModuleSql {

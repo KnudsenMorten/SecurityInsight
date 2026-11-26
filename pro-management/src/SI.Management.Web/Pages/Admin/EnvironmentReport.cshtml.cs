@@ -20,7 +20,7 @@ public sealed class EnvironmentReportModel(EnvironmentReportService reports, ILo
     public async Task OnGetAsync(CancellationToken ct)
     {
         try { Report = await reports.BuildAsync(ct); }
-        catch (Exception ex) when (ex is not OperationCanceledException) { log.LogError(ex, "environment report"); Error = "The environment report could not be built: " + ViewerError.Text(ex); }
+        catch (Exception ex) when (ex is not OperationCanceledException) { log.LogError(ex, "system documentation"); Error = "The System Documentation could not be built: " + ViewerError.Text(ex); }
     }
 
     /// Export JSON: the same facts as the page.
@@ -29,6 +29,6 @@ public sealed class EnvironmentReportModel(EnvironmentReportService reports, ILo
     {
         var r = await reports.BuildAsync(ct);
         if (AuditScope.Current is { } a) { a.Target = "/Admin/EnvironmentReport/json"; a.Rows = r.Findings.Count; }
-        return File(Encoding.UTF8.GetBytes(r.ToJson()), "application/json", $"securityinsight-environment-report-{r.ReadUtc:yyyyMMdd-HHmm}.json");
+        return File(Encoding.UTF8.GetBytes(r.ToJson()), "application/json", $"securityinsight-system-documentation-{r.ReadUtc:yyyyMMdd-HHmm}.json");
     }
 }

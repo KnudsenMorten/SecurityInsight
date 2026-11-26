@@ -146,7 +146,8 @@ Describe 'the completeness count is a measurement: it never raises a run warning
     }
     It 'the engine sets the measurement flag around the count query only, and clears it in a finally' {
         $ra = [IO.File]::ReadAllText((Join-Path $script:SIRoot 'engine\risk-analysis\Invoke-RiskAnalysis.ps1'))
-        $ra | Should -Match ([regex]::Escape('$script:_RAHuntingMeasurement = $true') + '\s+try \{ Get-RABucketRows -Resp \(Invoke-GraphHuntingQuery -Query \(Get-RAReportCountKql ')
+        # #1310 put the count's progress beat (a comment + one line, no query) between the flag and the count query
+        $ra | Should -Match ([regex]::Escape('$script:_RAHuntingMeasurement = $true') + '(?:\r?\n\s*(?:#[^\r\n]*|if \(\$null -ne \$script:RACountBeat[^\r\n]*))*\r?\n\s+try \{ Get-RABucketRows -Resp \(Invoke-GraphHuntingQuery -Query \(Get-RAReportCountKql ')
         $ra | Should -Match ([regex]::Escape('finally { $script:_RAHuntingMeasurement = $false }'))
         @([regex]::Matches($ra, [regex]::Escape('$script:_RAHuntingMeasurement = $true'))).Count | Should -Be 1
     }

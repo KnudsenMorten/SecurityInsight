@@ -43,6 +43,30 @@ if (-not (Get-Command -Name Get-SIDefaultTierValue -ErrorAction SilentlyContinue
 # #562 the asset type / subtype come from the ONE classification (the CI build's rows and value maps).
 if (-not (Get-Command -Name Get-SIProfileAssetClassification -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot '..\..\data-model\SI-ProfileClassification.ps1') }
 
+# #1389 THE PER-ROW HELPERS ARE LOADED ONCE, HERE (owner 2026-11-25: "Yes, all builders"; same output, same path for every
+# size). MEASURED on the test runner (pwsh 7.6.10): `Get-Command -Name X` costs 8.3 ms per call, found or not, and this
+# builder asked 7-8 times per row. Worse, a dot-source INSIDE the row function defines the helpers in that one call's scope,
+# so they were gone when the row returned and the next row parsed the file again (AzureParentScopeCache.ps1 with
+# SI-AzRest.ps1 behind it, Get-SIRiskFactors.ps1, and SI-SolutionVersion.ps1 -- whose load also reset its cache, so every
+# row re-read VERSION from disk). The per-run caches those files keep live in script scope, so loading them here once keeps
+# every lookup's answer. A guard that must stay (degrade, do not die) is `Test-Path function:<name>` (0.08 ms).
+foreach ($__siRowHelper in @(
+        @{ Fn = 'Resolve-SIAssetIdValue';                    File = '..\..\_shared\SI-AssetIdentity.ps1' }
+        @{ Fn = 'Get-SIAzureSubscriptionScope';              File = 'AzureParentScopeCache.ps1' }
+        @{ Fn = 'Get-SIEndpointMdeDeviceIdForAzureResource'; File = 'EndpointAzureCorrelationCache.ps1' }
+        @{ Fn = 'Get-SIAzureRiskFactors';                    File = 'Get-SIRiskFactors.ps1' }
+        @{ Fn = 'Get-SISyntheticAssetName';                  File = 'SI-AssetName.ps1' }
+        @{ Fn = 'Get-SISolutionVersion';                     File = 'SI-SolutionVersion.ps1' }
+    )) {
+    if (-not (Test-Path -Path ('function:' + $__siRowHelper.Fn))) { . (Join-Path $PSScriptRoot $__siRowHelper.File) }
+}
+# DEGRADE, DO NOT DIE (#244): the tier attribution columns are an audit surface, never worth the row -- said once, not per row.
+if (-not (Test-Path -Path 'function:Set-SIProfileTierAttribution')) {
+    try { . (Join-Path $PSScriptRoot 'Get-SITierAttribution.ps1') } catch {
+        Write-Warning ("tier attribution unavailable ({0}) -- SI_TierSetBy/Reason/Claims will be empty for this run; the tier itself is unaffected." -f $_.Exception.Message)
+    }
+}
+
 if (-not (Get-Variable -Name _SISchemaCache -Scope Script -ErrorAction SilentlyContinue)) {
     $script:_SISchemaCache = @{}
 }
@@ -350,10 +374,7 @@ function Build-SIAzureProfileRow {
     # 🔒 Through the SHARED identity rule (engine/_shared/SI-AssetIdentity.ps1) -- one list answers
     # "may this type key an asset?" for all four engines. A NO-OP for azure today (PrimaryEntityType is
     # 'AzureResource', not a weak type) and kept anyway so the invariant is one rule in four places
-    # rather than a property azure happens to have.
-    if (-not (Get-Command Resolve-SIAssetIdValue -ErrorAction SilentlyContinue)) {
-        . (Join-Path $PSScriptRoot '..\..\_shared\SI-AssetIdentity.ps1')
-    }
+    # rather than a property azure happens to have. (#1389 SI-AssetIdentity.ps1 is loaded once at the top of this file.)
     $row['SI_AssetId']        = Resolve-SIAssetIdValue -Id $row['PrimaryEntityId'] -Type 'AzureResource'
     $row['PrimaryEntityType'] = 'AzureResource'
 
@@ -467,7 +488,7 @@ function Build-SIAzureProfileRow {
     # #562 AssetType / AssetSubtype from the ONE classification over the resource type (ARM or Exposure Graph label --
     # 'microsoft.web/sites_webapp' reads as microsoft.web/sites, the same normalisation the eg mapping applies).
     $row['AssetSubtype'] = ''
-    if (Get-Command -Name Get-SIProfileAssetClassification -ErrorAction SilentlyContinue) {
+    if (Test-Path -Path 'function:Get-SIProfileAssetClassification') {
         $clsType = [string]$row['ResourceType']; if (-not $clsType) { $clsType = [string](Get-SIAzureMetaValue -Meta $meta -Key 'AZ_Type') }
         $cls = Get-SIProfileAssetClassification -Item (ConvertTo-SIAzureClassificationItem -ResourceType $clsType)
         if ($null -ne $cls) {
@@ -584,10 +605,7 @@ function Build-SIAzureProfileRow {
     }
 
     # ---- parent-scope tag + name inheritance ----
-    # Lazy-load the parent-scope cache helpers (per-run singletons inside).
-    if (-not (Get-Command -Name Get-SIAzureSubscriptionScope -ErrorAction SilentlyContinue)) {
-        . (Join-Path $PSScriptRoot 'AzureParentScopeCache.ps1')
-    }
+    # The parent-scope cache helpers (per-run singletons inside) -- #1389 loaded once at the top of this file.
     $parentTags  = @{}
     $parentNames = @{}
     $mgChain     = @()
@@ -685,9 +703,7 @@ function Build-SIAzureProfileRow {
     $rtForCorrelation = [string]$row['ResourceType']
     if ($rtForCorrelation) { $rtLower = $rtForCorrelation.ToLowerInvariant() } else { $rtLower = '' }
     if ($resId -and ($rtLower -eq 'microsoft.compute/virtualmachines' -or $rtLower -eq 'microsoft.hybridcompute/machines')) {
-        if (-not (Get-Command -Name Get-SIEndpointMdeDeviceIdForAzureResource -ErrorAction SilentlyContinue)) {
-            . (Join-Path $PSScriptRoot 'EndpointAzureCorrelationCache.ps1')
-        }
+        # #1389 EndpointAzureCorrelationCache.ps1 is loaded once at the top of this file
         try {
             $mdeId = Get-SIEndpointMdeDeviceIdForAzureResource -AzureResourceId $resId
             if ($mdeId) { [void]$entityIds.Add(@{ type='MdeDeviceId'; id=$mdeId; source='mde-correlation' }) }
@@ -719,10 +735,7 @@ function Build-SIAzureProfileRow {
     # cmdbCriticalityScore moved to riskscore_weighted.schema.json
     # (declarative model). See Build-EndpointProfileRow.ps1 for the rationale.
 
-    # ---- profile-time risk-factor derivations ----
-    if (-not (Get-Command -Name Get-SIAzureRiskFactors -ErrorAction SilentlyContinue)) {
-        . (Join-Path $PSScriptRoot 'Get-SIRiskFactors.ps1')
-    }
+    # ---- profile-time risk-factor derivations ---- (#1389 Get-SIRiskFactors.ps1 is loaded once at the top of this file)
     # v2.2.371 -- avoid Add-Member-per-key (~300 Add-Member calls per row).
     # Get-SIRecordValue walks Record.<key> | Record.Verdict.<key> | Record.Metadata.<key>;
     # building the pscustomobject from a single hashtable union is ~50x faster
@@ -779,10 +792,7 @@ function Build-SIAzureProfileRow {
             # 🪤 The helper strips punctuation and takes the TAIL of the id on purpose: an ARM path's
             # entropy is the resource name at the end, while its first characters are the subscription
             # guid shared by every resource in the subscription. Taking the head would hand every Azure
-            # resource the same "unique" placeholder.
-            if (-not (Get-Command Get-SISyntheticAssetName -ErrorAction SilentlyContinue)) {
-                . (Join-Path $PSScriptRoot 'SI-AssetName.ps1')
-            }
+            # resource the same "unique" placeholder. (#1389 SI-AssetName.ps1 is loaded once at the top.)
             $row['SI_AssetName'] = Get-SISyntheticAssetName -Engine 'azure' -Id $pe
         }
     }
@@ -790,19 +800,14 @@ function Build-SIAzureProfileRow {
     # Schema-author audit
     # V3-6 -- stamp WHICH RELEASE produced this row; azure resolves inline rather than through
     # the field switch, so the assignment lives here. Same helper, same rule as the other three.
-    if (-not (Get-Command Get-SISolutionVersion -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot 'SI-SolutionVersion.ps1') }
-    $row['SolutionVersion'] = Get-SISolutionVersion
+    $row['SolutionVersion'] = Get-SISolutionVersion   # #1389 SI-SolutionVersion.ps1 is loaded once at the top of this file
 
     # ---- #244: WHICH source set this resource's tier (SI_TierSetBy / SI_TierReason / SI_TierClaims) ----
     # Until 2026-10-04 only the endpoint profiler recorded this, so every Azure resource on the Pro tier board read "set
     # by (not recorded)". Claims: the profile rules (including the same-machine rule that gives a VM its device's tier)
     # and the classification verdict; the row's Tier is passed in, never recomputed. DEGRADE, DO NOT DIE.
-    if (-not (Get-Command -Name Set-SIProfileTierAttribution -ErrorAction SilentlyContinue)) {
-        try { . (Join-Path $PSScriptRoot 'Get-SITierAttribution.ps1') } catch {
-            Write-Warning ("tier attribution unavailable ({0}) -- SI_TierSetBy/Reason/Claims will be empty for this run; the tier itself is unaffected." -f $_.Exception.Message)
-        }
-    }
-    if (Get-Command -Name Set-SIProfileTierAttribution -ErrorAction SilentlyContinue) {
+    # #1389 Get-SITierAttribution.ps1 is loaded once at the top of this file; the guard stays, at 0.08 ms instead of 8 ms.
+    if (Test-Path -Path 'function:Set-SIProfileTierAttribution') {
         $classifyStatus = if ($Record.PSObject.Properties['SI_Classify_Status']) { [string]$Record.SI_Classify_Status } else { '' }
         $tierClaimSources = @{}
         try { $tierClaimSources = Get-SIProfileTierSources -Verdict $verdict -ClassifyStatus $classifyStatus } catch { $tierClaimSources = @{} }

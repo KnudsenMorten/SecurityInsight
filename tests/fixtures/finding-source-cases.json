@@ -1,0 +1,28 @@
+{
+  "about": "#1332 the readers on the finding history: which statements the SQL seams send to the served views. ONE list for both implementations -- engine/_shared/data-sql/SI-FindingSource.ps1 (tests/pester/SIv3-FindingHistoryReaders.Tests.ps1) and SI.Management.Core/ProData/FindingSource.cs (FindingSourceTests). 'want' = the statement after routing; null = unchanged.",
+  "cases": [
+    { "why": "a plain read", "sql": "SELECT f.Title FROM sidata.Finding AS f WHERE f.CollectionId = @c", "want": "SELECT f.Title FROM sidata.vFinding AS f WHERE f.CollectionId = @c" },
+    { "why": "a join, no alias keyword", "sql": "SELECT 1 FROM sidata.Collection c JOIN sidata.Finding f ON f.CollectionId = c.CollectionId", "want": "SELECT 1 FROM sidata.Collection c JOIN sidata.vFinding f ON f.CollectionId = c.CollectionId" },
+    { "why": "a join hint and a second reference", "sql": "SELECT 1 FROM sidata.Collection AS col INNER LOOP JOIN sidata.Finding AS f ON f.CollectionId = col.CollectionId WHERE EXISTS (SELECT 1 FROM sidata.Finding AS x WHERE x.FindingId = f.FindingId)", "want": "SELECT 1 FROM sidata.Collection AS col INNER LOOP JOIN sidata.vFinding AS f ON f.CollectionId = col.CollectionId WHERE EXISTS (SELECT 1 FROM sidata.vFinding AS x WHERE x.FindingId = f.FindingId)" },
+    { "why": "the exempted and current views", "sql": "SELECT x.FindingId FROM sidata.vExemptedFinding AS x UNION ALL SELECT y.FindingId FROM sidata.vCurrentFinding y", "want": "SELECT x.FindingId FROM sidata.vExemptedFindingServed AS x UNION ALL SELECT y.FindingId FROM sidata.vCurrentFindingServed y" },
+    { "why": "other tables whose names start the same are not the findings", "sql": "SELECT 1 FROM sidata.FindingFacet AS ff JOIN sidata.FindingState AS s ON 1 = 1 JOIN sidata.FindingStateMember AS m ON 1 = 1 JOIN sidata.FindingChange AS c ON 1 = 1", "want": null },
+    { "why": "a quoted name is never a source", "sql": "SELECT CASE WHEN OBJECT_ID('sidata.Finding') IS NOT NULL AND COL_LENGTH(N'sidata.Finding', 'Cve') > 0 THEN 1 END", "want": null },
+    { "why": "a quoted name beside a read: only the read moves", "sql": "IF COL_LENGTH('sidata.Finding', 'RaFindingKey') IS NULL RETURN; SELECT f.FindingId FROM sidata.Finding AS f", "want": "IF COL_LENGTH('sidata.Finding', 'RaFindingKey') IS NULL RETURN; SELECT f.FindingId FROM sidata.vFinding AS f" },
+    { "why": "a read inside dynamic SQL moves; the quoted name in it does not", "sql": "DECLARE @own nvarchar(100) = CASE WHEN COL_LENGTH('sidata.Finding', 'CarriedFrom') IS NOT NULL THEN N' AND f.CarriedFrom IS NULL' ELSE N'' END; DECLARE @q nvarchar(max) = N'SELECT f.FindingId FROM sidata.Finding AS f WHERE f.CollectionId = @CollectionId' + @own; EXEC sp_executesql @q", "want": "DECLARE @own nvarchar(100) = CASE WHEN COL_LENGTH('sidata.Finding', 'CarriedFrom') IS NOT NULL THEN N' AND f.CarriedFrom IS NULL' ELSE N'' END; DECLARE @q nvarchar(max) = N'SELECT f.FindingId FROM sidata.vFinding AS f WHERE f.CollectionId = @CollectionId' + @own; EXEC sp_executesql @q" },
+    { "why": "another schema's table of the same name", "sql": "SELECT 1 FROM archive.sidata.Finding AS f", "want": null },
+    { "why": "an already served view", "sql": "SELECT 1 FROM sidata.vFinding AS f", "want": null },
+    { "why": "INSERT into the findings", "sql": "INSERT sidata.Finding (CollectionId) SELECT CollectionId FROM sidata.Finding WHERE CollectionId = 1", "want": null },
+    { "why": "INSERT INTO the findings", "sql": "INSERT INTO sidata.Finding (CollectionId) VALUES (1)", "want": null },
+    { "why": "UPDATE the findings", "sql": "UPDATE sidata.Finding SET Title = N'x' WHERE FindingId = 1", "want": null },
+    { "why": "UPDATE through the alias", "sql": "UPDATE f SET f.Title = s.Title FROM sidata.Finding AS f JOIN #s AS s ON s.FindingId = f.FindingId", "want": null },
+    { "why": "DELETE TOP through the table", "sql": "DELETE TOP (5000) FROM sidata.Finding WHERE CollectionId = 1", "want": null },
+    { "why": "DELETE through the alias", "sql": "DELETE f FROM sidata.Finding f WHERE f.CollectionId = 1", "want": null },
+    { "why": "MERGE into the findings", "sql": "MERGE sidata.Finding AS t USING #s AS s ON t.FindingId = s.FindingId WHEN MATCHED THEN UPDATE SET Title = s.Title;", "want": null },
+    { "why": "an index on the findings", "sql": "CREATE INDEX IX_X ON sidata.Finding (CollectionId)", "want": null },
+    { "why": "ALTER TABLE the findings", "sql": "ALTER TABLE sidata.Finding ADD X int NULL", "want": null },
+    { "why": "TRUNCATE the findings", "sql": "TRUNCATE TABLE sidata.Finding WITH (PARTITIONS (3))", "want": null },
+    { "why": "a read that fills a work table is a read", "sql": "INSERT #w (FindingId) SELECT f.FindingId FROM sidata.Finding AS f WHERE f.CollectionId = @C", "want": "INSERT #w (FindingId) SELECT f.FindingId FROM sidata.vFinding AS f WHERE f.CollectionId = @C" },
+    { "why": "a reader that keeps the stored rows (the findings list) is never routed", "sql": "SELECT TOP (50) f.FindingId FROM sidata.Finding AS f WHERE f.CollectionId = @c ORDER BY f.RiskScore DESC /* si.finding.source: stored */", "want": null },
+    { "why": "case does not matter", "sql": "select f.Title from SIDATA.FINDING as f", "want": "select f.Title from sidata.vFinding as f" }
+  ]
+}

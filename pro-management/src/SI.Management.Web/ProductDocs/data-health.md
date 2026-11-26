@@ -57,8 +57,8 @@ of at least 10 characters. It is recorded on the audit trail and lasts until the
 itself. An override from an earlier Unhealthy period never counts.
 
 **Releases wait.** When an install turned Unhealthy after it took a new version, that version is not promoted to the
-next ring while that install stays Unhealthy or stops reporting. Only the vendor's release owner can override that, with
-a reason, recorded. A channel override at your install never lifts that hold. See [Releases, rings and waves](releases).
+next ring while that install stays Unhealthy or stops reporting. An override needs a recorded release approval with a
+reason. A channel override at your install never lifts that hold. See [Releases, rings and waves](releases).
 
 ## Where you see it
 

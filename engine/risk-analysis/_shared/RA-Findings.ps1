@@ -205,7 +205,7 @@ function ConvertTo-SIFindingRows {
         # #559: the bands of the risk factor model v2 -- ONE definition (RA-RiskScore.ps1 Get-SIRiskRating); the same
         # thresholds inline when it is not loaded
         if ($null -ne $score) {
-            if (Get-Command -Name Get-SIRiskRating -ErrorAction SilentlyContinue) { $rating = Get-SIRiskRating -Score $score -Lower }
+            if (Test-Path -Path 'function:Get-SIRiskRating') { $rating = Get-SIRiskRating -Score $score -Lower }
             elseif ($score -ge 50) { $rating = 'critical' } elseif ($score -ge 30) { $rating = 'high' } elseif ($score -ge 15) { $rating = 'moderate' }
         }
         $o = [ordered]@{

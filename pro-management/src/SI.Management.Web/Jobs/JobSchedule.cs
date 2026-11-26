@@ -57,6 +57,7 @@ public static class JobSchedule
             "signin-methods" => "Users' sign-in methods (background read)",
             "data-out" => "Data out (ServiceNow and the other outputs)",
             "support-grant" => "Invardia support access (just in time)",
+            "job-requests" => "Job requests (starts what you ask for here)",
             _ => jobName ?? "",
         };
     }
@@ -99,6 +100,7 @@ public static class JobSchedule
         "signin-methods" => new("Reads each user's sign-in methods in full -- every method with its details and the device a Windows Hello or Authenticator key lives on -- in slices every 15 minutes, privileged users first, and keeps them for the identity collection. One read per user, which Microsoft throttles: the first full read of a large tenant takes many hours, spread over the day; later runs read only users whose methods changed. Collections never wait for it; never a step of the pipeline. Setting: Users' sign-in methods in full.", [], "the users' sign-in methods in full"),
         "data-out" => new("Sends the ServiceNow hand-off, the vulnerable items and the other outputs from the newest collection the data sync marked ready. The data sync starts it the moment it has stored the findings per CI, so the push never waits for the summaries, the clean-up or the views; start it to send again. Never a step of the pipeline.", [], "the outputs (" + SI.Management.Web.Navigation.NavModel.PathOf("/Collection/Connectors") + ")"),
         "support-grant" => new("Opens or closes the Invardia Support app's database access for a support session, at most at the level you consented to and for at most 8 hours, and removes it on its own when the time is up. Started only by the Invardia Support session; never a step of the pipeline.", [], "the Support app's database access"),
+        "job-requests" => new("Starts the job you ask for on these pages -- Run now, Stop, a template release, a mail sent now, and the pipeline job that applies a schedule change -- within a minute of your click, as SecurityInsight's collection identity. The web app only puts your request on a queue (it holds no right on any job); this job checks it (one of this install's jobs, only the values allowed for that job, not older than 15 minutes) and writes one line per request. Started only by its queue; never a step of the pipeline.", [], "the jobs you start on these pages"),
         _ => null,
     };
 

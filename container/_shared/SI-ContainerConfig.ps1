@@ -143,6 +143,9 @@ function Get-SIConfigEnvArgs {
 $script:SIRetiredSettings = @('SI_PrestageInfra', 'SI_StorageKey', 'SI_UseStorageOAuth')
 # #914: the older ServiceNow push's five settings are retired too
 $script:SIRetiredSettings += @('SI_ServiceNow_DirectWrite', 'SI_ServiceNow_ImportSetMaxRows', 'SI_ServiceNow_ImportSetTable', 'SI_VulnSync_ServiceNowDirectWrite', 'SI_VulnSync_ServiceNowImportSetTable')
+# #1361 (owner 2026-11-25, "Yes, this model"): the protection score is the tier-share score of the assets' health -- the tier
+# weights and the severities that took an asset out of good standing no longer drive it
+$script:SIRetiredSettings += @('SI_ProtectionScore_Severities', 'SI_ProtectionScore_TierWeights')
 
 function Get-SIRetiredSettingNames {
     <# PURE. The settings that no longer exist (see $script:SIRetiredSettings). #>
@@ -549,6 +552,8 @@ function Get-SIJobRetryLimitArg {
     if ("$Name".Trim().ToLowerInvariant() -eq 'caj-si-data-out') { return '0' }
     # #1021: the support grant job -- a request is answered once; a failed start is the Support session's to repeat
     if ("$Name".Trim().ToLowerInvariant() -eq 'caj-si-support-grant') { return '0' }
+    # #1252: the job request job -- a request is answered once; the person asks again
+    if ("$Name".Trim().ToLowerInvariant() -eq 'caj-si-job-requests') { return '0' }
     if (Test-SIEngineJobName -Name $Name -StepKeys $StepKeys) { '0' } else { '1' }
 }
 
@@ -1057,6 +1062,11 @@ function Get-SIContainerEngineDispatch {
             # (its one SUPPORT-GRANT line, exit 2), so the Support session always reads an answer.
             return [pscustomobject]@{ Script = 'engine/support-grant/Invoke-SISupportGrant.ps1'; Args = $a; Skip = $null }
         }
+        'job-requests' {
+            # #1252: the job request job (caj-si-job-requests) -- starts the job a person asked for in the web app (a message on
+            # the queue si-job-requests), as the engine identity. Never skipped: it needs no database and no licence.
+            return [pscustomobject]@{ Script = 'engine/job-requests/Invoke-SIJobRequests.ps1'; Args = $a; Skip = $null }
+        }
         'asset-cmdb-sql' {
             # The SQL CMDB connector (#271): every CI into the Pro database's CI table. Off, with the reason, until a Pro
             # database is configured or when SI_Pro_CmdbSql_Enabled is false. Its other settings are read by the engine.
@@ -1423,10 +1433,12 @@ function Get-SISupportGrantTriggerArgs {
         si-support-requests in -StorageAccount, signed in as -IdentityResourceId (the engine identity), at most one execution.
         Both are needed: no storage account or no identity throws (a queue scaler without an identity never reads the queue).
     #>
-    param([AllowEmptyString()][string]$StorageAccount, [AllowEmptyString()][string]$IdentityResourceId)
+    # #1252: -Queue -- the same trigger for the job request job (caj-si-job-requests on si-job-requests); the rule is named as its queue
+    param([AllowEmptyString()][string]$StorageAccount, [AllowEmptyString()][string]$IdentityResourceId, [string]$Queue = '')
     if ([string]::IsNullOrWhiteSpace($StorageAccount)) { throw 'the support grant job is started by its queue: it needs SI_StorageAccount (the account that holds si-support-requests)' }
     if ([string]::IsNullOrWhiteSpace($IdentityResourceId)) { throw 'the support grant job is started by its queue: the queue scaler signs in as the engine''s managed identity, and this job has none' }
-    $t = $script:SISupportGrantTrigger
+    $t = [ordered]@{}; foreach ($k in $script:SISupportGrantTrigger.Keys) { $t[$k] = $script:SISupportGrantTrigger[$k] }
+    if ("$Queue".Trim()) { $t.Queue = "$Queue".Trim(); $t.RuleName = "$Queue".Trim() }
     @(
         '--trigger-type', 'Event',
         '--min-executions', '0',
@@ -1445,8 +1457,8 @@ function ConvertTo-SISupportGrantEventCreateArgs {
         support grant job's queue trigger (Get-SISupportGrantTriggerArgs): --trigger-type and --cron-expression (with their
         values) are dropped, the event trigger is added. Everything else is kept as it is. Throws as the trigger does.
     #>
-    param([Parameter(Mandatory)][object[]]$CreateArgs, [AllowEmptyString()][string]$StorageAccount, [AllowEmptyString()][string]$IdentityResourceId)
-    $trigger = @(Get-SISupportGrantTriggerArgs -StorageAccount $StorageAccount -IdentityResourceId $IdentityResourceId)
+    param([Parameter(Mandatory)][object[]]$CreateArgs, [AllowEmptyString()][string]$StorageAccount, [AllowEmptyString()][string]$IdentityResourceId, [string]$Queue = '')
+    $trigger = @(Get-SISupportGrantTriggerArgs -StorageAccount $StorageAccount -IdentityResourceId $IdentityResourceId -Queue $Queue)
     $a = @($CreateArgs | ForEach-Object { [string]$_ })
     $out = New-Object System.Collections.Generic.List[string]
     $i = 0
@@ -1661,7 +1673,9 @@ function Get-SIKedaProducerCreateArgs {
 # and active alert of a Defender recommendation, SecurityRecommendation.Read.All -- read only), /deviceManagement/managedDevices (Intune serial numbers and
 # MAC addresses for the full asset details, DeviceManagementManagedDevices.Read.All -- read only),
 # /deviceManagement/deviceCompliancePolicies and /deviceManagement/deviceConfigurations (which compliance policies a device does
-# not meet, its update ring, DeviceManagementConfiguration.Read.All -- read only),
+# not meet, its update ring, DeviceManagementConfiguration.Read.All -- read only), /deviceManagement/auditEvents (the proof that a
+# managed device was DELETED in Intune, so its asset retires at once -- #1057 / #1390, DeviceManagementApps.Read.All -- read only,
+# owner 2026-11-25: "Yes, add the right"),
 # /identityGovernance/accessReviews/definitions (the last access review of a privileged role, group or application,
 # AccessReview.Read.All -- read only), /security/alerts_v2 (the OPEN alerts per device: how many, the highest severity,
 # the newest one -- SecurityAlert.Read.All -- read only), /security/secureScores (the latest Microsoft Secure Score for the
@@ -1676,7 +1690,7 @@ $script:SIContainerIdentityAppRoles = @(
         'AuditLog.Read.All', 'Policy.Read.All', 'RoleManagement.Read.All', 'RoleManagement.Read.Directory',
         'RoleManagementPolicy.Read.Directory', 'RoleEligibilitySchedule.Read.Directory', 'RoleAssignmentSchedule.Read.Directory',
         'PrivilegedAccess.Read.AzureADGroup', 'IdentityRiskyUser.Read.All', 'IdentityRiskEvent.Read.All',
-        'IdentityRiskyServicePrincipal.Read.All', 'ThreatHunting.Read.All', 'UserAuthenticationMethod.Read.All', 'DeviceManagementManagedDevices.Read.All', 'DeviceManagementConfiguration.Read.All', 'AccessReview.Read.All', 'SecurityAlert.Read.All', 'SecurityEvents.Read.All') }
+        'IdentityRiskyServicePrincipal.Read.All', 'ThreatHunting.Read.All', 'UserAuthenticationMethod.Read.All', 'DeviceManagementManagedDevices.Read.All', 'DeviceManagementConfiguration.Read.All', 'DeviceManagementApps.Read.All', 'AccessReview.Read.All', 'SecurityAlert.Read.All', 'SecurityEvents.Read.All') }
     [pscustomobject]@{ Resource = 'Microsoft Threat Protection'; ResourceAppId = '8ee8fdad-f234-4243-8f3b-15c294843740'; Roles = @('AdvancedHunting.Read.All') }
     [pscustomobject]@{ Resource = 'WindowsDefenderATP'; ResourceAppId = 'fc780465-2017-40d4-a0c5-307022471b92'; Roles = @('Machine.Read.All', 'Vulnerability.Read.All', 'SecurityRecommendation.Read.All', 'Score.Read.All') }
 )
@@ -2196,7 +2210,7 @@ function Get-SIExecutionGuardDecision {
         # #1063 (3.0.30): FlowBusy, Housekeeping $true -- the entry goes on to the runner in housekeeping-only mode: the paced
         # clean-up of old collections' rows (the in-run clean-up), then it ends. It starts nothing; the running run goes on.
         return [pscustomobject]@{ Action = 'FlowBusy'; Housekeeping = $true
-            Message = ('[flow] the flow is still running (execution {0}, started {1}); this wake-up starts nothing -- it only does the paced housekeeping.' -f $Other.name, $started) }
+            Message = ('[flow] the flow is still running (execution {0}, started {1}); this wake-up starts nothing -- it removes old collections'' rows, paced by the database''s load and giving way to the data sync and a data out.' -f $Other.name, $started) }
     }
     # #1038 (1): the data-out job is started by the data sync on every mark and by a person to resend -- a start while one
     # sends is normal operation, not a guard (the running one sends the newest mark when it has finished): one plain line
@@ -2209,6 +2223,11 @@ function Get-SIExecutionGuardDecision {
     if ($Engine -eq 'signin-methods' -or $Job -eq 'caj-si-signin-methods') {
         return [pscustomobject]@{ Action = 'FlowBusy'; Housekeeping = $false
             Message = ('[signin-methods] the previous background read is still running (execution {0}, started {1}); this run ends at once and reads nothing.' -f $Other.name, $started) }
+    }
+    # #1252: the job request job -- every execution reads the queue; an empty one ends at once (nothing is dropped)
+    if ($Engine -eq 'job-requests' -or $Job -eq 'caj-si-job-requests') {
+        return [pscustomobject]@{ Action = 'Run'
+            Message = ('[job-requests] another job request execution is running ({0}, started {1}); this one reads the queue too.' -f $Other.name, $started) }
     }
     # #1021: the support grant job -- every start carries its own request on the queue, so one is never dropped; the signed
     # procedures' lock keeps two grants on the same database apart (framework 4b: support always works)

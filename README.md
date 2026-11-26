@@ -155,7 +155,7 @@ database's statistics are brought up to date after every run, so a page never wa
 
 Every visitor of the web app signs in with Microsoft Entra, under your Conditional Access, before any page answers. With
 Microsoft's own sign-in in front of it (the built-in authentication of Azure Container Apps, switched on per
-installation by your support partner) no password or client secret is stored anywhere. Who may do what is decided inside SecurityInsight, by its roles and your groups. The parts reachable from the
+installation by your support partner) the sign-in has no password, client secret or certificate: the web app proves itself to Entra with its own managed identity. Who may do what is decided inside SecurityInsight, by its roles and your groups. The parts reachable from the
 internet hold only the rights they need to show your data.
 
 <p align="center">

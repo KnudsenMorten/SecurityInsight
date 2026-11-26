@@ -16,7 +16,7 @@ Permissions* and on the run's health record with the command that fixes it; the 
 
 ## The identities
 
-![Who signs in to what: people through Entra sign-in to the web app only; the engine jobs, the web app, the MCP server, the updater and asset tagging each with their own managed identity and only the rights of their job; the optional Invardia Support app through the SQL admin group, its own database user and the Key Vault role of its level](images/identities-access.png)
+![Who signs in to what: people through Entra sign-in to the web app only; the engine jobs, the web app, the MCP server, the updater and asset tagging each with their own managed identity and only the rights of their job; the optional Invardia Support app with its own read-only database user, more only just in time, and the Key Vault role of its level](images/identities-access.png)
 
 | Identity (name on a new install) | Kind | What it is for | Lifetime |
 |---|---|---|---|
@@ -26,7 +26,7 @@ Permissions* and on the run's health record with the command that fixes it; the 
 | `id-si-updater` | User-assigned managed identity | The updater: licence, signed releases, image build, database schema, rolling the jobs | As long as the install |
 | `id-si-tagging` | User-assigned managed identity | Asset tagging, only when you opt in | Until you remove asset tagging |
 | *SecurityInsight* | Entra app registration (sign-in) | Users' sign-in to the web app and bearer tokens for the MCP server. No secret, no certificate: the web app's identity is its federated credential. No assignment required: SecurityInsight decides who has access, on its *Access* page. | As long as the install |
-| `grp-si-sql-admins`, shown as *SecurityInsight SQL admins* (an existing install may still show *grp-si-sql-admins* until its update renames it) | Role-assignable Entra security group | The SQL server's Entra administrator. Holds the Invardia Support app only, when you chose support; otherwise empty. | As long as the install |
+| `grp-si-sql-admins`, shown as *SecurityInsight SQL admins* (an existing install may still show *grp-si-sql-admins* until its update renames it) | Role-assignable Entra security group | The SQL server's Entra administrator. Holds the database setup job's identity (`id-si-dbinit`), and on a private network install the identity of the one-time support jobs. Your own people join it just in time. The Invardia Support app is never a standing member. | As long as the install |
 | *Invardia Support* | Entra app registration in your tenant | Optional. Created by you, at a level you choose. See [Support access](support-access). | Until you remove it |
 | The person who installs | Your own account | Runs the guided install; a member of the SQL admin group only for the length of the install | The install |
 
@@ -54,6 +54,7 @@ the names an existing install shows.
 | UserAuthenticationMethod.Read.All | Which accounts are passwordless-only |
 | DeviceManagementManagedDevices.Read.All | Intune serial numbers and MAC addresses for the asset details |
 | DeviceManagementConfiguration.Read.All | Which compliance policies a device does not meet, and its update ring |
+| DeviceManagementApps.Read.All | Intune deletion proof: Intune's audit events show a managed device was deleted, so its asset retires at once |
 | AccessReview.Read.All | The last access review of a privileged role, group or application |
 | SecurityAlert.Read.All | Open alerts per device: how many, the highest severity, the newest |
 | SecurityEvents.Read.All | The Microsoft Secure Score of the tenant, sent with the Invardia support link |

@@ -3,7 +3,7 @@
   "kind": "output-map",
   "id": "servicenow-remediation-task",
   "version": "1.0.0",
-  "description": "ServiceNow remediation tasks (Import Set): one row per CI and task to perform -- the update, the software upgrade (per version; a library bundled in another product: per application, with its paths), the configuration change -- with its counts, highest severity and risk, the CI's owner and department, and its state run to run (open / closed and why). Raw lines, never summarised. The SQL hand-off view snowstage.vImportRemediationTask carries the same columns, the same row hash and source run. Every date UTC 'yyyy-MM-dd HH:mm:ss' (the vulnerable items' format); u_si_cleared names the columns now empty (a reopened task: u_close_reason, u_closed_at); u_source_run = 'si-<collection id>-<yyyyMMddHHmmss>', at most 28 characters. Key u_si_task_id. Column names are a contract; append only.",
+  "description": "ServiceNow remediation tasks (Import Set): one row per CI and task to perform -- the update, the software upgrade (per version; a library bundled in another product: per application, with its paths), the configuration change -- with its counts, highest severity and risk, the CI's owner and department, and its state run to run (open / closed and why). Raw lines, never summarised. The SQL hand-off view snowstage.vImportRemediationTask carries the same columns, the same row hash and source run. Every date UTC 'yyyy-MM-dd HH:mm:ss' (the vulnerable items' format); u_si_cleared names the columns now empty (a reopened task: u_close_reason, u_closed_at); u_source_run = 'si-<collection id>-<yyyyMMddHHmmss>', at most 28 characters. The task's context for a ticket follows (u_what_to_do: for a library bundled in an application, the application to update first, with its version and where it is installed, the library and its CVEs as the reason; the recommended update, the remediation, every CVE id, the risk, the exploit, the end of support, the earliest due date, the CI's type, OS, IP address and environment, what else reported the same weakness, and u_si_more_info: the task's page in SecurityInsight) -- worked out once by the task build; each sent only when the Import Set table has its column (on by default). u_si_context_hash fingerprints the context; u_row_hash keeps its meaning. Key u_si_task_id. Column names are a contract; append only.",
   "grain": "remediation_task",
   "columns": [
     {
@@ -121,6 +121,126 @@
     {
       "target": "u_si_cleared",
       "from": "$cleared"
+    },
+    {
+      "target": "u_what_to_do",
+      "from": "record.what_to_do",
+      "soft": true
+    },
+    {
+      "target": "u_application_version",
+      "from": "record.application_version",
+      "soft": true
+    },
+    {
+      "target": "u_detected_paths",
+      "from": "record.detected_paths",
+      "soft": true
+    },
+    {
+      "target": "u_recommended_update",
+      "from": "record.recommended_update",
+      "soft": true
+    },
+    {
+      "target": "u_remediation",
+      "from": "record.remediation",
+      "soft": true
+    },
+    {
+      "target": "u_cve_ids",
+      "from": "record.cve_ids",
+      "soft": true
+    },
+    {
+      "target": "u_risk_rating",
+      "from": "record.risk_rating",
+      "soft": true
+    },
+    {
+      "target": "u_weighted_risk",
+      "from": "record.weighted_risk",
+      "soft": true
+    },
+    {
+      "target": "u_security_domain",
+      "from": "record.security_domain",
+      "soft": true
+    },
+    {
+      "target": "u_tool",
+      "from": "record.tool",
+      "soft": true
+    },
+    {
+      "target": "u_exploit_available",
+      "from": "record.exploit_available",
+      "soft": true
+    },
+    {
+      "target": "u_end_of_support",
+      "from": "record.end_of_support",
+      "soft": true
+    },
+    {
+      "target": "u_end_of_support_date",
+      "from": "record.end_of_support_date",
+      "soft": true
+    },
+    {
+      "target": "u_due_date",
+      "from": "record.due_date",
+      "soft": true
+    },
+    {
+      "target": "u_first_detected",
+      "from": "record.first_detected",
+      "soft": true
+    },
+    {
+      "target": "u_within_accepted_lifecycle",
+      "from": "record.within_accepted_lifecycle",
+      "soft": true
+    },
+    {
+      "target": "u_asset_type",
+      "from": "record.asset_type",
+      "soft": true
+    },
+    {
+      "target": "u_os",
+      "from": "record.os",
+      "soft": true
+    },
+    {
+      "target": "u_ip_address",
+      "from": "record.ip_address",
+      "soft": true
+    },
+    {
+      "target": "u_environment",
+      "from": "record.environment",
+      "soft": true
+    },
+    {
+      "target": "u_internet_exposed",
+      "from": "record.internet_exposed",
+      "soft": true
+    },
+    {
+      "target": "u_also_reported_by",
+      "from": "record.also_reported_by",
+      "soft": true
+    },
+    {
+      "target": "u_si_more_info",
+      "from": "record.more_info",
+      "soft": true
+    },
+    {
+      "target": "u_si_context_hash",
+      "from": "record.context_hash",
+      "soft": true
     }
   ],
   "contract": "snowstage.vImportRemediationTask"

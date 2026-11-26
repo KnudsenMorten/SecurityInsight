@@ -26,7 +26,7 @@ three independent checks. An install that still gives the Support app standing a
 through its updates and one recorded support step; your own administrators keep the database admin group. See
 [SQL access](sql-access). The Support app is never the engine's identity and never runs your pipeline.
 
-![Who signs in to what: people through Entra sign-in to the web app only; the engine jobs, the web app, the MCP server, the updater and asset tagging each with their own managed identity and only the rights of their job; the optional Invardia Support app through the SQL admin group, its own database user and the Key Vault role of its level](images/identities-access.png)
+![Who signs in to what: people through Entra sign-in to the web app only; the engine jobs, the web app, the MCP server, the updater and asset tagging each with their own managed identity and only the rights of their job; the optional Invardia Support app with its own read-only database user, more only just in time, and the Key Vault role of its level](images/identities-access.png)
 
 ## How you give and remove it
 
@@ -39,10 +39,8 @@ through its updates and one recorded support step; your own administrators keep 
 
 ## Its secret, under your control
 
-The Support app signs in with a client secret that is stored at Invardia, never in your install. Invardia's script also
-creates a Conditional Access policy for this app only that blocks its sign-in from anywhere but Invardia's support
-address; it is created switched off, and you decide when to switch it on. In Invardia's customer portal you control
-the secret per environment:
+The Support app signs in with a client secret that is stored at Invardia, never in your install. In Invardia's customer
+portal you control the secret per environment:
 
 | Control | Choices |
 |---|---|

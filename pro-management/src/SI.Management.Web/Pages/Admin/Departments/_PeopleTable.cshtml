@@ -1,6 +1,7 @@
 @model SI.Management.Web.Pages.Admin.Departments.PeopleTableModel
 @using SI.Management.Web.Departments
 @using Microsoft.AspNetCore.Html
+@inject GuestObjectIdResolver GuestIds
 @*
     #335: ONE people table, the same on the New department form and on a department's page. A row = a person and a role;
     someone with two roles has two rows. A new row's person is picked from the list (type a name or an e-mail address:
@@ -47,7 +48,7 @@
                             <span data-person>@kept.DisplayName</span>
                             <span class="hint">@(kept.Mail ?? (kept.PrincipalType + " " + kept.ObjectId))</span>
                             @if (kept.IsExternal) { <span class="badge">outside</span> }
-                            @if (string.IsNullOrWhiteSpace(kept.ObjectId) && !string.IsNullOrWhiteSpace(kept.Mail)) { <span class="hint" data-mail-only>@MailOnlyMatch.AdminNote</span> }
+                            @if (string.IsNullOrWhiteSpace(kept.ObjectId) && !string.IsNullOrWhiteSpace(kept.Mail)) { <span class="hint" data-mail-only>@GuestIds.NoteFor("member", kept.MemberId)</span> }
                             @if (!string.IsNullOrEmpty(kept.Company)) { <span class="hint">@kept.Company</span> }
                         }
                         else

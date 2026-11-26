@@ -20,8 +20,13 @@
 
     THE JOB, in order (Invoke-SISupportGrantJob):
       1. the SWEEP on every product database: a grant past its maxUntil is revoked first, whatever the message says;
-      2. every message on the queue is read and DELETED; the newest one not older than 15 minutes is the request, the
-         others are dropped and said;
+      2. every message on the queue is read and DELETED, and each is read on its own, oldest first (#1356): one older than
+         15 minutes is dropped, one that is not a valid request is refused alone (said) and never blocks the others; a
+         CLOSE is answered first and wins only over the waiting opens of its OWN session (#1368, the session id in
+         SI_AUDIT_STARTED_BY), else the oldest open; another session's request is NOT deleted -- it stays on the queue
+         for the next execution (one request, one SUPPORT-GRANT line per execution). Before a close the job says which
+         other sessions' open grants it ends (one close ends them all: one Support app user) -- where it may read them:
+         si_engine is not granted that read, so a refused read is said ("could not read the other open grants");
       3. open: the Pro database first (it holds the consent the customer recorded), then the identity ledger and the data
          database; one that fails rolls back the ones already opened (they are closed again) -- never a half grant;
          close: every database, each on its own;
@@ -43,6 +48,8 @@
 if (-not (Get-Command -Name Get-SISupportGrantCallSql -ErrorAction SilentlyContinue)) {
     . ([IO.Path]::Combine((Split-Path -Parent (Split-Path -Parent $PSScriptRoot)), 'engine', 'pro-settings', 'SI-SupportGrantSql.ps1'))
 }
+# the database seams (New-SIRecordSqlInvoke -> Invoke-SIRecordSqlDb) are loaded here, never assumed from the job (SUP-2026-00687)
+if (-not (Get-Command -Name Invoke-SIRecordSqlDb -ErrorAction SilentlyContinue)) { . ([IO.Path]::Combine((Split-Path -Parent $PSScriptRoot), 'data-model', 'SI-RecordSql.ps1')) }
 
 $script:SISupportGrantJob = [ordered]@{
     Job            = 'caj-si-support-grant'
@@ -159,7 +166,7 @@ function Select-SISupportGrantMessage {
     #>
     param([AllowEmptyCollection()][object[]]$Messages = @(), [Parameter(Mandatory)][datetime]$NowUtc)
     $limit = $NowUtc.ToUniversalTime().AddMinutes(-$script:SISupportGrantJob.StaleMinutes)
-    $all = @($Messages | Where-Object { $null -ne $_ } | Sort-Object { [datetime]$_.Inserted } -Descending)
+    $all = @(ConvertTo-SISupportGrantMessageList -Messages $Messages | ForEach-Object { $_ } | Sort-Object { [datetime]$_.Inserted } -Descending)
     $pick = $null; $dropped = [System.Collections.Generic.List[object]]::new()
     foreach ($m in $all) {
         $at = ([datetime]$m.Inserted).ToUniversalTime()
@@ -168,6 +175,113 @@ function Select-SISupportGrantMessage {
         $dropped.Add([pscustomobject]@{ Id = [string]$m.Id; Why = 'a newer request came after it' })
     }
     [pscustomobject]@{ Message = $pick; Dropped = $dropped.ToArray() }
+}
+
+function ConvertTo-SISupportGrantMessageList {
+    <#
+        PURE. #1356: the messages read as ONE flat list of messages (@{ Id; PopReceipt; Inserted; Text }), nulls left out.
+        A read hands its batch back as one array (ConvertFrom-SISupportGrantQueueXml returns , @(...)); collected with @( )
+        that batch stayed ONE item, so with two or more messages pending the job saw one "message" whose Inserted was an
+        array ("Cannot convert System.Object[] to System.DateTime") and answered no request at all. Batches inside batches
+        are opened up here, whatever the depth; a message object itself is never opened.
+    #>
+    param([AllowNull()][AllowEmptyCollection()][object[]]$Messages = @())
+    $out = [System.Collections.Generic.List[object]]::new()
+    $add = $null
+    $add = {
+        param($Item)
+        if ($null -eq $Item) { return }
+        if ($Item -is [System.Collections.IEnumerable] -and $Item -isnot [string] -and $Item -isnot [System.Collections.IDictionary]) {
+            foreach ($i in $Item) { & $add $i }
+            return
+        }
+        $out.Add($Item)
+    }
+    foreach ($m in @($Messages)) { & $add $m }
+    , $out.ToArray()
+}
+
+function Get-SISupportGrantSessionKey {
+    <#
+        PURE. #1368: which Support session a request belongs to -- the session id the Invardia Support tools put in
+        SI_AUDIT_STARTED_BY ("Invardia Support: <operator> (session <id>)"), case ignored; a request without one is its OWN
+        session (keyed by its message id), so it never stands in for another request.
+    #>
+    param([AllowNull()][AllowEmptyString()][string]$StartedBy, [AllowNull()][AllowEmptyString()][string]$MessageId)
+    if ("$StartedBy" -match '\(session\s+([^\s()]+)\)') { return ('session:' + $Matches[1].ToLowerInvariant()) }
+    'message:' + "$MessageId"
+}
+
+function Select-SISupportGrantRequest {
+    <#
+        PURE. #1356 / #1368: the ONE request this execution answers, from every message read (@{ Id; Inserted (UTC); Text }),
+        each message read on its own, oldest first:
+          * a message older than 15 minutes is dropped (said);
+          * a message that is not a valid request is REFUSED on its own (said with why) -- it never blocks the others;
+          * a CLOSE is answered first (the oldest close): revoking goes before granting, so a close never ends an open that
+            was still waiting behind it. A close wins ONLY over the waiting opens of its OWN session
+            (Get-SISupportGrantSessionKey; no session id = its own session) -- those are dropped, and so is a second close
+            of that session;
+          * with no close, the OLDEST open is answered;
+          * every request of ANOTHER session (and a further open when no close is waiting) is LATER: it stays on the queue
+            and is answered, oldest first, by the next executions (#1368: Invardia 2026-11-25, SEC-CHANGE-1 item 4 -- 3.1.46
+            dropped another session's open at internal 08:51 and 09:11Z). One request per execution, one SUPPORT-GRANT line.
+        Returns @{ Message; Request (ConvertFrom-SISupportGrantMessage's answer) -- both $null when none is valid; Session;
+                   Dropped = @(@{ Id; Why }); Refused = @(@{ Id; Why }); Later = @(<message>) }.
+    #>
+    param([AllowEmptyCollection()][object[]]$Messages = @(), [Parameter(Mandatory)][datetime]$NowUtc)
+    $c = $script:SISupportGrantJob
+    $limit = $NowUtc.ToUniversalTime().AddMinutes(-$c.StaleMinutes)
+    $at = { param($m) try { ([datetime]$m.Inserted).ToUniversalTime() } catch { [datetime]::MinValue } }
+    $all = @(ConvertTo-SISupportGrantMessageList -Messages $Messages | ForEach-Object { $_ } | Sort-Object -Property @{ Expression = { & $at $_ } }, @{ Expression = { [string]$_.Id } })
+    $valid = [System.Collections.Generic.List[object]]::new()
+    $dropped = [System.Collections.Generic.List[object]]::new(); $refused = [System.Collections.Generic.List[object]]::new(); $later = [System.Collections.Generic.List[object]]::new()
+    foreach ($m in $all) {
+        $when = & $at $m
+        if ($when -lt $limit) { $dropped.Add([pscustomobject]@{ Id = [string]$m.Id; Why = ('older than {0} minutes (put on the queue {1})' -f $c.StaleMinutes, $(if ($when -eq [datetime]::MinValue) { 'at an unknown time' } else { Format-SISupportGrantUtc $when })) }); continue }
+        $r = $null
+        try { $r = ConvertFrom-SISupportGrantMessage -Text ([string]$m.Text) -NowUtc $NowUtc } catch { $r = [pscustomobject]@{ Ok = $false; Why = 'the message could not be read' } }
+        if (-not $r.Ok) { $refused.Add([pscustomobject]@{ Id = [string]$m.Id; Why = [string]$r.Why }); continue }
+        $valid.Add([pscustomobject]@{ Index = $valid.Count; Message = $m; Request = $r; Session = (Get-SISupportGrantSessionKey -StartedBy ([string]$r.StartedBy) -MessageId ([string]$m.Id)) })
+    }
+    $closes = @($valid | Where-Object { $_.Request.Action -eq 'close' })
+    $pick = $null
+    if ($closes.Count) { $pick = $closes[0] } elseif ($valid.Count) { $pick = $valid[0] }
+    foreach ($v in $valid) {
+        if ($pick -and $v.Index -eq $pick.Index) { continue }
+        if ($pick -and $pick.Request.Action -eq 'close' -and $v.Session -eq $pick.Session) {
+            $why = if ($v.Request.Action -eq 'close') { 'the same close of this session was asked again' } else { 'a close of the same session is waiting -- a close wins over its own session''s open' }
+            $dropped.Add([pscustomobject]@{ Id = [string]$v.Message.Id; Why = $why }); continue
+        }
+        $later.Add($v.Message)
+    }
+    [pscustomobject]@{ Message = $(if ($pick) { $pick.Message } else { $null }); Request = $(if ($pick) { $pick.Request } else { $null }); Session = $(if ($pick) { $pick.Session } else { '' })
+                       Dropped = $dropped.ToArray(); Refused = $refused.ToArray(); Later = $later.ToArray() }
+}
+
+function Get-SISupportGrantOpenGrantsSql {
+    <# PURE. #1368, READ ONLY: the grants a close is about to end in this database -- every 'open' journal row granted since
+       the oldest marker still open (a later open of another session extends that marker instead of adding one). #>
+    "DECLARE @since datetime2(0) = (SELECT MIN(AddedUtc) FROM cfg.SupportJitMarker WHERE ClosedUtc IS NULL);`n" +
+    "SELECT CONVERT(nvarchar(36), j.GrantId) AS GrantId, j.StartedBy, j.Reason, j.LevelGranted, CONVERT(nvarchar(19), j.AtUtc, 126) + N'Z' AS AtUtc`n" +
+    "FROM cfg.SupportGrant AS j`n" +
+    "WHERE @since IS NOT NULL AND j.Action = N'open' AND j.Outcome = N'granted' AND j.AtUtc >= @since`n" +
+    "ORDER BY j.EntryId;"
+}
+
+function Get-SISupportGrantOtherSessionLines {
+    <# PURE. #1368: the log lines that say which OTHER sessions' open grants a close ends (one close closes every grant: the
+       Support app is one database user with one membership per role). -Rows: Get-SISupportGrantOpenGrantsSql's rows. #>
+    param([AllowEmptyCollection()][object[]]$Rows = @(), [Parameter(Mandatory)][string]$Session, [Parameter(Mandatory)][string]$Database)
+    $out = [System.Collections.Generic.List[string]]::new(); $seen = @{}
+    foreach ($r in @($Rows | Where-Object { $null -ne $_ })) {
+        $k = Get-SISupportGrantSessionKey -StartedBy (Get-SISupportGrantRowValue $r 'StartedBy') -MessageId (Get-SISupportGrantRowValue $r 'GrantId')
+        if ($k -eq $Session -or $seen.ContainsKey($k)) { continue }
+        $seen[$k] = $true
+        $who = Get-SISupportGrantRowValue $r 'StartedBy'; if (-not $who) { $who = 'grant ' + (Get-SISupportGrantRowValue $r 'GrantId') }
+        $out.Add(('{0}: this close also ends the open grant of ANOTHER support session -- {1}, {2} since {3}: {4}' -f $Database, $who, (Get-SISupportGrantRowValue $r 'LevelGranted'), (Get-SISupportGrantRowValue $r 'AtUtc'), (Get-SISupportGrantRowValue $r 'Reason')))
+    }
+    , $out.ToArray()
 }
 
 function ConvertFrom-SISupportGrantQueueXml {
@@ -384,7 +498,8 @@ function Invoke-SISupportGrantJob {
 
         # 2. every message is read and deleted; the newest fresh one is the request
         $msgs = @()
-        try { $msgs = @(& $Receive) } catch { & $Say 'WARN' ('the support request queue could not be read ({0})' -f $_.Exception.Message); return (& $finish 'no-request') }
+        # #1356: one flat list -- a read's batch is never one "message" (several pending requests = one item per request)
+        try { $msgs = @(ConvertTo-SISupportGrantMessageList -Messages @(& $Receive) | ForEach-Object { $_ }) } catch { & $Say 'WARN' ('the support request queue could not be read ({0})' -f $_.Exception.Message); return (& $finish 'no-request') }
         # #1154: the QUEUE starts this job, so an empty queue is no request at all -- the execution that started for the same
         # message took it first (the scaler may start one more while the first reads). Nothing was asked of this execution:
         # it ends ok and writes NO SUPPORT-GRANT line (the line answers a request; this one has none to answer).
@@ -393,15 +508,23 @@ function Invoke-SISupportGrantJob {
             $res.Result = 'empty'; $res.ExitCode = 0; $res.Line = ''
             return [pscustomobject]$res
         }
-        foreach ($m in $msgs) { if ($Remove) { try { & $Remove $m } catch { & $Say 'WARN' ('a support request could not be deleted from the queue ({0}) -- it is ignored after {1} minutes' -f $_.Exception.Message, $script:SISupportGrantJob.StaleMinutes) } } }
-        $pick = Select-SISupportGrantMessage -Messages $msgs -NowUtc $NowUtc
-        foreach ($d in $pick.Dropped) { & $Say 'INFO' ('a support request was not used: {0}' -f $d.Why) }
-        if (-not $pick.Message) { & $Say 'WARN' 'no support request on the queue (a start without a fresh request does nothing)'; return (& $finish 'no-request') }
-        $req = ConvertFrom-SISupportGrantMessage -Text ([string]$pick.Message.Text) -NowUtc $NowUtc
-        if (-not $req.Ok) {
-            # what the request asked is told only when it could be read -- never a value of a refused one
-            & $Say 'WARN' ('the support request was refused: {0}' -f $req.Why); return (& $finish 'bad-request')
+        # #1356 / #1368: every request read on its own, oldest first; a bad one is refused alone; a close is answered first and
+        # wins only over its OWN session's waiting open; another session's request stays on the queue for the next execution
+        $pick = Select-SISupportGrantRequest -Messages $msgs -NowUtc $NowUtc
+        $keep = @{}; foreach ($l in @($pick.Later)) { $keep[[string]$l.Id] = $true }
+        foreach ($m in $msgs) {
+            if ($keep.ContainsKey([string]$m.Id)) { continue }
+            if ($Remove) { try { & $Remove $m } catch { & $Say 'WARN' ('a support request could not be deleted from the queue ({0}) -- it is ignored after {1} minutes' -f $_.Exception.Message, $script:SISupportGrantJob.StaleMinutes) } }
         }
+        if (@($pick.Later).Count) { & $Say 'INFO' ('{0} more support request(s) stay on the queue -- each is answered by its own next execution, oldest first' -f @($pick.Later).Count) }
+        foreach ($d in $pick.Dropped) { & $Say 'INFO' ('a support request was not used: {0}' -f $d.Why) }
+        # what a request asked is told only when it could be read -- never a value of a refused one
+        foreach ($d in $pick.Refused) { & $Say 'WARN' ('the support request was refused: {0}' -f $d.Why) }
+        if (-not $pick.Message) {
+            if (@($pick.Refused).Count) { return (& $finish 'bad-request') }
+            & $Say 'WARN' 'no support request on the queue (a start without a fresh request does nothing)'; return (& $finish 'no-request')
+        }
+        $req = $pick.Request
         $res.Action = $req.Action
         $rid = [guid]::Empty
         if (-not [guid]::TryParse([string]$pick.Message.Id, [ref]$rid)) { $rid = [guid]::NewGuid() }
@@ -446,6 +569,13 @@ function Invoke-SISupportGrantJob {
         # close: every database, each on its own
         $bad = ''
         foreach ($db in @($Databases.Keys)) {
+            # #1368 (LOG ONLY): one close ends every open grant here (one Support app user, one membership per role) -- say
+            # which OTHER sessions' grants it ends, read before the close. si_engine is NOT granted that read (SEC-CHANGE-1
+            # point 1: no right for a log line) -- where it is refused the line says so and the close goes on as before
+            try {
+                $og = @(& $Databases[$db] (Get-SISupportGrantOpenGrantsSql) @{} 'rows' | ForEach-Object { $_ } | Where-Object { $null -ne $_ })
+                foreach ($l in @(Get-SISupportGrantOtherSessionLines -Rows $og -Session ([string]$pick.Session) -Database ([string]$db))) { & $Say 'WARN' $l }
+            } catch { & $Say 'INFO' ('{0}: could not read the other open grants -- which other support sessions this close ends is not known here ({1}); the close goes on' -f $db, (($_.Exception.Message -split "`n")[0])) }
             try {
                 $row = Read-SISupportGrantRow -Invoke $Databases[$db] -Sql (Get-SISupportGrantCallSql -Name Close) -Params $p
                 $rows.Add($row)

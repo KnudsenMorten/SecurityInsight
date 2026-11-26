@@ -10,7 +10,7 @@
 <p class="lede">Each Risk Analysis report asks Microsoft Defender in buckets: slices of your assets, one query each, so no answer is too large. This page shows how many buckets each report uses, how that changed, and whether a count looks wrong.</p>
 <details class="help">
     <summary>How the bucket count works</summary>
-    <p>A report starts from the count it used last time. When a bucket's answer is too large, that bucket is split and run again, and the next run starts from twice the count. After three runs far below every limit, a report tries half the count. A reset, or a changed query, makes the next run size the report again: from its last measured result when there is one, otherwise 1, 2, 4, 8.</p>
+    <p>A report starts from the count it used last time. When a bucket's answer is too large, that bucket is split and run again, and the next run starts from the count its answers needed. After each run the next run's count is sized to fit what the run returned (its rows, size and time per bucket against half of every limit), so a report that returns little comes down to 1 or 2 buckets at once. A throttled or busy answer is asked again at the same size; it never raises the count. A reset, or a changed query, makes the next run size the report again: from its last measured result when there is one, otherwise 1, 2, 4, 8.</p>
     <p><strong>Jump</strong>: a count 4 times the report's usual count (the median of its earlier runs), or above 256, points at a wrong query or wrong data. The run completes and the report is named in a warning on the Guards page.</p>
     <p><strong>Reset</strong> (Admin): staged on Review &amp; commit; the next run of that report sizes it again, once, and remembers the new count.</p>
 </details>
@@ -53,7 +53,7 @@ else
                                 <td class="num" data-value="@(r.Usual ?? 0)" data-usual>@(r.Usual is { } u ? Fmt.Int(u) : "--")</td>
                                 <td data-value="@(r.LastChangeUtc is { } lc ? LocalTime.Iso(lc) : "")">@(r.LastChangeUtc is { } lc2 ? Fmt.Time(lc2) : "--")</td>
                                 <td data-flag>@(r.Jump ? "Jump" : "")</td>
-                                <td data-note>@BucketText.Note(r)</td>
+                                <td data-note>@BucketText.Note(r, DateTime.UtcNow)</td>
                                 @if (isAdmin)
                                 {
                                     <td>

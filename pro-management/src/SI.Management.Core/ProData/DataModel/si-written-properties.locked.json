@@ -1,0 +1,73 @@
+{
+  "$comment": "The record properties SecurityInsight WRITES ITSELF (not what a source offers). Continuous discovery sees them on the records like any other property, so this list keeps them off Configuration > New context available: they are recorded as known (Everything known), never as new context. THE RULE (owner 2026-11-25: 'if we control it, why dont you fill out these fields and activate them'): every property SecurityInsight writes ships in the same release either MAPPED to the si_ field(s) named here (use 'mapped', the shipped field map reads it) or listed as INTERNAL ('internal', with why). A test holds it: every entry is mapped or internal-with-a-reason, every mapped entry is read by the shipped field map, and every part the privilege tier classifier writes is listed. property: the property as discovery names it inside the part ('key', 'key.child'); a trailing * matches every property that starts with the text before it. recordTypes: '*' = every record type of the source. The web app reads an embedded copy (pro-management/src/SI.Management.Core/ProData/DataModel), held to this file by a test.",
+  "kind": "si-written-properties",
+  "version": "1.0.0",
+  "properties": [
+    {
+      "source": "entra",
+      "recordTypes": [ "user", "service_principal" ],
+      "part": "roleScopes",
+      "property": "tierLevel",
+      "use": "internal",
+      "why": "the object that holds the level inside Tier 0; its parts below are mapped or listed one by one"
+    },
+    {
+      "source": "entra",
+      "recordTypes": [ "user", "service_principal" ],
+      "part": "roleScopes",
+      "property": "tierLevel.level",
+      "use": "mapped",
+      "fields": [ "si_privilege_tier_level" ],
+      "why": "the level inside Tier 0: 1 = a Tier 0 role held tenant-wide, 2 = every Tier 0 role held on a scope only"
+    },
+    {
+      "source": "entra",
+      "recordTypes": [ "user", "service_principal" ],
+      "part": "roleScopes",
+      "property": "tierLevel.text",
+      "use": "mapped",
+      "fields": [ "si_privilege_tier_level_text" ],
+      "why": "why the identity is Tier 0, in words: the deciding role and, for a scoped role, the scope's type, name and id"
+    },
+    {
+      "source": "entra",
+      "recordTypes": [ "user", "service_principal" ],
+      "part": "roleScopes",
+      "property": "tierLevel.tier",
+      "use": "internal",
+      "why": "always 0 -- the level is written only for a Tier 0 identity; the identity's tier itself is si_privilege_tier_permanent / si_privilege_tier_eligible"
+    },
+    {
+      "source": "entra",
+      "recordTypes": [ "user", "service_principal" ],
+      "part": "roleScopes",
+      "property": "tierLevel.scoped",
+      "use": "internal",
+      "why": "the deciding scoped roles behind the text: the text names them (role, scope type, name and id), every scoped assignment is in si_entra_role_scopes and the group a role is held through in si_role_paths"
+    },
+    {
+      "source": "azure",
+      "recordTypes": [ "*" ],
+      "part": "parentTags",
+      "property": "installId",
+      "use": "internal",
+      "why": "the install tag on the resource group of a SecurityInsight install: it says which install a resource belongs to, not context about the customer's own resources"
+    },
+    {
+      "source": "azure",
+      "recordTypes": [ "*" ],
+      "part": "parentTags",
+      "property": "si-*",
+      "use": "internal",
+      "why": "SecurityInsight's own tags on its own resources (what is installed, the updater's record, its components)"
+    },
+    {
+      "source": "azure",
+      "recordTypes": [ "*" ],
+      "part": "parentTags",
+      "property": "invardia*",
+      "use": "internal",
+      "why": "Invardia's install tags on the resources of a SecurityInsight install"
+    }
+  ]
+}

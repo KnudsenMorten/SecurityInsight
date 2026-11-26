@@ -4,7 +4,7 @@
     ViewData["Title"] = "Lifecycle and deadlines";
 }
 <h1>Lifecycle and deadlines</h1>
-<p class="lede">The lifecycles SecurityInsight counts with, in one place: how long a finding may exist before the Protection Score counts it, how long a finding has to be fixed, and how long an unseen asset is kept. Change a value with its Change link -- you review it and give a reason before it is saved, and every change is on the audit trail.</p>
+<p class="lede">The lifecycles SecurityInsight counts with, in one place: how long a finding may exist before the Protection Score counts it, how long a finding has to be fixed, and how long an unseen asset is kept -- or whether it retires at once when its source proves it deleted. Change a value with its Change link -- you review it and give a reason before it is saved, and every change is on the audit trail.</p>
 @if (Model.Error is not null) { <div class="notice warn" role="status" data-lifecycle-error>@Model.Error</div> }
 @foreach (var (sec, lines) in Model.View)
 {
@@ -19,7 +19,7 @@
                     {
                         <tr data-setting="@l.Setting.Name" data-default="@(l.IsDefault ? "1" : "0")">
                             <td class="wrap" title="@l.Setting.PurposeText">@l.Setting.Title</td>
-                            <td><strong>@l.Value</strong>@if (l.IsDefault) { <span class="hint"> (default)</span> }</td>
+                            <td><strong>@SI.Management.Web.Pages.Admin.Settings.LifecycleModel.Shown(l)</strong>@if (l.IsDefault) { <span class="hint"> (default)</span> }</td>
                             <td>@if (!l.IsDefault) { <span>@l.UpdatedBy</span> if (l.UpdatedAt is { } at) { <span class="hint"> @Fmt.Time(at)</span> } }</td>
                             <td><a href="/Admin/Settings/Edit?name=@Uri.EscapeDataString(l.Setting.Name)" data-lifecycle-change="@l.Setting.Name">Change</a></td>
                         </tr>
@@ -27,6 +27,7 @@
                 </tbody>
             </table>
         </div>
+        @if (sec.Note is not null) { <p class="hint" data-lifecycle-note="@sec.Id">@sec.Note</p> }
     </section>
 }
 <p class="hint">The risk rating's thresholds (which score is Critical, High, Moderate or Low) are on the <a href="/Admin/Settings/RiskRating">Risk rating</a> tab.</p>

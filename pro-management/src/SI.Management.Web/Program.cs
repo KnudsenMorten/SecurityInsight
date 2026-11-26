@@ -238,6 +238,10 @@ builder.Services.AddRazorPages(o =>
     o.Conventions.AuthorizeFolder("/Rules", Policies.Management);
     o.Conventions.AuthorizeFolder("/AssetTagging", Policies.Management);
     o.Conventions.AuthorizeFolder("/SchemaOverlay", Policies.Management);
+    // #1381 (owner 2026-11-25: "hide it if it is not relevant to customers"): the schema overlays (list + editor) are for a
+    // SuperAdmin only -- no menu item; New context available, in the same folder, stays a reader's page
+    o.Conventions.AuthorizePage("/SchemaOverlay/Index", Policies.SuperAdmin);
+    o.Conventions.AuthorizePage("/SchemaOverlay/Edit", Policies.SuperAdmin);
     // #252 exemptions: Admin or Viewer request; who may decide or review is checked per domain by ExemptionWorkflow
     o.Conventions.AuthorizeFolder("/Exemptions", Policies.Management);
     o.Conventions.AuthorizePage("/Chat", Policies.Management);
@@ -431,10 +435,15 @@ builder.Services.AddSingleton<SI.Management.Web.Departments.DepartmentRepository
 builder.Services.AddSingleton<IDepartmentViews>(sp => new DepartmentViews(sp.GetRequiredService<IProSql>()));
 // #636: Security recommendations > Summary, the Remediations pages and the key figures of the Executive overview / report
 builder.Services.AddSingleton<IRecommendationViews>(sp => new SqlRecommendationViews(sp.GetRequiredService<IProSql>()));
+builder.Services.AddSingleton<IAcceptedLifecycleViews>(sp => new SqlAcceptedLifecycleViews(sp.GetRequiredService<IProSql>()));   // #1355 Actual Risks / Within Accepted Lifecycle
 builder.Services.AddSingleton<SI.Management.Web.Departments.IDepartmentScopeResolver, SI.Management.Web.Departments.MembershipDepartmentScope>();
 builder.Services.AddSingleton<IAuthorizationHandler, SI.Management.Web.Departments.DepartmentAccessHandler>();
 // #335: the people fields typed on the department pages, and who approves what (technical / business approvers)
 builder.Services.AddSingleton<SI.Management.Web.Departments.DepartmentPeopleResolver>();
+// #995b: a department person or advisor kept by e-mail address only gets its object id from the directory ONCE (exactly one
+// account with that address; at the Admin's save and in the background after start) -- matched by object id from then on
+builder.Services.AddSingleton<SI.Management.Web.Departments.GuestObjectIdResolver>();
+builder.Services.AddHostedService<SI.Management.Web.Departments.GuestObjectIdsInBackground>();
 builder.Services.AddSingleton<SI.Management.Web.Departments.DepartmentApprovers>();
 builder.Services.AddSingleton<SI.Management.Web.Exemptions.IDepartmentDeciders>(sp => sp.GetRequiredService<SI.Management.Web.Departments.DepartmentApprovers>());
 // #254 phase 2 + 3: the governance log per finding, the remediation flows, the vendor-escalation outbox (cfg.*)
@@ -589,6 +598,8 @@ builder.Services.AddSingleton(_ => SI.Management.Web.ChangeJournal.ConfigEntitie
 builder.Services.AddSingleton<SI.Management.Web.ChangeJournal.ConfigSettings>();
 builder.Services.AddSingleton<SI.Management.Web.ChangeJournal.ConfigApplier>();
 builder.Services.AddSingleton<SI.Management.Web.ChangeJournal.IConfigJournalStore, SI.Management.Web.ChangeJournal.SqlConfigJournalStore>();
+// #1377: Who on Operations > Commits by name (the install's identities, the Support app) -- read at display time
+builder.Services.AddSingleton<SI.Management.Web.ChangeJournal.ICommitNamesReader, SI.Management.Web.ChangeJournal.SqlCommitNamesReader>();
 builder.Services.AddSingleton<SI.Management.Web.ChangeJournal.IConfigBackupStore, SI.Management.Web.ChangeJournal.SqlConfigBackupStore>();
 builder.Services.AddSingleton<SI.Management.Web.ChangeJournal.IConfigApprovalStore, SI.Management.Web.ChangeJournal.SqlConfigApprovalStore>();
 builder.Services.AddSingleton<SI.Management.Web.ChangeJournal.ICollectionSendStore, SI.Management.Web.ChangeJournal.SqlCollectionSendStore>();
@@ -608,12 +619,20 @@ if (jobs.IsConfigured)
     // request the pipeline runner applies; the default changes it directly, as before
     // #931: a start with values never carries a template (Azure Container Apps: that needs jobs/write) -- the values go to
     // the database as a start request the job claims (StartRequestJobsClient), in both modes
-    if (jobs.ChangesAreRequests)
-        builder.Services.AddTransient<IJobsClient>(sp => new RequestedTriggerJobsClient(
+    // #1252 (SECURE-WEB-1 part 2): where the updater has set up the job request queue (cfg.InstallState 'JobRequestQueue',
+    // set only after the queue, its job's trigger and the web app's one right read back) every start is a message on that
+    // queue and every trigger change a request the pipeline runner applies (woken through the same queue); else as before
+    builder.Services.AddSingleton<IJobRequestQueue>(sp => new JobRequestQueue(sp.GetRequiredService<ISqlExecutor>(), sp.GetRequiredService<TokenCredential>()));
+    static IJobsClient Before(IServiceProvider sp, bool requests) => requests
+        ? new RequestedTriggerJobsClient(
             new SI.Management.Web.Audit.AttributedJobsClient(new StartRequestJobsClient(sp.GetRequiredService<ArmJobsClient>(), sp.GetRequiredService<ISqlExecutor>()), sp.GetRequiredService<SI.Management.Web.Audit.IChangeAttributionWriter>()),
-            sp.GetRequiredService<ISqlExecutor>()));
-    else
-        builder.Services.AddTransient<IJobsClient>(sp => new SI.Management.Web.Audit.AttributedJobsClient(new StartRequestJobsClient(sp.GetRequiredService<ArmJobsClient>(), sp.GetRequiredService<ISqlExecutor>()), sp.GetRequiredService<SI.Management.Web.Audit.IChangeAttributionWriter>()));
+            sp.GetRequiredService<ISqlExecutor>())
+        : new SI.Management.Web.Audit.AttributedJobsClient(new StartRequestJobsClient(sp.GetRequiredService<ArmJobsClient>(), sp.GetRequiredService<ISqlExecutor>()), sp.GetRequiredService<SI.Management.Web.Audit.IChangeAttributionWriter>());
+    var jobRequestsMode = jobs.ChangesAreRequests;
+    builder.Services.AddTransient<IJobsClient>(sp => new JobRequestSwitchJobsClient(Before(sp, jobRequestsMode), sp.GetRequiredService<IJobRequestQueue>(),
+        at => new RequestedTriggerJobsClient(
+            new SI.Management.Web.Audit.AttributedJobsClient(new QueuedStartJobsClient(sp.GetRequiredService<ArmJobsClient>(), sp.GetRequiredService<IJobRequestQueue>(), at), sp.GetRequiredService<SI.Management.Web.Audit.IChangeAttributionWriter>()),
+            sp.GetRequiredService<ISqlExecutor>())));
 }
 else builder.Services.AddSingleton<IJobsClient, NotConfiguredJobsClient>();
 // #269: the daily job flow's definition + run records (cfg.JobFlow / cfg.FlowRun / cfg.FlowStepRun)
@@ -741,6 +760,9 @@ app.Use(async (ctx, next) =>
 app.UseRateLimiter();
 // #636: an old address of a retired page, opened in a browser, opens the page / named view that replaced it
 app.Use((ctx, next) => SI.Management.Web.Navigation.RetiredPages.Middleware(ctx, () => next()));
+// every page module carries one version stamp (/js/v/<stamp>/app/main.js and all it imports): served as /js/...
+SI.Management.Web.Pages.AppScripts.Init(app.Environment.WebRootPath);
+app.Use((ctx, next) => SI.Management.Web.Pages.AppScripts.Middleware(ctx, () => next()));
 app.UseStaticFiles();   // after authorization on purpose: the fallback policy covers the assets too
 
 // The only anonymous endpoint. It says the process is up -- nothing about version, configuration or data. 503 while the

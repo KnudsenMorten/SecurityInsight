@@ -1,6 +1,8 @@
 [
   { "key": "users", "counts": "Enabled member users: Entra (accountEnabled, userType Member) plus AD-only enabled user accounts from the Exposure Graph, each person once", "source": "SI_Identity_Profile_CL (latest settled collection) + ExposureGraphNodes" },
   { "key": "guests", "counts": "Guest users, enabled or not", "source": "SI_Identity_Profile_CL (latest settled collection)" },
+  { "key": "usersTotal", "counts": "All user objects: enabled and disabled, members and guests (not soft-deleted) -- as PIM sends it; left out when not recorded in the last 8 days", "source": "Microsoft Graph GET /users/$count (ConsistencyLevel eventual), read by the identity collection and recorded in the Pro database cfg.InstallState TenantSize (users)" },
+  { "key": "groups", "counts": "Every group (security, Microsoft 365, distribution; not soft-deleted) -- as PIM sends it; left out when not recorded in the last 8 days", "source": "Microsoft Graph GET /groups/$count (ConsistencyLevel eventual), read by the identity collection and recorded in the Pro database cfg.InstallState TenantSize (groups)" },
   { "key": "devices", "counts": "7-day maximum of the daily unique correlated devices (endpoints and servers, one per real machine; no IoT / network devices)", "source": "SI_ObjectMap_CL + SI_Endpoint_Profile_CL" },
   { "key": "sqlUsedMb", "counts": "MB the Pro database's data files use", "source": "Pro database: FILEPROPERTY SpaceUsed" },
   { "key": "sqlMaxMb", "counts": "The Pro database's maximum size in MB", "source": "Pro database: DATABASEPROPERTYEX MaxSizeInBytes" },

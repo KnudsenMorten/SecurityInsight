@@ -122,12 +122,13 @@ $global:SI_Identity_SignInMethodsMaxAgeDays  = 90      # a user's detail is read
 $global:SI_Identity_SignInMethodsFillMinutes = 8       # minutes of background reading per 15-minute run
 
 # --- Retire at once on proof of deletion (#1057) ---
-# Off by default -- an install that does not turn them on works exactly as before. On (per install, per source): an asset
+# ON by default (owner 2026-11-25, #1390: "All ON"); an install that stored its own value keeps it. Per source: an asset
 # whose source PROVES it deleted (never merely missing) retires at once instead of after the grace period, and its open
-# vulnerabilities close as 'asset deleted in <source>'. Read by engine\data-model\SI-DeletionProof.ps1.
-$global:SI_DeletionProof_Entra  = $false   # a user, device or group in Entra ID's deleted items retires at once
-$global:SI_DeletionProof_Azure  = $false   # an Azure resource with a Delete in the resource changes retires at once
-$global:SI_DeletionProof_Intune = $false   # a managed device deleted in Intune's audit events retires at once
+# vulnerabilities close as 'asset deleted in <source>'. Intune's proof needs DeviceManagementApps.Read.All (read only);
+# until it is granted the Intune read answers 403 and decides nothing. Read by engine\data-model\SI-DeletionProof.ps1.
+$global:SI_DeletionProof_Entra  = $true    # a user, device or group in Entra ID's deleted items retires at once
+$global:SI_DeletionProof_Azure  = $true    # an Azure resource with a Delete in the resource changes retires at once
+$global:SI_DeletionProof_Intune = $true    # a managed device deleted in Intune's audit events retires at once
 
 # --- CI build ---
 # Every CI is rebuilt in full at least this often (days); the runs between build only the CIs whose input changed.

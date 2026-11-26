@@ -34,6 +34,7 @@
     // each value carries its band's words and colour (ProtectionBands -- a score, not a risk)
     var pv = Model.ViewKey;
     var pKiosk = Model.FullScreen && Model.Kiosk is not null ? "kiosk=1&" : "";
+    var psInfo = Model.Protection.Info;
 }
 <section class="wb-kpis wb-protection" aria-label="Protection Score" data-wb-protection data-view="@pv">
     @foreach (var (code, _) in SI.Management.Web.RiskExec.ExecutiveFigures.ProtectionViews)
@@ -41,27 +42,39 @@
         var p = Model.Protection.Headline("protection_" + code);
         var band = SI.Management.Core.ProData.ProtectionBands.Of(p.Raw);
         @* owner 2026-10-20: the headline readable from the back of the room, the value balanced with it (app.css .wb-score);
-           the accepted lifecycle's actual values under its score *@
-        <a class="wb-kpi wb-score@(code == pv ? " chosen" : "")" href="/Wallboard?@(pKiosk)view=@code" data-protection-view="@code" data-band="@band.Tone" aria-current="@(code == pv ? "true" : "false")"><div class="label ps-cap">@p.Label</div><div class="value ps-value band-@band.Tone">@p.Value</div>@if (p.Change is { } c1) { <partial name="_ChangeSince" model="c1" /> }@if (code == "lifecycle") { <div class="ps-explain" data-lifecycle-line>@Model.Protection.Lifecycle.Line</div> }</a>
+           the accepted lifecycle's actual values under its score; #1360 (owner 2026-11-25): the (i) with the formula beside it *@
+        <div class="ps-host">
+        <a class="wb-kpi wb-score@(code == pv ? " chosen" : "")" href="/Wallboard?@(pKiosk)view=@code" data-protection-view="@code" data-band="@band.Tone" aria-current="@(code == pv ? "true" : "false")"><div class="label ps-cap">@p.Label</div><div class="value ps-value band-@band.Tone">@p.Value</div>@if (p.Change is { } c1) { <partial name="_ChangeSince" model="c1" /> }@if (code == "lifecycle") { <div class="ps-explain" data-lifecycle-line>@SI.Management.Web.RiskExec.ExecWords.LifecycleLine(Model.Protection.Lifecycle, Model.Protection.Model)</div> } else { <div class="ps-explain" data-actual-line>@SI.Management.Web.RiskExec.ExecWords.ActualLine(Model.Protection.Model)</div> }<div class="ps-explain ps-hint" data-ps-hint>@SI.Management.Web.RiskExec.ExecWords.InfoHint</div></a>
+        <partial name="_ProtectionScoreInfo" model="psInfo" />
+        </div>
     }
     @* #860 (owner 2026-10-21: "we have a risk with no first seen date"): its own count beside the score, never hidden *@
     @if (Model.Protection.Get("protection", "agebasis", "no date (counted)") is { Available: true } nd)
     {
-        <div class="wb-kpi @(nd.Value > 0 ? "bad" : "")" data-wb-nodate><div class="label">@SI.Management.Web.RiskExec.ExecutiveFigures.NoDateLabel</div><div class="value">@Fmt.Int((long)Math.Round(nd.Value ?? 0))</div></div>
+        <div class="wb-kpi @(nd.Value > 0 ? "bad" : "")" data-wb-nodate title="@SI.Management.Web.RiskExec.ExecWords.NoDateTip"><div class="label">@SI.Management.Web.RiskExec.ExecutiveFigures.NoDateLabel</div><div class="value">@Fmt.Int((long)Math.Round(nd.Value ?? 0))</div><div class="wb-sub">@SI.Management.Web.RiskExec.ExecWords.NoDateSub</div></div>
     }
-    <div class="wb-kpi"><div class="label">The table below shows</div><div class="value seg" role="group">@foreach (var (code, label) in SI.Management.Web.RiskExec.ExecutiveFigures.ProtectionViews) { <a href="/Wallboard?@(pKiosk)view=@code" data-view="@code" aria-current="@(code == pv ? "true" : "false")">@label</a> }</div></div>
+    <div class="wb-kpi"><div class="label">The table below shows</div><div class="value seg" role="group">@foreach (var (code, label) in SI.Management.Web.RiskExec.ExecutiveFigures.ProtectionViews) { <a href="/Wallboard?@(pKiosk)view=@code" data-view="@code" aria-current="@(code == pv ? "true" : "false")">@label</a> }</div>@* #1355 the table counts every severity: its own line (the score tile keeps its sentence) *@@if (pv == "lifecycle") { <div class="ps-explain" data-lifecycle-table-line>@Model.Protection.Lifecycle.TableLine</div> }</div>
 </section>
 <partial name="_RiskScorePanel" model="Model.RiskScore" />
-<div class="wb-kpis">
-    <div class="wb-kpi"><div class="label">Findings</div><div class="value">@(k is null ? "–" : Fmt.Int(k.Findings))</div></div>
-    <div class="wb-kpi @(k is { Tier0Findings: > 0 } ? "bad" : "")"><div class="label">Findings on Tier-0 assets</div><div class="value">@(k is null ? "–" : Fmt.Int(k.Tier0Findings))</div></div>
-    <div class="wb-kpi @(k is { VeryHigh: > 0 } ? "bad" : "")"><div class="label">Very High</div><div class="value">@(k is null ? "–" : Fmt.Int(k.VeryHigh))</div></div>
-    <div class="wb-kpi"><div class="label">High</div><div class="value">@(k is null ? "–" : Fmt.Int(k.High))</div></div>
-    <div class="wb-kpi"><div class="label">Average risk score per finding (lower is better)</div><div class="value">@(k is null ? "–" : Fmt.Score(k.AverageRiskScore))</div></div>
-    <div class="wb-kpi"><div class="label">Highest risk score</div><div class="value">@(k is null ? "–" : Fmt.Score(k.HighestRiskScore))</div></div>
-    <div class="wb-kpi"><div class="label">Open vulnerabilities</div><div class="value">@(Model.OpenNow is { } o ? Fmt.Int(o) : "–")</div></div>
-    <div class="wb-kpi"><div class="label">New, last 7 days</div><div class="value">@Fmt.Int(Model.Opened7)</div></div>
-    <div class="wb-kpi good"><div class="label">Fixed, last 7 days</div><div class="value">@Fmt.Int(Model.Closed7)</div></div>
+@* #1382 (owner 2026-11-25: "new what ?", "very high what ?" / "this is for executives"): each tile names what it counts in
+   plain words, a short line under the value says what it means, and its tooltip says exactly what is counted (ExecWords) *@
+@{
+    async Task Kpi(SI.Management.Web.RiskExec.KpiText t, string value, string tone = "")
+    {
+        <div class="wb-kpi@(tone.Length > 0 ? " " + tone : "")" data-kpi="@t.Key" title="@t.Tip"><div class="label">@t.Label</div><div class="value">@value</div><div class="wb-sub">@t.Sub</div></div>
+    }
+}
+<div class="wb-kpis" data-wb-kpis>
+    @{ await Kpi(SI.Management.Web.RiskExec.ExecWords.OpenFindings, k is null ? "–" : Fmt.Int(k.Findings)); }
+    @{ await Kpi(SI.Management.Web.RiskExec.ExecWords.Tier0Findings, k is null ? "–" : Fmt.Int(k.Tier0Findings), k is { Tier0Findings: > 0 } ? "bad" : ""); }
+    @{ await Kpi(SI.Management.Web.RiskExec.ExecWords.VeryHigh, k is null ? "–" : Fmt.Int(k.VeryHigh), k is { VeryHigh: > 0 } ? "bad" : ""); }
+    @{ await Kpi(SI.Management.Web.RiskExec.ExecWords.High, k is null ? "–" : Fmt.Int(k.High)); }
+    @{ await Kpi(SI.Management.Web.RiskExec.ExecWords.AverageRisk, k is null ? "–" : Fmt.Score(k.AverageRiskScore)); }
+    @{ await Kpi(SI.Management.Web.RiskExec.ExecWords.HighestRisk, k is null ? "–" : Fmt.Score(k.HighestRiskScore)); }
+    @{ await Kpi(SI.Management.Web.RiskExec.ExecWords.OpenVulns, Model.OpenNow is { } o ? Fmt.Int(o) : "–"); }
+    @{ await Kpi(SI.Management.Web.RiskExec.ExecWords.NewVulns, Fmt.Int(Model.Opened7)); }
+    @* the fixed ones when the close-loop splits its closes by reason; before that, every close (fixed or the asset retired) *@
+    @{ await Kpi(Model.Fixed7 is null ? SI.Management.Web.RiskExec.ExecWords.ClosedVulns : SI.Management.Web.RiskExec.ExecWords.FixedVulns, Fmt.Int(Model.Fixed7 ?? Model.Closed7), "good"); }
 </div>
 <section class="card" aria-labelledby="h-t0" data-wb-tier0>
     <h2 id="h-t0">Top 10 Tier-0 assets -- by Very High, then High vulnerabilities</h2>

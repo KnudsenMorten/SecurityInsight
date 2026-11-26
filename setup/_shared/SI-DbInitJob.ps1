@@ -13,10 +13,11 @@
       * It does the database work that needed a person in that group: every product identity's contained user by its client
         id (engine, web, MCP, updater, asset tagging) with its roles and grants, the updater's rights, the signed grant
         procedure, the web app's sign-in front schema, and -- only when the caller names the Invardia Support app -- that
-        app's own database user and the support grant procedures. Every statement is the SQL the person-run script already
-        sends (Get-SIEngineDatabaseAccessSql, Get-SIUpdaterDatabaseAccessSql, Get-SIGrantProcedureAdminSql,
-        Get-SIManagementUserSql, Get-SITaggingDatabaseAccessSql, Get-SISigninStoreSql, Get-SISupportAppDatabaseAccessSql,
-        Get-SISupportGrantAdminSteps) -- never a second copy of it.
+        app's own database user in the READ-ONLY role si_support_read and the support grant procedures (framework
+        SECAUDIT-1a, #1374: NEVER db_owner, never the SQL admin group -- admin only just in time). Every statement is the SQL
+        the person-run script already sends (Get-SIEngineDatabaseAccessSql, Get-SIUpdaterDatabaseAccessSql,
+        Get-SIGrantProcedureAdminSql, Get-SIManagementUserSql, Get-SITaggingDatabaseAccessSql, Get-SISigninStoreSql,
+        Get-SISupportAppReadOnlyAccessSql, Get-SISupportGrantAdminSteps) -- never a second copy of it.
       * Every principal and grant is READ BACK; the job writes ONE result row (cfg.InstallState 'DbJob', Value <= 400
         characters) and exits non-zero on any failure.
 
@@ -611,8 +612,13 @@ function Get-SIDbInitPlan {
                     (Get-SIDbInitSupportUserReplaceSql -UserName $DbInput.Support.UserName -ClientId $DbInput.Support.ClientId) $null $true
             }
         }
-        if (& $has 'Get-SISupportAppDatabaseAccessSql') {
-            foreach ($d in $dbs) { & $add 'support-user' $d ('the Invardia Support app''s own user ({0}) in {1}' -f $DbInput.Support.UserName, $d) (Get-SISupportAppDatabaseAccessSql -UserName $DbInput.Support.UserName -ClientId $DbInput.Support.ClientId) $null $true }
+        # #1374 SECAUDIT-1a (owner 2026-11-25): the Support app's own user in the READ-ONLY role si_support_read -- NEVER
+        # db_owner (the earlier Get-SISupportAppDatabaseAccessSql is not used here any more), never the SQL admin group. Admin
+        # comes only just in time through the signed support grant procedures (the support-grant-* steps below). A db_owner
+        # of an earlier release is not changed by this step: the updater's run takes it off where the just-in-time path reads
+        # back (SI_DBINIT_SUPPORT_STANDING_OFF), and never after a deliberate rollback.
+        if (& $has 'Get-SISupportAppReadOnlyAccessSql') {
+            foreach ($d in $dbs) { & $add 'support-user' $d ('the Invardia Support app''s own user ({0}) in {1}, in the read-only role si_support_read (no db_owner)' -f $DbInput.Support.UserName, $d) (Get-SISupportAppReadOnlyAccessSql -UserName $DbInput.Support.UserName -ClientId $DbInput.Support.ClientId) $null $true }
         } else { $skipped.Add('support-user (this package has no Support app access)') }
         # the install records WHICH Support app this is (cfg.InstallState 'SupportApp' = its client id: the heartbeat reports its
         # access by it, the updater knows it as an owner of the web sign-in app) -- the same write the person-run path makes
@@ -674,7 +680,8 @@ function Get-SIDbInitExpectations {
         if ($p.Component -eq 'engine' -and $led -and $PlannedSteps.ContainsKey('ledger-engine')) { $x.Add([pscustomobject]@{ Database = $led; Component = 'engine'; Name = $p.Name; ClientId = $p.ClientId; Roles = @('db_datareader', 'db_datawriter') }) }
     }
     if ($DbInput.Support -and $PlannedSteps.ContainsKey('support-user')) {
-        foreach ($d in @($pro) + @($(if ($led) { $led }))) { $x.Add([pscustomobject]@{ Database = $d; Component = 'support'; Name = $DbInput.Support.UserName; ClientId = $DbInput.Support.ClientId; Roles = @('db_owner') }) }
+        # #1374 SECAUDIT-1a: the read-only role, never db_owner
+        foreach ($d in @($pro) + @($(if ($led) { $led }))) { $x.Add([pscustomobject]@{ Database = $d; Component = 'support'; Name = $DbInput.Support.UserName; ClientId = $DbInput.Support.ClientId; Roles = @('si_support_read') }) }
     }
     $x.ToArray()
 }
@@ -884,13 +891,14 @@ SELECT @existed AS Existed, @dropped AS TablesDropped,
 }
 
 function Get-SIDbInitSigninDropLine {
-    <# PURE. The one plain line for a state: removed | none | kept | refused | skipped. #>
+    <# PURE. The one plain line for a state: removed | none | kept | refused | skipped. SecurityInsight removes the tables
+       itself: a state that is not removed / none says the next update tries again -- never a step for anyone else. #>
     param([Parameter(Mandatory)][string]$State, [string]$Why = '')
     switch ($State) {
         'removed' { 'the earlier sign-in''s database tables are removed' }
         'none'    { 'the earlier sign-in''s database tables: none left' }
         'skipped' { 'the earlier sign-in''s database tables: not checked in this run -- the next full run does it' }
-        default   { 'the earlier sign-in''s database tables could not be removed{0} -- the update goes on; support step: the support partner removes them through the Support app' -f $(if ($Why) { ' (' + $Why + ')' } else { '' }) }
+        default   { 'the earlier sign-in''s database tables are still there{0} -- the update goes on; the next update tries again' -f $(if ($Why) { ' (' + $Why + ')' } else { '' }) }
     }
 }
 
@@ -1828,7 +1836,7 @@ function Get-SIDbInitUpdaterLockSql {
     <# PURE. READ ONLY, one scalar: the lock row an updater run beats now ('<lock>|<holder>|<last beat>'; NULL = none, or no
        lock table). An updater run holds the 'updater' row from its start, and the 'install' row from its run gate on. #>
     $m = [int](Get-SIDbInitNames).UpdaterLockStaleMinutes
-    "SET NOCOUNT ON; IF OBJECT_ID(N'cfg.PipelineLock') IS NULL SELECT CAST(NULL AS nvarchar(400)) AS Held; ELSE SELECT TOP (1) LockId + N'|' + Holder + N'|' + ISNULL(CONVERT(nvarchar(19), HeartbeatUtc, 126) + N'Z', N'') AS Held FROM cfg.PipelineLock WHERE Holder LIKE N'caj-si-updater%' AND HeartbeatUtc >= DATEADD(minute, -$m, SYSUTCDATETIME()) ORDER BY HeartbeatUtc DESC;"
+    "SET NOCOUNT ON; IF OBJECT_ID(N'cfg.PipelineLock') IS NULL SELECT CAST(NULL AS nvarchar(400)) AS Held; ELSE SELECT TOP (1) LockId + N'|' + Holder + N'|' + ISNULL(CONVERT(nvarchar(19), HeartbeatUtc, 126) + N'Z', N'') AS Held FROM cfg.PipelineLock WHERE LockId <> N'updater-ended' AND Holder LIKE N'caj-si-updater%' AND HeartbeatUtc >= DATEADD(minute, -$m, SYSUTCDATETIME()) ORDER BY HeartbeatUtc DESC;"
 }
 
 function Get-SIDbInitUpdaterRunning {

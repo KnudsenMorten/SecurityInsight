@@ -54,7 +54,7 @@ BEGIN
         WHERE m.ObjectId IN (SELECT j.[value] FROM OPENJSON(@ObjectIds) AS j) OR (m.ObjectId IS NULL AND @Upn IS NOT NULL AND m.Mail = @Upn);
     IF OBJECT_ID(N'cfg.DepartmentAdvisor') IS NOT NULL
         INSERT @k SELECT CONCAT(N'advisor:', a.AdvisorId) FROM cfg.DepartmentAdvisor AS a
-        WHERE a.RevokedAt IS NULL AND (a.ObjectId IN (SELECT j.[value] FROM OPENJSON(@ObjectIds) AS j) OR (@Upn IS NOT NULL AND a.Mail = @Upn));
+        WHERE a.RevokedAt IS NULL AND (a.ObjectId IN (SELECT j.[value] FROM OPENJSON(@ObjectIds) AS j) OR (a.ObjectId IS NULL AND @Upn IS NOT NULL AND a.Mail = @Upn));
 END;
 SELECT DISTINCT K FROM @k;
 """;

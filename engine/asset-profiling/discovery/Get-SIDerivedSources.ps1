@@ -114,7 +114,7 @@ function Invoke-SISpOwnerCapture {
     $n = 0
     foreach ($id in @($state.Counts.Keys)) {
         # #721: held or streamed (the discover phase streams its records; their ids are remembered)
-        if (Get-Command -Name Test-SIRecordCaptured -ErrorAction SilentlyContinue) { if (-not (Test-SIRecordCaptured -Id "entra|service_principal|$id")) { continue } }
+        if (Test-Path -Path 'function:Test-SIRecordCaptured') { if (-not (Test-SIRecordCaptured -Id "entra|service_principal|$id")) { continue } }
         elseif (-not $global:SIRecordCaptureState.Records.ContainsKey("entra|service_principal|$id")) { continue }
         $items = @(); if ($state.Owners -and $state.Owners.ContainsKey($id)) { $items = @($state.Owners[$id]) }
         try { Add-SIRecordPart -Provider 'entra' -RecordType 'service_principal' -Key $id -Part 'owners' -Object ([pscustomobject]@{ count = [int]$state.Counts[$id]; items = $items }); $n++ } catch { }

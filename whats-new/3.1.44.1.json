@@ -1,0 +1,21 @@
+{
+  "version": "3.1.44.1",
+  "date": "2026-11-24",
+  "type": "fix-only",
+  "summary": "The vulnerability close-loop step runs again, and security image updates arrive within 15 minutes.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "Vulnerability close-loop runs again",
+      "text": "The close-loop step reaches its database again; a check now makes sure every step can load what it needs."
+    },
+    {
+      "title": "Security image updates within 15 minutes",
+      "text": "Every installation checks for newer security images every 15 minutes and applies them without stopping a run."
+    },
+    {
+      "title": "Release checks run first",
+      "text": "The quick release checks and the ring check run before the tests, so a problem is found in seconds."
+    }
+  ]
+}

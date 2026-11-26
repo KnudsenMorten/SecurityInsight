@@ -21,6 +21,8 @@
                         <dd>@if (l.Href is not null) { <a href="@l.Href">@l.Value</a> } else { @l.Value }
                             @if (l.Change is { } ch) { <partial name="_ChangeSince" model="ch" /> }
                             @if (l.Note is not null) { <span class="muted kf-note"> -- @l.Note</span> }
+                            @* #1360: the (i) with the formula beside each Protection Score value *@
+                            @if (Model.Info is { } psi && l.Key is "protection.lifecycle" or "protection.technical") { <partial name="_ProtectionScoreInfo" model="@(psi with { Inline = true })" /> }
                         </dd>
                     </div>
                 }

@@ -8,6 +8,7 @@
 <details class="help">
     <summary>How to read this page</summary>
     <p><strong>Halted</strong> means a safety guard stopped the run before it closed anything (an empty or collapsed desired set, an incomplete run, a scope change, the close ceiling). The plan line is what the run intended; "written per run" is what reached the target. A source that is not available is listed at the top -- the others still show.</p>
+    <p data-held-help><strong>@SI.Management.Core.ProData.CollectionViewSql.HeldLabel</strong>: @SI.Management.Core.ProData.CollectionViewSql.HeldHelp</p>
 </details>
 @foreach (var e in Model.Errors) { <div class="notice warn" role="status">@e</div> }
 
@@ -18,14 +19,14 @@
     {
         <div class="table-wrap">
             <table data-sortable>
-                <thead><tr><th>Connector</th><th>Started</th><th>Mode</th><th>Outcome</th><th class="num">Plan open</th><th class="num">Plan close</th><th class="num">Held</th><th class="num">Opened</th><th class="num">Closed</th><th class="num">Reopened</th><th class="num">Errors</th><th>Why</th></tr></thead>
+                <thead><tr><th>Connector</th><th>Started</th><th>Mode</th><th>Outcome</th><th class="num">Plan open</th><th class="num">Plan close</th><th class="num" data-col="held" title="@SI.Management.Core.ProData.CollectionViewSql.HeldHelp">@SI.Management.Core.ProData.CollectionViewSql.HeldLabel</th><th class="num">Opened</th><th class="num">Closed</th><th class="num">Reopened</th><th class="num">Errors</th><th>Why</th></tr></thead>
                 <tbody>
                     @foreach (var r in Model.ConnectorRunRows)
                     {
                         <tr class="@(r.Outcome == "halted" ? "exempt" : "")">
                             <td class="mono">@r.ConnectorName <span class="hint">@r.Kind</span></td><td>@Fmt.Time(r.StartedAt)</td><td>@r.Mode</td>
                             <td><span class="@(r.Outcome is "success" or "whatif" ? "state ok" : "state bad")">@r.Outcome</span></td>
-                            <td class="num" data-value="@Fmt.Raw(r.PlanOpen)">@Fmt.Int(r.PlanOpen)</td><td class="num" data-value="@Fmt.Raw(r.PlanClose)">@Fmt.Int(r.PlanClose)</td><td class="num" data-value="@Fmt.Raw(r.Held)">@Fmt.Int(r.Held)</td>
+                            <td class="num" data-value="@Fmt.Raw(r.PlanOpen)">@Fmt.Int(r.PlanOpen)</td><td class="num" data-value="@Fmt.Raw(r.PlanClose)">@Fmt.Int(r.PlanClose)</td><td class="num" data-value="@Fmt.Raw(r.Held)">@if (r.Held > 0 && SI.Management.Web.Pages.Admin.ConnectorsModel.HeldLinksToCloseLoop(r.ConnectorName)) { <a href="/Admin/CloseLoop#h-reasons" data-held-link title="@SI.Management.Core.ProData.CollectionViewSql.HeldHelp">@Fmt.Int(r.Held)</a> } else { @Fmt.Int(r.Held) }</td>
                             <td class="num" data-value="@Fmt.Raw(r.Opened)">@Fmt.Int(r.Opened)</td><td class="num" data-value="@Fmt.Raw(r.Closed)">@Fmt.Int(r.Closed)</td><td class="num" data-value="@Fmt.Raw(r.Reopened)">@Fmt.Int(r.Reopened)</td><td class="num" data-value="@Fmt.Raw(r.Errors)">@Fmt.Int(r.Errors)</td>
                             <td class="wrap">@(r.HaltReason ?? r.Error)</td>
                         </tr>

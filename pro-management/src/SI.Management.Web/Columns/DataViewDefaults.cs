@@ -69,9 +69,12 @@ public static class DataViewDefaults
     /// What ONE KIND of identity carries (owner 2026-10-11: "Split users / service principals"; no half-empty columns):
     /// users -- sign-in name, MFA strength, Conditional Access enforces MFA, risk level, the role paths, the level inside
     /// Tier 0 in words (where set), the manager (sign-in name + id), the last interactive sign-in; service principals
-    /// (managed identities too) -- the owners (sign-in names + ids), the days until a credential expires and what to do
-    /// about it, the resource the identity is attached to (name + id), the last app sign-in. Every field is a prepared,
-    /// typed column.
+    /// (managed identities too) -- the owners (sign-in names + ids), the level inside Tier 0 in words (where set: why the
+    /// service principal is Tier 0 -- #1379, owner 2026-11-25 "if we control it, why dont you fill out these fields and
+    /// activate them ?"), the days until a credential expires and what to do about it, the resource the identity is attached
+    /// to (name + id), the last app sign-in. Every field is a prepared, typed column. These are SHIPPED defaults: an install
+    /// shows them after the update, wherever no layout of its own was saved (a tenant default or a person's layout stays
+    /// as saved).
     /// </summary>
     public static readonly IReadOnlyDictionary<string, IReadOnlyList<string>> IdentityKindContext = new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase)
     {
@@ -82,7 +85,8 @@ public static class DataViewDefaults
         ],
         [ServicePrincipalKind] =
         [
-            "si_owner_upns", "si_owner_ids", "si_credential_expiry_days", "si_credential_fix", "si_attached_resource", "si_attached_resource_id", "si_last_app_sign_in",
+            "si_owner_upns", "si_owner_ids", "si_privilege_tier_level_text", "si_credential_expiry_days", "si_credential_fix", "si_attached_resource", "si_attached_resource_id",
+            "si_last_app_sign_in",
         ],
     };
 
@@ -252,6 +256,44 @@ public static class DataViewDefaults
         }
         // a reference the grid carries hidden next to a shown one (a CMDB id, a service key) becomes visible as its pair
         return Complete(keys, known);
+    }
+
+    /// <summary>
+    /// The application columns of a task, in the order they stand: the application that bundles the product, its version, its
+    /// paths and where the product was detected (owner 2026-11-25: "why are the paths + application paths still way out to
+    /// the sort order of the page. it must be close to the appliation name").
+    /// </summary>
+    public static readonly IReadOnlyList<string> TaskApplicationColumns = ["Application", "ApplicationVersion", "ApplicationPaths", "DetectedPaths"];
+
+    /// A grid of remediation tasks per asset (Tasks per asset, with or without dimensions, the asset's and the CI's tasks):
+    /// it carries the task, the task across assets and the application columns.
+    public static bool IsTaskGrid(GridSpec spec) =>
+        spec.Column("TaskName") is not null && spec.Column("TaskGroup") is not null && TaskApplicationColumns.All(k => spec.Column(k) is not null);
+
+    /// <summary>
+    /// The order of a task grid's columns, whatever layout they come from -- the shipped one, the tenant default, a person's
+    /// own, a named one (owner 2026-11-25, "people are really pissed of this"). A stored layout is a plain list of column
+    /// keys with no version of the view it was saved for (cfg.ColumnLayout / cfg.ViewLayout ColumnsJson), so a layout saved
+    /// while the application columns stood at the far right -- or with them ticked later, which appends them after the
+    /// columns shown -- would keep them there. WHICH columns are shown stays the layout's choice; only the order is kept:
+    /// the application columns chosen stand right after the task (else after the asset), in
+    /// <see cref="TaskApplicationColumns"/> order, and the task's own columns stand before the CI's attributes (the extra
+    /// columns keep their order among themselves). Applied when a layout is read; nothing stored is rewritten.
+    /// </summary>
+    public static IReadOnlyList<string> TaskOrder(IReadOnlyList<string> layout)
+    {
+        var own = layout.Where(k => !K.IsExtra(k)).ToList();
+        var extras = layout.Where(K.IsExtra).ToList();
+        var app = TaskApplicationColumns.Select(a => own.FirstOrDefault(k => k.Equals(a, StringComparison.OrdinalIgnoreCase))).Where(k => k is not null).Select(k => k!).ToList();
+        if (app.Count > 0)
+        {
+            own = own.Where(k => !app.Contains(k, StringComparer.OrdinalIgnoreCase)).ToList();
+            var at = own.FindIndex(k => k.Equals("TaskName", StringComparison.OrdinalIgnoreCase));
+            if (at < 0) at = own.FindIndex(k => k.Equals("AssetName", StringComparison.OrdinalIgnoreCase));
+            // neither the task nor the asset is shown: the application columns lead
+            own.InsertRange(at + 1, app);
+        }
+        return own.Concat(extras).ToList();
     }
 
     /// The keys with <paramref name="add"/> inserted after the first of <paramref name="after"/> present (else at the end).

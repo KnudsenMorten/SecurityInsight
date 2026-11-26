@@ -1,32 +1,41 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    SecurityInsight Pro -- the Invardia Support app's database access: BOTH PARTS, PERMANENTLY, NEVER REMOVED.
+    SecurityInsight -- the Invardia Support app's database access: a STANDING READ-ONLY user, admin ONLY JUST IN TIME
+    (framework SECAUDIT-1a; owner 2026-11-04 point 3, and 2026-11-25: "the old support scripts can only give just-in-time
+    access, never permanent").
 
 .DESCRIPTION
     The Support app (the install answer supportAppId: an Entra application in the customer's tenant, created and
     consented to by the customer) runs the product's setup scripts for the customer later, through a recorded support
-    session. Those scripts touch the product databases, so the Support app must be able to sign in to them -- on a new
-    install and on an existing one, permanently.
+    session.
 
-    Framework DOCS/REQUIREMENTS.md section 4.1b (owner 2026-10-18: "make sure it never gets removed again"). It
-    supersedes the group-only build of 2026-10-13, which removed (b). On every install, both are ENSURED:
-      (a) the Support app's service principal is a MEMBER of the database server's admin group (grp-si-sql-admins, or
-          the install's own group = the server's Entra administrator, kind Group) -- added when it is not, read back;
-      (b) ITS OWN CONTAINED DATABASE USER in each product database (the Pro database, the identity ledger, the data
-          database where the install has one), made from the application's CLIENT id without a directory lookup --
-              CREATE USER [<name>] WITH SID = 0x<the client id's 16 bytes, [guid]::ToByteArray() order, as hex>, TYPE = E
-          -- and a member of db_owner (the setup scripts create tables, create users and add them to fixed roles -- and
-          only db_owner may add a member to a fixed database role). Made when it is not there, read back.
-    NOTHING HERE TAKES EITHER AWAY. The only removal of the Support app's access in the product is the customer's own
-    off-switch, setup\Grant-SISupportAccess.ps1 -Remove (section 4.1a); no other code calls it.
+    WHAT IT HOLDS STANDING -- the only thing any install, update, repair or private-network path gives it:
+      * ITS OWN CONTAINED DATABASE USER in each product database (the Pro database, the identity ledger, the data database
+        where the install has one), made from the application's CLIENT id without a directory lookup --
+            CREATE USER [<name>] WITH SID = 0x<the client id's 16 bytes, [guid]::ToByteArray() order, as hex>, TYPE = E
+        -- in the read-only role si_support_read (VIEW DEFINITION + VIEW DATABASE STATE: metadata and health, no data);
+      * with the support grant's tables, its four SIGNED procedures and the customer's consent next to it (engine\
+        pro-settings\SI-SupportGrantSql.ps1, Get-SISupportGrantAdminSteps -- the one source of those steps).
+    ADMIN ONLY JUST IN TIME: more than read-only comes only through the signed support grant procedures (the support grant
+    job caj-si-support-grant, started through its queue), for at most 8 hours, at most at the level the customer consented
+    to, and it closes by itself. The Support app is NEVER made a member of the SQL admin group and NEVER put in db_owner
+    by an install, an update, a repair or the private-network move.
 
-    Used by the guided install (setup\_shared\SI-GuidedInstallPro.ps1), by setup\Grant-SISupportAppDatabase.ps1 (existing
-    installs, by hand or through a support session) and by setup\Grant-SISupportAccess.ps1. The UPDATE does not touch the
-    Support app's access at all: Invardia repairs a missing part itself (owner 2026-10-18); SecurityInsight only REPORTS
-    both parts, read only, on the identified heartbeat (engine\_shared\SI-SupportSqlAccess.ps1, which is also the one home
-    of the SID and the read statements -- loaded below). Every function takes its outside calls as script blocks, so the
-    tests run them offline:
+    THE STANDING-ADMIN FUNCTIONS of earlier releases (Get-SISupportAppDatabaseAccessSql = db_owner, Set-SISupportAppGroupMember
+    = the SQL admin group, Invoke-SISupportAppDatabaseAccess -Apply, Invoke-SISupportAppDatabaseEnsure -Apply) stay ONLY for
+    the two deliberate ways back: setup\Remove-SISupportStandingAccess.ps1 -Rollback (puts back what its record says) and
+    -LegacyStandingAccess (OFF; only on Invardia's word: setup\Grant-SISupportAccess.ps1, setup\Grant-SISupportAppDatabase.ps1).
+    Without -LegacyStandingAccess each of them REFUSES to write (said, nothing changed). A source scan test holds every
+    other path to that (tests\pester\SIv3-SupportStandingGuards.Tests.ps1).
+    This SUPERSEDES framework section 4.1b's "both parts, permanently, never removed" (owner 2026-10-18), which SECAUDIT-1a
+    replaced. The generic add of a managed identity to the SQL admin group (id-si-sql, id-si-dbinit) is
+    Set-SISqlAdminGroupMember -- never called for the Support app.
+
+    The UPDATE never adds anything for the Support app; it only takes the standing db_owner of an earlier release off where
+    the just-in-time path reads back (setup\_shared\SI-SupportStandingUpdate.ps1). The heartbeat REPORTS the state, read only
+    (engine\_shared\SI-SupportSqlAccess.ps1, which is also the one home of the SID and the read statements -- loaded below).
+    Every function takes its outside calls as script blocks, so the tests run them offline:
         -Graph { param([string]$Method, [string]$Uri, $Body) }   Microsoft Graph; returns the answer, throws on a refusal
         -Sql   { param([string]$Database, [string]$Query) }      ONE scalar from that database; throws on a refusal
 #>
@@ -39,6 +48,107 @@
 . ([IO.Path]::Combine((Split-Path -Parent (Split-Path -Parent $PSScriptRoot)), 'engine', '_shared', 'SI-SupportSqlAccess.ps1'))
 # #1092: a member added right after its group was made waits out Entra replication, then is read back
 . ([IO.Path]::Combine($PSScriptRoot, 'SI-GroupMemberAdd.ps1'))
+
+# ======================================================================================================================
+# THE STANDING ACCESS EVERY PATH GIVES (SECAUDIT-1a): its own user in the read-only role si_support_read -- nothing more.
+# ======================================================================================================================
+
+function Get-SISupportStandingRefusalText {
+    <# PURE. The one sentence a refused standing grant says (SECAUDIT-1a, #1374). -What: what would have been given. #>
+    param([string]$What = 'standing admin (db_owner, the SQL admin group)')
+    ('refused: {0} is not given to the Invardia Support app -- it holds only its read-only database user (si_support_read); admin comes only just in time, through the signed support grant procedures (max 8 h, at the consented level). Only -LegacyStandingAccess (on Invardia''s word) or setup\Remove-SISupportStandingAccess.ps1 -Rollback puts standing admin back' -f $What)
+}
+
+function Get-SISupportAppReadOnlyAccessSql {
+    <# PURE, SELF-CONTAINED (the support SQL job carries it word for word). The statements that give the Support app its
+       own database user (by SID -- no directory lookup; an existing user with that SID is reused whatever its name) in the
+       read-only role si_support_read (made when the database has none: VIEW DEFINITION + VIEW DATABASE STATE -- metadata and
+       health, no data). The same right as the support grant's 'user' step (engine\pro-settings\SI-SupportGrantSql.ps1).
+       NEVER db_owner, never any other role: it only ADDS the user and that one membership. Ends with ONE value:
+       '<user>|<db_owner 1/0>|<si_support_read 1/0>' (a db_owner of an earlier release is READ, never changed here). #>
+    param([Parameter(Mandatory)][string]$UserName, [Parameter(Mandatory)][string]$ClientId)
+    $sid = '0x' + ((([guid]$ClientId).ToByteArray() | ForEach-Object { $_.ToString('X2') }) -join '')
+    $un = $UserName.Replace(']', ']]').Replace("'", "''"); $uq = $UserName.Replace("'", "''")
+    $has = { param($r) "CASE WHEN EXISTS (SELECT 1 FROM sys.database_role_members m JOIN sys.database_principals r ON r.principal_id = m.role_principal_id WHERE m.member_principal_id = u.principal_id AND r.name = N'$r') THEN N'1' ELSE N'0' END" }
+    @"
+DECLARE @s nvarchar(400);
+DECLARE @n sysname = (SELECT TOP (1) name FROM sys.database_principals WHERE sid = $sid AND principal_id > 4 AND type NOT IN ('R', 'A', 'C', 'K'));
+IF @n IS NULL BEGIN EXEC (N'CREATE USER [$un] WITH SID = $sid, TYPE = E'); SET @n = N'$uq'; END
+IF DATABASE_PRINCIPAL_ID(N'si_support_read') IS NULL EXEC (N'CREATE ROLE [si_support_read] AUTHORIZATION [dbo]');
+GRANT VIEW DEFINITION TO [si_support_read];
+GRANT VIEW DATABASE STATE TO [si_support_read];
+IF NOT EXISTS (SELECT 1 FROM sys.database_role_members AS m WHERE m.role_principal_id = DATABASE_PRINCIPAL_ID(N'si_support_read') AND m.member_principal_id = DATABASE_PRINCIPAL_ID(@n))
+BEGIN SET @s = N'ALTER ROLE [si_support_read] ADD MEMBER ' + QUOTENAME(@n) + N';'; EXEC (@s); END
+SELECT ISNULL((SELECT TOP (1) u.name COLLATE DATABASE_DEFAULT + N'|' + $(& $has 'db_owner') + N'|' + $(& $has 'si_support_read')
+    FROM sys.database_principals u WHERE u.sid = $sid AND u.principal_id > 4), N'') AS Value;
+"@
+}
+
+function ConvertFrom-SISupportAppReadRoleAnswer {
+    <# PURE, SELF-CONTAINED. '<user>|<db_owner 1/0>|<si_support_read 1/0>' (Get-SISupportAppReadRoleCheckSql,
+       Get-SISupportAppReadOnlyAccessSql) -> @{ User; Owner; ReadOnly; Hidden }. '' = no user; '?' = Hidden. #>
+    param([AllowNull()][AllowEmptyString()][string]$Text)
+    $t = ([string]$Text).Trim()
+    if ($t -eq '?') { return [pscustomobject]@{ User = ''; Owner = $false; ReadOnly = $false; Hidden = $true } }
+    if (-not $t) { return [pscustomobject]@{ User = ''; Owner = $false; ReadOnly = $false; Hidden = $false } }
+    $p = $t.Split('|')
+    if ($p.Count -lt 3) { return [pscustomobject]@{ User = $p[0]; Owner = ($p.Count -gt 1 -and $p[1] -eq '1'); ReadOnly = $false; Hidden = $false } }
+    $user = ($p[0..($p.Count - 3)]) -join '|'
+    [pscustomobject]@{ User = $user; Owner = ($p[$p.Count - 2] -eq '1'); ReadOnly = ($p[$p.Count - 1] -eq '1'); Hidden = $false }
+}
+
+function Invoke-SISupportAppReadOnlyAccess {
+    <#
+        SECAUDIT-1a: the Support app's own database user in the READ-ONLY role si_support_read, in each of -Databases. READ
+        FIRST: a database that already has it gets no statement. With -Apply a missing user / membership is made and READ
+        BACK. NEVER db_owner, never the SQL admin group. A db_owner held from an earlier release is READ and said (Owner),
+        never changed here (the update takes it off where the just-in-time path reads back; Invardia support's
+        Remove-SISupportStandingAccess.ps1 otherwise). Never throws. SELF-CONTAINED apart from
+        ConvertTo-SISqlSidFromClientId, ConvertFrom-SISupportAppReadRoleAnswer, Get-SISupportAppReadOnlyAccessSql and
+        Get-SISupportAppRightHint (the support SQL job carries all of them). Returns one @{ Database; State; User; Owner; Detail }:
+          present   it was there                      granted   made now, and read back
+          missing   not there (-Apply not given, or made but not there when read back)
+          failed    the statements were refused       unchecked the database could not be read / hides its users
+    #>
+    param([Parameter(Mandatory)][scriptblock]$Sql, [Parameter(Mandatory)][string[]]$Databases, [Parameter(Mandatory)][string]$ClientId,
+          [string]$UserName, [switch]$Apply, [scriptblock]$Retry)
+    $null = [guid]$ClientId
+    if (-not $UserName) { $UserName = 'invardia-support-app' }
+    $sid = ConvertTo-SISqlSidFromClientId -ClientId $ClientId
+    $check = @"
+SELECT ISNULL((SELECT TOP (1) u.name COLLATE DATABASE_DEFAULT + N'|' + CASE WHEN EXISTS (SELECT 1 FROM sys.database_role_members m JOIN sys.database_principals r ON r.principal_id = m.role_principal_id WHERE m.member_principal_id = u.principal_id AND r.name = N'db_owner') THEN N'1' ELSE N'0' END
+    + N'|' + CASE WHEN EXISTS (SELECT 1 FROM sys.database_role_members m JOIN sys.database_principals r ON r.principal_id = m.role_principal_id WHERE m.member_principal_id = u.principal_id AND r.name = N'si_support_read') THEN N'1' ELSE N'0' END
+    FROM sys.database_principals u WHERE u.sid = $sid AND u.principal_id > 4),
+    CASE WHEN ISNULL(HAS_PERMS_BY_NAME(NULL, NULL, N'VIEW DEFINITION'), 0) = 1 THEN N'' ELSE N'?' END) AS Value;
+"@
+    $ownerNote = { param($o) if ($o) { ' -- it STILL holds db_owner from an earlier release (not changed here; the update or Invardia support takes it off)' } else { '' } }
+    foreach ($db in @($Databases | Where-Object { $_ } | Select-Object -Unique)) {
+        $row = { param($s, $u, $o, $d) [pscustomobject]@{ Database = $db; State = $s; User = [string]$u; Owner = [bool]$o; Detail = [string]$d } }
+        $have = $null; $readWhy = ''
+        try { $have = ConvertFrom-SISupportAppReadRoleAnswer ([string](& $Sql $db $check)) }
+        catch {
+            $readWhy = [string]$_.Exception.Message
+            if ($Retry) { try { $have = ConvertFrom-SISupportAppReadRoleAnswer ([string](& $Retry $db $check)); $readWhy = '' } catch { $readWhy = [string]$_.Exception.Message } }
+        }
+        if ($readWhy) { & $row 'unchecked' '' $false ('could not be checked: {0}' -f $readWhy); continue }
+        if ($have.User -and $have.ReadOnly) { & $row 'present' $have.User $have.Owner ('its own database user is there, in the read-only role si_support_read' + (& $ownerNote $have.Owner)); continue }
+        if (-not $Apply) {
+            if ($have.Hidden) { & $row 'unchecked' '' $false 'could not be checked: this connection cannot see the database''s users (no VIEW DEFINITION)'; continue }
+            & $row 'missing' $have.User $have.Owner ($(if ($have.User) { 'its own database user is there, but not in the read-only role si_support_read' } else { 'it has no database user of its own' }) + (& $ownerNote $have.Owner))
+            continue
+        }
+        try {
+            $now = ConvertFrom-SISupportAppReadRoleAnswer ([string](& $Sql $db (Get-SISupportAppReadOnlyAccessSql -UserName $UserName -ClientId $ClientId)))
+            if ($now.User -and $now.ReadOnly) { & $row 'granted' $now.User $now.Owner ('its own database user was made in the read-only role si_support_read (no db_owner), and read back' + (& $ownerNote $now.Owner)) }
+            else { & $row 'missing' $now.User $now.Owner 'the statements ran, but its own database user in the read-only role is not there when read back' }
+        } catch { & $row 'failed' '' $false ('its own read-only database user could not be made: {0}{1}' -f $_.Exception.Message, (Get-SISupportAppRightHint -Message $_.Exception.Message -Kind database)) }
+    }
+}
+
+# ======================================================================================================================
+# STANDING ADMIN OF EARLIER RELEASES -- ONLY for -LegacyStandingAccess (on Invardia's word). Every write below REFUSES
+# without it. (setup\Remove-SISupportStandingAccess.ps1 -Rollback writes its own statements from its record.)
+# ======================================================================================================================
 
 function Get-SISupportAppDatabaseAccessSql {
     <# PURE. The statements that give the Support app its own database user (by SID -- no directory lookup, no FROM
@@ -97,13 +207,29 @@ function Get-SISupportAppRightHint {
     param([AllowNull()][AllowEmptyString()][string]$Message, [ValidateSet('group', 'database')][string]$Kind)
     if ([string]$Message -notmatch '(?i)Authorization_RequestDenied|Insufficient privileges|\b403\b|Forbidden|permission|not have permission|denied') { return '' }
     if ($Kind -eq 'group') { return ' -- adding a member to the database admin group (a role-assignable group) needs Privileged Role Administrator (or Global Administrator), which this identity does not hold' }
-    ' -- making a database user and adding it to db_owner needs the database owner role (or membership of the server''s admin group), which this identity does not hold'
+    ' -- making a database user and adding it to a database role needs the database owner role (or membership of the server''s admin group), which this identity does not hold'
 }
 
 function Set-SISupportAppGroupMember {
     <#
-        The Support app's service principal is a member of the database server's admin group: added when it is not (a
-        member is never added twice, NOTHING IS EVER REMOVED) and READ BACK from the directory. Never throws.
+        STANDING ADMIN (earlier releases) -- the Support app's service principal as a member of the database server's admin
+        group. ONLY with -LegacyStandingAccess (OFF; on Invardia's word); without it -Apply is REFUSED (State 'refused',
+        nothing changed) and a plan only READS. A managed identity of the install (id-si-sql, id-si-dbinit) is added with
+        Set-SISqlAdminGroupMember, never through this function. Returns Set-SISqlAdminGroupMember's @{ State; Detail }.
+    #>
+    param([Parameter(Mandatory)][scriptblock]$Graph, [Parameter(Mandatory)][string]$GroupId, [Parameter(Mandatory)][string]$ServicePrincipalId,
+          [switch]$Apply, [switch]$LegacyStandingAccess, [scriptblock]$Sleep, [int[]]$Waits = @(5, 10, 15, 30), [int]$LimitSeconds = 300, [scriptblock]$Print)
+    if ($Apply -and -not $LegacyStandingAccess) {
+        return [pscustomobject]@{ State = 'refused'; Detail = (Get-SISupportStandingRefusalText -What 'membership of the SQL admin group') }
+    }
+    Set-SISqlAdminGroupMember -Graph $Graph -GroupId $GroupId -ServicePrincipalId $ServicePrincipalId -Apply:$Apply -Sleep $Sleep -Waits $Waits -LimitSeconds $LimitSeconds -Print $Print
+}
+
+function Set-SISqlAdminGroupMember {
+    <#
+        A service principal (an install's OWN managed identity: id-si-sql, id-si-dbinit -- never the Invardia Support app,
+        SECAUDIT-1a) is a member of the database server's admin group: added when it is not (a member is never added twice,
+        NOTHING IS EVER REMOVED) and READ BACK from the directory. Never throws.
         Returns @{ State; Detail }:  present | added | planned (-Apply not given) | failed (the add was refused: "the member
         could not be added: ...") | unchecked (the directory could not be asked, or the add was accepted but does not read back yet).
     #>
@@ -133,18 +259,25 @@ function Set-SISupportAppGroupMember {
 
 function Invoke-SISupportAppDatabaseAccess {
     <#
-        (b) The Support app's own database user with db_owner, in each of -Databases. READ FIRST: a database that already
-        has it gets no statement at all. With -Apply a missing user / role is made and READ BACK. It only adds. Never throws.
+        STANDING ADMIN (earlier releases): the Support app's own database user with db_owner, in each of -Databases. READ
+        FIRST: a database that already has it gets no statement at all. -Apply writes ONLY with -LegacyStandingAccess (OFF;
+        on Invardia's word) -- without it every database answers 'refused' and NO statement is sent. It only adds. Never throws.
         Returns one @{ Database; State; User; Detail } per database:
           present   it was there                      granted   made now, and read back
           missing   not there (-Apply not given, or made but not there when read back)
           failed    the statements were refused ("its own database user could not be made: ...")
           unchecked the database could not be read, or hides its users from this connection ("could not be checked: ...")
+          refused   -Apply without -LegacyStandingAccess (SECAUDIT-1a): nothing sent
     #>
     param([Parameter(Mandatory)][scriptblock]$Sql, [Parameter(Mandatory)][string[]]$Databases, [Parameter(Mandatory)][string]$ClientId,
-          [string]$UserName, [switch]$Apply, [scriptblock]$Retry)
+          [string]$UserName, [switch]$Apply, [switch]$LegacyStandingAccess, [scriptblock]$Retry)
     $null = [guid]$ClientId
     if (-not $UserName) { $UserName = 'invardia-support-app' }
+    if ($Apply -and -not $LegacyStandingAccess) {
+        $why = Get-SISupportStandingRefusalText -What 'db_owner'
+        foreach ($db in @($Databases | Where-Object { $_ } | Select-Object -Unique)) { [pscustomobject]@{ Database = $db; State = 'refused'; User = ''; Detail = $why } }
+        return
+    }
     $check = Get-SISupportAppDatabaseCheckSql -ClientId $ClientId
     foreach ($db in @($Databases | Where-Object { $_ } | Select-Object -Unique)) {
         $row = { param($s, $u, $d) [pscustomobject]@{ Database = $db; State = $s; User = [string]$u; Detail = [string]$d } }
@@ -185,7 +318,10 @@ function Get-SISupportAppAdminGroupRefusal {
 
 function Invoke-SISupportAppDatabaseEnsure {
     <#
-        BOTH PARTS OF SECTION 4.1b, ENSURED -- added where missing, read back, NEVER removed. In order:
+        STANDING ADMIN OF EARLIER RELEASES (section 4.1b, superseded by SECAUDIT-1a) -- ONLY with -LegacyStandingAccess
+        (OFF; on Invardia's word). -Apply WITHOUT it is REFUSED before anything is read or written: Refused = the reason,
+        Ok = $false, nothing changed. The plan (no -Apply) still reads and says what the earlier model would do.
+        With -LegacyStandingAccess -- added where missing, read back, never removed. In order:
           1. READ: the Support app's service principal, the server's administrator (and the kind the server records it
              as) and the admin group -- the group the server names, else the group by any of its names (-GroupName);
           2. (a) THE SUPPORT APP IS A MEMBER of the admin group: added when it is not (-Apply), read back;
@@ -210,7 +346,7 @@ function Invoke-SISupportAppDatabaseEnsure {
     #>
     param([Parameter(Mandatory)][string]$ClientId, [Parameter(Mandatory)][string[]]$Databases, [string]$RecordDatabase,
           [Parameter(Mandatory)][scriptblock]$Graph, [Parameter(Mandatory)][scriptblock]$Sql, [Parameter(Mandatory)][scriptblock]$GetAdmin, [scriptblock]$SetAdmin,
-          [string]$CallerAppId, [string]$GroupName = 'grp-si-sql-admins', [switch]$Apply, [scriptblock]$Sleep, [scriptblock]$Say, [string]$By = 'setup',
+          [string]$CallerAppId, [string]$GroupName = 'grp-si-sql-admins', [switch]$Apply, [switch]$LegacyStandingAccess, [scriptblock]$Sleep, [scriptblock]$Say, [string]$By = 'setup',
           # how long a run signed in as the Support app waits for a database to let it in through the group, after THIS
           # run added the member or changed the administrator (seconds, one try after each)
           [int[]]$GroupWaits = @(30, 60))
@@ -221,7 +357,13 @@ function Invoke-SISupportAppDatabaseEnsure {
     $st = { param($s, $d) [pscustomobject]@{ State = [string]$s; Detail = [string]$d } }
     $nap = { param($n) if ($Sleep) { & $Sleep $n } else { Start-Sleep -Seconds $n } }
     $out = [ordered]@{ Ok = $false; Applied = [bool]$Apply; ServicePrincipal = $null; Group = $null; Admin = $null; Member = $null; Databases = @()
-                       GroupOk = $false; DbUserOk = $false; Added = @(); Proof = ''; Problems = @() }
+                       GroupOk = $false; DbUserOk = $false; Added = @(); Proof = ''; Problems = @(); Refused = '' }
+    # SECAUDIT-1a (#1374): no standing admin without -LegacyStandingAccess -- refused before anything is read or written
+    if ($Apply -and -not $LegacyStandingAccess) {
+        $out.Applied = $false; $out.Refused = Get-SISupportStandingRefusalText
+        $out.Problems = @($out.Refused); & $tell 'refused' $out.Refused
+        return [pscustomobject]$out
+    }
     $added = New-Object System.Collections.Generic.List[string]
     $dbs = @($Databases | Where-Object { $_ } | Select-Object -Unique)
     $callerIsSupportApp = [bool](([string]$CallerAppId).Trim() -and ($CallerAppId -ieq $ClientId))
@@ -260,7 +402,7 @@ function Invoke-SISupportAppDatabaseEnsure {
     if ($adminRead) { & $tell 'present' ('the database server''s administrator: {0}{1}' -f $(if ($adminLogin) { $adminLogin } else { '(none)' }), $(if ($adminKind) { ' (recorded as ' + $adminKind + ')' } else { '' })) }
 
     # ---- 2. (a) a member of the admin group -- before the administrator is touched, so nobody is ever shut out ----
-    if ($sp -and $group) { $out.Member = Set-SISupportAppGroupMember -Graph $Graph -GroupId $group.Id -ServicePrincipalId $sp.Id -Apply:$Apply -Sleep $Sleep }
+    if ($sp -and $group) { $out.Member = Set-SISupportAppGroupMember -Graph $Graph -GroupId $group.Id -ServicePrincipalId $sp.Id -Apply:$Apply -LegacyStandingAccess:$LegacyStandingAccess -Sleep $Sleep }
     elseif (-not $group) { $out.Member = & $st 'unchecked' ('could not be checked: the admin group was not found (the server''s administrator is not a group and no single group is named {0})' -f $GroupName) }
     elseif ($spWhy) { $out.Member = & $st 'unchecked' ('could not be checked: the Support app''s service principal could not be read ({0})' -f $spWhy) }
     else { $out.Member = & $st 'failed' 'the tenant has no service principal for the Support app to add' }
@@ -315,7 +457,7 @@ function Invoke-SISupportAppDatabaseEnsure {
           foreach ($w in @($__siSupWaits)) { & $__siSupNap $w; try { return (& $__siSupSqlSeam $Database $Query $false) } catch { $last = $_ } }
           throw $last }
     } else { $slow })
-    $res = @(Invoke-SISupportAppDatabaseAccess -Sql $quick -Retry $retry -Databases $dbs -ClientId $ClientId -UserName $name -Apply)
+    $res = @(Invoke-SISupportAppDatabaseAccess -Sql $quick -Retry $retry -Databases $dbs -ClientId $ClientId -UserName $name -Apply -LegacyStandingAccess:$LegacyStandingAccess)
     $out.Databases = $res
     foreach ($d in $res) { & $tell $d.State ('(b) {0}: {1}' -f $d.Database, $d.Detail); if ($d.State -eq 'granted') { $added.Add([string]$d.Database) } }
     $out.DbUserOk = [bool]($dbs.Count -gt 0 -and @($res | Where-Object { $_.State -in 'present', 'granted' }).Count -eq $dbs.Count)

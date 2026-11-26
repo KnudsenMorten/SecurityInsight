@@ -155,6 +155,10 @@ DECLARE @res TABLE (Published bit, Reason nvarchar(400), CollectionId int, Colle
 INSERT @res EXEC sidata.PublishedRunSet @Source = @Source, @FlowRunId = @fr, @RunStartedUtc = @rs, @RunEndedUtc = @re,
      @SolutionVersion = @sv, @Grains = @Grains, @NeedCiBuild = @ci, @AllowPartial = @ap, @SnapshotKeepDays = @keep,
      @RefuseWhy = @RefuseWhy;
+-- #1332 the published run's finding source: its readers read the collection's HISTORY only when its every compare of the run
+-- was the same (sidata.FindingHistoryServes), else its STORED rows -- a difference never publishes unverified rows
+IF EXISTS (SELECT 1 FROM @res WHERE Published = 1) AND COL_LENGTH(N'sidata.PublishedRun', N'FindingSource') IS NOT NULL AND OBJECT_ID(N'sidata.FindingHistoryServes') IS NOT NULL
+    EXEC (N'UPDATE p SET FindingSource = CASE WHEN EXISTS (SELECT 1 FROM sidata.FindingHistoryServes(p.DetailedCollectionId) AS s) THEN N''history'' ELSE N''stored'' END FROM sidata.PublishedRun AS p WHERE p.Name = N''current'' AND p.DetailedCollectionId IS NOT NULL;');
 SELECT Published, Reason, CollectionId, CollectionTime, [Partial], CONVERT(bit, 0) AS CopiesCaughtUp, CAST(NULL AS nvarchar(400)) AS CopiesNote FROM @res;
 '@
 }

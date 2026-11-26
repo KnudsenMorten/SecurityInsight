@@ -482,10 +482,15 @@ function Register-SIUpdaterExecutionBeat {
 }
 
 function Unregister-SIUpdaterExecutionBeat {
-    <# The update's own sign of life released at the end of the run (only when this run holds it). Never throws. #>
+    <# The update's own sign of life released at the end of the run (only when this run holds it). Never throws.
+       #1357: FIRST the end mark of this run (Set-SIExecutionLockEnded, row 'updater-ended'), THEN the row let go -- so there is
+       no moment where a still-running (stopping) execution names no row and reads "never reported that it was working". #>
     $x = $global:SI_UpdaterExecBeat
     $global:SI_UpdaterExecBeat = $null
-    if ($x -and $x.Store -and $x.Holder) { try { Exit-SIExecutionLock -Store $x.Store -Lock 'updater' -Holder $x.Holder } catch { } }
+    if ($x -and $x.Store -and $x.Holder) {
+        if (Get-Command -Name Set-SIExecutionLockEnded -ErrorAction SilentlyContinue) { try { $null = Set-SIExecutionLockEnded -Store $x.Store -Holder $x.Holder } catch { } }
+        try { Exit-SIExecutionLock -Store $x.Store -Lock 'updater' -Holder $x.Holder } catch { }
+    }
 }
 
 function Get-SIUpdaterLockWhat {

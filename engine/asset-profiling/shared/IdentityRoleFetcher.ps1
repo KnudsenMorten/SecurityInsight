@@ -21,6 +21,9 @@ if (-not (Get-Command -Name Read-SILaParts -ErrorAction SilentlyContinue)) { . (
 if (-not (Get-Command -Name Add-SIEntraRolesPartialNote -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot '../../_shared/SI-RunOutcome.ps1') }
 # #1049 F0: each phase's time as a log line and a cfg.StepPhaseTime row (measurement only)
 if (-not (Get-Command -Name Start-SIIdentityPhase -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot 'SI-IdentityPhaseTime.ps1') }
+# #1383: the per-object reads (group members, PIM for Groups, application permissions) go through Graph $batch at the
+# sign-in methods read's pace (Invoke-SIGraphBatchGet) -- loaded here at file level, never inside a function
+if (-not (Get-Command -Name Invoke-SIGraphBatchGet -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot 'SI-AuthMethodsRead.ps1') }
 
 # per-process bulk-fetch cache. The Entra User + Entra SP
 # discoveries each ran the same 6 bulk fetches (~8 Graph + 1 LA + N Az
@@ -1053,7 +1056,6 @@ function Get-SISPAppRoleAssignments {
         [Parameter(Mandatory)][string]$ObjectId,
         [Parameter(Mandatory)][hashtable]$AppRoleResolver
     )
-    $perms = New-Object System.Collections.ArrayList
     try {
         $rows = Invoke-SIGraphPaged -RelativeUrl ('/servicePrincipals/{0}/appRoleAssignments' -f $ObjectId) -Token $Token
     } catch {
@@ -1063,7 +1065,15 @@ function Get-SISPAppRoleAssignments {
         Add-SIPermissionFetchFailure -Kind 'application' -ObjectId $ObjectId -Message $_.Exception.Message
         return @()
     }
-    foreach ($a in $rows) {
+    return (ConvertTo-SISPAppRolePermissions -Rows $rows -AppRoleResolver $AppRoleResolver)
+}
+
+function ConvertTo-SISPAppRolePermissions {
+    <# PURE. One service principal's appRoleAssignments rows -> the permission values the resolver names (unique, in order). #>
+    param([AllowNull()][object[]]$Rows, [hashtable]$AppRoleResolver = @{})
+    $perms = New-Object System.Collections.ArrayList
+    foreach ($a in @($Rows)) {
+        if ($null -eq $a) { continue }
         $resourceId = [string]$a.resourceId
         $appRoleId  = [string]$a.appRoleId
         if (-not $resourceId -or -not $appRoleId) { continue }
@@ -1071,6 +1081,97 @@ function Get-SISPAppRoleAssignments {
         if ($val -and -not ($perms -contains $val)) { [void]$perms.Add($val) }
     }
     return $perms.ToArray()
+}
+
+function Get-SISPAppRoleAssignmentsMany {
+    <#
+        #1383: the application permissions of MANY service principals in one go -- GET /servicePrincipals/{id}/appRoleAssignments
+        through Graph $batch (Invoke-SIGraphBatchGet: 20 per request, several at once, Retry-After honoured). Returns
+        @{ <object id> = @(<permission values>) } for EVERY id asked. A principal whose read failed (after every retry) is
+        counted exactly as the single read counted it (Add-SIPermissionFetchFailure: its permissions are unknown, published
+        empty, said once by Write-SIPermissionFetchSummary). Never throws. -PostMany / -Sleep: Invoke-SIGraphBatchGet's seams.
+    #>
+    param([string]$Token, [AllowNull()][string[]]$ObjectIds = @(), [hashtable]$AppRoleResolver = @{}, [scriptblock]$PostMany, [scriptblock]$Sleep)
+    $out = @{}
+    $ids = @(@($ObjectIds) | Where-Object { $_ } | ForEach-Object { [string]$_ } | Select-Object -Unique)
+    if ($ids.Count -eq 0) { return $out }
+    $reqs = @(foreach ($id in $ids) { @{ Key = $id; Url = ('/servicePrincipals/{0}/appRoleAssignments' -f $id) } })
+    $read = Invoke-SIGraphBatchGet -Token $Token -Requests $reqs -PostMany $PostMany -Sleep $Sleep -Label 'service principals: application permissions'
+    foreach ($id in $ids) {
+        $o = $read.Items[$id]
+        if ($null -eq $o -or [int]$o.Status -ne 200) {
+            $why = if ($o) { [string]$o.Error } else { 'not answered' }
+            Add-SIPermissionFetchFailure -Kind 'application' -ObjectId $id -Message $why
+            $out[$id] = @()
+            continue
+        }
+        $out[$id] = @(ConvertTo-SISPAppRolePermissions -Rows @($o.Rows) -AppRoleResolver $AppRoleResolver)
+    }
+    $script:_SICache['SPAppRoleBatchCalls'] = [int]$read.Requests + [int]$script:_SICache['SPAppRoleBatchCalls']
+    return $out
+}
+
+# ---------------------------------------------------------------------------------------------------------------------
+# #1383 DELETED GROUPS ARE GONE, NOT AN INCOMPLETE READ (owner 2026-11-25 "Deleted groups = not incomplete"). Measured on
+# the internal install: 32 of 194 privilege-holding groups answered 404 -- Azure role assignments still naming groups that
+# were deleted -- and every 404 marked the Entra role read incomplete, so shadow admin stayed unknown on every run. A group
+# the directory confirms does not exist (getByIds does not return it, or a read of the group answers 404) is now counted as
+# gone: logged once with its id, its members and schedules are not read, and the role read stays complete. A real read
+# failure (5xx / timeout / 403 / a kind read that failed) still marks the read incomplete, exactly as before.
+# ---------------------------------------------------------------------------------------------------------------------
+function Get-SIGoneGroupSet {
+    <# The groups this run found to be gone (a case-insensitive set, kept for the run). #>
+    if (-not $script:_SICache.ContainsKey('GoneGroups') -or $null -eq $script:_SICache['GoneGroups']) {
+        $script:_SICache['GoneGroups'] = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    }
+    , $script:_SICache['GoneGroups']
+}
+
+function Add-SIGoneGroups {
+    <# Records groups as gone; the ones new to this run are said ONCE (information, with their ids). Returns how many were new. #>
+    param([AllowNull()][string[]]$Ids, [string]$How = 'the directory no longer has them')
+    $set = Get-SIGoneGroupSet
+    $new = @(@(foreach ($id in @($Ids)) { if ($id -and $set.Add([string]$id)) { [string]$id } }) | Sort-Object)
+    if ($new.Count -gt 0) {
+        $m = ('[perms] {0} privilege-holding group(s) no longer exist ({1}) -- counted as gone, not as a read that did not complete: {2}' -f $new.Count, $How, ($new -join ', '))
+        if (Get-Command -Name Write-SIInfo -ErrorAction SilentlyContinue) { Write-SIInfo $m } else { Write-Host $m }
+    }
+    $new.Count
+}
+
+function Remove-SIGonePrivilegeGroups {
+    <#
+        The privilege-holding group map without the groups that no longer exist. Only the groups this run has NOT confirmed are
+        asked -- the Azure-only ones (an Azure role assignment names them; the Entra role groups were just confirmed by
+        Get-SIRoleAssignedGroups' getByIds) -- through Get-SIDirectoryObjectTypes (ONE getByIds per 1000). An id the service
+        did not return is gone; an id whose kind read FAILED is kept and read as before (unknown is never gone).
+    #>
+    param([string]$Token, [hashtable]$GroupMap = @{}, [hashtable]$RoleAssignedGroupMap = @{})
+    if ($null -eq $GroupMap -or $GroupMap.Count -eq 0) { return $GroupMap }
+    $gone = Get-SIGoneGroupSet
+    $ask = @(@($GroupMap.Keys) | ForEach-Object { [string]$_ } | Where-Object { $_ -and -not $RoleAssignedGroupMap.ContainsKey($_) -and -not $gone.Contains($_) })
+    if ($ask.Count -gt 0) {
+        $null = Get-SIDirectoryObjectTypes -Token $Token -Ids $ask
+        $known = $script:_SICache['PrincipalTypes']
+        $missing = @(foreach ($id in $ask) { if ($known -and $known.ContainsKey($id) -and [string]$known[$id] -eq '') { $id } })
+        if ($missing.Count -gt 0) { $null = Add-SIGoneGroups -Ids $missing -How 'an Azure role assignment still names them' }
+    }
+    $out = @{}
+    foreach ($k in @($GroupMap.Keys)) { if (-not $gone.Contains([string]$k)) { $out[[string]$k] = $GroupMap[$k] } }
+    return $out
+}
+
+function Get-SIGraphBatchCallCounts {
+    <# The $batch requests this run's batched identity reads sent so far (measurement: the phase lines and the tests). #>
+    $c = $script:_SICache
+    [pscustomobject]@{ GroupMembers = [int]$c['GroupMemberBatchCalls']; PimSchedules = [int]$c['PimScheduleBatchCalls']
+        PimInstances = [int]$c['PimInstanceBatchCalls']; AppRoles = [int]$c['SPAppRoleBatchCalls'] }
+}
+
+function Test-SIGraphGroupGone {
+    <# PURE. A batched read of ONE group answered that the group does not exist (HTTP 404). #>
+    param([AllowNull()]$Item)
+    return ($null -ne $Item -and [int]$Item.Status -eq 404)
 }
 
 function Get-SIRoleAssignedGroups {
@@ -1120,20 +1221,32 @@ function Get-SIGroupTransitiveMembers {
     # Only role-assigned groups are queried (typical tenant: 10-50 groups, not 1000s).
     param(
         [Parameter(Mandatory)][string]$Token,
-        [Parameter(Mandatory)][hashtable]$RoleAssignedGroupMap   # from Get-SIRoleAssignedGroups
+        [Parameter(Mandatory)][hashtable]$RoleAssignedGroupMap,  # from Get-SIRoleAssignedGroups
+        # #1383 seams of the batched read (Invoke-SIGraphBatchGet)
+        [scriptblock]$PostMany, [scriptblock]$Sleep
     )
     if ($script:_SICache.ContainsKey('MemberToGroups')) { Write-SIInfo '[perms] group transitive members (cache hit)'; return $script:_SICache['MemberToGroups'] }
     $byMember = @{}     # userOrSpId -> HashSet[groupId]
     $nestedGroups = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
-    foreach ($gid in $RoleAssignedGroupMap.Keys) {
-        try {
-            # LIST KEPT: membership only -- the member ids of one group
-            $rows = Invoke-SIGraphPaged -RelativeUrl ('/groups/{0}/transitiveMembers?$select=id' -f $gid) -Token $Token
-        } catch {
-            Write-Warning ('transitiveMembers failed for group {0}: {1}' -f $gid, $_.Exception.Message)
-            Set-SIEntraRoleReadPart -Part 'GroupMembers' -Complete $false -ErrorText $_.Exception.Message
+    # #1383: every group's members in ONE batched read (20 groups per request, several requests at once); a group that no
+    # longer exists (404) is gone, not a read that did not complete
+    $goneSet = Get-SIGoneGroupSet
+    $gids = @(@($RoleAssignedGroupMap.Keys) | ForEach-Object { [string]$_ } | Where-Object { $_ -and -not $goneSet.Contains($_) })
+    # LIST KEPT: membership only -- the member ids of one group
+    $read = Invoke-SIGraphBatchGet -Token $Token -PostMany $PostMany -Sleep $Sleep -Label 'role-holding groups: transitive members' `
+        -Requests @(foreach ($gid in $gids) { @{ Key = $gid; Url = ('/groups/{0}/transitiveMembers?$select=id&$top=999' -f $gid) } })
+    $script:_SICache['GroupMemberBatchCalls'] = [int]$read.Requests + [int]$script:_SICache['GroupMemberBatchCalls']
+    $goneNow = New-Object System.Collections.Generic.List[string]
+    foreach ($gid in $gids) {
+        $o = $read.Items[$gid]
+        if (Test-SIGraphGroupGone $o) { $goneNow.Add($gid); continue }
+        if ($null -eq $o -or [int]$o.Status -ne 200) {
+            $why = if ($o) { [string]$o.Error } else { 'not answered' }
+            Write-Warning ('transitiveMembers failed for group {0}: {1}' -f $gid, $why)
+            Set-SIEntraRoleReadPart -Part 'GroupMembers' -Complete $false -ErrorText $why
             continue
         }
+        $rows = @($o.Rows)
         # #899: a member answered twice is said (a WARNING only; the read is used as read)
         $gw = New-SIIdDuplicateWatch -Label ('transitive members of role-holding group {0}' -f $gid); Add-SIIdDuplicateWatch -Watch $gw -Rows @($rows); $null = Write-SIIdDuplicateWarning $gw
         foreach ($m in $rows) {
@@ -1147,6 +1260,7 @@ function Get-SIGroupTransitiveMembers {
             if ($tp -and [string]$tp.Value -eq '#microsoft.graph.group') { [void]$nestedGroups.Add($mid) }
         }
     }
+    if ($goneNow.Count -gt 0) { $null = Add-SIGoneGroups -Ids $goneNow.ToArray() -How 'reading their members answered 404' }
     $script:_SICache['NestedMemberGroups'] = $nestedGroups
     Set-SIEntraRoleReadPart -Part 'GroupMembers' -Complete $true      # AND-ed with a group that failed above
     $script:_SICache['MemberToGroups'] = $byMember
@@ -1213,7 +1327,9 @@ function Get-SIPimForGroupsByPrincipal {
     # Returns @{<principalId> = HashSet[<groupId>]}
     param(
         [Parameter(Mandatory)][string]$Token,
-        [Parameter(Mandatory)][hashtable]$RoleAssignedGroupMap   # from Get-SIRoleAssignedGroups
+        [Parameter(Mandatory)][hashtable]$RoleAssignedGroupMap,  # from Get-SIRoleAssignedGroups
+        # #1383 seams of the batched reads (Invoke-SIGraphBatchGet)
+        [scriptblock]$PostMany, [scriptblock]$Sleep
     )
     if ($script:_SICache.ContainsKey('PimForGroupsMap')) { Write-SIInfo '[perms] PIM for Groups (cache hit)'; return $script:_SICache['PimForGroupsMap'] }
     Write-SIInfo ('[perms] PIM for Groups: scanning {0} role-bearing group(s)...' -f $RoleAssignedGroupMap.Count)
@@ -1232,23 +1348,32 @@ function Get-SIPimForGroupsByPrincipal {
     $queue = @(@($queue) + @($nested | Where-Object { -not $RoleAssignedGroupMap.ContainsKey($_) }))
     $_pimIdx = 0
     Reset-SIProgress -Label 'PimForGroups' -ErrorAction SilentlyContinue
+    $goneSet = Get-SIGoneGroupSet
+    $endpoints = @('eligibilitySchedules', 'assignmentSchedules')
     while ($queue.Count -gt 0) {
         $_pimTotal = $scanned.Count + $queue.Count
         $roundPrincipals = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
-        foreach ($gid in $queue) {
-            if (-not $gid -or -not $scanned.Add($gid)) { continue }
+        # #1383: the round's groups x both schedules in ONE batched read (20 per request, several requests at once); a group
+        # that no longer exists has no schedules to read
+        $roundGroups = New-Object System.Collections.Generic.List[string]
+        foreach ($gid in $queue) { if ($gid -and -not $goneSet.Contains($gid) -and $scanned.Add($gid)) { $roundGroups.Add($gid) } }
+        # LIST KEPT: membership only -- who is eligible for or assigned to the group
+        $read = Invoke-SIGraphBatchGet -Token $Token -PostMany $PostMany -Sleep $Sleep -Label 'PIM for Groups: schedules' -Requests @(
+            foreach ($gid in $roundGroups) { foreach ($endpoint in $endpoints) {
+                @{ Key = ('{0}|{1}' -f $endpoint, $gid); Url = ("/identityGovernance/privilegedAccess/group/{0}?`$filter=groupId eq '{1}'&`$select=principalId,groupId" -f $endpoint, $gid) } } })
+        $script:_SICache['PimScheduleBatchCalls'] = [int]$read.Requests + [int]$script:_SICache['PimScheduleBatchCalls']
+        foreach ($gid in $roundGroups) {
             $_pimIdx++
             try { Write-SIProgress -Label 'PimForGroups' -Index $_pimIdx -Total $_pimTotal } catch { }
-            foreach ($endpoint in @('eligibilitySchedules','assignmentSchedules')) {
-                try {
-                    # LIST KEPT: membership only -- who is eligible for or assigned to the group
-                    $rows = Invoke-SIGraphPaged -RelativeUrl ("/identityGovernance/privilegedAccess/group/{0}?`$filter=groupId eq '{1}'&`$select=principalId,groupId" -f $endpoint, $gid) -Token $Token
-                } catch {
+            foreach ($endpoint in $endpoints) {
+                $o = $read.Items[('{0}|{1}' -f $endpoint, $gid)]
+                if ($null -eq $o -or [int]$o.Status -ne 200) {
                     # Tenant may lack Entra ID P2; skip silently per group/endpoint -- but the read is then NOT complete: who
                     # can elevate into a role-bearing group is unknown (shadow-admin guard)
-                    Set-SIEntraRoleReadPart -Part 'PimForGroups' -Complete $false -ErrorText $_.Exception.Message
+                    Set-SIEntraRoleReadPart -Part 'PimForGroups' -Complete $false -ErrorText $(if ($o) { [string]$o.Error } else { 'not answered' })
                     continue
                 }
+                $rows = @($o.Rows)
                 foreach ($r in $rows) {
                     $principalId = [string]$r.principalId
                     if (-not $principalId) { continue }
@@ -1279,15 +1404,22 @@ function Get-SIPimForGroupsByPrincipal {
     $pimGroupMembers = @{}
     # (a group nested in a privilege-holding group needs no read: its members are that group's transitive members already)
     $followed = @($scanned | Where-Object { -not $RoleAssignedGroupMap.ContainsKey($_) -and -not $nested.Contains($_) })
+    # #1383: the followed groups' members in ONE batched read; a group that no longer exists (404) is gone
+    # LIST KEPT: membership only -- the member ids of one group
+    $readF = Invoke-SIGraphBatchGet -Token $Token -PostMany $PostMany -Sleep $Sleep -Label 'PIM for Groups: members of the groups followed' `
+        -Requests @(foreach ($pg in $followed) { @{ Key = [string]$pg; Url = ('/groups/{0}/transitiveMembers?$select=id&$top=999' -f $pg) } })
+    $script:_SICache['GroupMemberBatchCalls'] = [int]$readF.Requests + [int]$script:_SICache['GroupMemberBatchCalls']
+    $goneF = New-Object System.Collections.Generic.List[string]
     foreach ($pg in $followed) {
-        try {
-            # LIST KEPT: membership only -- the member ids of one group
-            $rows = Invoke-SIGraphPaged -RelativeUrl ('/groups/{0}/transitiveMembers?$select=id' -f $pg) -Token $Token
-        } catch {
-            Write-Warning ('transitiveMembers failed for group {0}: {1}' -f $pg, $_.Exception.Message)
-            Set-SIEntraRoleReadPart -Part 'PimForGroups' -Complete $false -ErrorText $_.Exception.Message
+        $o = $readF.Items[[string]$pg]
+        if (Test-SIGraphGroupGone $o) { $goneF.Add([string]$pg); continue }
+        if ($null -eq $o -or [int]$o.Status -ne 200) {
+            $why = if ($o) { [string]$o.Error } else { 'not answered' }
+            Write-Warning ('transitiveMembers failed for group {0}: {1}' -f $pg, $why)
+            Set-SIEntraRoleReadPart -Part 'PimForGroups' -Complete $false -ErrorText $why
             continue
         }
+        $rows = @($o.Rows)
         $gw = New-SIIdDuplicateWatch -Label ('transitive members of group {0}' -f $pg); Add-SIIdDuplicateWatch -Watch $gw -Rows @($rows); $null = Write-SIIdDuplicateWarning $gw
         foreach ($m in $rows) {
             $mid = [string]$m.id
@@ -1296,6 +1428,7 @@ function Get-SIPimForGroupsByPrincipal {
             [void]$pimGroupMembers[$mid].Add($pg)
         }
     }
+    if ($goneF.Count -gt 0) { $null = Add-SIGoneGroups -Ids $goneF.ToArray() -How 'reading their members answered 404' }
     $script:_SICache['PimGroupMembers'] = $pimGroupMembers
     Write-SIInfo ('[perms] PIM for Groups loaded: {0} principal->group entries across {1} principals' -f $totalRows, $byPrincipal.Count)
     if ($followed.Count -gt 0) {
@@ -1304,7 +1437,7 @@ function Get-SIPimForGroupsByPrincipal {
     Set-SIEntraRoleReadPart -Part 'PimForGroups' -Complete $true      # AND-ed with a group / endpoint that failed above
     # who is a member of a role-holding group only while a membership is activated: one more read per group, kept for the
     # run (Get-SIInheritedRolesForPrincipal and the identity context read it from there). It never fails this scan.
-    try { $null = Get-SIPimGroupActivatedMemberships -Token $Token -RoleAssignedGroupMap $RoleAssignedGroupMap } catch { Write-Verbose ('activated group memberships not read: {0}' -f $_.Exception.Message) }
+    try { $null = Get-SIPimGroupActivatedMemberships -Token $Token -RoleAssignedGroupMap $RoleAssignedGroupMap -PostMany $PostMany -Sleep $Sleep } catch { Write-Verbose ('activated group memberships not read: {0}' -f $_.Exception.Message) }
     $script:_SICache['PimForGroupsMap'] = $byPrincipal
     return $byPrincipal
 }
@@ -1331,25 +1464,30 @@ function Get-SIPimGroupActivatedMemberships {
         Groups, or when the read is refused, no activation can be told apart -- every member then counts through the group
         exactly as before this read existed (active = permanent), said once.
     #>
-    param([string]$Token = '', [hashtable]$RoleAssignedGroupMap = @{}, [switch]$CacheOnly)
+    param([string]$Token = '', [hashtable]$RoleAssignedGroupMap = @{}, [switch]$CacheOnly,
+          # #1383 seams of the batched read (Invoke-SIGraphBatchGet)
+          [scriptblock]$PostMany, [scriptblock]$Sleep)
     if ($script:_SICache -and $script:_SICache.ContainsKey('PimGroupActivations')) { return $script:_SICache['PimGroupActivations'] }
     if ($CacheOnly) { return $null }
     $state = @{ Complete = $true; Error = ''; Groups = 0; ByKey = @{} }
-    foreach ($gid in @($RoleAssignedGroupMap.Keys)) {
-        if (-not $gid) { continue }
-        $rows = $null
-        try {
-            # the group's instances as the service returns them (no property list): which membership is an activation and
-            # until when; only the principal, the kind of access, the kind of assignment and the end are used
-            $rows = Invoke-SIGraphPaged -RelativeUrl ("/identityGovernance/privilegedAccess/group/assignmentScheduleInstances?`$filter=groupId eq '{0}'" -f $gid) -Token $Token
-        } catch {
+    $goneSet = Get-SIGoneGroupSet
+    $gids = @(@($RoleAssignedGroupMap.Keys) | ForEach-Object { [string]$_ } | Where-Object { $_ -and -not $goneSet.Contains($_) })
+    # #1383: every group's instances in ONE batched read (20 per request, several at once). Refused for the tenant (no
+    # licence, no permission: 401 / 403): every group answers the same -- nothing more is asked after it (-StopOnStatus)
+    # the group's instances as the service returns them (no property list): which membership is an activation and until
+    # when; only the principal, the kind of access, the kind of assignment and the end are used
+    $read = Invoke-SIGraphBatchGet -Token $Token -PostMany $PostMany -Sleep $Sleep -StopOnStatus @(401, 403) -Label 'PIM for Groups: activated memberships' `
+        -Requests @(foreach ($gid in $gids) { @{ Key = $gid; Url = ("/identityGovernance/privilegedAccess/group/assignmentScheduleInstances?`$filter=groupId eq '{0}'" -f $gid) } })
+    $script:_SICache['PimInstanceBatchCalls'] = [int]$read.Requests + [int]$script:_SICache['PimInstanceBatchCalls']
+    foreach ($gid in $gids) {
+        $o = $read.Items[$gid]
+        if ($null -eq $o -or [int]$o.Status -ne 200) {
             $state.Complete = $false
-            if (-not $state.Error) { $state.Error = [string]$_.Exception.Message }
-            $status = 0; try { $status = Get-SIGraphHttpStatus -ErrorRecord $_ } catch { $status = 0 }
-            # refused for the tenant (no licence, no permission): every group answers the same -- stop asking
-            if ($status -in 401, 403) { break }
+            # the first error said is the first real answer (a group not asked after a refusal says nothing new)
+            if ($o -and [int]$o.Status -ne -1 -and -not $state.Error) { $state.Error = [string]$o.Error }
             continue
         }
+        $rows = @($o.Rows)
         $state.Groups++
         $assigned = New-Object 'System.Collections.Generic.HashSet[string]'
         $activated = @{}

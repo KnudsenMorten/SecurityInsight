@@ -17,7 +17,12 @@
                                          (config\settings.catalog.locked.json: its type, limits, choices) and written by
                                          SI's ONE setting writer (engine\pro-settings\SI-ProSettingWrite.ps1
                                          Set-SIProSetting: the row and its cfg.ChangeLog entry in one transaction), then
-                                         read back.
+                                         read back. #1339: the MAIL settings (Get-SIControlPlaneMailList -- how mail is
+                                         sent, the sender's From address, each mail's switch, its recipients; never the
+                                         sender's rights): a
+                                         recipient list is SET AS A WHOLE and each address checked as the web app checks
+                                         it; written at the web app's scope; ONCE PER VALUE (cfg.InstallState
+                                         'CPSetting:<name>'), so an Admin's later change in the web app is kept.
       SI_UPDATER_OUTPUTS                 a compact JSON object switching what an OUTPUT sends (owner 2026-11-16: the new
                                          ServiceNow columns / outputs are switched on per install through the updater):
                                            { "<output id>": { "on": [ "<column>", ... ], "off": [ "<column>", ... ],
@@ -78,7 +83,31 @@
 function Get-SIControlPlaneSettingAllowList {
     <# PURE. THE settings an operator may set through SI_UPDATER_SETTINGS on the updater job. A constant: a setting is added
        here in code (with its reason in SI REQUIREMENTS #1270), never by configuration. #>
-    @('OpenAI_endpoint', 'OpenAI_deployment', 'OpenAI_apiVersion', 'SI_EnableAI') + @(Get-SIControlPlaneOffOnlyList)
+    @('OpenAI_endpoint', 'OpenAI_deployment', 'OpenAI_apiVersion', 'SI_EnableAI') + @(Get-SIControlPlaneOffOnlyList) + @(Get-SIControlPlaneMailList)
+}
+
+function Get-SIControlPlaneMailList {
+    <# PURE. #1339 (owner 2026-11-23: "yes, in 3.1.44"): the mail settings the update may set through SI_UPDATER_SETTINGS --
+       how mail is sent, the on/off switch of each mail, and who receives it. ONLY what an Admin sets in the web app, through
+       the same writer and change log. The From address (SI_Mail_From) is on the list (Invardia 2026-11-23: an address, not a
+       right -- Exchange's scoped role decides what may be sent, a wrong From simply fails to send and SI says so); it must be
+       ONE e-mail address. NEVER the sender's rights (the probe mailbox, the restriction attestation, the SMTP server and its
+       sign-in): those stay with Invardia's rights path. A recipient list is
+       SET AS A WHOLE (it replaces the list); each address is checked as the web app checks it. Written at the scope the web
+       app writes it (the setting's one engine, else 'solution'). ONCE PER VALUE (cfg.InstallState 'CPSetting:<name>'): a
+       change an Admin makes afterwards in the web app is kept. A constant, changed in code only. #>
+    @('SI_Mail_Mode', 'SI_Mail_From',
+      'SendMail', 'MailTo', 'RiskAnalysis_Summary_SendMail', 'RiskAnalysis_Summary_To', 'RiskAnalysis_Detailed_SendMail', 'RiskAnalysis_Detailed_To',
+      'Mail_CloseLoop_Daily_SendMail', 'Mail_CloseLoop_Daily_To',
+      'SI_Pro_DepartmentReport_SendMail', 'SI_Pro_TechnicalReview_SendMail', 'SI_Pro_GovernanceNotify_SendMail', 'SI_Pro_TaskDigest_SendMail',
+      'SI_GuardMail_Enabled', 'SI_GuardMail_To', 'SI_Pro_DataQuality_Mail_Enabled', 'SI_Pro_DataQuality_Mail_To')
+}
+
+function Test-SIControlPlaneMailAddress {
+    <# PURE. Is the text one e-mail address? The web app's own rule (SettingsForm.IsMailAddress): name@domain.tld, no
+       space, no < > , ; or quote. #>
+    param([AllowNull()][AllowEmptyString()][string]$Address)
+    "$Address".Trim() -match '^[^@\s<>,;"]+@[^@\s<>,;"]+\.[^@\s<>,;"]+$'
 }
 
 function Get-SIControlPlaneOffOnlyList {
@@ -175,12 +204,40 @@ function ConvertFrom-SIControlPlaneSettings {
             'int'    { if ($value -is [string]) { $i = 0L; if ([long]::TryParse($value.Trim(), [ref]$i)) { $value = [int]$i } } elseif ($value -is [long] -and $value -le [int]::MaxValue -and $value -ge [int]::MinValue) { $value = [int]$value } }
             'number' { if (Get-Command -Name ConvertTo-SISettingNumber -ErrorAction SilentlyContinue) { $d = ConvertTo-SISettingNumber $value; if ($null -ne $d) { $value = $d } } }
         }
+        $isMail = @(@(Get-SIControlPlaneMailList) | Where-Object { $_ -ieq $canon }).Count -gt 0
+        # the From address: ONE e-mail address, as the web app's mail setup checks it
+        if ($isMail -and [string]$s.type -eq 'text') {
+            if ($value -isnot [string] -or -not (Test-SIControlPlaneMailAddress $value)) { $refused.Add(('{0}: {1} must be one e-mail address (name@domain); not applied' -f $n.Settings, $canon)); continue }
+            $value = $value.Trim()
+        }
+        if ([string]$s.type -eq 'list') {
+            # #1339: a list is SET AS A WHOLE. Text is split as the web app's form splits a mail list (line, comma,
+            # semicolon); every item must be text; an empty list is not a reset
+            # assigned inside each branch: an if-statement's output would turn an empty list into $null
+            $raw = $null
+            if ($value -is [string]) { $raw = @($value -split '[\r\n,;]') } elseif ($value -is [System.Collections.IEnumerable]) { $raw = @($value) }
+            if ($null -ne $raw) {
+                $list = New-Object System.Collections.Generic.List[string]; $notText = $false
+                foreach ($x in $raw) { if ($x -isnot [string]) { $notText = $true; break }; if ($x.Trim()) { $list.Add($x.Trim()) } }
+                if ($notText) { $refused.Add(('{0}: {1} must be a list of text; not applied' -f $n.Settings, $canon)); continue }
+                if ($list.Count -eq 0) { $refused.Add(('{0}: {1} is an empty list (a reset is not done this way); not applied' -f $n.Settings, $canon)); continue }
+                if ([string]$s.itemFormat -ieq 'email') {
+                    $bad = @($list | Where-Object { -not (Test-SIControlPlaneMailAddress $_) })
+                    if ($bad.Count) { $refused.Add(('{0}: {1} ''{2}'' is not an e-mail address -- nothing of the list is applied' -f $n.Settings, $canon, $bad[0])); continue }
+                }
+                $value = $list.ToArray()
+            }
+        }
         $why = Test-SISettingValue -Setting $s -Value $value
         if ($why) { $refused.Add(('{0}: {1} {2}; not applied' -f $n.Settings, $canon, $why)); continue }
         # #1304: an AI switch may only be switched OFF this way
         $offOnly = @(@(Get-SIControlPlaneOffOnlyList) | Where-Object { $_ -ieq $canon }).Count -gt 0
         if ($offOnly -and -not ($value -is [bool] -and -not $value)) { $refused.Add(('{0}: {1} may only be switched off this way (false), never on; not applied' -f $n.Settings, $canon)); continue }
-        $items.Add([pscustomobject]@{ Name = $canon; Value = $value; Json = (ConvertTo-SIJsonText $value); OffOnly = $offOnly })
+        # #1339: a mail setting is written at the scope the web app writes it (its one engine, else 'solution'), so it is the
+        # row in force; every other setting at 'solution' as before
+        $scope = $n.Scope
+        if ($isMail) { $eng = @($s.engines | Where-Object { $_ }); if ($eng.Count -eq 1) { $scope = 'engine:' + [string]$eng[0] } }
+        $items.Add([pscustomobject]@{ Name = $canon; Value = $value; Json = (ConvertTo-SIJsonText $value); OffOnly = $offOnly; Mail = $isMail; Scope = $scope })
     }
     & $out
 }
@@ -190,7 +247,13 @@ function ConvertTo-SIControlPlaneJsonKey {
        value written with other spacing compare equal. $null / unparsable = itself. #>
     param([AllowNull()][AllowEmptyString()][string]$ValueJson)
     if ($null -eq $ValueJson) { return $null }
-    try { ConvertTo-SIJsonText (ConvertFrom-SIControlPlaneJson -Text $ValueJson) } catch { $ValueJson }
+    try {
+        $v = ConvertFrom-SIControlPlaneJson -Text $ValueJson
+        # #1339: a stored LIST stays a list -- PowerShell 7 unrolls a one-item list into its item (and an empty one into
+        # nothing), 5.1 gives the array as one object; foreach + @() makes a plain list in both
+        if ($ValueJson.Trim().StartsWith('[')) { $v = @(foreach ($x in $v) { $x }) }
+        ConvertTo-SIJsonText $v
+    } catch { $ValueJson }
 }
 
 function Read-SIControlPlaneSetting {
@@ -272,16 +335,37 @@ function Invoke-SIControlPlaneSettings {
             }
             continue
         }
-        try {
-            $before = Read-SIControlPlaneSetting -Store $Store -Name $it.Name -Scope $n.Scope
-            if ($null -ne $before -and (ConvertTo-SIControlPlaneJsonKey $before) -ceq $it.Json) {
-                $already.Add($it.Name); $lines.Add(('control-plane value: {0} is already {1} -- nothing written' -f $it.Name, $it.Json)); continue
+        # #1339: a mail setting is applied ONCE PER VALUE -- the applied value's hash in cfg.InstallState 'CPSetting:<name>';
+        # the same value on a later update writes nothing, so a change an Admin makes in the web app is kept
+        $once = $null; $hash = $null
+        # one line in the log: a list's JSON without its line breaks
+        $show = $it.Json -replace '\r?\n\s*', ''
+        if ($it.Mail) {
+            $once = 'CPSetting:' + $it.Name
+            $hash = Get-SIControlPlaneValueHash -Json ('{0}|{1}|{2}' -f $it.Name, $it.Scope, $it.Json)
+            $prev = $null
+            try { $prev = Read-SIControlPlaneInstallState -Store $Store -Name $once } catch { $prev = $null; $lines.Add(('WARNING: control-plane value: whether {0} was applied before could not be read ({1}) -- it is compared now' -f $it.Name, (([string]$_.Exception.Message) -split "`n")[0])) }
+            if ($prev -and $prev -ceq $hash) {
+                $already.Add($it.Name); $lines.Add(('control-plane value: {0} {1} is the value already applied -- nothing written (a change made since in the web app is kept)' -f $it.Name, $show)); continue
             }
-            $null = Set-SIProSetting -Store $Store -Catalog $Catalog -Name $it.Name -Scope $n.Scope -Action Set -Value $it.Value -ChangedBy $n.ChangedBy -Reason $Reason
-            $back = Read-SIControlPlaneSetting -Store $Store -Name $it.Name -Scope $n.Scope
+        }
+        $remember = {
+            if ($once) {
+                try { Write-SIControlPlaneInstallState -Store $Store -Name $once -Value $hash }
+                catch { $lines.Add(('WARNING: control-plane value: that {0} was applied could not be recorded ({1}) -- the next update compares again' -f $it.Name, (([string]$_.Exception.Message) -split "`n")[0])) }
+            }
+        }
+        try {
+            $before = Read-SIControlPlaneSetting -Store $Store -Name $it.Name -Scope $it.Scope
+            if ($null -ne $before -and (ConvertTo-SIControlPlaneJsonKey $before) -ceq $it.Json) {
+                $already.Add($it.Name); $lines.Add(('control-plane value: {0} is already {1} -- nothing written' -f $it.Name, $show)); . $remember; continue
+            }
+            $null = Set-SIProSetting -Store $Store -Catalog $Catalog -Name $it.Name -Scope $it.Scope -Action Set -Value $it.Value -ChangedBy $n.ChangedBy -Reason $Reason
+            $back = Read-SIControlPlaneSetting -Store $Store -Name $it.Name -Scope $it.Scope
             if ($null -ne $back -and (ConvertTo-SIControlPlaneJsonKey $back) -ceq $it.Json) {
                 $applied.Add($it.Name)
-                $lines.Add(('control-plane value: {0} {1} -> {2} (from {3}; read back, in the change log)' -f $it.Name, $(if ($null -eq $before) { '(not set)' } else { $before }), $it.Json, $n.Settings))
+                $lines.Add(('control-plane value: {0}{1} {2} -> {3} (from {4}; read back, in the change log)' -f $it.Name, $(if ($it.Scope -ne $n.Scope) { ' [' + $it.Scope + ']' } else { '' }), $(if ($null -eq $before) { '(not set)' } else { $before -replace '\r?\n\s*', '' }), $show, $n.Settings))
+                . $remember
             } else {
                 $failed.Add($it.Name); $lines.Add(('WARNING: control-plane value: {0} was written but does not read back as {1} -- the next update tries again' -f $it.Name, $it.Json))
             }

@@ -718,6 +718,7 @@
         "SI_LogRetentionDays",
         "SI_Pro_DataRetentionDays",
         "SI_Data_KeepCollections",
+        "SI_Data_RetireByPartition",
         "SI_Pro_ConfigBackupRetentionDays"
       ]
     },
@@ -737,7 +738,10 @@
       "settings": [
         "SI_SqlPacing_Enabled",
         "SI_SqlPacing_HighPercent",
-        "SI_SqlPacing_LowPercent"
+        "SI_SqlPacing_LowPercent",
+        "SI_Data_ParseAtInsert",
+        "SI_Data_BulkLoad",
+        "SI_Data_LoadPerReport"
       ]
     },
     {
@@ -839,7 +843,7 @@
     {
       "name": "Protection score",
       "category": "Web app",
-      "description": "The protection score of the Executive overview, the Executive report, the management mail and the wall board: its accepted lifecycle per asset type, the tier weights and the severities that count.",
+      "description": "The protection score of the Executive overview, the Executive report, the management mail and the wall board: its accepted lifecycle per asset type, each tier's share of the score and the points each open fix costs an asset's health.",
       "settings": [
         "SI_ProtectionScore_GraceDays_Device",
         "SI_ProtectionScore_GraceDays_Identity",
@@ -849,8 +853,9 @@
         "SI_ProtectionScore_OtherGraceDays_Identity",
         "SI_ProtectionScore_OtherGraceDays_CloudResource",
         "SI_ProtectionScore_OtherGraceDays_PublicIp",
-        "SI_ProtectionScore_TierWeights",
-        "SI_ProtectionScore_Severities",
+        "SI_ProtectionScore_TierShares",
+        "SI_ProtectionScore_SeverityPoints",
+        "SI_ProtectionScore_MinorPointsCap",
         "SI_RA_SourceFirstSeen"
       ]
     }
@@ -901,8 +906,8 @@
       "whenToChange": "Rarely; turn off only while troubleshooting query splitting.",
       "info": {
         "what": "Saves how many parts each large risk analysis query had to be split into, so later runs start at the right number.",
-        "whenOn": "split counts are saved and reused.",
-        "whenOff": "Off, every run probes again from one part upward, which makes large estates noticeably slower. On, a changed query is detected and re-probed automatically.",
+        "whenOn": "a changed query is detected and re-probed automatically.",
+        "whenOff": "every run probes again from one part upward, which makes large estates noticeably slower.",
         "risk": "Changes what the Risk Analysis reports show, how findings are filtered or scored, or where reports go, from the next run; earlier reports are unchanged. Hiding findings can make real exposure invisible to readers. Reversible: change it back.",
         "requires": "Read by: risk-analysis.",
         "default": "On: split counts are saved and reused.",
@@ -1008,14 +1013,14 @@
       "info": {
         "what": "Splits large risk analysis queries into smaller parts automatically so results stay under Defender's row limit.",
         "whenOn": "On is the default: it works as described under \"What it does\".",
-        "whenOff": "Off, large queries run at a fixed split and can exceed Defender's limit, giving incomplete or failed reports on big estates.",
+        "whenOff": "large queries run at a fixed split and can exceed Defender's limit, giving incomplete or failed reports on big estates.",
         "risk": "Large queries run at a fixed split and can exceed Defender's row limit: reports on big estates can be incomplete or fail. Reversible at once.",
         "requires": "Read by: risk-analysis.",
         "default": "On.",
         "recommended": "On.",
         "docUrl": "https://invardia.com/docs/si/settings/AutoBucketCount/",
         "confirmWhen": "off",
-        "confirm": "Off, large queries run at a fixed split and can exceed Defender's limit, giving incomplete or failed reports on big estates. Large queries run at a fixed split and can exceed Defender's row limit: reports on big estates can be incomplete or fail. Reversible at once."
+        "confirm": "large queries run at a fixed split and can exceed Defender's limit, giving incomplete or failed reports on big estates. Large queries run at a fixed split and can exceed Defender's row limit: reports on big estates can be incomplete or fail. Reversible at once."
       }
     },
     {
@@ -1899,7 +1904,7 @@
       "info": {
         "what": "Deletes the previous risk analysis Excel workbook at the start of a run and writes a fresh one.",
         "whenOn": "a fresh workbook every run.",
-        "whenOff": "Off, the run writes into the existing workbook instead, so older content can remain alongside new results.",
+        "whenOff": "the run writes into the existing workbook instead, so older content can remain alongside new results.",
         "risk": "Changes what the Risk Analysis reports show, how findings are filtered or scored, or where reports go, from the next run; earlier reports are unchanged. Hiding findings can make real exposure invisible to readers. Reversible: change it back.",
         "requires": "Read by: risk-analysis.",
         "default": "On: a fresh workbook every run.",
@@ -1980,7 +1985,7 @@
       "whenToChange": "For one run when reports look incomplete or after a large estate change.",
       "info": {
         "what": "Deletes the saved query split counts at the start of a run so they are probed again.",
-        "whenOn": "On, the next run re-probes every large query from scratch, so it takes longer; the new counts are saved again afterwards.",
+        "whenOn": "the next run re-probes every large query from scratch, so it takes longer; the new counts are saved again afterwards.",
         "whenOff": "Off is the default: none of what \"On\" describes happens.",
         "risk": "Changes what the Risk Analysis reports show, how findings are filtered or scored, or where reports go, from the next run; earlier reports are unchanged. Hiding findings can make real exposure invisible to readers. Reversible: change it back.",
         "requires": "Read by: risk-analysis.",
@@ -2010,7 +2015,7 @@
       "hint": "Used when a run does not say which report.",
       "info": {
         "what": "Makes risk analysis run in Detailed mode unless Summary is asked for on the command line.",
-        "whenOn": "On, scheduled runs produce one row per affected asset: larger Excel files, longer runs, more data ingested, and the Detailed mail recipients. Cannot be on together with RiskAnalysis_Summary_Override.",
+        "whenOn": "scheduled runs produce one row per affected asset: larger Excel files, longer runs, more data ingested, and the Detailed mail recipients. Cannot be on together with RiskAnalysis_Summary_Override.",
         "whenOff": "runs default to Summary mode.",
         "risk": "Changes what the Risk Analysis reports show, how findings are filtered or scored, or where reports go, from the next run; earlier reports are unchanged. Hiding findings can make real exposure invisible to readers. Reversible: change it back.",
         "requires": "Read by: risk-analysis.",
@@ -2876,7 +2881,7 @@
       "card": "Asset tagging",
       "info": {
         "what": "Lets the asset-tagging script on a server (launcher.community-vm.ps1) write the tags its rules select in Defender, Azure and Entra on every run, instead of only reporting them.",
-        "whenOn": "On, every run changes Defender machine tags, Azure resource tags and Entra custom security attributes in your tenant; -WhatIfMode on a run still makes that run report only. The identity also needs the write grants. For one run only, use -Apply instead.",
+        "whenOn": "every run changes Defender machine tags, Azure resource tags and Entra custom security attributes in your tenant; -WhatIfMode on a run still makes that run report only. The identity also needs the write grants. For one run only, use -Apply instead.",
         "whenOff": "report only, every planned tag is logged, nothing is changed",
         "risk": "Writes to your tenant: every run changes Defender machine tags, Azure resource tags and Entra custom security attributes. A wrong rule tags or untags many objects at once. Reversible only by changing the rules and running again (or by hand); the audit trail records every change.",
         "requires": "Read by: asset-tagging.",
@@ -2884,7 +2889,7 @@
         "recommended": "Off until the report-only output has been reviewed; then on.",
         "docUrl": "https://invardia.com/docs/si/settings/SI_AssetTagging_Apply/",
         "confirmWhen": "on",
-        "confirm": "On, every run changes Defender machine tags, Azure resource tags and Entra custom security attributes in your tenant; -WhatIfMode on a run still makes that run report only. The identity also needs the write grants. For one run only, use -Apply instead. Writes to your tenant: every run changes Defender machine tags, Azure resource tags and Entra custom security attributes. A wrong rule tags or untags many objects at once. Reversible only by changing the rules and running again (or by hand); the audit trail records every change."
+        "confirm": "every run changes Defender machine tags, Azure resource tags and Entra custom security attributes in your tenant; -WhatIfMode on a run still makes that run report only. The identity also needs the write grants. For one run only, use -Apply instead. Writes to your tenant: every run changes Defender machine tags, Azure resource tags and Entra custom security attributes. A wrong rule tags or untags many objects at once. Reversible only by changing the rules and running again (or by hand); the audit trail records every change."
       }
     },
     {
@@ -2905,15 +2910,15 @@
       "card": "Asset tagging",
       "info": {
         "what": "Turns asset tagging on: the asset-tagging rules (for example Auto-CanBeOnboarded--Excluded--SI for the devices Defender can onboard) apply inside SecurityInsight, and the tagging job may run.",
-        "whenOn": "On, the asset-tagging rules you have switched on tag the CIs inside SecurityInsight, and a rule whose tag ends in --Excluded--SI takes the device out of every report. Writing the tags to Defender, Azure and Entra stays the separate 'Asset tagging writes tags' setting. Off, no tagging rule tags anything, the tagging job does not run, and a tag an earlier tagging run wrote is ignored; your own exclusion tags keep working.",
-        "whenOff": "no tagging rule sets a tag anywhere and no report treats a device as excluded because of one",
+        "whenOn": "the asset-tagging rules you have switched on tag the CIs inside SecurityInsight, and a rule whose tag ends in --Excluded--SI takes the device out of every report. Writing the tags to Defender, Azure and Entra stays the separate 'Asset tagging writes tags' setting.",
+        "whenOff": "no tagging rule tags anything, the tagging job does not run, and a tag an earlier tagging run wrote is ignored; your own exclusion tags keep working.",
         "risk": "The tagging rules you have switched on take devices out of every report (a tag ending in --Excluded--SI). A wrong rule hides many devices at once. Reversible: turn it off and the next CI build puts them back.",
         "requires": "Nothing else.",
         "default": "Off: no tagging rule sets a tag anywhere and no report treats a device as excluded because of one",
         "recommended": "Off until you have decided which automatic exclusions you want; then on, and check the Excluded assets report.",
         "docUrl": "https://invardia.com/docs/si/settings/SI_AssetTagging_Enabled/",
         "confirmWhen": "on",
-        "confirm": "On, the asset-tagging rules you have switched on tag the CIs inside SecurityInsight, and a rule whose tag ends in --Excluded--SI takes the device out of every report. Writing the tags to Defender, Azure and Entra stays the separate 'Asset tagging writes tags' setting. Off, no tagging rule tags anything, the tagging job does not run, and a tag an earlier tagging run wrote is ignored; your own exclusion tags keep working. The tagging rules you have switched on take devices out of every report (a tag ending in --Excluded--SI). A wrong rule hides many devices at once. Reversible: turn it off and the next CI build puts them back."
+        "confirm": "the asset-tagging rules you have switched on tag the CIs inside SecurityInsight, and a rule whose tag ends in --Excluded--SI takes the device out of every report. Writing the tags to Defender, Azure and Entra stays the separate 'Asset tagging writes tags' setting. The tagging rules you have switched on take devices out of every report (a tag ending in --Excluded--SI). A wrong rule hides many devices at once. Reversible: turn it off and the next CI build puts them back."
       }
     },
     {
@@ -3243,6 +3248,32 @@
         "default": "No cap of its own; Resource Graph's own limit still applies.",
         "recommended": "Keep the default. Change it when: For a first run in a very large estate; remove it afterwards.",
         "docUrl": "https://invardia.com/docs/si/settings/SI_AzureMaxResources/"
+      }
+    },
+    {
+      "name": "SI_AzureReadTimeoutSec",
+      "label": "Azure read call timeout",
+      "group": "Collection scope & limits",
+      "type": "int",
+      "engines": [],
+      "edition": "community",
+      "secret": false,
+      "advanced": true,
+      "default": null,
+      "defaultText": "120 seconds.",
+      "description": "How long ONE Azure read call (one page of Resource Graph / ARM) may wait before it counts as no answer and is tried again (each retry is said in the log). Default 120 seconds; Azure answers a page in seconds.",
+      "purpose": "How long one Azure read call (one page of Resource Graph or Azure Resource Manager) may wait before it counts as no answer and is tried again.",
+      "effect": "A call that waits longer is tried again (up to 4 times, each retry said in the log). Longer tolerates a slow platform at the cost of a longer step when Azure does not answer; shorter retries sooner. Nothing that was read is lost either way: a subscription whose read fails is marked unknown, never empty.",
+      "whenToChange": "Only when support asks for it, or when Azure reads time out on a slow network.",
+      "unit": "seconds",
+      "info": {
+        "what": "How long one Azure read call (one page of Resource Graph or Azure Resource Manager) may wait before it counts as no answer and is tried again.",
+        "whenChanged": "A call that waits longer is tried again (up to 4 times, each retry said in the log). Longer tolerates a slow platform at the cost of a longer step when Azure does not answer; shorter retries sooner. Nothing that was read is lost either way: a subscription whose read fails is marked unknown, never empty.",
+        "risk": "Changes what is collected from the next run: narrowing it means some assets or data are not collected, so they look absent in profiles, CIs and reports (absence is never read as fixed). Reversible: change it back; the next run collects again.",
+        "requires": "Nothing else.",
+        "default": "120 seconds.",
+        "recommended": "Keep the default. Change it when: Only when support asks for it, or when Azure reads time out on a slow network.",
+        "docUrl": "https://invardia.com/docs/si/settings/SI_AzureReadTimeoutSec/"
       }
     },
     {
@@ -4112,7 +4143,7 @@
       "setupOnly": true,
       "info": {
         "what": "Makes all container jobs sign in as the app registration (service principal) with its client secret instead of a managed identity.",
-        "whenOn": "On, every job carries the client secret as a job secret. Queue scaling is not available with it. A supported choice, never the default.",
+        "whenOn": "every job carries the client secret as a job secret. Queue scaling is not available with it. A supported choice, never the default.",
         "whenOff": "the jobs sign in as a managed identity, unless the configuration already carries a client secret.",
         "risk": "Every job carries the client secret: a secret to store, rotate and protect, and queue scaling is not available. A supported choice, but weaker than a managed identity. Reversible: run setup with the managed identity.",
         "requires": "Kept in the install's Key Vault.",
@@ -4120,7 +4151,7 @@
         "recommended": "Off (the managed identity).",
         "docUrl": "https://invardia.com/docs/si/settings/SI_Bootstrap_UseClientSecret/",
         "confirmWhen": "on",
-        "confirm": "On, every job carries the client secret as a job secret. Queue scaling is not available with it. A supported choice, never the default. Every job carries the client secret: a secret to store, rotate and protect, and queue scaling is not available. A supported choice, but weaker than a managed identity. Reversible: run setup with the managed identity."
+        "confirm": "every job carries the client secret as a job secret. Queue scaling is not available with it. A supported choice, never the default. Every job carries the client secret: a secret to store, rotate and protect, and queue scaling is not available. A supported choice, but weaker than a managed identity. Reversible: run setup with the managed identity."
       }
     },
     {
@@ -4168,7 +4199,7 @@
       "setupOnly": true,
       "info": {
         "what": "Makes all container jobs sign in as one user-assigned managed identity, said explicitly.",
-        "whenOn": "On, setup creates the identity and the jobs carry no secret; the image is also pulled as that identity. Its rights are listed, and granted only when setup is told to grant them; some database access is a one-time manual step.",
+        "whenOn": "setup creates the identity and the jobs carry no secret; the image is also pulled as that identity. Its rights are listed, and granted only when setup is told to grant them; some database access is a one-time manual step.",
         "whenOff": "Not set: the managed identity anyway, unless the configuration carries a client secret (an existing install keeps it).",
         "risk": "Affects how the jobs sign in or which Azure resources they use. A wrong value stops the affected jobs at their next run (nothing is changed or deleted); a broader identity or right gives the jobs more access than they need. Reversible: correct it and run again.",
         "requires": "Nothing else.",
@@ -4386,7 +4417,7 @@
       "licensedFeature": "servicenow-connector",
       "info": {
         "what": "The second switch needed before the ServiceNow CMDB connector creates a CI.",
-        "whenOn": "On, with the create-if-unmatched mode and apply, unmatched assets are created as CIs in ServiceNow.",
+        "whenOn": "with the create-if-unmatched mode and apply, unmatched assets are created as CIs in ServiceNow.",
         "whenOff": "no CI is created",
         "risk": "New CIs are created in ServiceNow (with apply and the create-if-unmatched mode); created CIs stay when it is turned off again.",
         "requires": "A SecurityInsight Pro licence.",
@@ -4612,7 +4643,7 @@
       "whenToChange": "Only while checking a change to the correlation.",
       "info": {
         "what": "Makes the asset correlation compute and report its results without publishing them.",
-        "whenOn": "On, nothing is published, so the CI keys stay as they were on the last published run.",
+        "whenOn": "nothing is published, so the CI keys stay as they were on the last published run.",
         "whenOff": "the correlation results are published",
         "risk": "Affects what SecurityInsight writes to your CMDB or ticketing systems. Reversible for future runs, but changes already written there stay; the connector's own guards hold large or unsafe changes.",
         "requires": "Nothing else.",
@@ -4781,6 +4812,161 @@
       }
     },
     {
+      "name": "SI_Data_BulkLoad",
+      "label": "Load the large writes in bulk",
+      "group": "Data & retention",
+      "type": "enum",
+      "engines": [],
+      "edition": "community",
+      "secret": false,
+      "advanced": true,
+      "default": null,
+      "defaultText": "on -- in bulk batches, each counted and checked back",
+      "description": "How the largest writes reach the database (the Risk Analysis findings and summary rows, the staging of the findings per CI, the data out summary). on (the default) = in bulk batches, the same statement over the same texts, each batch counted and checked back before it is kept (loaded again once, then the step stops); off = as text chunks (the earlier way); shadow (for troubleshooting) = each batch checked through the bulk copy and rolled back, the rows written the earlier way.",
+      "purpose": "How the largest writes reach the database (the Risk Analysis findings and summary rows, the staging of the findings per CI, the data out summary): in bulk batches that are counted and checked back, or as text chunks (as before).",
+      "effect": "on: the rows go to the database in bulk batches -- the same statement works out every column from the same texts as before -- each batch counted and checked back before it is kept; a batch that does not arrive as sent is loaded again once, then the step stops. off: the rows go as text chunks (the earlier way). shadow (for troubleshooting): each batch is checked through the bulk copy and rolled back, the rows are written the earlier way, and a difference is one warning line. The stored rows are the same in every mode.",
+      "whenToChange": "Most installs never should. shadow or off only when support asks for it.",
+      "values": [
+        "off",
+        "shadow",
+        "on"
+      ],
+      "card": "Database write pace",
+      "info": {
+        "what": "How the largest writes reach the database (the Risk Analysis findings and summary rows, the staging of the findings per CI, the data out summary): in bulk batches that are counted and checked back, or as text chunks (as before).",
+        "whenChanged": "on: the rows go to the database in bulk batches -- the same statement works out every column from the same texts as before -- each batch counted and checked back before it is kept; a batch that does not arrive as sent is loaded again once, then the step stops. off: the rows go as text chunks (the earlier way). shadow (for troubleshooting): each batch is checked through the bulk copy and rolled back, the rows are written the earlier way, and a difference is one warning line. The stored rows are the same in every mode.",
+        "risk": "on: the rows are worked out by exactly the statement of before, from exactly the texts of before; each batch is counted and checked back before it is kept, and a batch that does not arrive as sent is loaded again once, then the step stops instead of keeping a part. shadow changes nothing that is stored: each batch is checked through the bulk copy and rolled back, and the rows are written the earlier way. Reversible at once: off writes the earlier way from the next write.",
+        "requires": "Nothing else.",
+        "default": "on -- in bulk batches, each counted and checked back",
+        "recommended": "Keep on (the default); shadow or off only when support asks.",
+        "docUrl": "https://invardia.com/docs/si/settings/SI_Data_BulkLoad/"
+      }
+    },
+    {
+      "name": "SI_Data_ChangedSet",
+      "label": "Build the data from what changed",
+      "group": "Data & retention",
+      "type": "enum",
+      "engines": [],
+      "edition": "community",
+      "secret": false,
+      "advanced": true,
+      "default": null,
+      "defaultText": "On -- only what changed is worked out again; every run checks a rotating seventh of the CIs and a sample in full",
+      "description": "How the nightly data sync builds a collection. 'on' (the default) = the findings that did not change since the published collection keep their prepared results (only what changed is worked out again). Every run also builds a rotating seventh of all CIs in full (every CI at least once in 7 runs) and about one CI in ten at random, and compares -- any difference and that run is built in full before anything is published. A full build is made automatically when nothing trusted is published and when the build fingerprint changes (the fields and their mapping, the typing, the templates, the settings that change the output) -- not after every update; once a week only when the rotating check could not run. 'off' = every collection is built in full. 'shadow' = troubleshooting only: built both ways and compared, the full build kept (twice the work).",
+      "purpose": "How the nightly data sync builds a collection: from what changed since the published collection (the default), or in full.",
+      "effect": "On: a finding that did not change since the published collection keeps its prepared results (the views' columns, the findings per CI's rows); everything that changed, is new or is gone is worked out as before. Every run also builds a rotating seventh of all CIs in full (every CI at least once in 7 runs) and about one CI in ten at random, and compares: any difference and that run is built in full before anything is published, and support is told. A full build is made automatically when nothing trusted is published and when the build fingerprint changes (the fields and their mapping, the typing, the templates, the settings that change the output) -- not after every update; once a week only when the rotating check could not run. What the pages show and what is sent to ServiceNow, the CMDB and data out is the same either way. Off: every collection is built in full (slower at a large install). Shadow: built both ways and compared, the full build kept -- for troubleshooting only, it doubles the work.",
+      "whenToChange": "Keep on. Off or shadow only when support asks for it.",
+      "values": [
+        "on",
+        "shadow",
+        "off"
+      ],
+      "valueLabels": {
+        "on": "On: build from what changed (checked every run)",
+        "shadow": "Shadow: build both ways and compare (troubleshooting, twice the work)",
+        "off": "Off: always build in full"
+      },
+      "hint": "On = only what changed is worked out again (checked every run). Off = always in full. Shadow = troubleshooting.",
+      "info": {
+        "what": "How the nightly data sync builds a collection: from what changed since the published collection (the default), or in full.",
+        "whenChanged": "On: a finding that did not change since the published collection keeps its prepared results (the views' columns, the findings per CI's rows); everything that changed, is new or is gone is worked out as before. Every run also builds a rotating seventh of all CIs in full (every CI at least once in 7 runs) and about one CI in ten at random, and compares: any difference and that run is built in full before anything is published, and support is told. A full build is made automatically when nothing trusted is published and when the build fingerprint changes (the fields and their mapping, the typing, the templates, the settings that change the output) -- not after every update; once a week only when the rotating check could not run. What the pages show and what is sent to ServiceNow, the CMDB and data out is the same either way. Off: every collection is built in full (slower at a large install). Shadow: built both ways and compared, the full build kept -- for troubleshooting only, it doubles the work.",
+        "risk": "What is shown and sent is the same either way: every run checks a sample against a full build and builds in full on any difference. Off makes a large install's nightly run much longer; shadow doubles its work. Reversible at once (the next run).",
+        "requires": "Nothing else.",
+        "default": "On -- only what changed is worked out again; every run checks a rotating seventh of the CIs and a sample in full",
+        "recommended": "On.",
+        "docUrl": "https://invardia.com/docs/si/settings/SI_Data_ChangedSet/"
+      }
+    },
+    {
+      "name": "SI_Data_ColumnstoreIndexes",
+      "label": "Columnstore indexes on the largest tables",
+      "group": "Data & retention",
+      "type": "bool",
+      "engines": [],
+      "edition": "community",
+      "secret": false,
+      "advanced": true,
+      "default": null,
+      "defaultText": "On -- built when the install is idle (Standard S3 or above)",
+      "description": "Columnstore indexes on the largest tables the data sync scans and totals (the findings, the finding lifecycle). On (the default) = the updater records them and the index build job builds them ONLINE when the install is idle; off = none, and the next update drops any built. An index only: results are the same either way. Azure SQL Standard S3 or above; on Basic and S0-S2 nothing is built and the update says why.",
+      "purpose": "Faster nightly data sync at a large install: columnstore indexes on the findings and the finding lifecycle, the tables the data sync reads in full and totals every run. An index only -- every page, report and connector shows and sends exactly the same data with or without it.",
+      "effect": "On: the next update records the indexes, and the index build job builds them online when the install is idle long enough (about as long as an index on those tables takes; the next run waits only if one is being built). An install whose runs go back to back gets them too: after a day of waiting one is built before a scheduled run, which then starts up to 3 hours late, at most once a day per index. The data sync then reads far less from the database. Needs an Azure SQL database of Standard S3 or above; on Basic and S0-S2 nothing is built and the update says why. Off: the next update removes them.",
+      "whenToChange": "Most installs never should. Turn it off only when support advises it, for example while a database change is looked into.",
+      "info": {
+        "what": "Faster nightly data sync at a large install: columnstore indexes on the findings and the finding lifecycle, the tables the data sync reads in full and totals every run. An index only -- every page, report and connector shows and sends exactly the same data with or without it.",
+        "whenOn": "the next update records the indexes, and the index build job builds them online when the install is idle long enough (about as long as an index on those tables takes; the next run waits only if one is being built). An install whose runs go back to back gets them too: after a day of waiting one is built before a scheduled run, which then starts up to 3 hours late, at most once a day per index. The data sync then reads far less from the database. Needs an Azure SQL database of Standard S3 or above; on Basic and S0-S2 nothing is built and the update says why.",
+        "whenOff": "the next update removes them.",
+        "risk": "An index only: no result changes. While an index is being built (when the install is idle) a pipeline run that starts waits for it. Writes of new findings take a little longer with the index there. Reversible: off removes the indexes at the next update.",
+        "requires": "Nothing else.",
+        "default": "On -- built when the install is idle (Standard S3 or above)",
+        "recommended": "Keep on (the default).",
+        "docUrl": "https://invardia.com/docs/si/settings/SI_Data_ColumnstoreIndexes/"
+      }
+    },
+    {
+      "name": "SI_Data_HistoryDays",
+      "label": "Finding history kept (days)",
+      "group": "Data & retention",
+      "type": "int",
+      "engines": [],
+      "edition": "community",
+      "secret": false,
+      "advanced": true,
+      "default": null,
+      "defaultText": "30 days",
+      "description": "Days of finding history kept: a collection stays in the history, as it was published, until it is this many days old (not set = 30; 0 = the history follows the kept collections).",
+      "purpose": "How many days of finding history are kept: a collection stays in the history, as it was published, until it is that many days old -- also after the clean-up removed its findings.",
+      "effect": "30 (the default): a collection whose findings the clean-up removed stays in the history, as it was published, until it is 30 days old, then leaves it by its partition. 0: a collection leaves the history with its findings. More days keep more history (more storage).",
+      "whenToChange": "Only when support asks for it; the pages read the kept collections.",
+      "unit": "days",
+      "info": {
+        "what": "How many days of finding history are kept: a collection stays in the history, as it was published, until it is that many days old -- also after the clean-up removed its findings.",
+        "whenChanged": "30 (the default): a collection whose findings the clean-up removed stays in the history, as it was published, until it is 30 days old, then leaves it by its partition. 0: a collection leaves the history with its findings. More days keep more history (more storage).",
+        "risk": "A higher value keeps the history of removed collections longer (more storage); nothing a page shows changes.",
+        "requires": "Nothing else.",
+        "default": "30 days",
+        "recommended": "30 (the default).",
+        "docUrl": "https://invardia.com/docs/si/settings/SI_Data_HistoryDays/"
+      }
+    },
+    {
+      "name": "SI_Data_HistoryModel",
+      "label": "Keep the finding history",
+      "group": "Data & retention",
+      "type": "enum",
+      "engines": [],
+      "edition": "community",
+      "secret": false,
+      "advanced": true,
+      "default": null,
+      "defaultText": "On -- every kept collection is also kept as finding states, checked row for row every run",
+      "description": "Keep the finding history: every kept collection is also recorded as the states of its findings, checked row for row against the stored findings every run (any difference and the stored findings are what is shown and sent). 'on' (the default) | 'shadow' (troubleshooting) | 'off' (no history).",
+      "purpose": "Whether the nightly data sync also keeps every collection as a history of finding states and checks it against the stored findings every run.",
+      "effect": "On: after each run every kept collection is also recorded as the states of its findings (one row per distinct state, and a small row per finding), checked row for row against the stored findings, and What changed is checked from the findings that changed. Any difference and the stored findings and the full builds are what is shown and sent, and support is told. What the pages show and what is sent to ServiceNow, the CMDB and data out is the same either way. Shadow: the same, for troubleshooting. Off: no history is kept.",
+      "whenToChange": "Keep on. Off only when support asks for it.",
+      "values": [
+        "on",
+        "shadow",
+        "off"
+      ],
+      "valueLabels": {
+        "on": "On: keep the history, checked every run",
+        "shadow": "Shadow: keep and check it (troubleshooting)",
+        "off": "Off: no history"
+      },
+      "hint": "On = the history is kept and checked every run. Off = no history.",
+      "info": {
+        "what": "Whether the nightly data sync also keeps every collection as a history of finding states and checks it against the stored findings every run.",
+        "whenChanged": "On: after each run every kept collection is also recorded as the states of its findings (one row per distinct state, and a small row per finding), checked row for row against the stored findings, and What changed is checked from the findings that changed. Any difference and the stored findings and the full builds are what is shown and sent, and support is told. What the pages show and what is sent to ServiceNow, the CMDB and data out is the same either way. Shadow: the same, for troubleshooting. Off: no history is kept.",
+        "risk": "What is shown and sent is the same either way: the history is checked row for row against the stored findings every run, and on any difference the stored findings are what is used. On adds a read of the newest collection per run and a little storage. Reversible at once (the next run).",
+        "requires": "Nothing else.",
+        "default": "On -- every kept collection is also kept as finding states, checked row for row every run",
+        "recommended": "Keep on (the default).",
+        "docUrl": "https://invardia.com/docs/si/settings/SI_Data_HistoryModel/"
+      }
+    },
+    {
       "name": "SI_Data_KeepCollections",
       "label": "Collections kept with all their findings",
       "group": "Data & retention",
@@ -4808,6 +4994,95 @@
         "docUrl": "https://invardia.com/docs/si/settings/SI_Data_KeepCollections/",
         "confirmWhen": "lower",
         "confirm": "A lower value PERMANENTLY removes the findings of the older collections at the next data sync (their totals for the trends stay); What changed, the collection lists and the history then go back fewer runs. Cannot be undone. A higher value grows the database by about one run's findings per extra collection."
+      }
+    },
+    {
+      "name": "SI_Data_LoadPerReport",
+      "label": "Prepare the views per report as Risk Analysis finishes them",
+      "group": "Data & retention",
+      "type": "enum",
+      "engines": [],
+      "edition": "community",
+      "secret": false,
+      "advanced": true,
+      "default": null,
+      "defaultText": "on -- filled per report as Risk Analysis finishes each one, checked by the data sync",
+      "description": "When the views' prepared context of each finding is filled. on (the default) = per report as Risk Analysis finishes each one, beside the run; the data sync leaves out the reports that still hold exactly the rows filled early (one that does not match is filled as before, with a warning line); shadow (for troubleshooting) = the data sync still fills every finding and compares; off = only the data sync fills them (the earlier way). Nothing is published before the run ends. Needs SI_Data_ParseAtInsert on: without it every finding is filled by the data sync, as with off.",
+      "purpose": "When the views' prepared context of each finding (product, vendor, description, fix, remediation and the other columns the views show) is filled: by the data sync after the whole Risk Analysis (as before), or report by report as Risk Analysis finishes each one, beside the run.",
+      "effect": "on (the default): each report is filled as it is complete; the data sync leaves out the reports that still hold exactly the rows filled early, so it has less to read after the run -- a report that does not match is filled by the data sync as before and said in a warning line. shadow (for troubleshooting): the data sync still fills every finding and first compares the reports filled early with its own fill -- a difference is one warning line and the data sync's values are kept. off: only the data sync fills them (the earlier way). Nothing is published before the whole run has ended in any mode. It needs SI_Data_ParseAtInsert on: without it every finding is filled by the data sync, as with off.",
+      "whenToChange": "Most installs never should. shadow or off only when support asks for it.",
+      "values": [
+        "off",
+        "shadow",
+        "on"
+      ],
+      "card": "Database write pace",
+      "info": {
+        "what": "When the views' prepared context of each finding (product, vendor, description, fix, remediation and the other columns the views show) is filled: by the data sync after the whole Risk Analysis (as before), or report by report as Risk Analysis finishes each one, beside the run.",
+        "whenChanged": "on (the default): each report is filled as it is complete; the data sync leaves out the reports that still hold exactly the rows filled early, so it has less to read after the run -- a report that does not match is filled by the data sync as before and said in a warning line. shadow (for troubleshooting): the data sync still fills every finding and first compares the reports filled early with its own fill -- a difference is one warning line and the data sync's values are kept. off: only the data sync fills them (the earlier way). Nothing is published before the whole run has ended in any mode. It needs SI_Data_ParseAtInsert on: without it every finding is filled by the data sync, as with off.",
+        "risk": "on (the default): the data sync takes a report as filled only when it still holds exactly the rows that were filled, nothing else lies in its range and its view values are those of the current statement; any other report is filled by the data sync as before and said in a warning line. shadow changes nothing that is stored: the data sync still fills every finding and keeps its own values. Nothing is published before the whole run has ended in either mode. Reversible at once: off fills everything in the data sync again from the next run.",
+        "requires": "Nothing else.",
+        "default": "on -- filled per report as Risk Analysis finishes each one, checked by the data sync",
+        "recommended": "Keep on (the default); shadow or off only when support asks.",
+        "docUrl": "https://invardia.com/docs/si/settings/SI_Data_LoadPerReport/"
+      }
+    },
+    {
+      "name": "SI_Data_ParseAtInsert",
+      "label": "Work out the view values as findings are stored",
+      "group": "Data & retention",
+      "type": "enum",
+      "engines": [],
+      "edition": "community",
+      "secret": false,
+      "advanced": true,
+      "default": null,
+      "defaultText": "on -- worked out once, as Risk Analysis stores each finding",
+      "description": "The view values of each finding worked out as Risk Analysis stores it, instead of by the data sync re-reading every stored finding afterwards. on (the default) = the data sync leaves alone only the findings Risk Analysis worked out with exactly the current statement and does what is left (findings carried over or loaded from Log Analytics are always worked out again); off = the data sync works out every finding (the older way); shadow (for troubleshooting) = both work them out, the data sync compares and keeps its own (a difference is a warning line). The views show the same values in every mode.",
+      "purpose": "Where the values the views read from each finding (its rating, score, CVSS, MITRE and compliance lists, fix, CMDB service, score parts) are worked out: by the data sync re-reading every stored finding (as before), or once, as Risk Analysis stores the finding.",
+      "effect": "on: the data sync leaves alone only the findings Risk Analysis worked out with exactly the current statement and does what is left (the totals per view, the services, and every finding carried over or loaded from Log Analytics), so the data sync is much shorter. off: the data sync works the values out again for every finding (the older way). shadow (for troubleshooting): Risk Analysis works the values out as it stores each finding; the data sync still works them out again for every finding, compares the two and keeps its own -- a difference is one warning line in the data sync's log (how many findings, the first finding ids and column names). The views and everything sent out show the same values in every mode.",
+      "whenToChange": "Most installs never should. shadow or off only when support asks for it while a difference in the view values is looked into.",
+      "values": [
+        "off",
+        "shadow",
+        "on"
+      ],
+      "card": "Database write pace",
+      "info": {
+        "what": "Where the values the views read from each finding (its rating, score, CVSS, MITRE and compliance lists, fix, CMDB service, score parts) are worked out: by the data sync re-reading every stored finding (as before), or once, as Risk Analysis stores the finding.",
+        "whenChanged": "on: the data sync leaves alone only the findings Risk Analysis worked out with exactly the current statement and does what is left (the totals per view, the services, and every finding carried over or loaded from Log Analytics), so the data sync is much shorter. off: the data sync works the values out again for every finding (the older way). shadow (for troubleshooting): Risk Analysis works the values out as it stores each finding; the data sync still works them out again for every finding, compares the two and keeps its own -- a difference is one warning line in the data sync's log (how many findings, the first finding ids and column names). The views and everything sent out show the same values in every mode.",
+        "risk": "on: the data sync keeps the values Risk Analysis worked out only for a finding worked out by exactly the current statement -- the same statement, so the same values; every other finding (carried over, loaded from Log Analytics, or worked out by an older release) is worked out again. shadow changes nothing that is shown or sent: the data sync's own values are kept and any difference is said in a warning line; Risk Analysis takes a little longer to store its findings. Reversible at once: off works everything out in the data sync again from the next run.",
+        "requires": "Nothing else.",
+        "default": "on -- worked out once, as Risk Analysis stores each finding",
+        "recommended": "Keep on (the default); shadow only for troubleshooting when support asks.",
+        "docUrl": "https://invardia.com/docs/si/settings/SI_Data_ParseAtInsert/"
+      }
+    },
+    {
+      "name": "SI_Data_RetireByPartition",
+      "label": "Remove old collections by partition",
+      "group": "Data & retention",
+      "type": "bool",
+      "engines": [],
+      "edition": "community",
+      "secret": false,
+      "advanced": true,
+      "default": null,
+      "defaultText": "On: old collections leave by their own partition in an idle window; what a partition cannot take is removed a little at a time.",
+      "description": "The old collections leave by their own partition. On (the default): in an idle window the index build job empties a removed collection's findings, recommendations and prepared issue rows in seconds (never the published run, the newest two or a kept collection; the rows are counted before and after, and any difference keeps them all), and first moves an existing install's large tables onto one partition per collection, a part per idle window, resumable, never during a run; every update also does a bounded part of that move (a few minutes, under the install's lock, resumed by the next window). Whatever a partition cannot take is removed a little at a time, as before. Off: the findings of old collections are only removed a little at a time by the pipeline runner's wake-ups.",
+      "purpose": "How the findings of old collections leave the Pro database: each old collection at once from its own partition (on, the default), or only a little at a time (off). A large install holds millions of rows waiting to be removed; a little at a time that takes days.",
+      "effect": "On: in an idle window (no run, data sync or data out going, no update waiting) the index build job empties an old collection's findings, recommendations and prepared issue rows in seconds -- never the published run, the newest two or a kept collection; the rows are counted before and after, and any difference keeps them all. On an install made before this release it first moves the three large tables onto one partition per collection, a part per idle window, resumable -- and every update also does a bounded part of that move (a few minutes, under the install's lock, resumed by the next window); until that is done, and for anything a partition cannot take, the removal goes on a little at a time. Off: the pipeline runner's wake-ups remove the findings of old collections a little at a time, as before.",
+      "whenToChange": "Rarely: turn it off only when support asks for it, for example while a problem with the move of the large tables is looked at.",
+      "card": "How long data is kept",
+      "info": {
+        "what": "How the findings of old collections leave the Pro database: each old collection at once from its own partition (on, the default), or only a little at a time (off). A large install holds millions of rows waiting to be removed; a little at a time that takes days.",
+        "whenOn": "in an idle window (no run, data sync or data out going, no update waiting) the index build job empties an old collection's findings, recommendations and prepared issue rows in seconds -- never the published run, the newest two or a kept collection; the rows are counted before and after, and any difference keeps them all. On an install made before this release it first moves the three large tables onto one partition per collection, a part per idle window, resumable -- and every update also does a bounded part of that move (a few minutes, under the install's lock, resumed by the next window); until that is done, and for anything a partition cannot take, the removal goes on a little at a time.",
+        "whenOff": "the pipeline runner's wake-ups remove the findings of old collections a little at a time, as before.",
+        "risk": "Only changes HOW old collections leave, never WHICH: the same collections the clean-up removes today, never the published run, the newest two or a kept collection. On an install made before this release the first idle windows move the three large tables onto partitions (a copy beside the table, checked row for row per collection before it is used; the old table is kept until a later check). Reversible: off goes back to removing a little at a time; the tables stay on their partitions, which reads exactly as before.",
+        "requires": "Nothing else.",
+        "default": "On: old collections leave by their own partition in an idle window; what a partition cannot take is removed a little at a time.",
+        "recommended": "Keep it on.",
+        "docUrl": "https://invardia.com/docs/si/settings/SI_Data_RetireByPartition/"
       }
     },
     {
@@ -5322,7 +5597,7 @@
       "whenToChange": "Turn on briefly when investigating warnings about dropped columns.",
       "info": {
         "what": "Logs the difference between a data collection rule's columns and the data being sent, on every ingestion call.",
-        "whenOn": "On, each ingestion call logs added, removed and changed columns. Makes logs longer and runs slightly slower; never stops ingestion.",
+        "whenOn": "each ingestion call logs added, removed and changed columns. Makes logs longer and runs slightly slower; never stops ingestion.",
         "whenOff": "Off is the default: none of what \"On\" describes happens.",
         "risk": "A tuning or diagnostic setting: it mostly changes run time, cost or log detail. Leave it at the default unless support asks. Reversible at once.",
         "requires": "Nothing else.",
@@ -5412,15 +5687,15 @@
     },
     {
       "name": "SI_DeletionProof_Azure",
-      "label": "Retire at once: resources deleted in Azure",
+      "label": "Retire at once when deleted in Azure",
       "group": "Data & retention",
       "type": "bool",
       "engines": [],
       "edition": "community",
       "secret": false,
       "advanced": true,
-      "default": false,
-      "defaultText": "Off: an Azure resource Azure no longer lists waits the not-seen grace period, as before",
+      "default": true,
+      "defaultText": "On: an Azure resource with a Delete in Azure's resource changes retires at once and its findings close as 'asset deleted in Azure', never as fixed; a resource merely missing from a list waits the not-seen grace period",
       "description": "an Azure resource with a Delete in the Resource Graph resource changes",
       "purpose": "Retires an asset at once when Azure PROVES its resource was deleted: a Delete in Azure Resource Graph's resource changes (the last 14 days). Merely missing from a list is never proof -- it keeps the not-seen grace period.",
       "effect": "Stages: the CI build checks the Azure records missing from a complete collection against the resource changes; a proven one is recorded, its CI retires at once ('retired at once: deleted in Azure') -- the proof wins over the grace period -- and its open vulnerabilities close as 'asset deleted in Azure', never as fixed. A CI another source still sees stays active. A resource listed again is active again and its findings reopen. A read that is not complete decides nothing for what it did not return.",
@@ -5428,12 +5703,12 @@
       "card": "Assets no longer seen",
       "info": {
         "what": "Retires an asset at once when Azure PROVES its resource was deleted: a Delete in Azure Resource Graph's resource changes (the last 14 days). Merely missing from a list is never proof -- it keeps the not-seen grace period.",
-        "whenOn": "Stages: the CI build checks the Azure records missing from a complete collection against the resource changes; a proven one is recorded, its CI retires at once ('retired at once: deleted in Azure') -- the proof wins over the grace period -- and its open vulnerabilities close as 'asset deleted in Azure', never as fixed. A CI another source still sees stays active. A resource listed again is active again and its findings reopen. A read that is not complete decides nothing for what it did not return.",
+        "whenOn": "an Azure resource with a Delete in Azure's resource changes retires at once and its findings close as 'asset deleted in Azure', never as fixed; a resource merely missing from a list waits the not-seen grace period",
         "whenOff": "an Azure resource Azure no longer lists waits the not-seen grace period, as before",
         "risk": "Assets of resources deleted in Azure retire from the next CI build and their vulnerabilities close as deleted (ServiceNow closures follow). Reversible: turn it off and the next build decides them by the grace period again.",
         "requires": "Read access to Azure Resource Graph (Reader, which the engine identity already has).",
-        "default": "Off: an Azure resource Azure no longer lists waits the not-seen grace period, as before",
-        "recommended": "Off, unless your organisation chose it.",
+        "default": "On: an Azure resource with a Delete in Azure's resource changes retires at once and its findings close as 'asset deleted in Azure', never as fixed; a resource merely missing from a list waits the not-seen grace period",
+        "recommended": "On (the default): only a proof of deletion retires an asset at once.",
         "docUrl": "https://invardia.com/docs/si/settings/SI_DeletionProof_Azure/",
         "confirmWhen": "on",
         "confirm": "Assets whose Azure resource Azure proves deleted retire at once from the next CI build; their open vulnerabilities close as asset deleted in Azure."
@@ -5441,28 +5716,28 @@
     },
     {
       "name": "SI_DeletionProof_Entra",
-      "label": "Retire at once: objects deleted in Entra ID",
+      "label": "Retire at once when deleted in Entra ID",
       "group": "Data & retention",
       "type": "bool",
       "engines": [],
       "edition": "community",
       "secret": false,
       "advanced": true,
-      "default": false,
-      "defaultText": "Off: a user Entra ID lists as deleted retires at once whatever this setting says, unless another source still sees it. This setting only concerns a user, device or group that has disappeared from a complete collection without being listed as deleted: those wait the not-seen grace period",
-      "description": "Retire at once on PROOF of deletion, per source. Off by default. On, an asset whose source proves it deleted (never merely missing from a list -- that keeps the not-seen grace period) retires at once, and its open vulnerabilities close as 'asset deleted in <source>', never as fixed. Restored / listed again = active again, its findings reopen.",
+      "default": true,
+      "defaultText": "On: a user, device or group in Entra ID's deleted items retires at once (unless another source still sees it) and its findings close as 'asset deleted in Entra ID', never as fixed; an object merely missing from a list waits the not-seen grace period",
+      "description": "Retire at once on PROOF of deletion, per source. On by default ($false keeps that source on the grace period): an asset whose source proves it deleted (never merely missing from a list -- that keeps the not-seen grace period) retires at once, and its open vulnerabilities close as 'asset deleted in <source>', never as fixed. Restored / listed again = active again, its findings reopen.",
       "purpose": "Retires an asset at once when Entra ID PROVES its object was deleted: the user, device or group is in Entra ID's deleted items. Merely missing from a list is never proof -- it keeps the not-seen grace period.",
       "effect": "Stages: the CI build checks the Entra ID records (and the Exposure Graph users and groups) missing from a complete collection against Entra ID's deleted items; a proven one is recorded, its CI retires at once ('retired at once: deleted in Entra ID') -- the proof wins over the grace period -- and its open vulnerabilities close as 'asset deleted in Entra ID', never as fixed. A CI another source still sees stays active. An object restored in Entra ID is listed again: its CI is active again and its findings reopen. A read that is not complete decides nothing for what it did not return.",
       "whenToChange": "When an object deleted in Entra ID should not wait the grace period before it and its vulnerabilities are retired.",
       "card": "Assets no longer seen",
       "info": {
         "what": "Retires an asset at once when Entra ID PROVES its object was deleted: the user, device or group is in Entra ID's deleted items. Merely missing from a list is never proof -- it keeps the not-seen grace period.",
-        "whenOn": "Stages: the CI build checks the Entra ID records (and the Exposure Graph users and groups) missing from a complete collection against Entra ID's deleted items; a proven one is recorded, its CI retires at once ('retired at once: deleted in Entra ID') -- the proof wins over the grace period -- and its open vulnerabilities close as 'asset deleted in Entra ID', never as fixed. A CI another source still sees stays active. An object restored in Entra ID is listed again: its CI is active again and its findings reopen. A read that is not complete decides nothing for what it did not return.",
-        "whenOff": "a user Entra ID lists as deleted retires at once whatever this setting says, unless another source still sees it. This setting only concerns a user, device or group that has disappeared from a complete collection without being listed as deleted: those wait the not-seen grace period",
+        "whenOn": "a user, device or group in Entra ID's deleted items retires at once (unless another source still sees it) and its findings close as 'asset deleted in Entra ID', never as fixed; an object merely missing from a list waits the not-seen grace period",
+        "whenOff": "a user, device or group that disappears from a complete collection waits the not-seen grace period, as before (a user Entra ID lists as deleted still retires at once, unless another source still sees it)",
         "risk": "Assets of objects deleted in Entra ID retire from the next CI build and their vulnerabilities close as deleted (ServiceNow closures follow). Reversible: turn it off and the next build decides them by the grace period again.",
         "requires": "Read access to Entra ID's deleted items (Directory.Read.All, which the engine identity already has).",
-        "default": "Off: a user Entra ID lists as deleted retires at once whatever this setting says, unless another source still sees it. This setting only concerns a user, device or group that has disappeared from a complete collection without being listed as deleted: those wait the not-seen grace period",
-        "recommended": "Off, unless your organisation chose it.",
+        "default": "On: a user, device or group in Entra ID's deleted items retires at once (unless another source still sees it) and its findings close as 'asset deleted in Entra ID', never as fixed; an object merely missing from a list waits the not-seen grace period",
+        "recommended": "On (the default): only a proof of deletion retires an asset at once.",
         "docUrl": "https://invardia.com/docs/si/settings/SI_DeletionProof_Entra/",
         "confirmWhen": "on",
         "confirm": "Assets whose object Entra ID lists in its deleted items retire at once from the next CI build; their open vulnerabilities close as asset deleted in Entra ID."
@@ -5470,15 +5745,15 @@
     },
     {
       "name": "SI_DeletionProof_Intune",
-      "label": "Retire at once: devices deleted in Intune",
+      "label": "Retire at once when deleted in Intune",
       "group": "Data & retention",
       "type": "bool",
       "engines": [],
       "edition": "community",
       "secret": false,
       "advanced": true,
-      "default": false,
-      "defaultText": "Off: a device Intune no longer lists waits the not-seen grace period, as before",
+      "default": true,
+      "defaultText": "On: a managed device with a successful Delete in Intune's audit events retires at once and its findings close as 'asset deleted in Intune', never as fixed; a device merely missing from a list waits the not-seen grace period. Until DeviceManagementApps.Read.All is granted the read answers 403 and decides nothing",
       "description": "a managed device deleted in Intune's audit events (needs DeviceManagementApps.Read.All)",
       "purpose": "Retires an asset at once when Intune PROVES its managed device was deleted: a successful Delete of the managed device in Intune's audit events. Merely missing from a list is never proof -- it keeps the not-seen grace period.",
       "effect": "Stages: the CI build checks the Intune records missing from a complete collection against Intune's audit events; a proven one is recorded, its CI retires at once ('retired at once: deleted in Intune') -- the proof wins over the grace period -- and its open vulnerabilities close as 'asset deleted in Intune', never as fixed. A CI another source still sees stays active. A device listed again is active again and its findings reopen. A read that is not complete (for example without the permission) decides nothing for what it did not return.",
@@ -5486,12 +5761,12 @@
       "card": "Assets no longer seen",
       "info": {
         "what": "Retires an asset at once when Intune PROVES its managed device was deleted: a successful Delete of the managed device in Intune's audit events. Merely missing from a list is never proof -- it keeps the not-seen grace period.",
-        "whenOn": "Stages: the CI build checks the Intune records missing from a complete collection against Intune's audit events; a proven one is recorded, its CI retires at once ('retired at once: deleted in Intune') -- the proof wins over the grace period -- and its open vulnerabilities close as 'asset deleted in Intune', never as fixed. A CI another source still sees stays active. A device listed again is active again and its findings reopen. A read that is not complete (for example without the permission) decides nothing for what it did not return.",
+        "whenOn": "a managed device with a successful Delete in Intune's audit events retires at once and its findings close as 'asset deleted in Intune', never as fixed; a device merely missing from a list waits the not-seen grace period. Until DeviceManagementApps.Read.All is granted the read answers 403 and decides nothing",
         "whenOff": "a device Intune no longer lists waits the not-seen grace period, as before",
         "risk": "Assets of devices deleted in Intune retire from the next CI build and their vulnerabilities close as deleted (ServiceNow closures follow). Reversible: turn it off and the next build decides them by the grace period again.",
-        "requires": "Read access to Intune's audit events (DeviceManagementApps.Read.All -- not granted to the engine identity by setup today; without it the read answers 403 and decides nothing).",
-        "default": "Off: a device Intune no longer lists waits the not-seen grace period, as before",
-        "recommended": "Off, unless your organisation chose it.",
+        "requires": "Read access to Intune's audit events: the Microsoft Graph application permission DeviceManagementApps.Read.All (read only), which setup grants the engine identity; an existing install gets it through its update (Invardia support). Without it the read answers 403 and decides nothing -- said once per run, never a failed step.",
+        "default": "On: a managed device with a successful Delete in Intune's audit events retires at once and its findings close as 'asset deleted in Intune', never as fixed; a device merely missing from a list waits the not-seen grace period. Until DeviceManagementApps.Read.All is granted the read answers 403 and decides nothing",
+        "recommended": "On (the default): only a proof of deletion retires an asset at once.",
         "docUrl": "https://invardia.com/docs/si/settings/SI_DeletionProof_Intune/",
         "confirmWhen": "on",
         "confirm": "Assets whose managed device Intune's audit events show deleted retire at once from the next CI build; their open vulnerabilities close as asset deleted in Intune."
@@ -6563,7 +6838,7 @@
       "whenToChange": "Once after changing tier rules or the schema, then turn it off again.",
       "info": {
         "what": "Makes the public IP engine process every address, ignoring the per-tier re-check cadence, for this engine only.",
-        "whenOn": "On, every address is re-processed on every run. It only changes anything when the fingerprint cache (SI_FingerprintCache_Enabled) is on; without it every address is processed anyway. More run time when it matters.",
+        "whenOn": "every address is re-processed on every run. It only changes anything when the fingerprint cache (SI_FingerprintCache_Enabled) is on; without it every address is processed anyway. More run time when it matters.",
         "whenOff": "falls back to SI_ForceFullRun, which is also off.",
         "risk": "Changes what is collected from the next run: narrowing it means some assets or data are not collected, so they look absent in profiles, CIs and reports (absence is never read as fixed). Reversible: change it back; the next run collects again.",
         "requires": "Read by: publicip.",
@@ -9125,14 +9400,14 @@
       "info": {
         "what": "One switch for every safety check that holds, refuses or stops a step to protect your data (the list below and the Guards page).",
         "whenOn": "every check works as set below.",
-        "whenOff": "WARNING -- Off turns EVERY safety check off at once: SecurityInsight then closes vulnerability records, retires CIs, hands over batches and loads collections even when the data looks broken or incomplete, so a failed collection can close or retire everything it no longer sees. Nothing is held for release and no guard mail is sent; each check says once in its job log that it is off. The checks that only report a stop SecurityInsight cannot skip (the source failed, the licence) stop reporting it. On: every check works as set below.",
+        "whenOff": "None of what \"On\" describes happens.",
         "risk": "Turning this off removes EVERY safety check at once: no step is held or stopped to protect your data, whatever happens. Reversible at once: switch it back on; it applies from the next run.",
         "requires": "Nothing else.",
         "default": "On",
         "recommended": "Keep it on. Change it when: Leave it on. Turn it off only for a short time, when the checks stop work you know is right -- and prefer turning off or tuning the one check that is in the way.",
         "docUrl": "https://invardia.com/docs/si/settings/SI_Guards_Enabled/",
         "confirmWhen": "off",
-        "confirm": "WARNING -- Off turns EVERY safety check off at once: SecurityInsight then closes vulnerability records, retires CIs, hands over batches and loads collections even when the data looks broken or incomplete, so a failed collection can close or retire everything it no longer sees. Nothing is held for release and no guard mail is sent; each check says once in its job log that it is off. The checks that only report a stop SecurityInsight cannot skip (the source failed, the licence) stop reporting it. On: every check works as set below. Turning this off removes EVERY safety check at once: no step is held or stopped to protect your data, whatever happens. Reversible at once: switch it back on; it applies from the next run."
+        "confirm": "None of what \"On\" describes happens. Turning this off removes EVERY safety check at once: no step is held or stopped to protect your data, whatever happens. Reversible at once: switch it back on; it applies from the next run."
       }
     },
     {
@@ -9153,7 +9428,7 @@
       "card": "Sources and links",
       "info": {
         "what": "Tells Risk Analysis that Defender exposure graph tables are mirrored into Log Analytics, so reports needing them can run.",
-        "whenOn": "On, Risk Analysis runs the reports that query exposure graph tables in the workspace. Turning it on without the tables present makes those reports fail.",
+        "whenOn": "Risk Analysis runs the reports that query exposure graph tables in the workspace. Turning it on without the tables present makes those reports fail.",
         "whenOff": "reports needing exposure graph tables are skipped",
         "risk": "Changes what the Risk Analysis reports show, how findings are filtered or scored, or where reports go, from the next run; earlier reports are unchanged. Hiding findings can make real exposure invisible to readers. Reversible: change it back.",
         "requires": "Nothing else.",
@@ -9197,11 +9472,11 @@
       "secret": false,
       "advanced": true,
       "default": 8,
-      "defaultText": "8 minutes",
+      "defaultText": "8 minutes, and 12 while users are due (never read, or their sign-in methods changed)",
       "description": "minutes of background reading per 15-minute run",
       "purpose": "How many minutes of each 15-minute run of its own job (caj-si-signin-methods) the background read of the users' sign-in methods may use.",
-      "effect": "More minutes fill the detail sooner (about 250-300 users a minute, depending on how much Microsoft throttles); fewer leave more of the tick idle. A slice that is still running is never started twice.",
-      "whenToChange": "Raise it to fill a large tenant faster the first time; lower it to keep the job's runs short.",
+      "effect": "More minutes fill the detail sooner (about 250-300 users a minute, depending on how much Microsoft throttles); fewer leave more of the tick idle. With the default the slice grows to 12 minutes by itself while users are due, so a first fill or a wave of changes is read sooner; any other value is used as it is, always. A slice that is still running is never started twice.",
+      "whenToChange": "Leave it at the default: it already reads longer while users are due. Lower it only to keep the job's runs short (that value is then used always).",
       "unit": "minutes",
       "max": 25,
       "min": 1,
@@ -9209,10 +9484,10 @@
       "needs": "SI_Identity_SignInMethodsPerUser",
       "info": {
         "what": "How many minutes of each 15-minute run of its own job (caj-si-signin-methods) the background read of the users' sign-in methods may use.",
-        "whenChanged": "More minutes fill the detail sooner (about 250-300 users a minute, depending on how much Microsoft throttles); fewer leave more of the tick idle. A slice that is still running is never started twice.",
+        "whenChanged": "More minutes fill the detail sooner (about 250-300 users a minute, depending on how much Microsoft throttles); fewer leave more of the tick idle. With the default the slice grows to 12 minutes by itself while users are due, so a first fill or a wave of changes is read sooner; any other value is used as it is, always. A slice that is still running is never started twice.",
         "risk": "More minutes make each run of the job caj-si-signin-methods longer (its limit is 30 minutes); fewer fill the detail more slowly. Nothing collected is changed. Reversible at once.",
         "requires": "SI_Identity_SignInMethodsPerUser all or privileged. Works only while \"Users' sign-in methods in full: which users are read\" is on.",
-        "default": "8 minutes",
+        "default": "8 minutes, and 12 while users are due (never read, or their sign-in methods changed)",
         "recommended": "8 minutes (the default).",
         "docUrl": "https://invardia.com/docs/si/settings/SI_Identity_SignInMethodsFillMinutes/"
       }
@@ -9330,8 +9605,8 @@
       "card": "Exposure Graph identities without an asset",
       "info": {
         "what": "A customer's choice for on-premises Active Directory accounts that the Exposure Graph lists but that were never synced to Entra ID (no Entra object id). On, only the privileged ones become assets, whether they are enabled or disabled: privileged = an admin count, a critical or tier 0/1 AD group (Domain Admins, Enterprise Admins ...), an assigned role, a service account, a sensitive account or a Microsoft criticality level. The others are counted and get no asset. It is the wider form of SI_Identity_SkipNeverSyncedDisabledAd: while it is on, that setting decides nothing.",
-        "whenOn": "Stages: the identity collection records no asset for a never-synced AD account that is not privileged, whatever its enabled state (the Exposure Graph often lists such accounts with their name only); the run log and the Data health page show how many per run; the CI build retires the existing CI of such an account at once, with a reason naming this setting (its findings close as asset retired, never as fixed). Only on-premises AD accounts are affected (a domain SID, or an account name and domain): accounts synced to Entra ID, identities from other sources, groups, devices and findings are not. Off, SI_Identity_SkipNeverSyncedDisabledAd decides these accounts again (only disabled ones are left out), and the next run records the others again and their CIs come back.",
-        "whenOff": "never-synced on-premises AD accounts are decided by SI_Identity_SkipNeverSyncedDisabledAd (only disabled, non-privileged ones are left out)",
+        "whenOn": "It works as described under \"What it does\".",
+        "whenOff": "SI_Identity_SkipNeverSyncedDisabledAd decides these accounts again (only disabled ones are left out), and the next run records the others again and their CIs come back.",
         "risk": "Objects the customer chose not to keep stop being assets from the next run and their CIs retire (CMDB / ServiceNow closures follow the retired CIs). Accounts synced to Entra ID, identities from other sources, groups, devices and findings are not affected. Reversible: turn it off and the next run records them again and their CIs come back.",
         "requires": "The identity collection with the Exposure Graph (Defender XDR advanced hunting).",
         "default": "Off: never-synced on-premises AD accounts are decided by SI_Identity_SkipNeverSyncedDisabledAd (only disabled, non-privileged ones are left out)",
@@ -10121,12 +10396,12 @@
       "purpose": "How SecurityInsight sends every mail: sharedMailbox = an Office 365 shared mailbox through Microsoft Graph as SecurityInsight's own identity (recommended); smtp = your own SMTP relay; none = no mail.",
       "effect": "Every mail (reports, safety-check alerts, close-loop, exemption, governance and digest mails, licence notices) goes this way. With sharedMailbox SecurityInsight sends only once it has verified that Mail.Send is restricted to the shared mailbox.",
       "whenToChange": "Set up with Settings > E-mail > Set up mail, or setup\\Set-SIMail.ps1.",
+      "editor": "radio",
       "valueLabels": {
         "sharedMailbox": "Shared mailbox (Office 365) -- recommended",
         "smtp": "SMTP relay (your own mail server)",
         "none": "No mail"
       },
-      "editor": "radio",
       "values": [
         "sharedMailbox",
         "smtp",
@@ -10276,6 +10551,32 @@
         "default": "24 MB (fits a 25 MB mail server limit)",
         "recommended": "Keep the default. Change it when: Raise only if your mail server accepts larger messages; lower if mails are rejected.",
         "docUrl": "https://invardia.com/docs/si/settings/SI_MaxMailAttachmentMB/"
+      }
+    },
+    {
+      "name": "SI_MdcArmSubscriptionTimeoutMinutes",
+      "label": "Defender for Cloud read per subscription",
+      "group": "Collection scope & limits",
+      "type": "int",
+      "engines": [],
+      "edition": "community",
+      "secret": false,
+      "advanced": true,
+      "default": null,
+      "defaultText": "15 minutes.",
+      "description": "How long the Defender for Cloud assessments read of ONE subscription may take. Default 15 minutes (it takes seconds). A subscription that runs out counts as one whose read failed: Resource Graph's rows answer for it when it has some, else it is unknown -- never \"nothing there\".",
+      "purpose": "How long the Defender for Cloud assessments read of one subscription may take.",
+      "effect": "A subscription that runs out counts as one whose read failed: Resource Graph's rows answer for it when it has some, else its findings are unknown -- never shown as nothing there. Longer gives a very large subscription more time; shorter ends a stuck read sooner.",
+      "whenToChange": "Only when support asks for it, or when a very large subscription's read is cut off.",
+      "unit": "minutes",
+      "info": {
+        "what": "How long the Defender for Cloud assessments read of one subscription may take.",
+        "whenChanged": "A subscription that runs out counts as one whose read failed: Resource Graph's rows answer for it when it has some, else its findings are unknown -- never shown as nothing there. Longer gives a very large subscription more time; shorter ends a stuck read sooner.",
+        "risk": "Changes what is collected from the next run: narrowing it means some assets or data are not collected, so they look absent in profiles, CIs and reports (absence is never read as fixed). Reversible: change it back; the next run collects again.",
+        "requires": "Nothing else.",
+        "default": "15 minutes.",
+        "recommended": "Keep the default. Change it when: Only when support asks for it, or when a very large subscription's read is cut off.",
+        "docUrl": "https://invardia.com/docs/si/settings/SI_MdcArmSubscriptionTimeoutMinutes/"
       }
     },
     {
@@ -10758,7 +11059,7 @@
       "card": "Asset tagging",
       "info": {
         "what": "Lets the asset-tagging job actually write the tags its rules select in Defender, Azure and Entra, instead of only reporting them.",
-        "whenOn": "On, the job changes Defender machine tags, Azure resource tags and Entra custom security attributes in your tenant. Only a real true turns it on; the job identity also needs the write roles.",
+        "whenOn": "the job changes Defender machine tags, Azure resource tags and Entra custom security attributes in your tenant. Only a real true turns it on; the job identity also needs the write roles.",
         "whenOff": "report only, every planned tag is logged, nothing is changed",
         "risk": "Writes to your tenant: the job changes Defender machine tags, Azure resource tags and Entra custom security attributes. A wrong rule tags or untags many objects at once. Reversible only by changing the rules and running again (or by hand); every change is on the audit trail.",
         "requires": "The asset tagging identity's write rights (granted by setup only when asked).",
@@ -10766,7 +11067,7 @@
         "recommended": "Off until the report-only plan has been reviewed on the Asset tagging page; then on.",
         "docUrl": "https://invardia.com/docs/si/settings/SI_Pro_AssetTagging_Apply/",
         "confirmWhen": "on",
-        "confirm": "On, the job changes Defender machine tags, Azure resource tags and Entra custom security attributes in your tenant. Only a real true turns it on; the job identity also needs the write roles. Writes to your tenant: the job changes Defender machine tags, Azure resource tags and Entra custom security attributes. A wrong rule tags or untags many objects at once. Reversible only by changing the rules and running again (or by hand); every change is on the audit trail."
+        "confirm": "the job changes Defender machine tags, Azure resource tags and Entra custom security attributes in your tenant. Only a real true turns it on; the job identity also needs the write roles. Writes to your tenant: the job changes Defender machine tags, Azure resource tags and Entra custom security attributes. A wrong rule tags or untags many objects at once. Reversible only by changing the rules and running again (or by hand); every change is on the audit trail."
       }
     },
     {
@@ -10870,7 +11171,7 @@
       "licensedFeature": "cmdb-connectors",
       "info": {
         "what": "Makes the SQL CMDB connector plan what it would create, update and retire without writing anything to SQL.",
-        "whenOn": "On, the CI table is not changed and no run is recorded there; the plan is in the job's log and on the audit trail as a plan.",
+        "whenOn": "the CI table is not changed and no run is recorded there; the plan is in the job's log and on the audit trail as a plan.",
         "whenOff": "the connector writes the CI table",
         "risk": "The CMDB table is not updated while it is on: consumers of the CMDB hand-off keep the last state. Reversible: turn it off.",
         "requires": "A SecurityInsight Pro licence.",
@@ -10878,7 +11179,7 @@
         "recommended": "Off; on only to check a change safely.",
         "docUrl": "https://invardia.com/docs/si/settings/SI_Pro_CmdbSql_DryRun/",
         "confirmWhen": "on",
-        "confirm": "On, the CI table is not changed and no run is recorded there; the plan is in the job's log and on the audit trail as a plan. The CMDB table is not updated while it is on: consumers of the CMDB hand-off keep the last state. Reversible: turn it off."
+        "confirm": "the CI table is not changed and no run is recorded there; the plan is in the job's log and on the audit trail as a plan. The CMDB table is not updated while it is on: consumers of the CMDB hand-off keep the last state. Reversible: turn it off."
       }
     },
     {
@@ -10900,8 +11201,8 @@
       "card": "SQL CMDB connector",
       "info": {
         "what": "Writes every asset SecurityInsight knows into a CI table in the Pro database (one row per asset with its tier, department, owner, business services, identifiers and change history), for reporting and Power BI.",
-        "whenOn": "when a Pro database is configured",
-        "whenOff": "Off, the CMDB connector job ends at once and the CI table keeps what it last held; nothing is deleted. On, each run creates new CIs, updates changed ones and retires CIs that are gone.",
+        "whenOn": "each run creates new CIs, updates changed ones and retires CIs that are gone.",
+        "whenOff": "the CMDB connector job ends at once and the CI table keeps what it last held; nothing is deleted.",
         "risk": "Changes how long data is kept or how quickly assets are treated as gone. Shortening a retention DELETES older data at the next clean-up and that cannot be undone; shortening a grace period retires assets (and closes their findings) sooner. Lengthening is safe but uses more storage.",
         "requires": "A SecurityInsight Pro licence.",
         "default": "On when a Pro database is configured",
@@ -11347,7 +11648,7 @@
       "whenToChange": "Turn on briefly when testing a new database setup; turn off again afterwards.",
       "info": {
         "what": "Makes the Pro data sync plan what it would copy and purge without writing anything to SQL.",
-        "whenOn": "On, no run data reaches the Pro database and nothing is purged, so Pro pages stop getting new data. Useful to check a new setup safely.",
+        "whenOn": "no run data reaches the Pro database and nothing is purged, so Pro pages stop getting new data. Useful to check a new setup safely.",
         "whenOff": "the data sync writes to the database",
         "risk": "No run data reaches the Pro database: the web app's pages stop getting new data while it is on. Reversible: turn it off; the next sync catches up within its look-back.",
         "requires": "Nothing else.",
@@ -11355,7 +11656,7 @@
         "recommended": "Off; on only to check a new setup safely.",
         "docUrl": "https://invardia.com/docs/si/settings/SI_Pro_DataSync_DryRun/",
         "confirmWhen": "on",
-        "confirm": "On, no run data reaches the Pro database and nothing is purged, so Pro pages stop getting new data. Useful to check a new setup safely. No run data reaches the Pro database: the web app's pages stop getting new data while it is on. Reversible: turn it off; the next sync catches up within its look-back."
+        "confirm": "no run data reaches the Pro database and nothing is purged, so Pro pages stop getting new data. Useful to check a new setup safely. No run data reaches the Pro database: the web app's pages stop getting new data while it is on. Reversible: turn it off; the next sync catches up within its look-back."
       }
     },
     {
@@ -11417,7 +11718,7 @@
     },
     {
       "name": "SI_Pro_FindingSla_CriticalDays",
-      "label": "Days to fix a critical finding",
+      "label": "Days to fix a very high (critical) finding",
       "group": "Data & retention",
       "type": "int",
       "engines": [],
@@ -11427,20 +11728,48 @@
       "default": null,
       "defaultText": "15 days",
       "description": "--- Findings per CI: the days a finding has to be fixed, per severity (its due date; 0 = no due date) ---",
-      "purpose": "How many days a critical finding has to be fixed, counted from when it was first found (or found again after it was fixed).",
-      "effect": "Sets the due date of every critical finding. A finding past its due date is shown as overdue on the CI page, the service views and the trend. 0 = critical findings have no due date.",
-      "whenToChange": "Set it to the deadline your security policy gives critical findings.",
+      "purpose": "How many days a very high finding (SI's top severity; the Rating column says Critical) has to be fixed, counted from when it was first found (or found again after it was fixed).",
+      "effect": "Sets the due date of every very high (critical) finding. A finding past its due date is shown as overdue on the CI page, the service views and the trend; the remediation tasks and the tickets carry it unless Defender for Cloud governance set a due date of its own. 0 = very high findings have no due date.",
+      "whenToChange": "Set it to the deadline your security policy gives very high (critical) findings.",
       "unit": "days",
       "max": 3650,
       "min": 0,
       "info": {
-        "what": "How many days a critical finding has to be fixed, counted from when it was first found (or found again after it was fixed).",
-        "whenChanged": "Sets the due date of every critical finding. A finding past its due date is shown as overdue on the CI page, the service views and the trend. 0 = critical findings have no due date.",
+        "what": "How many days a very high finding (SI's top severity; the Rating column says Critical) has to be fixed, counted from when it was first found (or found again after it was fixed).",
+        "whenChanged": "Sets the due date of every very high (critical) finding. A finding past its due date is shown as overdue on the CI page, the service views and the trend; the remediation tasks and the tickets carry it unless Defender for Cloud governance set a due date of its own. 0 = very high findings have no due date.",
         "risk": "Changes how long data is kept or how quickly assets are treated as gone. Shortening a retention DELETES older data at the next clean-up and that cannot be undone; shortening a grace period retires assets (and closes their findings) sooner. Lengthening is safe but uses more storage.",
         "requires": "Nothing else.",
         "default": "15 days",
-        "recommended": "Keep the default. Change it when: Set it to the deadline your security policy gives critical findings.",
+        "recommended": "Keep the default. Change it when: Set it to the deadline your security policy gives very high (critical) findings.",
         "docUrl": "https://invardia.com/docs/si/settings/SI_Pro_FindingSla_CriticalDays/"
+      }
+    },
+    {
+      "name": "SI_Pro_FindingSla_ExploitedDays",
+      "label": "Days to fix an actively exploited finding",
+      "group": "Data & retention",
+      "type": "int",
+      "engines": [],
+      "edition": "community",
+      "secret": false,
+      "advanced": true,
+      "default": null,
+      "defaultText": "14 days",
+      "description": "the days a finding with a verified exploit or one in an exploit kit has to be fixed, whatever its severity (0 = off)",
+      "purpose": "How many days a vulnerability (CVE) finding has to be fixed when its exploit is verified or is in an exploit kit, whatever its severity, counted from when it was first found (or found again after it was fixed). An exploit that is only known to exist does not count.",
+      "effect": "A finding with a verified exploit, or one in an exploit kit, is due after this many days when that is sooner than the days of its severity (or its severity has no due date). A due date set in Defender for Cloud governance is kept. 0 = off: only the days of the severity count.",
+      "whenToChange": "Set it to the deadline your security policy gives actively exploited vulnerabilities (CISA BOD 22-01 gives 14 days), or 0 to use the severity alone.",
+      "unit": "days",
+      "max": 3650,
+      "min": 0,
+      "info": {
+        "what": "How many days a vulnerability (CVE) finding has to be fixed when its exploit is verified or is in an exploit kit, whatever its severity, counted from when it was first found (or found again after it was fixed). An exploit that is only known to exist does not count.",
+        "whenChanged": "A finding with a verified exploit, or one in an exploit kit, is due after this many days when that is sooner than the days of its severity (or its severity has no due date). A due date set in Defender for Cloud governance is kept. 0 = off: only the days of the severity count.",
+        "risk": "Changes how long data is kept or how quickly assets are treated as gone. Shortening a retention DELETES older data at the next clean-up and that cannot be undone; shortening a grace period retires assets (and closes their findings) sooner. Lengthening is safe but uses more storage.",
+        "requires": "Nothing else.",
+        "default": "14 days",
+        "recommended": "Keep the default. Change it when: Set it to the deadline your security policy gives actively exploited vulnerabilities (CISA BOD 22-01 gives 14 days), or 0 to use the severity alone.",
+        "docUrl": "https://invardia.com/docs/si/settings/SI_Pro_FindingSla_ExploitedDays/"
       }
     },
     {
@@ -11481,7 +11810,7 @@
       "secret": false,
       "advanced": true,
       "default": null,
-      "defaultText": "180 days",
+      "defaultText": "90 days",
       "description": "the days a low finding has to be fixed (0 = no due date)",
       "purpose": "How many days a low finding has to be fixed, counted from when it was first found (or found again after it was fixed).",
       "effect": "Sets the due date of every low finding. A finding past its due date is shown as overdue. 0 = low findings have no due date.",
@@ -11494,7 +11823,7 @@
         "whenChanged": "Sets the due date of every low finding. A finding past its due date is shown as overdue. 0 = low findings have no due date.",
         "risk": "Changes how long data is kept or how quickly assets are treated as gone. Shortening a retention DELETES older data at the next clean-up and that cannot be undone; shortening a grace period retires assets (and closes their findings) sooner. Lengthening is safe but uses more storage.",
         "requires": "Nothing else.",
-        "default": "180 days",
+        "default": "90 days",
         "recommended": "Keep the default. Change it when: Set it to the deadline your security policy gives low findings.",
         "docUrl": "https://invardia.com/docs/si/settings/SI_Pro_FindingSla_LowDays/"
       }
@@ -11509,7 +11838,7 @@
       "secret": false,
       "advanced": true,
       "default": null,
-      "defaultText": "90 days",
+      "defaultText": "60 days",
       "description": "the days a medium finding has to be fixed (0 = no due date)",
       "purpose": "How many days a medium finding has to be fixed, counted from when it was first found (or found again after it was fixed).",
       "effect": "Sets the due date of every medium finding. A finding past its due date is shown as overdue. 0 = medium findings have no due date.",
@@ -11522,7 +11851,7 @@
         "whenChanged": "Sets the due date of every medium finding. A finding past its due date is shown as overdue. 0 = medium findings have no due date.",
         "risk": "Changes how long data is kept or how quickly assets are treated as gone. Shortening a retention DELETES older data at the next clean-up and that cannot be undone; shortening a grace period retires assets (and closes their findings) sooner. Lengthening is safe but uses more storage.",
         "requires": "Nothing else.",
-        "default": "90 days",
+        "default": "60 days",
         "recommended": "Keep the default. Change it when: Set it to the deadline your security policy gives medium findings.",
         "docUrl": "https://invardia.com/docs/si/settings/SI_Pro_FindingSla_MediumDays/"
       }
@@ -12238,6 +12567,35 @@
       }
     },
     {
+      "name": "SI_ProtectionScore_MinorPointsCap",
+      "label": "Protection score: Medium and Low cost at most (points per asset)",
+      "group": "Risk Analysis -- mails and executive view",
+      "type": "int",
+      "engines": [],
+      "edition": "community",
+      "secret": false,
+      "advanced": false,
+      "default": null,
+      "defaultText": "20",
+      "description": "The most points Medium and Low fixes together take from one asset's health (0 = they do not count). Default 20.",
+      "purpose": "The most points Medium and Low fixes together take from one asset's health, so many small findings cannot outweigh a Very High.",
+      "effect": "0 = Medium and Low fixes do not count. 0 to 100; anything else = the default.",
+      "whenToChange": "Medium and Low findings matter more (raise it) or not at all (0) to your management.",
+      "unit": "points",
+      "max": 100,
+      "min": 0,
+      "card": "Protection score",
+      "info": {
+        "what": "The most points Medium and Low fixes together take from one asset's health, so many small findings cannot outweigh a Very High.",
+        "whenChanged": "0 = Medium and Low fixes do not count. 0 to 100; anything else = the default.",
+        "risk": "Changes how the headline figures are presented in the mails and the executive view; the findings themselves are unchanged. Reversible at once.",
+        "requires": "Nothing else.",
+        "default": "20",
+        "recommended": "Keep the default. Change it when: Medium and Low findings matter more (raise it) or not at all (0) to your management.",
+        "docUrl": "https://invardia.com/docs/si/settings/SI_ProtectionScore_MinorPointsCap/"
+      }
+    },
+    {
       "name": "SI_ProtectionScore_OtherGraceDays_CloudResource",
       "label": "Protection Score: grace for Azure findings (days)",
       "group": "Risk Analysis -- mails and executive view",
@@ -12354,8 +12712,8 @@
       }
     },
     {
-      "name": "SI_ProtectionScore_Severities",
-      "label": "Protection score: severities that count",
+      "name": "SI_ProtectionScore_SeverityPoints",
+      "label": "Protection score: points per open fix",
       "group": "Risk Analysis -- mails and executive view",
       "type": "text",
       "engines": [],
@@ -12363,25 +12721,25 @@
       "secret": false,
       "advanced": false,
       "default": null,
-      "defaultText": "Very High, Critical, High",
-      "description": "The severities that take an asset out of good standing. Default 'Very High,Critical,High'.",
-      "purpose": "The finding severities that take an asset out of good standing in the protection score.",
-      "effect": "An asset with an open, non-exempted finding of one of these severities is not in good standing. Separate with commas.",
-      "whenToChange": "Also count Medium findings, for a stricter score.",
+      "defaultText": "Very High=25,High=10,Medium=3,Low=1",
+      "description": "The points each open fix costs an asset's health (100), by severity: one fix = one recommended update however many CVEs it closes; any other finding counts as one. Default 'Very High=25,High=10,Medium=3,Low=1'.",
+      "purpose": "How many points of an asset's health (100) each open fix costs, by its severity: one fix = one recommended update however many CVEs it closes; any other finding counts as one.",
+      "effect": "An asset's health = 100 less the points of its open fixes (Medium and Low together at most SI_ProtectionScore_MinorPointsCap), never below 0. A severity at 0 does not count. Write <severity>=<0..100> for Very High, High, Medium, Low; anything else = the default.",
+      "whenToChange": "Your management weighs the severities differently.",
       "card": "Protection score",
       "info": {
-        "what": "The finding severities that take an asset out of good standing in the protection score.",
-        "whenChanged": "An asset with an open, non-exempted finding of one of these severities is not in good standing. Separate with commas.",
+        "what": "How many points of an asset's health (100) each open fix costs, by its severity: one fix = one recommended update however many CVEs it closes; any other finding counts as one.",
+        "whenChanged": "An asset's health = 100 less the points of its open fixes (Medium and Low together at most SI_ProtectionScore_MinorPointsCap), never below 0. A severity at 0 does not count. Write <severity>=<0..100> for Very High, High, Medium, Low; anything else = the default.",
         "risk": "Changes how the headline figures are presented in the mails and the executive view; the findings themselves are unchanged. Reversible at once.",
         "requires": "Nothing else.",
-        "default": "Very High, Critical, High",
-        "recommended": "Keep the default. Change it when: Also count Medium findings, for a stricter score.",
-        "docUrl": "https://invardia.com/docs/si/settings/SI_ProtectionScore_Severities/"
+        "default": "Very High=25,High=10,Medium=3,Low=1",
+        "recommended": "Keep the default. Change it when: Your management weighs the severities differently.",
+        "docUrl": "https://invardia.com/docs/si/settings/SI_ProtectionScore_SeverityPoints/"
       }
     },
     {
-      "name": "SI_ProtectionScore_TierWeights",
-      "label": "Protection score: tier weights",
+      "name": "SI_ProtectionScore_TierShares",
+      "label": "Protection score: share of each tier (%)",
       "group": "Risk Analysis -- mails and executive view",
       "type": "text",
       "engines": [],
@@ -12389,20 +12747,20 @@
       "secret": false,
       "advanced": false,
       "default": null,
-      "defaultText": "8,4,2,1 (an unclassified asset weighs as Tier 3)",
-      "description": "The protection score's tier weights, Tier 0..3 (an unclassified asset weighs as Tier 3). Default '8,4,2,1'.",
-      "purpose": "How much an asset of each tier weighs in the protection score, Tier 0 to Tier 3, separated by commas.",
-      "effect": "A Tier 0 asset out of good standing lowers the score as much as eight Tier 3 assets with the default. Four numbers, 0 or more; anything else = the default.",
-      "whenToChange": "Your management weighs tiers differently.",
+      "defaultText": "40,30,20,10",
+      "description": "(#1361) The protection score's share of each tier, Tier 0..3 in percent, whatever the number of assets in the tier (an unclassified asset counts as Tier 3; a tier with no assets hands its share to the others). Default '40,30,20,10'.",
+      "purpose": "How much of the protection score each tier owns, Tier 0 to Tier 3 in percent, separated by commas -- whatever the number of assets in the tier (an unclassified asset counts as Tier 3).",
+      "effect": "The score = Tier 0's average asset health x its share + Tier 1's x its share + ...; a tier with no assets hands its share to the others. Four numbers, 0 or more, not all 0; anything else = the default. From the next run; stored collections keep their score.",
+      "whenToChange": "Your management wants Tier 0 to count even more, or the tiers more evenly.",
       "card": "Protection score",
       "info": {
-        "what": "How much an asset of each tier weighs in the protection score, Tier 0 to Tier 3, separated by commas.",
-        "whenChanged": "A Tier 0 asset out of good standing lowers the score as much as eight Tier 3 assets with the default. Four numbers, 0 or more; anything else = the default.",
+        "what": "How much of the protection score each tier owns, Tier 0 to Tier 3 in percent, separated by commas -- whatever the number of assets in the tier (an unclassified asset counts as Tier 3).",
+        "whenChanged": "The score = Tier 0's average asset health x its share + Tier 1's x its share + ...; a tier with no assets hands its share to the others. Four numbers, 0 or more, not all 0; anything else = the default. From the next run; stored collections keep their score.",
         "risk": "Changes how the headline figures are presented in the mails and the executive view; the findings themselves are unchanged. Reversible at once.",
         "requires": "Nothing else.",
-        "default": "8,4,2,1 (an unclassified asset weighs as Tier 3)",
-        "recommended": "Keep the default. Change it when: Your management weighs tiers differently.",
-        "docUrl": "https://invardia.com/docs/si/settings/SI_ProtectionScore_TierWeights/"
+        "default": "40,30,20,10",
+        "recommended": "Keep the default. Change it when: Your management wants Tier 0 to count even more, or the tiers more evenly.",
+        "docUrl": "https://invardia.com/docs/si/settings/SI_ProtectionScore_TierShares/"
       }
     },
     {
@@ -12610,6 +12968,62 @@
       }
     },
     {
+      "name": "SI_RA_HuntingStreamRead",
+      "label": "Risk Analysis reads hunting answers as they arrive",
+      "group": "Risk Analysis reports",
+      "type": "enum",
+      "engines": [],
+      "edition": "community",
+      "secret": false,
+      "advanced": true,
+      "default": null,
+      "defaultText": "on -- each answer is read as it arrives",
+      "description": "How Risk Analysis reads the answers of Microsoft Defender's advanced hunting. on (the default) = each answer is read as it arrives, a few MB of rows at a time, so a large answer never has to fit in the worker's memory several times at once; an answer that cannot be read that way is asked again the older way. off = each answer is read whole, then parsed (the older read). The rows are the same either way.",
+      "purpose": "How Risk Analysis reads the answers of Microsoft Defender's advanced hunting. A large answer read whole is held in the worker's memory several times at once (the text, the parsed answer, the rows); read as it arrives, a few MB of rows at a time, it is held about once.",
+      "effect": "on: each answer is read as it arrives, so a query slice whose answer did not fit in the worker's memory no longer has to be split again and again; an answer that cannot be read this way is asked again the older way and the run log says so in one line. off: each answer is read whole, then parsed (the older read). The rows, columns and values are the same either way.",
+      "whenToChange": "Most installs never should. Set it to off only when support asks for it while a problem with reading Defender's answers is looked into.",
+      "values": [
+        "off",
+        "on"
+      ],
+      "info": {
+        "what": "How Risk Analysis reads the answers of Microsoft Defender's advanced hunting. A large answer read whole is held in the worker's memory several times at once (the text, the parsed answer, the rows); read as it arrives, a few MB of rows at a time, it is held about once.",
+        "whenChanged": "on: each answer is read as it arrives, so a query slice whose answer did not fit in the worker's memory no longer has to be split again and again; an answer that cannot be read this way is asked again the older way and the run log says so in one line. off: each answer is read whole, then parsed (the older read). The rows, columns and values are the same either way.",
+        "risk": "Only changes how Risk Analysis reads Defender's answers, not what it reads: the findings are the same either way. On uses far less memory for a large answer; an answer it cannot read that way is asked again the older way (one more request, said in the run log). Reversible at once.",
+        "requires": "Nothing else.",
+        "default": "on -- each answer is read as it arrives",
+        "recommended": "Keep on (the default).",
+        "docUrl": "https://invardia.com/docs/si/settings/SI_RA_HuntingStreamRead/"
+      }
+    },
+    {
+      "name": "SI_RA_PartsBudgetSeconds",
+      "label": "Risk Analysis shared budget, read every (seconds)",
+      "group": "Risk Analysis reports",
+      "type": "int",
+      "engines": [],
+      "edition": "community",
+      "secret": false,
+      "advanced": true,
+      "default": null,
+      "defaultText": "60 seconds (a worker that is asked to slow down tells the others at once)",
+      "description": "How often (seconds) a Risk Analysis queue worker reads the run's shared budget of parts at a time. A worker that Defender asks to slow down tells the others at once, whatever this is.",
+      "purpose": "The queue workers of one Risk Analysis run share one budget of how many report parts they ask Microsoft Defender at a time. It is measured from Defender's own answers: halved for every worker when Defender asks any of them to slow down, raised again after quiet rounds, and shared by how many parts each running report still has. This is how often a worker reads it.",
+      "effect": "Shorter: a worker takes up a share another worker gave back sooner, at one more small read of the run's storage each time. Longer: fewer reads, a freed share is taken up later. The findings are the same either way.",
+      "whenToChange": "Most installs never should. Change it only if support asks you to.",
+      "unit": "seconds",
+      "min": 1,
+      "info": {
+        "what": "The queue workers of one Risk Analysis run share one budget of how many report parts they ask Microsoft Defender at a time. It is measured from Defender's own answers: halved for every worker when Defender asks any of them to slow down, raised again after quiet rounds, and shared by how many parts each running report still has. This is how often a worker reads it.",
+        "whenChanged": "Shorter: a worker takes up a share another worker gave back sooner, at one more small read of the run's storage each time. Longer: fewer reads, a freed share is taken up later. The findings are the same either way.",
+        "risk": "Only changes how often a worker reads the run's shared budget, so how soon a freed share is used: the findings are the same either way. Reversible at once.",
+        "requires": "Nothing else.",
+        "default": "60 seconds (a worker that is asked to slow down tells the others at once)",
+        "recommended": "Keep 60 (the default).",
+        "docUrl": "https://invardia.com/docs/si/settings/SI_RA_PartsBudgetSeconds/"
+      }
+    },
+    {
       "name": "SI_RA_PartsInParallel_Max",
       "label": "Risk Analysis parts asked at a time (most)",
       "group": "Risk Analysis reports",
@@ -12619,8 +13033,8 @@
       "secret": false,
       "advanced": true,
       "default": null,
-      "defaultText": "6 (never more than 4 per processor core)",
-      "description": "The most parts of one Risk Analysis report asked from Defender at a time (the next parts' answers are on their way while a part is processed). Adapts by itself: starts at 2, more while Defender answers quickly, fewer when it asks to slow down. 1 = one part at a time.",
+      "defaultText": "Not set: no fixed number -- the queue workers of a run share one budget measured from Defender's own answers (never more than 4 per processor core)",
+      "description": "The most parts of one Risk Analysis report asked from Defender at a time (the next parts' answers are on their way while a part is processed). Adapts by itself: starts at 2, more while Defender answers quickly, fewer when it asks to slow down. Not set (the default): no fixed number -- the queue workers of a run share one budget measured from Defender's own answers. A number = the ceiling. 1 = one part at a time.",
       "purpose": "A large Risk Analysis report is asked from Microsoft Defender in parts. While one part is processed (risk scores, the database), the next parts are already asked, so Defender and SecurityInsight work at the same time. This is the most parts asked at a time.",
       "effect": "The number adapts by itself: each report starts at 2, asks more while Defender answers quickly, and halves at once when Defender asks to slow down (it then waits as long as Defender says). A higher maximum lets a large report finish sooner when Defender keeps up; 1 asks one part at a time. The parts are processed in their order either way: the stored findings are the same.",
       "whenToChange": "Most installs never should. Set 1 only if support asks you to; lower it if other tools in the tenant share Defender's advanced hunting limits.",
@@ -12630,8 +13044,8 @@
         "whenChanged": "The number adapts by itself: each report starts at 2, asks more while Defender answers quickly, and halves at once when Defender asks to slow down (it then waits as long as Defender says). A higher maximum lets a large report finish sooner when Defender keeps up; 1 asks one part at a time. The parts are processed in their order either way: the stored findings are the same.",
         "risk": "Only changes how many parts of a report are asked from Defender at a time, so how long Risk Analysis takes: 1 makes a large report take much longer; a higher number can make Defender ask SecurityInsight to slow down more often (it then does). The findings are the same either way. Reversible at once.",
         "requires": "Nothing else.",
-        "default": "6 (never more than 4 per processor core)",
-        "recommended": "Keep 6 (the default).",
+        "default": "Not set: no fixed number -- the queue workers of a run share one budget measured from Defender's own answers (never more than 4 per processor core)",
+        "recommended": "Keep it not set (the default): the run measures what Defender allows.",
         "docUrl": "https://invardia.com/docs/si/settings/SI_RA_PartsInParallel_Max/"
       }
     },
@@ -12660,6 +13074,35 @@
         "default": "90 minutes (0 = no time limit)",
         "recommended": "Keep 90 (the default).",
         "docUrl": "https://invardia.com/docs/si/settings/SI_RA_RecoveryBudgetMinutes/"
+      }
+    },
+    {
+      "name": "SI_RA_SliceMerge",
+      "label": "Risk Analysis asks small parts together",
+      "group": "Risk Analysis reports",
+      "type": "enum",
+      "engines": [],
+      "edition": "community",
+      "secret": false,
+      "advanced": true,
+      "default": null,
+      "defaultText": "on -- small parts are asked together with their partner parts",
+      "description": "A small part of a Risk Analysis report is asked together with its untouched partner part (the same rows, fewer requests). on (the default); off = every part is asked on its own.",
+      "purpose": "A large Risk Analysis report is asked from Microsoft Defender in parts. When the answers come back small, a part is asked together with its partner part that nothing has asked yet: one request instead of two, the same rows. Each row is still written as part of its own part, in the same order.",
+      "effect": "on: fewer requests to Defender for a report whose parts are small; a request that held several parts and failed is asked again part by part. off: every part is asked on its own (the older way). The rows, columns and values are the same either way.",
+      "whenToChange": "Most installs never should. Set it to off only when support asks for it while a problem with a report's parts is looked into.",
+      "values": [
+        "off",
+        "on"
+      ],
+      "info": {
+        "what": "A large Risk Analysis report is asked from Microsoft Defender in parts. When the answers come back small, a part is asked together with its partner part that nothing has asked yet: one request instead of two, the same rows. Each row is still written as part of its own part, in the same order.",
+        "whenChanged": "on: fewer requests to Defender for a report whose parts are small; a request that held several parts and failed is asked again part by part. off: every part is asked on its own (the older way). The rows, columns and values are the same either way.",
+        "risk": "Only changes how many requests a report's parts take: the findings are the same either way. Reversible at once.",
+        "requires": "Nothing else.",
+        "default": "on -- small parts are asked together with their partner parts",
+        "recommended": "Keep on (the default).",
+        "docUrl": "https://invardia.com/docs/si/settings/SI_RA_SliceMerge/"
       }
     },
     {
@@ -13784,7 +14227,7 @@
       "card": "Public IP checks (Shodan)",
       "info": {
         "what": "Asks Shodan to actively re-scan your addresses before reading results, instead of using only data Shodan already has.",
-        "whenOn": "On, a batch scan is submitted (at most once per fresh scan interval) and the run waits for it; if it does not finish in time the run writes no rows and the next run picks it up. Spends Shodan scan credits.",
+        "whenOn": "a batch scan is submitted (at most once per fresh scan interval) and the run waits for it; if it does not finish in time the run writes no rows and the next run picks it up. Spends Shodan scan credits.",
         "whenOff": "cached and existing Shodan data only, no scan credits spent.",
         "risk": "Changes what is collected from the next run: narrowing it means some assets or data are not collected, so they look absent in profiles, CIs and reports (absence is never read as fixed). Reversible: change it back; the next run collects again.",
         "requires": "Read by: publicip.",
@@ -15428,6 +15871,36 @@
       }
     },
     {
+      "name": "SI_VulnLoop_ChangedSet",
+      "label": "Vulnerability connector compares only what changed",
+      "group": "Connectors & CMDB",
+      "type": "enum",
+      "engines": [],
+      "edition": "community",
+      "secret": false,
+      "advanced": true,
+      "default": null,
+      "defaultText": "on -- only new, changed, reopened and absent findings are planned one by one",
+      "description": "How the vulnerability connector compares the newest results with its records. on (the default) = only new, changed, reopened and absent findings are planned one by one (closes still come from every finding against every open record, and the close limits decide on the whole run); off = every finding planned one by one, as before; shadow = both ways, compared, the full compare applied (troubleshooting only: it doubles the work).",
+      "purpose": "How the vulnerability connector compares the newest results with the records it already holds. A large install has well over a million findings, and nearly all of them are the same as in the run before.",
+      "effect": "on: a still-reported finding whose record is unchanged is refreshed as seen without being planned one by one, and the results are read faster; closes still come from every finding of the results against every open record, and the close limits decide on the whole run. off: every finding is planned one by one, as before. shadow: both ways on every page, compared -- the full compare's result is what is applied, and any difference is a warning on the run (troubleshooting only: it doubles the work).",
+      "whenToChange": "Only when support asks for it: shadow to check the faster compare at an install, off if a difference was reported.",
+      "values": [
+        "on",
+        "off",
+        "shadow"
+      ],
+      "info": {
+        "what": "How the vulnerability connector compares the newest results with the records it already holds. A large install has well over a million findings, and nearly all of them are the same as in the run before.",
+        "whenChanged": "on: a still-reported finding whose record is unchanged is refreshed as seen without being planned one by one, and the results are read faster; closes still come from every finding of the results against every open record, and the close limits decide on the whole run. off: every finding is planned one by one, as before. shadow: both ways on every page, compared -- the full compare's result is what is applied, and any difference is a warning on the run (troubleshooting only: it doubles the work).",
+        "risk": "Only changes how the connector compares, not what it decides or sends: the same records are opened, updated, closed and held either way, and the same close limits decide. Off makes a large install's connector step take hours longer; shadow doubles its work. Reversible at once.",
+        "requires": "Nothing else.",
+        "default": "on -- only new, changed, reopened and absent findings are planned one by one",
+        "recommended": "On (the default).",
+        "docUrl": "https://invardia.com/docs/si/settings/SI_VulnLoop_ChangedSet/"
+      }
+    },
+    {
       "name": "SI_VulnSync_CloseAfterRuns",
       "label": "Runs before a vulnerability closes",
       "group": "Data & retention",
@@ -16263,6 +16736,8 @@
   ],
   "retired": [
     "SI_PrestageInfra",
+    "SI_ProtectionScore_Severities",
+    "SI_ProtectionScore_TierWeights",
     "SI_ServiceNow_DirectWrite",
     "SI_ServiceNow_ImportSetMaxRows",
     "SI_ServiceNow_ImportSetTable",

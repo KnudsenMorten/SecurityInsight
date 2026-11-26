@@ -31,6 +31,13 @@
 # NO Set-StrictMode here -- it leaks into the caller's scope (measured 2026-08-12), and the shipped
 # engines deliberately run without it.
 
+# #1321: the streaming advanced hunting reader (Risk Analysis reads its answers with it when SI_RA_HuntingStreamRead = on;
+# compiled on first use). Absent or not loadable: every read is the older one.
+if (-not (Get-Command -Name Read-SIHuntingAnswerStream -ErrorAction Ignore)) {
+    $__siHuntStream = [System.IO.Path]::Combine($PSScriptRoot, 'SI-HuntingStreamRead.ps1')
+    if ($PSScriptRoot -and [System.IO.File]::Exists($__siHuntStream)) { . $__siHuntStream }
+}
+
 function New-SIGraphJsonBody {
     <#
         Serialise a request body to UTF-8 BYTES. Every POST in this file goes through here.
@@ -101,13 +108,35 @@ function Invoke-SIGraphHttp {
         [byte[]]$BodyBytes,
         [string]$ContentType = 'application/json; charset=utf-8',
         [int]$TimeoutSec = 300,
-        [hashtable]$ExtraHeaders
+        [hashtable]$ExtraHeaders,
+        # #1321: a 2xx answer read AS IT ARRIVES (Read-SIHuntingHttpAnswer) -- the result then carries .Answer (the rows) and
+        # no body text. Any other answer, and every call without the switch, reads exactly as before.
+        [switch]$StreamRows,
+        [long]$StreamChunkBytes = 0
     )
 
     Add-Type -AssemblyName System.Net.Http -ErrorAction SilentlyContinue
 
     $client = New-SIGraphHttpClient
     try {
+        if ($StreamRows) {
+            $client.Timeout = [TimeSpan]::FromSeconds($TimeoutSec)
+            $sreq = New-Object System.Net.Http.HttpRequestMessage([System.Net.Http.HttpMethod]::$Method, $Uri)
+            [void]$sreq.Headers.TryAddWithoutValidation('Authorization', ('Bearer ' + $Token))
+            if ($ExtraHeaders) { foreach ($k in $ExtraHeaders.Keys) { [void]$sreq.Headers.TryAddWithoutValidation([string]$k, [string]$ExtraHeaders[$k]) } }
+            if ($BodyBytes) {
+                $scontent = New-Object System.Net.Http.ByteArrayContent(,$BodyBytes)
+                $scontent.Headers.Remove('Content-Type') | Out-Null
+                [void]$scontent.Headers.TryAddWithoutValidation('Content-Type', $ContentType)
+                $sreq.Content = $scontent
+            }
+            # the headers first, then the rows from the stream while they arrive. The ceiling stays ONE: the time the request
+            # and the reads WAIT for the service, together (the rows are taken in between, as the older read parsed after it).
+            $__sw = [System.Diagnostics.Stopwatch]::StartNew()
+            $sresp = $client.SendAsync($sreq, [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead).GetAwaiter().GetResult()
+            try { return (Read-SIHuntingHttpAnswer -Response $sresp -TimeoutSec ([Math]::Max(1, $TimeoutSec - [int][Math]::Floor($__sw.Elapsed.TotalSeconds))) -ChunkBytes $StreamChunkBytes) }
+            finally { $sresp.Dispose() }
+        }
         $client.Timeout = [TimeSpan]::FromSeconds($TimeoutSec)
         $req = New-Object System.Net.Http.HttpRequestMessage(
                     [System.Net.Http.HttpMethod]::$Method, $Uri)
@@ -151,6 +180,35 @@ function New-SIGraphHttpClient {
     Add-Type -AssemblyName System.Net.Http -ErrorAction SilentlyContinue
     if ($null -ne $script:SIGraphHttpHandler) { return (New-Object System.Net.Http.HttpClient -ArgumentList $script:SIGraphHttpHandler, $false) }
     New-Object System.Net.Http.HttpClient
+}
+
+function Read-SIHuntingHttpAnswer {
+    <#
+        #1321: one advanced hunting response in the shape Invoke-SIGraphHttp returns (StatusCode, Body, Ok, RetryAfterSec)
+        plus .Answer: a 2xx body is read AS IT ARRIVES (Read-SIHuntingAnswerStream -- the rows, never the body text; $null
+        when there is no body); any other answer's body is read as text, as before (the error classifiers read it).
+        -TimeoutSec: the time the reads may wait for the service (0 = no limit: an answer already read in full).
+    #>
+    param([Parameter(Mandatory)]$Response, [int]$TimeoutSec = 0, [long]$ChunkBytes = 0)
+    $body = ''; $answer = $null
+    if ($Response.Content) {
+        if ($Response.IsSuccessStatusCode) {
+            if (Get-Command -Name Read-SIHuntingAnswerStream -ErrorAction SilentlyContinue) {
+                $answer = Read-SIHuntingAnswerStream -Stream ($Response.Content.ReadAsStreamAsync().GetAwaiter().GetResult()) -TimeoutSec $TimeoutSec -ChunkBytes $ChunkBytes
+            } else {
+                $answer = [pscustomobject]@{ Failed = 'the streaming reader is not loaded in this process'; ParseError = $null; Schema = $null; Rows = $null }
+            }
+        } else {
+            $body = $Response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+        }
+    }
+    [pscustomobject]@{
+        StatusCode    = [int]$Response.StatusCode
+        Body          = $body
+        Ok            = $Response.IsSuccessStatusCode
+        RetryAfterSec = (Get-SIHttpRetryAfterSeconds -Response $Response)
+        Answer        = $answer
+    }
 }
 
 function Get-SIHttpRetryAfterSeconds {
@@ -216,12 +274,19 @@ function Start-SIHuntingPrefetch {
 function Receive-SIHuntingPrefetch {
     <# The answer of a request sent ahead, in the shape Invoke-SIGraphHttp returns -- waiting for it if it is still on its
        way. A transport failure (the 900 s ceiling included) is thrown exactly as Invoke-SIGraphHttp throws it. #>
-    param([Parameter(Mandatory)]$Store, [Parameter(Mandatory)]$Entry)
+    # -StreamRows (#1321): a 2xx answer's rows are read from its (already received) bytes through the streaming reader --
+    # never as one string and one parsed tree (Read-SIHuntingHttpAnswer); the result then carries .Answer
+    param([Parameter(Mandatory)]$Store, [Parameter(Mandatory)]$Entry, [switch]$StreamRows, [long]$StreamChunkBytes = 0)
     $wait = [System.Diagnostics.Stopwatch]::StartNew()
     $status = 0; $ra = 0
     try {
         # GetAwaiter().GetResult(), never .Result (see Invoke-SIGraphHttp: a getter swallows the timeout)
         $resp = $Entry.Task.GetAwaiter().GetResult()
+        if ($StreamRows) {
+            $sh = Read-SIHuntingHttpAnswer -Response $resp -TimeoutSec 0 -ChunkBytes $StreamChunkBytes
+            $status = [int]$sh.StatusCode; $ra = [int]$sh.RetryAfterSec
+            return $sh
+        }
         $body = ''
         if ($resp.Content) { $body = $resp.Content.ReadAsStringAsync().GetAwaiter().GetResult() }
         $status = [int]$resp.StatusCode
@@ -418,6 +483,26 @@ function Invoke-SIGraphRestPaged {
     return $all.ToArray()
 }
 
+function Get-SIHuntingTransportErrorText {
+    <#
+        PURE. The text a TRANSPORT failure of an advanced hunting request is reported with (Invoke-SIHuntingQueryRest).
+        A timeout arrives as TaskCanceledException wrapped in the MethodInvocationException that GetResult() raises through
+        PowerShell, so both the exception and its inner are inspected; it is normalised to text containing
+        'TaskCanceledException', which the bucket escalation matches on. Any other failure: its message.
+    #>
+    param([Parameter(Mandatory)]$Exception, [int]$TimeoutSec = 900)
+    $ex = $Exception
+    $inner = $ex.InnerException
+    $isTimeout = ($ex -is [System.Threading.Tasks.TaskCanceledException]) -or
+                 ($inner -is [System.Threading.Tasks.TaskCanceledException]) -or
+                 ($ex -is [System.Net.WebException] -and $ex.Status -eq [System.Net.WebExceptionStatus]::Timeout) -or
+                 ($ex.Message -match 'timed out' -or $ex.Message -match 'canceled' -or $ex.Message -match 'cancelled')
+    if ($isTimeout) {
+        return ("TaskCanceledException: the request was canceled due to the configured timeout of {0} seconds elapsing." -f $TimeoutSec)
+    }
+    [string]$ex.Message
+}
+
 function Invoke-SIHuntingQueryRest {
     <#
         Advanced Hunting over REST -- the replacement for `Start-MgBetaSecurityHuntingQuery` (#113b).
@@ -461,10 +546,24 @@ function Invoke-SIHuntingQueryRest {
         # 🔒 Return a result object instead of throwing. Used by the advanced-hunting PROBE, whose
         # expected answer is a 400 -- once per SI_*_Profile_CL table, every run. See the comment at
         # the throw site: this is what keeps a working routing decision out of the transcript.
-        [switch]$AsResult
+        [switch]$AsResult,
+
+        # #1321 (SCALE-2; Risk Analysis passes it when SI_RA_HuntingStreamRead = on): the answer is read AS IT ARRIVES
+        # (engine/_shared/SI-HuntingStreamRead.ps1) -- the same rows in the same shape, without the body ever held as one
+        # string or one parsed tree. Never for -AsResult (the probe). An answer the reader cannot read is asked again the
+        # older way, said in one line. -StreamChunkBytes: how much of the answer is parsed at a time (tests; default 4 MB).
+        [switch]$StreamRows,
+        [long]$StreamChunkBytes = 0
     )
 
     $url  = ('https://graph.microsoft.com/{0}/security/runHuntingQuery' -f $ApiVersion)
+    $__stream = $false
+    if ($StreamRows -and -not $AsResult -and (Get-Command -Name Get-SIHuntingStreamReaderType -ErrorAction SilentlyContinue)) {
+        if ($null -ne (Get-SIHuntingStreamReaderType)) { $__stream = $true }
+        else { Write-SIHuntingStreamFallback -Reason (Get-SIHuntingStreamReaderType -Reason) -Once }
+    }
+    $__hsArgs = @{}
+    if ($__stream) { $__hsArgs['StreamRows'] = $true; if ($StreamChunkBytes -gt 0) { $__hsArgs['StreamChunkBytes'] = $StreamChunkBytes } }
     # 🔴 UTF-8 BYTES. RA inlines real device and user names into the query, so this body carries
     # customer data, not just KQL -- and on PS 5.1 a STRING body loses every non-ASCII character.
     # That is not theoretical: it is what a live run produced on 2026-09-08, as 400 BadRequest
@@ -490,27 +589,25 @@ function Invoke-SIHuntingQueryRest {
     # Defender answers -- and whether it throttles -- is learned from every answer, not only from the parts asked ahead
     $__direct = if ($null -eq $__pf -and -not $AsResult -and $null -ne $script:SIHuntingPrefetch) { [System.Diagnostics.Stopwatch]::StartNew() } else { $null }
     try {
-        $http = if ($null -ne $__pf) { Receive-SIHuntingPrefetch -Store $script:SIHuntingPrefetch -Entry $__pf }
-                else { Invoke-SIGraphHttp -Uri $url -Token $Token -Method Post -BodyBytes $body -TimeoutSec $TimeoutSec }
+        $http = if ($null -ne $__pf) { Receive-SIHuntingPrefetch -Store $script:SIHuntingPrefetch -Entry $__pf @__hsArgs }
+                else { Invoke-SIGraphHttp -Uri $url -Token $Token -Method Post -BodyBytes $body -TimeoutSec $TimeoutSec @__hsArgs }
         if ($null -ne $__direct) {
             $__direct.Stop()
             $script:SIHuntingPrefetch.Answers.Add([pscustomobject]@{ Part = -1; Status = [int]$http.StatusCode; RetryAfterSec = [int]$http.RetryAfterSec; WaitedSec = [double]$__direct.Elapsed.TotalSeconds; Seconds = [double]$__direct.Elapsed.TotalSeconds; Peeked = $false })
         }
     } catch {
         # Only a genuine TRANSPORT failure reaches here now -- HTTP status codes come back as data.
-        # A timeout arrives as TaskCanceledException wrapped in the MethodInvocationException that
-        # GetResult() raises through PowerShell, so both the exception and its inner are inspected.
-        $ex = $_.Exception
-        $inner = $ex.InnerException
-        $isTimeout = ($ex -is [System.Threading.Tasks.TaskCanceledException]) -or
-                     ($inner -is [System.Threading.Tasks.TaskCanceledException]) -or
-                     ($ex -is [System.Net.WebException] -and $ex.Status -eq [System.Net.WebExceptionStatus]::Timeout) -or
-                     ($ex.Message -match 'timed out' -or $ex.Message -match 'canceled' -or $ex.Message -match 'cancelled')
-        if ($isTimeout) {
-            $errText = ("TaskCanceledException: the request was canceled due to the configured timeout of {0} seconds elapsing." -f $TimeoutSec)
-        } else {
-            $errText = [string]$ex.Message
-        }
+        $errText = Get-SIHuntingTransportErrorText -Exception $_.Exception -TimeoutSec $TimeoutSec
+    }
+
+    # #1321: a streamed answer the reader could not read (not its shape, a reader fault) is NOT an error of the query -- the
+    # same query is asked again the older way (data first), said in one line; the reader is off for the rest of the process
+    if ($__stream -and -not $errText -and $null -ne $http -and $http.Ok -and $http.PSObject.Properties['Answer'] -and $null -ne $http.Answer -and $http.Answer.Failed) {
+        Write-SIHuntingStreamFallback -Reason ([string]$http.Answer.Failed)
+        $__stream = $false
+        $http = $null
+        try { $http = Invoke-SIGraphHttp -Uri $url -Token $Token -Method Post -BodyBytes $body -TimeoutSec $TimeoutSec }
+        catch { $errText = Get-SIHuntingTransportErrorText -Exception $_.Exception -TimeoutSec $TimeoutSec }
     }
 
     if (-not $errText -and $http -and -not $http.Ok) {
@@ -540,6 +637,22 @@ function Invoke-SIHuntingQueryRest {
         # The QUERY path still throws, because RA's bucket-escalation loop is built around catching it.
         if ($AsResult) { return [pscustomobject]@{ Ok = $false; Error = $errText; Results = @(); Schema = $null } }
         throw $errText
+    }
+
+    # #1321: the streamed answer -- the rows already in the shape below, built by the same conversion; no body, no rows
+    if ($__stream -and $null -ne $http -and $http.PSObject.Properties['Answer']) {
+        $__ans = $http.Answer
+        $http = $null
+        if ($null -eq $__ans) { return [pscustomobject]@{ Schema = $null; Results = @(); Ok = $true; Error = $null } }
+        if ($__ans.ParseError) { throw ('advanced hunting returned a body that is not JSON: {0}' -f $__ans.ParseError) }
+        # the schema through an if-statement, exactly as the older read takes it below (a one-column list comes out as its
+        # one column, an empty one as $null -- the same value either way)
+        $__schema = if ($null -ne $__ans.Schema) { $__ans.Schema } else { $null }
+        # (a plain statement, never $( ... ): a subexpression turns an empty list into $null)
+        $__res = New-Object 'object[]' 0
+        if ($null -ne $__ans.Rows) { $__res = $__ans.Rows.ToArray() }
+        $__ans = $null
+        return [pscustomobject]@{ Schema = $__schema; Results = $__res; Ok = $true; Error = $null }
     }
 
     $resp = $null

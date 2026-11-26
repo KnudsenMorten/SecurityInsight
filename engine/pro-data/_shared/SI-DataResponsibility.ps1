@@ -352,6 +352,7 @@ function Get-SIDataUnresolvedSql {
     <# Complete collections resolved with another policy (or never), NEWEST first. #>
     # #717: never a collection whose finding rows the retention removed -- its department totals are what is left of it
     $live = ''; if (Get-Command -Name Get-SIDataLiveFilter -ErrorAction SilentlyContinue) { $live = Get-SIDataLiveFilter }
+    if (Get-Command -Name Get-SIDataBuildFilter -ErrorAction SilentlyContinue) { $live += Get-SIDataBuildFilter }   # #1226
     "SELECT CollectionId, CollectionTime FROM sidata.Collection WHERE Status = 'Complete' AND (ResolvedVersion IS NULL OR ResolvedVersion <> @Fingerprint)$live ORDER BY CollectionTime DESC"
 }
 

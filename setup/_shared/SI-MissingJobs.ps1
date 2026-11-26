@@ -160,8 +160,52 @@ $script:SIMissingJobCatalog = @(
         What   = 'the support grant job (the Invardia Support app''s database access, just in time)'
         OwnSize = $true
     }
+    # #1252 (SECURE-WEB-1 part 2): the job request job -- never a timer, never a step (the map's manualOnly); STARTED BY ITS
+    # QUEUE si-job-requests (the same event trigger as the support grant job, the scaler signed in as the engine identity), where
+    # the web app puts a person's Run now / Stop / template release / mail send now; it starts that job as the engine identity.
+    # The floor size, its own short run limit. The queue and the web app's one right on it are made by the updater's job request
+    # step (setup\_shared\SI-JobRequestsUpdate.ps1).
+    [pscustomobject]@{
+        Engine = 'job-requests'; Code = @('engine/job-requests/Invoke-SIJobRequests.ps1', 'engine/job-requests/SI-JobRequests.ps1')
+        Donors = @('caj-si-heartbeat', 'caj-si-asset-datasync', 'caj-si-close-loop-mail', 'caj-si-asset-cmdb-sql', 'caj-si-verification')
+        What   = 'the job request job (starts the jobs people ask for in the web app)'
+        OwnSize = $true
+        # live 3.1.49 internal 2026-11-25: a Key Vault secret copied from the donor (openai-apikey) made Azure refuse the whole
+        # job (InvalidParameterValueInContainerTemplate) -- it reads no Key Vault secret: only the ones listed here are carried (the
+        # licence the container start reads, and the sign-in of an install that signs in with a secret or a certificate)
+        Secrets = @('si-license', 'si-spn-secret', 'si-spn-cert')
+    }
 )
 
+# 3.1.50 (#1252 follow-up, live 3.1.49 internal 2026-11-25: a donor's Key Vault reference the new job could not resolve --
+# openai-apikey -- made Azure refuse the WHOLE job): EVERY job of the catalog declares the secrets it reads; it carries only
+# those from its donor (and only the variables that refer to them). What each one reads (container\Start-SIInContainer.ps1
+# reads them for every job; the engine decides whether it uses them):
+#   si-spn-secret / si-spn-cert  the sign-in of an install that signs in with a client secret / a certificate (SI_SPN_SECRET /
+#                                SI_SPN_CERT_PFX_B64) -- every job; a managed-identity install has neither
+#   si-license                   SI_LICENSE, an install without a licence vault (the Pro engines refuse without it)
+#   smtp-password                SMTP_PASSWORD: the mail job, and every engine job's guard mail (SI-Guard.ps1 Get-SIGuardSmtp)
+#   openai-apikey                OPENAI_APIKEY: the key fallback of Azure OpenAI (#1257) -- only the privilege tier classifier
+#                                of this catalog uses AI
+#   (shodan-key: the public IP job only -- not in this catalog)
+# The support grant and job request jobs carry no secret but the licence and the sign-in.
+$script:SIMissingJobSignInSecrets = @('si-spn-secret', 'si-spn-cert')
+$script:SIMissingJobSecrets = @{
+    'verification'                     = @('si-license', 'smtp-password') + $script:SIMissingJobSignInSecrets
+    'close-loop-mail'                  = @('si-license', 'smtp-password') + $script:SIMissingJobSignInSecrets
+    'asset-vulnerabilities-servicenow' = @('si-license', 'smtp-password') + $script:SIMissingJobSignInSecrets
+    'asset-cmdb'                       = @('si-license', 'smtp-password') + $script:SIMissingJobSignInSecrets
+    'heartbeat'                        = @('si-license', 'smtp-password') + $script:SIMissingJobSignInSecrets
+    'signin-methods'                   = @('si-license', 'smtp-password') + $script:SIMissingJobSignInSecrets
+    'data-out'                         = @('si-license', 'smtp-password') + $script:SIMissingJobSignInSecrets
+    'privilege-tier-classifier'        = @('si-license', 'smtp-password', 'openai-apikey') + $script:SIMissingJobSignInSecrets
+    'support-grant'                    = @('si-license') + $script:SIMissingJobSignInSecrets
+    'job-requests'                     = @('si-license') + $script:SIMissingJobSignInSecrets
+}
+foreach ($c in @($script:SIMissingJobCatalog)) {
+    if ($c.PSObject.Properties['Secrets']) { continue }
+    if ($script:SIMissingJobSecrets.ContainsKey($c.Engine)) { $c | Add-Member -NotePropertyName Secrets -NotePropertyValue ([string[]]@($script:SIMissingJobSecrets[$c.Engine])) }
+}
 # Env a donor carries for ITS engine only -- never copied to a job of another engine.
 # #986: SI_CFG_SI_Pipeline_StartTime / _TimeZone too -- only the pipeline runner reads them (never a job made here), and on a
 # Pro install the database is their one source: a copy in a new job's environment is a stale copy waiting to mislead
@@ -352,6 +396,8 @@ function Get-SIMissingJobPlan {
                            ScheduleSetting = $(if ($c.PSObject.Properties['ScheduleSetting']) { [string]$c.ScheduleSetting } else { '' })
                            Cron = $(if ($c.PSObject.Properties['Cron']) { [string]$c.Cron } else { '' })
                            OwnSize = [bool]($c.PSObject.Properties['OwnSize'] -and $c.OwnSize)
+                           # the secrets the job may carry ($null = not declared: what its env refers to, as before)
+                           StrictSecrets = [bool]$c.PSObject.Properties['Secrets']; Secrets = @($(if ($c.PSObject.Properties['Secrets']) { $c.Secrets }) | Where-Object { $_ })
                            # #723: the timers an earlier version shipped (an existing job on one moves to Cron); the job as it is
                            ShippedCrons = $(if ($c.PSObject.Properties['ShippedCrons']) { @($c.ShippedCrons) } else { @() }); Existing = $null }
         $missingCode = @(@($c.Code) | Where-Object { -not (Test-Path -LiteralPath (Join-Path $Root (([string]$_).Replace('/', [IO.Path]::DirectorySeparatorChar)))) })
@@ -401,7 +447,10 @@ function Get-SIMissingJobSpec {
           [Parameter(Mandatory)][ValidateSet('flow', 'schedules')][string]$Mode, [string]$Cron, [object[]]$SecretArgs = @(),
           [string]$RegistryPassword, [hashtable]$Globals = @{}, $Map, [string[]]$ExtraEnv = @(),
           # #718: the job's own size and run limit (Get-SIContainerJobResources), never raised to the donor's
-          [switch]$OwnSize)
+          [switch]$OwnSize,
+          # the ONLY secrets this job may carry (the catalog's Secrets): every other secret reference of the donor's env is left out,
+          # its variable too; not given = the secrets the env still refers to, as before
+          [AllowNull()][AllowEmptyCollection()][string[]]$KeepSecrets = $null)
     if (-not $Map) { $Map = Get-SIJobFlowMap }
     $name = Get-SIBootstrapJobName -Engine $Engine
     $key = $name.Substring(7)
@@ -413,6 +462,9 @@ function Get-SIMissingJobSpec {
     $donorEnv = @(ConvertTo-SIKedaConvertEnvArgs -Env @(Get-SIKedaConvertProp $c @('env')))
     $jobEnv = Get-SIBootstrapJobEnvArgs -Engine $Engine
     $env = @(@(('SI_ENGINE=' + $jobEnv.SiEngine), 'SI_SHARD_COUNT=1') + @($donorEnv | Where-Object { [string]$_ -notmatch $script:SIMissingJobDonorOnlyEnv }) + @($jobEnv.EnvArgs) + @($ExtraEnv | Where-Object { $_ }) + @('SI_ROLE=worker'))
+    if ($PSBoundParameters.ContainsKey('KeepSecrets')) {
+        $env = @($env | Where-Object { $p = ([string]$_) -split '=', 2; -not ($p.Count -eq 2 -and $p[1].StartsWith('secretref:') -and @($KeepSecrets) -notcontains $p[1].Substring(10)) })
+    }
     # the secrets: only those the env still refers to (and the registry password, handled with the registry)
     $refs = @($env | ForEach-Object { $p = ([string]$_) -split '=', 2; if ($p.Count -eq 2 -and $p[1].StartsWith('secretref:')) { $p[1].Substring(10) } })
     $secrets = @(@($SecretArgs) | Where-Object { $refs -contains ((([string]$_) -split '=', 2)[0]) })
@@ -453,6 +505,13 @@ function Get-SIMissingJobSpec {
         if (-not (Get-Command -Name Select-SISupportGrantJobIdentity -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot 'SI-SupportGrantUpdate.ps1') }
         $sgId = Select-SISupportGrantJobIdentity -Job $Donor
         try { $a = @(ConvertTo-SISupportGrantEventCreateArgs -CreateArgs $a -StorageAccount (Get-SIKedaConvertEnvValue -EnvArgs $env -Name 'SI_STORAGE_ACCOUNT') -IdentityResourceId $sgId); $trigger = 'Event' } catch { $trigger = $trig.Trigger }
+    }
+    # #1252: the job request job -- started by ITS queue si-job-requests the same way (no storage account / identity = manual;
+    # the updater's job request step converts it once it can)
+    if ($Engine -eq 'job-requests') {
+        if (-not (Get-Command -Name Select-SISupportGrantJobIdentity -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot 'SI-SupportGrantUpdate.ps1') }
+        $jrId = Select-SISupportGrantJobIdentity -Job $Donor
+        try { $a = @(ConvertTo-SISupportGrantEventCreateArgs -CreateArgs $a -StorageAccount (Get-SIKedaConvertEnvValue -EnvArgs $env -Name 'SI_STORAGE_ACCOUNT') -IdentityResourceId $jrId -Queue 'si-job-requests'); $trigger = 'Event' } catch { $trigger = $trig.Trigger }
     }
     $location = [string](Get-SIKedaConvertProp $Donor @('location'))
     [pscustomobject]@{ Name = $name; Args = $a; Body = (ConvertFrom-SIJobCreateArgs -CreateArgs $a -Location $location).Body; Image = $image
@@ -523,6 +582,37 @@ function Test-SIMissingJobReadBack {
     $tt = [string](Get-SIKedaConvertProp $Job @('properties', 'configuration', 'triggerType'))
     if ($tt -ne $Spec.Trigger) { return ('its trigger is {0}, not {1}' -f $(if ($tt) { $tt } else { 'unknown' }), $Spec.Trigger) }
     ''
+}
+
+function Get-SIMissingJobVaultSecretCheckUri {
+    <# PURE. The metadata-only read of a Key Vault reference (-KeyVaultUrl https://<vault>/secrets/<name>[/<version>]): its
+       versions list (Key Vault Secrets User may read it; no secret VALUE is read). '' when the address is not a Key Vault secret. #>
+    param([AllowEmptyString()][string]$KeyVaultUrl)
+    $u = $null
+    if (-not [uri]::TryCreate("$KeyVaultUrl".Trim(), [UriKind]::Absolute, [ref]$u) -or $u.Scheme -ne 'https') { return '' }
+    $p = @($u.AbsolutePath.Trim('/') -split '/' | Where-Object { $_ })
+    if ($p.Count -lt 2 -or $p[0] -ne 'secrets') { return '' }
+    'https://{0}/secrets/{1}/versions?maxresults=1&api-version=7.4' -f $u.Host, $p[1]
+}
+
+function Test-SIMissingJobVaultSecret {
+    <# Does the vault HOLD the secret a Key Vault reference names (as Bootstrap checks before it references one)? present |
+       missing (404: the vault does not hold it) | unknown (could not be read -- the reference is kept as before). Never throws.
+       -Rest: the REST seam (resource https://vault.azure.net). #>
+    param([Parameter(Mandatory)][scriptblock]$Rest, [AllowEmptyString()][string]$KeyVaultUrl)
+    $uri = Get-SIMissingJobVaultSecretCheckUri -KeyVaultUrl $KeyVaultUrl
+    if (-not $uri) { return 'unknown' }
+    $r = $null
+    try { $r = & $Rest 'GET' $uri $null 'https://vault.azure.net' @{} } catch { return 'unknown' }
+    if (-not $r) { return 'unknown' }
+    $st = [int]$r.Status
+    if ($st -ge 200 -and $st -lt 300) {
+        $o = $null; try { $o = ("$($r.Body)" | ConvertFrom-Json) } catch { $o = $null }
+        if ($o -and $o.PSObject.Properties['value'] -and -not @($o.value | Where-Object { $_ }).Count) { return 'missing' }   # no version at all
+        return 'present'
+    }
+    if ($st -eq 404) { return 'missing' }
+    'unknown'
 }
 
 function Invoke-SIMissingJobs {
@@ -649,7 +739,27 @@ function Invoke-SIMissingJobs {
                     $extraEnv += ('{0}=secretref:{1}' -f $b.Env, $b.Secret)
                     $notes += ('{0} from {1}' -f $b.Env, $srcName)
                 }
-                $spec = Get-SIMissingJobSpec -Engine $row.Engine -Donor $row.Donor -ResourceGroup $ResourceGroup -Mode $mode -Cron $cron -SecretArgs $secretArgs -RegistryPassword $regPassword -Globals $Globals -Map $map -ExtraEnv $extraEnv -OwnSize:([bool]$row.OwnSize)
+                # the catalog's Secrets (an empty list too) through a splat -- never through $( ), which turns @() into $null
+                $keepSecrets = @{}
+                if ($row.StrictSecrets) {
+                    # 3.1.50: a declared Key Vault secret the vault does NOT hold is left out (its variable too), said once --
+                    # the job is still created; as Bootstrap does at a new install (Azure refuses the WHOLE job for one it cannot
+                    # resolve). One that cannot be checked is kept, as before.
+                    $keep = New-Object System.Collections.Generic.List[string]
+                    foreach ($sn in @($row.Secrets)) {
+                        $sa = @($secretArgs | Where-Object { ((([string]$_) -split '=', 2)[0]) -eq $sn })[0]
+                        if ($sa -and ([string]$sa) -match '=keyvaultref:([^,]+)') {
+                            $kvUrl = $Matches[1]
+                            if ((Test-SIMissingJobVaultSecret -Rest $Rest -KeyVaultUrl $kvUrl) -eq 'missing') {
+                                $lines.Add(('WARNING: missing jobs: {0} is made WITHOUT the secret {1} -- the Key Vault does not hold {2} (the job runs without it; store it there to use it)' -f $row.Job, $sn, $kvUrl))
+                                continue
+                            }
+                        }
+                        $keep.Add([string]$sn)
+                    }
+                    $keepSecrets['KeepSecrets'] = [string[]]$keep.ToArray()
+                }
+                $spec = Get-SIMissingJobSpec -Engine $row.Engine -Donor $row.Donor -ResourceGroup $ResourceGroup -Mode $mode -Cron $cron -SecretArgs $secretArgs -RegistryPassword $regPassword -Globals $Globals -Map $map -ExtraEnv $extraEnv -OwnSize:([bool]$row.OwnSize) @keepSecrets
                 # (2) idempotent: the job may have been made since the list was read (another run, the setup) -- never overwritten
                 $r = & $call 'GET' (& $jobUri $row.Job) $null
                 if (& $isOk $r) { & $add $row 'present' ('missing jobs: {0} exists now (made meanwhile) -- left as it is' -f $row.Job); continue }

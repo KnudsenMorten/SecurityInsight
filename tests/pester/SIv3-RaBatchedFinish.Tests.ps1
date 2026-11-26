@@ -29,7 +29,19 @@ BeforeDiscovery {
     $script:LocalSql = $script:LocalSql -and $script:HasSchema
 }
 
+AfterAll {
+    foreach ($k in @($script:RunnerJobVars.Keys)) { [Environment]::SetEnvironmentVariable([string]$k, [string]$script:RunnerJobVars[$k]) }
+}
+
 BeforeAll {
+    # The Linux test runner is itself a Container Apps Job. Its CONTAINER_APP_* variables make SI's batched writers believe
+    # they run as one of SI's own job executions, and the step's progress mark (Write-SIStepProgress, through the pacing
+    # before each batch) is written through the stream's seam -- one extra call in the fake database that is not a page.
+    # The gate clears them (afb5e964c); this suite clears them itself so a direct Invoke-Pester asserts the same thing.
+    $script:RunnerJobVars = @{}
+    foreach ($v in @([Environment]::GetEnvironmentVariables().Keys | Where-Object { "$_" -like 'CONTAINER_APP_*' })) {
+        $script:RunnerJobVars[[string]$v] = [Environment]::GetEnvironmentVariable([string]$v); [Environment]::SetEnvironmentVariable([string]$v, $null)
+    }
     $script:SIRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
     . (Join-Path $script:SIRoot 'engine\_shared\data-sql\SI-DataModel.ps1')
     . (Join-Path $script:SIRoot 'engine\risk-analysis\_shared\RA-SqlStream.ps1')

@@ -83,6 +83,8 @@ function Get-DiscoveryFromEntraServicePrincipals {
     Write-SIInfo '[perms] discovering role-assigned groups...'
     $groupRoles = Get-SIRoleAssignedGroups -Token $token -PermanentRolesByPrincipal $permRolesMap -EligibleRolesByPrincipal $eligRolesMap
     $privGroups = Get-SIPrivilegeHoldingGroupMap -RoleAssignedGroupMap $groupRoles -AzureLookup $azureLookup
+    # #1383: a group an Azure role assignment still names but the directory no longer has is gone -- not an incomplete read
+    $privGroups = Remove-SIGonePrivilegeGroups -Token $token -GroupMap $privGroups -RoleAssignedGroupMap $groupRoles
     Write-SIInfo ('[perms] {0} groups hold Entra roles, {1} hold Entra or Azure roles -- expanding transitive memberships...' -f $groupRoles.Count, $privGroups.Count)
     $memberToGroups = if ($privGroups.Count -gt 0) {
         Get-SIGroupTransitiveMembers -Token $token -RoleAssignedGroupMap $privGroups
@@ -168,9 +170,15 @@ function Get-DiscoveryFromEntraServicePrincipals {
         # per-SP perm enumeration (admin-consented application
         # perms + delegated oauth2 perms). Both are needed by the catalog
         # tier computer to classify the SP deterministically.
-        $apW = [System.Diagnostics.Stopwatch]::StartNew()
-        $appPerms      = Get-SISPAppRoleAssignments -Token $token -ObjectId $sp.id -AppRoleResolver $appRoleResolver
-        Add-SIIdentityPhaseTotal -Phase 'service principals: application permissions (one read per principal)' -Seconds $apW.Elapsed.TotalSeconds -Rows 1 -Calls 1
+        # #1383: from the batched read of the page / the whole set (Get-SISPAppRoleAssignmentsMany, $spAppPerms); one read
+        # of its own only for a principal that read did not carry
+        if ($null -ne $spAppPerms -and $spAppPerms.ContainsKey([string]$sp.id)) {
+            $appPerms  = $spAppPerms[[string]$sp.id]
+        } else {
+            $apW = [System.Diagnostics.Stopwatch]::StartNew()
+            $appPerms  = Get-SISPAppRoleAssignments -Token $token -ObjectId $sp.id -AppRoleResolver $appRoleResolver
+            Add-SIIdentityPhaseTotal -Phase 'service principals: application permissions (one read per principal)' -Seconds $apW.Elapsed.TotalSeconds -Rows 1 -Calls 1
+        }
         # delegated permissions: from the ONE read of the tenant's grants; when that read did not complete, per principal
         # as before (a failed read never becomes "no delegated permission")
         $delegPerms    = if ($oauthGrants -and $oauthGrants.Complete) { @(Get-SIOauth2ClientScopes -State $oauthGrants -ClientId ([string]$sp.id)) }
@@ -275,6 +283,24 @@ function Get-DiscoveryFromEntraServicePrincipals {
     try { $oauthGrants = Get-SIOauth2GrantsByClient -Token $token } catch { $oauthGrants = $null }
     $null = Stop-SIIdentityPhase $ph
 
+    # #1383 (owner 2026-11-25 "Batch the Graph calls"): the application permissions of the service principals about to be
+    # built, in ONE batched read (20 per $batch request, several at once) instead of one call per principal; $buildSp takes
+    # them from $spAppPerms. A principal whose read failed is counted exactly as the single read counted it.
+    $spAppPerms = $null
+    $readAppPerms = {
+        param($Sps)
+        $ids = @(foreach ($x in @($Sps)) {
+            if ($null -eq $x -or -not [string]$x.id) { continue }
+            if (-not $includeFirstParty -and $x.appOwnerOrganizationId -eq $microsoftFirstPartyTenantId) { continue }
+            [string]$x.id
+        })
+        $w = [System.Diagnostics.Stopwatch]::StartNew()
+        $before = [int](Get-SIGraphBatchCallCounts).AppRoles
+        $m = Get-SISPAppRoleAssignmentsMany -Token $token -ObjectIds $ids -AppRoleResolver $appRoleResolver
+        Add-SIIdentityPhaseTotal -Phase 'service principals: application permissions (batched, 20 per request)' -Seconds $w.Elapsed.TotalSeconds -Rows $ids.Count -Calls ([int](Get-SIGraphBatchCallCounts).AppRoles - $before)
+        $m
+    }
+
     # #475 STREAMING (the discover phase of a run collected in parts): each page's service principals become records and go
     # straight into their parts. Invoke-SIDiscover decided the parts before this source ran.
     $stream = $global:SI_DiscoverStream
@@ -284,6 +310,7 @@ function Get-DiscoveryFromEntraServicePrincipals {
         $onSps = {
             param($PageRows)
             Add-SIIdDuplicateWatch -Watch $spDupWatch -Rows @($PageRows)
+            $spAppPerms = & $readAppPerms @($PageRows)
             $batch = New-Object System.Collections.Generic.List[object]
             foreach ($ssp in $PageRows) {
                 Add-SIFullSourceObject -SourceSystem 'entra-serviceprincipal' -Object $ssp -AnchorColumn 'EntraAccountObjectId' -AnchorValue ([string]$ssp.id)
@@ -336,6 +363,7 @@ function Get-DiscoveryFromEntraServicePrincipals {
     # Per-principal permission lookups that fail after every retry are counted and reported once, after
     # the loop -- a failure used to publish the SP with NO permissions and say nothing (#125).
     Reset-SIPermissionFetchFailures
+    $spAppPerms = & $readAppPerms @($rows)
     foreach ($sp in $rows) {
         $_i++
         try { Write-SIProgress -Label 'EntraSPs' -Index $_i -Total $_total } catch { }

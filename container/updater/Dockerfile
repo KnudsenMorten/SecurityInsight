@@ -53,6 +53,10 @@ COPY setup/ /si/setup/
 # The size rule (setup/_shared/SI-JobSizing.ps1 loads container/_shared/SI-ContainerConfig.ps1): without this folder every
 # update said "job size: not checked" (2026-10-09 .. 3.0.18) and no job or web app was ever sized by an update.
 COPY container/_shared/ /si/container/_shared/
+# #1111 / #1385: the updater keeps the index build job caj-si-index-build present (container/updater/_shared/
+# SI-UpdaterDatabase.ps1 Invoke-SIUpdaterIndexBuildJob loads the job's definition from this file). Without it (3.1.50 at
+# internal) the job was never made and no waiting index was recorded. The job's definition only -- not its entry point.
+COPY engine/index-build/SI-IndexBuildJob.ps1 /si/engine/index-build/
 # ... and the pipeline's job map, which the size rule and the run limit read (without it a job's own run limit setting was
 # looked for under its own name only)
 COPY config/job-flow.locked.json /si/config/

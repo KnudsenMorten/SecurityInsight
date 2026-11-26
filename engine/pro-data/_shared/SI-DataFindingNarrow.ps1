@@ -18,9 +18,11 @@ $script:SIDataNarrowColumns = @('AssetKey', 'AssetName', 'ReportName', 'Security
     'RiskScoreWeighted', 'RiskRating', 'ExemptionId', 'RemediationEffort', 'FixOwner', 'DepartmentId', 'HasExploit', 'FixRemediation', 'CiLifecycle',
     'FixRecommendedUpdateId', 'FixRecommendedUpdate', 'AffectedVendor', 'AffectedProduct', 'RaFindingKey', 'RaSeq', 'RaAssetId',
     # the summary groupings' fields (data-model\summary-groupings.locked.json)
-    'Category', 'Subcategory', 'ComplianceTags', 'Cvss', 'MitreTactics', 'MitreTechniques', 'SourceFirstDetected')
+    'Category', 'Subcategory', 'ComplianceTags', 'Cvss', 'MitreTactics', 'MitreTechniques', 'SourceFirstDetected',
+    # #1213 B4 (SCALE-3): the key figures' fields (SI-DataKeyFigures.ps1 reads its findings from here)
+    'EosStatus', 'FixDueDate', 'AffectedVersion', 'AffectedSoftware')
 $script:SIDataNarrowJsonFields = @('si_remediation_type', 'RiskScoreTotal_Weighted', 'si_component', 'RiskFactor_Probability_Detailed', 'RiskFactor_Consequence_Detailed',
-    'si_servicenow_subci', 'si_patch_cycle', 'si_cve_published', 'si_category', 'Category', 'si_subcategory', 'Subcategory')
+    'si_servicenow_subci', 'si_patch_cycle', 'si_cve_published', 'si_category', 'Category', 'si_subcategory', 'Subcategory', 'si_fix_release_date')
 # the collections filled in THIS process (run): CollectionId -> $true
 $script:SIDataNarrowReady = @{}
 # #904: the collections whose fill FAILED in this process (run): CollectionId -> the error. A fill that failed is a part of the
@@ -37,8 +39,17 @@ function Get-SIDataFindingNarrowState {
 }
 
 function Get-SIDataNarrowCheckSql {
-    <# 1 when the database has sidata.FindingNarrow, else 0. #>
-    "SELECT CASE WHEN OBJECT_ID('sidata.FindingNarrow') IS NOT NULL THEN 1 ELSE 0 END"
+    <# 1 when the database has sidata.FindingNarrow with every column this code fills (a table the schema apply has not
+       extended yet: 0 -- the steps read sidata.Finding as before, never a fill that fails part way), else 0. #>
+    $cols = @(@($script:SIDataNarrowColumns) + @($script:SIDataNarrowJsonFields | ForEach-Object { 'Dj_' + $_ }) | ForEach-Object { "COL_LENGTH('sidata.FindingNarrow', '$_') IS NOT NULL" })
+    "SELECT CASE WHEN OBJECT_ID('sidata.FindingNarrow') IS NOT NULL AND " + ($cols -join ' AND ') + " THEN 1 ELSE 0 END"
+}
+
+function Test-SIDataFindingNarrowReady {
+    <# $true when THIS run has already filled the narrow findings of -CollectionId whole (Use-SIDataFindingNarrow) -- a step
+       that would gain nothing from a fill of its own (it reads the collection once anyway) reads them only then. #>
+    param([Parameter(Mandatory)][long]$CollectionId)
+    ($script:SIDataNarrowReady.ContainsKey($CollectionId) -and [bool]$script:SIDataNarrowReady[$CollectionId])
 }
 
 function Get-SIDataNarrowFillSql {

@@ -48,9 +48,76 @@ function Get-SIDataSummaryGroupsPendingSql {
     $k = [Math]::Max(2, $Keep)
     $live = ''; $liveK = ''
     if (Get-Command -Name Get-SIDataLiveFilter -ErrorAction SilentlyContinue) { $live = Get-SIDataLiveFilter -Alias 'c'; $liveK = Get-SIDataLiveFilter -Alias 'k' }
+    if (Get-Command -Name Get-SIDataBuildFilter -ErrorAction SilentlyContinue) { $live += Get-SIDataBuildFilter -Alias 'c' }   # #1226
     $pub = "(SELECT TOP (1) pc.CollectionTime FROM sidata.vPublishedCollection AS pc WHERE pc.Kind = N'Detailed')"
     $shown = "CASE WHEN c.CollectionTime >= $pub OR c.CollectionId IN (SELECT TOP ($k) k.CollectionId FROM sidata.Collection AS k WHERE k.Status = 'Complete' AND k.Kind = 'Detailed'$liveK AND k.CollectionTime <= $pub ORDER BY k.CollectionTime DESC) THEN 1 ELSE 0 END"
     "SELECT c.CollectionId, c.CollectionTime, $shown AS Shown FROM sidata.Collection AS c LEFT JOIN sidata.SummaryGroupState AS s ON s.CollectionId = c.CollectionId WHERE c.Status = 'Complete' AND c.Kind = 'Detailed' AND c.DerivedAt IS NOT NULL AND c.ContextAt IS NOT NULL AND (s.CollectionId IS NULL OR s.BuiltAt < c.DerivedAt OR s.BuiltAt < c.ContextAt OR s.DefinitionHash <> @Hash)$live ORDER BY Shown DESC, c.CollectionTime DESC"
+}
+
+function Get-SIDataSummaryGroupsLifecycleSchemaCheckSql {
+    <# #1355: 1 when the database carries what the grouped Summary rows need AND the lifecycle tables (the findings the lifecycle
+       view counts, their groupings and their mark) and the key figures' table; else 0. #>
+    (Get-SIDataSummaryGroupsSchemaCheckSql).Replace(' THEN 1 ELSE 0 END', " AND OBJECT_ID('sidata.FindingLifecycleRisk') IS NOT NULL AND OBJECT_ID('sidata.SummaryGroupLifecycle') IS NOT NULL AND OBJECT_ID('sidata.SummaryGroupLifecycleState') IS NOT NULL AND OBJECT_ID('sidata.KeyFigure') IS NOT NULL AND COL_LENGTH('sidata.Collection', 'KeyFiguresAt') IS NOT NULL THEN 1 ELSE 0 END")
+}
+
+function Get-SIDataSummaryGroupsLifecyclePendingSql {
+    <#
+        #1355: the complete Detailed collections whose key figures stored the findings the lifecycle view counts (the marker KeyFigure
+        meta 'lifecycle_rows', written in the same transaction as sidata.FindingLifecycleRisk) and whose lifecycle groupings are
+        missing, older than those figures or of another definition (@Hash). Newest first. A collection figured before the marker
+        existed is never pending: the views do not offer the choice for it (owner 2026-11-24: hide, no back-fill).
+    #>
+    $live = ''
+    if (Get-Command -Name Get-SIDataLiveFilter -ErrorAction SilentlyContinue) { $live = Get-SIDataLiveFilter -Alias 'c' }
+    if (Get-Command -Name Get-SIDataBuildFilter -ErrorAction SilentlyContinue) { $live += Get-SIDataBuildFilter -Alias 'c' }
+    "SELECT c.CollectionId, c.CollectionTime FROM sidata.Collection AS c LEFT JOIN sidata.SummaryGroupLifecycleState AS s ON s.CollectionId = c.CollectionId" +
+    " WHERE c.Status = 'Complete' AND c.Kind = 'Detailed' AND c.KeyFiguresAt IS NOT NULL" +
+    " AND EXISTS (SELECT 1 FROM sidata.KeyFigure AS k WHERE k.CollectionId = c.CollectionId AND k.Block = N'meta' AND k.Figure = N'lifecycle_rows')" +
+    " AND (s.CollectionId IS NULL OR s.BuiltAt < c.KeyFiguresAt OR s.DefinitionHash <> @Hash)$live ORDER BY c.CollectionTime DESC"
+}
+
+function Invoke-SIDataSummaryGroupsLifecycle {
+    <#
+    .SYNOPSIS  #1355 Writes the grouped Summary rows of the findings the "Within Accepted Lifecycle" view counts (after the key figures,
+               which store those findings). Never throws.
+    .NOTES     The SAME engine statement as the grouped Summary rows (Invoke-SISummaryGrouping -AsSql -Lifecycle), over
+               sidata.FindingLifecycleRisk. Every pending collection is written in this run (the key figures bound how many have
+               the marker: the kept ones), paced by the database's own load. Until a collection has them the Summary view does not
+               offer the choice for it.
+    #>
+    param([Parameter(Mandatory)][scriptblock]$Invoke, [switch]$DryRun, [scriptblock]$Log, $Plan)
+    if (-not $Log) { $Log = { param($l, $m) Write-Host ('[{0}] {1}' -f $l, $m) } }
+    try {
+        if (-not $Plan) { $Plan = Get-SISummaryGroupingPlan }
+        if (([int](& $Invoke (Get-SIDataSummaryGroupsLifecycleSchemaCheckSql) @{} 'scalar')) -ne 1) {
+            & $Log 'INFO' 'groupings   : the database does not have the tables of the "Within Accepted Lifecycle" Summary rows yet (the updater adds them) -- the Summary view does not offer that choice until then.'
+            return [pscustomobject]@{ Status = 'no-schema'; Collections = 0 }
+        }
+        $pending = @(@(& $Invoke (Get-SIDataSummaryGroupsLifecyclePendingSql) @{ Hash = $Plan.Hash } 'reader') | ForEach-Object { $_ } | Where-Object { $_ })
+        if ($DryRun) {
+            & $Log 'INFO' ("groupings   : {0} collection(s) would get their `"Within Accepted Lifecycle`" Summary rows; nothing is written." -f $pending.Count)
+            return [pscustomobject]@{ Status = 'dry-run'; Collections = 0; Pending = $pending.Count }
+        }
+        if ($pending.Count -eq 0) { return [pscustomobject]@{ Status = 'ok'; Collections = 0; Pending = 0; Groups = 0 } }
+        $sql = Invoke-SISummaryGrouping -AsSql -Lifecycle -Plan $Plan
+        $paced = [bool](Get-Command -Name Invoke-SISqlPacing -ErrorAction SilentlyContinue); $lastMs = 0L
+        $done = 0; $groups = [long]0
+        foreach ($p in $pending) {
+            if ($paced) { $null = Invoke-SISqlPacing -Invoke $Invoke -LastBatchMs $lastMs -Log $Log }
+            $cid = $(if ($p -is [System.Collections.IDictionary]) { $p['CollectionId'] } else { $p.CollectionId })
+            $sw = [Diagnostics.Stopwatch]::StartNew()
+            $n = if (Get-Command -Name Invoke-SIDataNarrowOrWide -ErrorAction SilentlyContinue) { Invoke-SIDataNarrowOrWide -Invoke $Invoke -Sql $sql -Params @{ CollectionId = [int]$cid; Hash = $Plan.Hash } -Mode 'scalar' -CollectionId ([long]$cid) -What 'the "Within Accepted Lifecycle" Summary rows' -Log $Log }
+                  else { & $Invoke $sql @{ CollectionId = [int]$cid; Hash = $Plan.Hash } 'scalar' }
+            $sw.Stop(); $lastMs = $sw.ElapsedMilliseconds
+            if ("$n" -match '^\d+$') { $groups += [long]"$n" }
+            $done++
+        }
+        & $Log 'OK' ("groupings   : {0} collection(s) got their `"Within Accepted Lifecycle`" Summary rows ({1} group(s))" -f $done, $groups)
+        return [pscustomobject]@{ Status = 'ok'; Collections = $done; Groups = $groups; Pending = 0 }
+    } catch {
+        & $Log 'WARN' ("groupings   : the `"Within Accepted Lifecycle`" Summary rows were not completed this run -- {0}. They are tried again on the next run; until then the Summary view does not offer that choice for the collection." -f $_.Exception.Message)
+        return [pscustomobject]@{ Status = 'failed'; Error = $_.Exception.Message }
+    }
 }
 
 function Get-SIDataSummaryGroupsSql {

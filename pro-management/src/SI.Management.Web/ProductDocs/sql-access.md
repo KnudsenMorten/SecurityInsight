@@ -26,7 +26,7 @@ asset). This page describes who can reach them and with which rights. The model 
 
 ## The roles
 
-![Who signs in to what: people through Entra sign-in to the web app only; the engine jobs, the web app, the MCP server, the updater and asset tagging each with their own managed identity and only the rights of their job; the optional Invardia Support app through the SQL admin group, its own database user and the Key Vault role of its level](images/identities-access.png)
+![Who signs in to what: people through Entra sign-in to the web app only; the engine jobs, the web app, the MCP server, the updater and asset tagging each with their own managed identity and only the rights of their job; the optional Invardia Support app with its own read-only database user, more only just in time, and the Key Vault role of its level](images/identities-access.png)
 
 | Role | Component | What it may do |
 |---|---|---|
@@ -43,10 +43,10 @@ The templates job has its own identity and role, so the engine role carries no w
 The audit trail and the change history it is built from refuse UPDATE and DELETE to every database user, enforced by
 the database (`DENY ... TO public`). Because no runtime identity holds DDL or ownership, the DENY binds all of them,
 including an identity added later under any name. The one way rows leave the trail is the retention procedure, which
-refuses anything younger than 13 months and records itself. The honest limit: a database owner (the admin group, and the
-Support app while a just-in-time grant is open) is not bound by a DENY, which is why the group holds only setup identities,
-why the Support app holds admin only just in time, and why it exists only when you create it. Every statement it runs goes through Invardia's audited
-SQL call.
+refuses anything younger than 13 months and records itself. Database administration is just in time only, and every
+statement is recorded by SQL auditing in your workspace: the admin group holds only setup identities, the Support app
+exists only when you create it and holds admin only just in time, and every statement it runs goes through Invardia's
+audited SQL call.
 
 ## Grants after a release: the signed grant procedure
 

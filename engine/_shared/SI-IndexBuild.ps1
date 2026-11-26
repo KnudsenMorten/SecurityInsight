@@ -44,6 +44,15 @@ $script:SIIndexBuild = @{
     LeadMinutes     = 15         # a window build must end this long before the next run starts
     ResumeMinutes   = 10         # a resumable build (new or paused) starts when the window has at least this many minutes
     CheckSeconds    = 15         # while it builds, the job looks this often for an update (and beats the install's lock)
+    # #1316 follow-up (coordinator 2026-11-23): an install whose runs go back to back has no idle window. An index that has
+    # waited GapAfterHours is built in the GAP before a scheduled run starts (also the gap after an update): the run starts
+    # late, at most GapLateMinutes (a resumable build pauses there; a non-resumable one starts only when its estimate fits --
+    # or the once-after-WaitDays build), at most once per GapEveryHours per index, never again within GapRetryMinutes of an
+    # index build job start (a start that did not take the lock never holds run after run).
+    GapAfterHours   = 24
+    GapLateMinutes   = 180
+    GapEveryHours   = 24
+    GapRetryMinutes = 60
     Job             = 'caj-si-index-build'   # #1111: the index build job (its own job; the updater only updates)
     Role            = 'index-build'          # its SI_ROLE (container\Start-SIInContainer.ps1 hands it to its entry)
     WaitTag         = 'si-update-waits'      # the updater's wait mark on its own job (the same tag the runner reads)
@@ -197,7 +206,7 @@ function Measure-SIIndexReadRate {
         if ($Pages -le 0 -or $Table -notmatch '^\w+\.\w+$') { return $null }
         $pct = Get-SIIndexSamplePercent -Pages $Pages
         $sch, $tab = $Table -split '\.', 2
-        $sql = 'SET NOCOUNT ON; SELECT COUNT_BIG(*) AS N FROM [{0}].[{1}] TABLESAMPLE SYSTEM ({2} PERCENT) WITH (NOLOCK);' -f $sch, $tab, $pct.ToString('0.####', [Globalization.CultureInfo]::InvariantCulture)
+        $sql = 'SET NOCOUNT ON; SELECT COUNT_BIG(*) AS N FROM {0}.{1} TABLESAMPLE SYSTEM ({2} PERCENT) WITH (NOLOCK);' -f (Get-SIIndexQuotedName $sch), (Get-SIIndexQuotedName $tab), $pct.ToString('0.####', [Globalization.CultureInfo]::InvariantCulture)
         $sw = [Diagnostics.Stopwatch]::StartNew()
         $null = & $Invoke $sql @{} 'reader'
         $sw.Stop()
@@ -389,6 +398,53 @@ function Test-SIIndexBuildFiltered {
     [bool]("$Statement" -match '(?is)^\s*CREATE\b.*?\bON\b.*?\)\s*(INCLUDE\s*\([^)]*\)\s*)?WHERE\b')
 }
 
+function Test-SIIndexBuildColumnstore {
+    <# PURE. #1316 Is -Statement a CREATE [NONCLUSTERED] COLUMNSTORE INDEX? SQL Server builds a columnstore index online but
+       never resumably, so -- like a filtered one -- it cannot pause: it starts only when its estimate fits the window. #>
+    param([AllowNull()][AllowEmptyString()][string]$Statement)
+    [bool]("$Statement" -match '(?is)^\s*CREATE\s+(?:NONCLUSTERED\s+)?COLUMNSTORE\s+INDEX\b')
+}
+
+function Test-SIIndexBuildJobStartedRecently {
+    <# PURE. Did an execution of the index build job START within GapRetryMinutes (ARM executions: properties.startTime)? A
+       start that cannot be read counts as recent -- a scheduled run is then never held on a guess. #>
+    param([object[]]$Executions = @(), [Parameter(Mandatory)][datetime]$NowUtc, [int]$Minutes = $script:SIIndexBuild.GapRetryMinutes)
+    $now = $NowUtc.ToUniversalTime()
+    foreach ($e in @($Executions)) {
+        if (-not $e) { continue }
+        $p = $e.PSObject.Properties['properties']; if (-not $p -or -not $p.Value) { return $true }
+        $st = $p.Value.PSObject.Properties['startTime']
+        if (-not $st -or -not "$($st.Value)".Trim()) { return $true }
+        $t = [datetime]::MinValue
+        if ($st.Value -is [datetime]) { $t = ([datetime]$st.Value).ToUniversalTime() }
+        elseif (-not [datetime]::TryParse("$($st.Value)", [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]'AdjustToUniversal, AssumeUniversal', [ref]$t)) { return $true }
+        if (($now - $t).TotalMinutes -lt $Minutes) { return $true }
+    }
+    $false
+}
+
+function Read-SIIndexBuildGapHold {
+    <# Review item 6: when this install's last scheduled run was held for an index (cfg.InstallState 'IndexGapHold', ISO UTC
+       text), or $null. Unreadable = now (a run is never held on a guess). #>
+    param([Parameter(Mandatory)][scriptblock]$Invoke, [datetime]$NowUtc = [datetime]::UtcNow)
+    try {
+        $v = [string](& $Invoke "SET NOCOUNT ON; SELECT CASE WHEN OBJECT_ID(N'cfg.InstallState') IS NULL THEN NULL ELSE (SELECT TOP (1) Value FROM cfg.InstallState WHERE Name = N'IndexGapHold') END;" @{} 'scalar')
+        if (-not "$v".Trim()) { return $null }
+        $t = [datetime]::MinValue
+        if ([datetime]::TryParse($v, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]'AdjustToUniversal, AssumeUniversal', [ref]$t)) { return $t }
+        $NowUtc.ToUniversalTime()
+    } catch { $NowUtc.ToUniversalTime() }
+}
+
+function Save-SIIndexBuildGapHold {
+    <# Records that this install's scheduled run is held for an index now (cfg.InstallState 'IndexGapHold'). Never throws. #>
+    param([Parameter(Mandatory)][scriptblock]$Invoke, [datetime]$NowUtc = [datetime]::UtcNow)
+    try {
+        $null = & $Invoke "SET NOCOUNT ON; IF OBJECT_ID(N'cfg.InstallState') IS NULL RETURN; UPDATE cfg.InstallState SET Value = @Value, UpdatedAt = SYSUTCDATETIME(), UpdatedBy = N'caj-si-flow' WHERE Name = N'IndexGapHold'; IF @@ROWCOUNT = 0 INSERT cfg.InstallState (Name, Value, UpdatedBy) VALUES (N'IndexGapHold', @Value, N'caj-si-flow');" @{ Value = $NowUtc.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ', [Globalization.CultureInfo]::InvariantCulture) } 'nonquery'
+        $true
+    } catch { $false }
+}
+
 function Get-SIIndexBuildWindowDecision {
     <#
         PURE. Does this wake-up start the index build job (caj-si-index-build) for a waiting or paused index? -Rows
@@ -401,13 +457,22 @@ function Get-SIIndexBuildWindowDecision {
         it builds for the window's minutes (MAX_DURATION) and pauses at its end. A filtered one starts only when its estimate
         fits the window -- or, after WaitDays of waiting, ONCE whatever the window (the next run waits for it).
         A row still 'building' while no index build job runs is a build that ended without an outcome: it is a candidate again.
-        Returns @{ Start; Force; Index (the row); Why; Minutes (the window, 0 = no run scheduled); Resumable }. One index per
-        window: the one that has waited longest.
+        THE GAP BEFORE A RUN (#1316 follow-up, for installs whose runs go back to back): -StartDue = a SCHEDULED run would
+        start at this wake-up (no run runs or resumes, no Run now asked; also the first run after an update). An index that
+        has waited GapAfterHours, was not started in the last GapEveryHours (its LastStartUtc) and whose job did not start in
+        the last GapRetryMinutes (-IndexJobStartedRecently) is built FIRST and the run starts late (HoldsRun = $true: this
+        wake-up starts no run; the job takes the install's lock, the run waits for it, never cancelled): a resumable one for
+        GapLateMinutes (it pauses there), a non-resumable one (filtered, columnstore) only when its estimate fits GapLateMinutes,
+        or ONCE after WaitDays whatever its estimate. Never while an update waits or runs, never during a data sync / data out
+        / an open step (-Busy).
+        Returns @{ Start; Force; Index (the row); Why; Minutes (the window, 0 = no run scheduled); Resumable; HoldsRun }. One
+        index per window: the one that has waited longest.
     #>
     param([object[]]$Rows = @(), [Parameter(Mandatory)][datetime]$NowUtc, $NextRunUtc, $Busy, [AllowEmptyString()][string]$UpdaterRunning = '',
-          [AllowEmptyString()][string]$UpdateWaits = '', [AllowEmptyString()][string]$IndexJobRunning = '', [bool]$RunDue = $false)
+          [AllowEmptyString()][string]$UpdateWaits = '', [AllowEmptyString()][string]$IndexJobRunning = '', [bool]$RunDue = $false,
+          [bool]$StartDue = $false, [bool]$IndexJobStartedRecently = $false, $LastGapHoldUtc = $null)
     $S = $script:SIIndexBuild
-    $no = { param($why, $row) [pscustomobject]@{ Start = $false; Force = $false; Index = $row; Why = $why; Minutes = 0; Resumable = $false } }
+    $no = { param($why, $row) [pscustomobject]@{ Start = $false; Force = $false; Index = $row; Why = $why; Minutes = 0; Resumable = $false; HoldsRun = $false } }
     $now = $NowUtc.ToUniversalTime()
     $jobRuns = [bool]"$IndexJobRunning".Trim()
     $states = @('waiting', 'paused'); if (-not $jobRuns) { $states += 'building' }
@@ -426,26 +491,100 @@ function Get-SIIndexBuildWindowDecision {
     $room = if ($next) { ($next - $now).TotalMinutes - $S.LeadMinutes } else { [double]::MaxValue }
     $win = if ($next) { [int][Math]::Max(0, [Math]::Floor($room)) } else { 0 }
     $after = if ($row.State -eq 'building') { ' (its last build ended without an outcome)' } else { '' }
-    $resumable = ($row.State -eq 'paused') -or -not (Test-SIIndexBuildFiltered -Statement $row.Statement)
+    # #1316: a columnstore index cannot be built resumably either -- it is taken like a filtered one (its estimate must fit)
+    $resumable = ($row.State -eq 'paused') -or -not ((Test-SIIndexBuildFiltered -Statement $row.Statement) -or (Test-SIIndexBuildColumnstore -Statement $row.Statement))
+    if ($StartDue) {
+        # THE GAP BEFORE A SCHEDULED RUN (see above): the index goes first, the run starts late -- bounded and at most once a day
+        $lastStart = if ($row.LastStartUtc) { ([datetime]$row.LastStartUtc).ToUniversalTime() } else { $null }
+        # STABILITY (review item 6): at most ONE late run a day for the INSTALL (not per index) -- -LastGapHoldUtc: when this
+        # install's last run was held for an index (cfg.InstallState 'IndexGapHold')
+        if ($null -ne $LastGapHoldUtc -and ($now - ([datetime]$LastGapHoldUtc).ToUniversalTime()).TotalHours -lt $S.GapEveryHours) { return (& $no ('a scheduled run starts now; a run of this install was already held for an index at {0:yyyy-MM-dd HH:mm}Z -- at most one late run a day' -f ([datetime]$LastGapHoldUtc).ToUniversalTime()) $row) }
+        if (($now - $since).TotalHours -lt $S.GapAfterHours) { return (& $no ('a scheduled run starts now; the index has waited less than {0} h -- it waits for an idle window' -f $S.GapAfterHours) $row) }
+        if ($lastStart -and ($now - $lastStart).TotalHours -lt $S.GapEveryHours) { return (& $no ('a scheduled run starts now; the index was last started {0:yyyy-MM-dd HH:mm}Z -- at most one late run a day for it' -f $lastStart) $row) }
+        if ($IndexJobStartedRecently) { return (& $no ('a scheduled run starts now; the index build job started less than {0} min ago -- the run is not held again' -f $S.GapRetryMinutes) $row) }
+        $gm = [int]$S.GapLateMinutes
+        $late = 'the next run starts late, after it (at most {0})' -f (Format-SIIndexDuration $gm)
+        if ($resumable) {
+            $how = if ($row.State -eq 'paused') { 'resumed' } else { 'built resumably' }
+            return [pscustomobject]@{ Start = $true; Force = $false; Index = $row; Resumable = $true; HoldsRun = $true; Minutes = $gm; Cap = $true
+                                      Why = ('{0} in the gap before the scheduled run -- the runs go back to back, no idle window came in {1} h; {2}; it pauses there{3}' -f $how, [int][Math]::Floor(($now - $since).TotalHours), $late, $after) }
+        }
+        if ($est -gt 0 -and $est -le $gm) {
+            return [pscustomobject]@{ Start = $true; Force = $false; Index = $row; Resumable = $false; HoldsRun = $true; Minutes = $gm; Cap = $true
+                                      Why = ('about {0}, built in the gap before the scheduled run -- the runs go back to back, no idle window came in {1} h; the next run starts late, after it{2}' -f (Format-SIIndexDuration $est), [int][Math]::Floor(($now - $since).TotalHours), $after) }
+        }
+        if ($waitedDays -ge $S.WaitDays -and -not $row.ForcedUtc) {
+            return [pscustomobject]@{ Start = $true; Force = $true; Index = $row; Resumable = $false; HoldsRun = $true; Minutes = $gm; Cap = $true
+                                      Why = ('it has waited {0} days without an idle window long enough ({1}); it is built now, once, in the gap before the scheduled run -- the next run starts late, after it, at most {2} (a build not done by then is stopped and tried again in an idle window, where it may take as long as it needs)' -f [int][Math]::Floor($waitedDays), $(if ($est) { 'about ' + (Format-SIIndexDuration $est) } else { 'its time is not known' }), (Format-SIIndexDuration $gm)) }
+        }
+        return (& $no ('a scheduled run starts now; the index needs {0}, more than the {1} a run may start late -- it waits (built once after {2} days)' -f $(if ($est) { 'about ' + (Format-SIIndexDuration $est) } else { 'a time that is not known' }), (Format-SIIndexDuration $gm), $S.WaitDays) $row)
+    }
     if ($resumable) {
         if ($room -ge $S.ResumeMinutes) {
             $how = if ($row.State -eq 'paused') { 'resumed' } else { 'built resumably' }
             $why = if ($next) { '{0} for up to {1} (it pauses at the end of the window; the next run starts {2:yyyy-MM-dd HH:mm}Z){3}' -f $how, (Format-SIIndexDuration $win), $next, $after }
                    else { '{0}, and no run is scheduled{1}' -f $how, $after }
-            return [pscustomobject]@{ Start = $true; Force = $false; Index = $row; Why = $why; Minutes = $win; Resumable = $true }
+            return [pscustomobject]@{ Start = $true; Force = $false; Index = $row; Why = $why; Minutes = $win; Resumable = $true; HoldsRun = $false }
         }
         return (& $no ('the window before the next run is shorter than {0} min' -f $S.ResumeMinutes) $row)
     }
     if ($est -gt 0 -and $est -le $room) {
         $why = if ($next) { 'about {0}, and the next run starts {1:yyyy-MM-dd HH:mm}Z{2}' -f (Format-SIIndexDuration $est), $next, $after } else { 'about {0}, and no run is scheduled{1}' -f (Format-SIIndexDuration $est), $after }
-        return [pscustomobject]@{ Start = $true; Force = $false; Index = $row; Why = $why; Minutes = $win; Resumable = $false }
+        return [pscustomobject]@{ Start = $true; Force = $false; Index = $row; Why = $why; Minutes = $win; Resumable = $false; HoldsRun = $false }
     }
     if ($waitedDays -ge $S.WaitDays -and -not $row.ForcedUtc) {
         $why = 'it has waited {0} days without an idle window long enough ({1}); it is built now, once, and the next run waits for it' -f [int][Math]::Floor($waitedDays), $(if ($est) { 'about ' + (Format-SIIndexDuration $est) } else { 'its time is not known' })
-        return [pscustomobject]@{ Start = $true; Force = $true; Index = $row; Why = $why; Minutes = $win; Resumable = $false }
+        return [pscustomobject]@{ Start = $true; Force = $true; Index = $row; Why = $why; Minutes = $win; Resumable = $false; HoldsRun = $false }
     }
     $left = if ($next) { 'the next run starts in {0}' -f (Format-SIIndexDuration ([int][Math]::Max(0, ($next - $now).TotalMinutes))) } else { 'no run is scheduled' }
     & $no ('it needs {0}; {1}' -f $(if ($est) { 'about ' + (Format-SIIndexDuration $est) } else { 'a time that is not known' }), $left) $row
+}
+
+# =====================================================================================================================
+#  #1317 THE COLLECTION PARTITIONS in the same idle window (SI_Data_RetireByPartition, ON by default -- owner 2026-11-23;
+#  off = today's paced removal only). The pipeline runner's
+#  wake-up reads -- with the engine's own read rights, data only -- whether partition work waits, and starts the index
+#  build job for it (SI_INDEXBUILD_PARTITIONS=1) by the same window rule as a resumable index. Set off = nothing here runs.
+# =====================================================================================================================
+function Test-SIIndexBuildPartitionSwitch {
+    <# PURE. SI_Data_RetireByPartition: ON by default -- not set or empty = on; off only for $false / 0 / 'false' / 'off' /
+       'no'. The same rule as engine\pro-settings\SI-ProPartitionMove.ps1 Test-SIPartitionSwitchOn (that file runs as the
+       updater's identity and is not loaded by the runner). #>
+    param($Value)
+    if ($null -eq $Value) { return $true }
+    if ($Value -is [bool]) { return $Value }
+    -not (("$Value".Trim().ToLowerInvariant()) -in @('0', 'false', 'off', 'no', '$false'))
+}
+
+function Get-SIPartitionWorkSql {
+    <#
+        Does partition work wait? ONE value, 1 or 0 (data only; the runner's identity reads it): a large table whose move is
+        not recorded done (and not blocked), fewer than @Low empty boundaries left above the newest collection id, or a
+        retired Detailed collection still holding finding rows that the job has not already left to the paced removal
+        (sidata.PartitionMove '(removal)'). A database without the tables = 0.
+    #>
+    @'
+SET NOCOUNT ON;
+IF OBJECT_ID(N'sidata.PartitionMove', N'U') IS NULL OR COL_LENGTH('sidata.Collection', 'RetiredAt') IS NULL BEGIN SELECT 0; RETURN; END
+DECLARE @lw int = TRY_CONVERT(int, @Low); IF @lw IS NULL OR @lw < 1 SET @lw = 4;
+DECLARE @skip nvarchar(1000) = ISNULL((SELECT TOP (1) Note FROM sidata.PartitionMove WHERE TableName = N'(removal)'), N'');
+SELECT CASE
+    WHEN (SELECT COUNT(*) FROM sidata.PartitionMove WHERE TableName IN (N'Finding', N'Recommendation', N'IssueContext') AND State = N'done') < 3
+         AND NOT EXISTS (SELECT 1 FROM sidata.PartitionMove WHERE TableName IN (N'Finding', N'Recommendation', N'IssueContext') AND State IN (N'blocked', N'gave-up', N'check-differs', N'waiting-space')) THEN 1
+    WHEN ISNULL((SELECT TOP (1) ScopeRows FROM sidata.PartitionMove WHERE TableName = N'(boundaries)'), 0) < ISNULL((SELECT MAX(CollectionId) FROM sidata.Collection), 0) + @lw THEN 1
+    WHEN EXISTS (SELECT 1 FROM sidata.Collection AS m WHERE m.Kind = N'Detailed' AND m.RetiredAt IS NOT NULL
+                 AND CHARINDEX(CONCAT(N',', m.CollectionId, N','), @skip) = 0
+                 AND EXISTS (SELECT 1 FROM sidata.Finding AS f WHERE f.CollectionId = m.CollectionId)) THEN 1
+    ELSE 0 END;
+'@
+}
+
+function Get-SIPartitionWorkRow {
+    <# PURE. The partition work as one waiting, resumable row for Get-SIIndexBuildWindowDecision (the same window rule as a
+       resumable index: at least ResumeMinutes before the next run; never during a run, an updater run or the job). #>
+    param([Parameter(Mandatory)][datetime]$NowUtc)
+    [pscustomobject]@{ Table = 'sidata.Finding'; Name = 'collection-partitions'; State = 'waiting'; Statement = 'the collection partitions'
+                       SinceUtc = $NowUtc.ToUniversalTime(); EstMinutes = 0; ForcedUtc = $null; Why = '' }
 }
 
 # =====================================================================================================================
@@ -458,11 +597,23 @@ function Test-SIIndexBuildName {
     ("$Table" -match '^[A-Za-z_]\w{0,127}\.[A-Za-z_]\w{0,127}$') -and ("$Index" -match '^[A-Za-z_]\w{0,127}$')
 }
 
+function Get-SIIndexQuotedName {
+    <# PURE. One identifier bracket-quoted: 'a]b' -> '[a]]b]' (every name this file puts into a statement, constants too). #>
+    param([Parameter(Mandatory)][AllowEmptyString()][string]$Name)
+    '[' + $Name.Replace(']', ']]') + ']'
+}
+
+function Get-SIIndexSqlText {
+    <# PURE. A value inside an N'...' literal: "'" -> "''". #>
+    param([AllowEmptyString()][string]$Text)
+    "$Text".Replace("'", "''")
+}
+
 function Get-SIIndexBuildQuotedTable {
-    <# PURE. 'sidata.Finding' -> '[sidata].[Finding]' (callers check Test-SIIndexBuildName first). #>
+    <# PURE. 'sidata.Finding' -> '[sidata].[Finding]' (callers check Test-SIIndexBuildName first; ']' escaped all the same). #>
     param([Parameter(Mandatory)][string]$Table)
     $p = $Table -split '\.', 2
-    '[{0}].[{1}]' -f $p[0], $p[1]
+    '{0}.{1}' -f (Get-SIIndexQuotedName $p[0]), (Get-SIIndexQuotedName $p[1])
 }
 
 function Get-SIIndexBuildRunSql {
@@ -475,19 +626,29 @@ function Get-SIIndexBuildRunSql {
         The stored statement's own trailing WITH (...) is replaced. Returns @{ Sql; Resumable; How }; Sql '' when the names
         are not safe or the statement is not a CREATE INDEX of this index.
     #>
-    param([Parameter(Mandatory)]$Row, [AllowEmptyString()][string]$ResumableState = '', [int]$Minutes = 60)
+    # -OnPartitionScheme (#1316 x #1317): a columnstore index of the list on a table that is on PS_SICollection is created
+    # ALIGNED -- ... WITH (ONLINE = ON) ON PS_SICollection ([CollectionId]) -- so TRUNCATE ... WITH (PARTITIONS) keeps working
+    param([Parameter(Mandatory)]$Row, [AllowEmptyString()][string]$ResumableState = '', [int]$Minutes = 60, [switch]$OnPartitionScheme)
     $m = [Math]::Max(1, $Minutes)
     $none = [pscustomobject]@{ Sql = ''; Resumable = $false; How = '' }
     if (-not (Test-SIIndexBuildName -Table ([string]$Row.Table) -Index ([string]$Row.Name))) { return $none }
     $qt = Get-SIIndexBuildQuotedTable -Table ([string]$Row.Table)
     if ($ResumableState -eq 'PAUSED') {
-        return [pscustomobject]@{ Sql = ('ALTER INDEX [{0}] ON {1} RESUME WITH (MAX_DURATION = {2} MINUTES)' -f $Row.Name, $qt, $m); Resumable = $true; How = 'resumed (resumable: it pauses at the end of its window)' }
+        return [pscustomobject]@{ Sql = ('ALTER INDEX {0} ON {1} RESUME WITH (MAX_DURATION = {2} MINUTES)' -f (Get-SIIndexQuotedName ([string]$Row.Name)), $qt, $m); Resumable = $true; How = 'resumed (resumable: it pauses at the end of its window)' }
     }
     $base = ([string]$Row.Statement).Trim().TrimEnd(';').TrimEnd()
     $base = ($base -replace '(?is)\s+WITH\s*\([^()]*\)\s*$', '').TrimEnd()
-    $head = '(?is)^CREATE\s+(?:UNIQUE\s+)?(?:NONCLUSTERED\s+)?INDEX\s+\[?' + [regex]::Escape([string]$Row.Name) + '\]?\s+ON\s+'
+    $head = '(?is)^CREATE\s+(?:UNIQUE\s+)?(?:NONCLUSTERED\s+)?(?:COLUMNSTORE\s+)?INDEX\s+\[?' + [regex]::Escape([string]$Row.Name) + '\]?\s+ON\s+'
     if ($base -notmatch $head -or $base -match ';') { return $none }
     if (Test-SIIndexBuildFiltered -Statement $base) { return [pscustomobject]@{ Sql = ('{0} WITH (ONLINE = ON)' -f $base); Resumable = $false; How = 'built online (a filtered index cannot pause)' } }
+    # #1316: a nonclustered COLUMNSTORE index (only SI's own, SI_Data_ColumnstoreIndexes) -- online, never resumable
+    if (Test-SIIndexBuildColumnstore -Statement $base) {
+        if ($OnPartitionScheme -and (Test-SIColumnstoreIndexName -Table ([string]$Row.Table) -Index ([string]$Row.Name)) -and $base -notmatch '(?is)\)\s*ON\s+\[?\w+\]?\s*\(') {
+            $S = $script:SIColumnstore
+            return [pscustomobject]@{ Sql = ('{0} WITH (ONLINE = ON) ON {1} ({2})' -f $base, (Get-SIIndexQuotedName $S.Scheme), (Get-SIIndexQuotedName $S.SchemeColumn)); Resumable = $false; How = ('built online, aligned on the collection partitions ({0}; a columnstore index cannot pause)' -f $S.Scheme) }
+        }
+        return [pscustomobject]@{ Sql = ('{0} WITH (ONLINE = ON)' -f $base); Resumable = $false; How = 'built online (a columnstore index cannot pause)' }
+    }
     [pscustomobject]@{ Sql = ('{0} WITH (ONLINE = ON, RESUMABLE = ON, MAX_DURATION = {1} MINUTES)' -f $base, $m); Resumable = $true; How = 'built online, resumable (it pauses at the end of its window)' }
 }
 
@@ -495,7 +656,7 @@ function Get-SIIndexBuildPauseSql {
     <# PURE. The pause of a running resumable build (sent on a second connection while the build runs). '' = unsafe names. #>
     param([Parameter(Mandatory)][string]$Table, [Parameter(Mandatory)][string]$Index)
     if (-not (Test-SIIndexBuildName -Table $Table -Index $Index)) { return '' }
-    'ALTER INDEX [{0}] ON {1} PAUSE' -f $Index, (Get-SIIndexBuildQuotedTable -Table $Table)
+    'ALTER INDEX {0} ON {1} PAUSE' -f (Get-SIIndexQuotedName $Index), (Get-SIIndexBuildQuotedTable -Table $Table)
 }
 
 function Get-SIIndexResumableOpSql {
@@ -575,4 +736,445 @@ function Invoke-SIIndexBuildCommand {
     }
     $sw.Stop()
     $sw.Elapsed.TotalSeconds
+}
+
+# =====================================================================================================================
+#  #1316 COLUMNSTORE ON THE READ-HEAVY TABLES (SCALE-2, REQUIREMENTS #1314 / #1316) -- behind ONE setting, ON by default
+# =====================================================================================================================
+#  The data sync's summary groups, key figures and changes phases SCAN and AGGREGATE a whole collection of sidata.Finding
+#  (GROUP BY asset / issue / report, SUM / MIN / MAX / COUNT DISTINCT) and the key figures scan sidata.CiFindingState (opened /
+#  fixed / time to fix). A large install's database sat at its limit 40 % of a 97 h run, bound by PHYSICAL READS. A
+#  NONCLUSTERED COLUMNSTORE index on the columns those statements read lets SQL Server read compressed column segments in
+#  batch mode instead of every row's pages. It is an INDEX: no statement is changed and no result can change (prio 1); SQL
+#  Server picks it only where it is cheaper. Rollback = the setting off: the next update drops the index.
+#  THE SETTING SI_Data_ColumnstoreIndexes, solution setting, default ON (owner 2026-11-23: new features ship on). Not set =
+#  on; false / off = the rollback below.
+#  WHO: the UPDATER on every run (Invoke-SIColumnstoreIndexStep, from Invoke-SIUpdaterIndexBuildJob) records a missing index
+#  as 'waiting' in cfg.IndexBuild with its statement and its estimate; the INDEX BUILD JOB caj-si-index-build builds it in an
+#  idle window (ONLINE; a columnstore index cannot pause, so it is taken like a filtered one). The updater never builds one
+#  itself; nothing else creates them. Off: the updater removes a waiting row and drops a built index of THIS list only; the
+#  job refuses a waiting row of this list while the setting is off. Azure SQL Database: only from Standard S3 (and every
+#  Premium / vCore size) -- a smaller size records nothing and says why.
+#  RISK (#1314 (6e)): a later schema change that ALTERs or DROPs a column inside one of these indexes is refused by SQL Server
+#  while the index is there -- the columns are SI's stable key columns; such a change drops the index first.
+$script:SIColumnstore = @{
+    Setting = 'SI_Data_ColumnstoreIndexes'
+    Indexes = @(
+        # every column the three phases' statements read from a collection's findings (no MAX column: a nonclustered
+        # columnstore index takes none)
+        # Partitioned: the table is one of #1317's (PS_SICollection) -- its index waits while the table's move is pending and is
+        # then built ALIGNED on the scheme (see "COLUMNSTORE x PARTITIONS" below)
+        [pscustomobject]@{ Table = 'sidata.Finding'; Name = 'NCCI_Finding_Load'; Partitioned = $true
+                           Columns = @('CollectionId', 'FindingId', 'AssetKey', 'AssetName', 'ReportName', 'SecurityDomain', 'ConfigurationId', 'Cve', 'Title', 'Severity',
+                                       'Tier', 'RiskScore', 'RiskRating', 'ExemptionId', 'HasExploit', 'DepartmentId', 'Category', 'Subcategory', 'CiLifecycle', 'EosStatus',
+                                       'FixDueDate', 'SourceFirstDetected') }
+        # the finding lifecycle the key figures count (opened / fixed in N days, the mean time to fix)
+        # (not partitioned: CiFindingState is one row per finding on a CI, never per collection -- never held, never aligned)
+        [pscustomobject]@{ Table = 'sidata.CiFindingState'; Name = 'NCCI_CiFindingState_Load'; Partitioned = $false
+                           Columns = @('OwnerKey', 'FindingKey', 'CiId', 'State', 'FirstDetected', 'ClosedAt', 'CloseReason', 'Severity') }
+    )
+    # Azure SQL Database service objectives without columnstore (Basic, S0-S2); every other size and every other engine has it
+    NoColumnstore = @('Basic', 'S0', 'S1', 'S2', 'System', 'System0', 'System1', 'System2')
+    DropLockMs = 10000
+    # #1317's partition scheme and its column (an index of a Partitioned table is built ON it once the table is there)
+    Scheme = 'PS_SICollection'; SchemeColumn = 'CollectionId'
+}
+
+function Get-SIColumnstoreContract { $script:SIColumnstore }
+
+function Test-SIColumnstoreSettingOn {
+    <# PURE. The setting's stored value (cfg.Setting ValueJson, or a plain value) -> on? false / "off" / 0 / no = OFF; anything
+       else -- empty, not set, true, a typo -- is ON (the default, owner 2026-11-23). #>
+    param($Value)
+    if ($null -eq $Value -or $Value -is [DBNull]) { return $true }
+    if ($Value -is [bool]) { return $Value }
+    $v = ("$Value".Trim() -replace '^"|"$', '').Trim().ToLowerInvariant()
+    -not ($v -in @('false', 'off', '0', 'no'))
+}
+
+function Read-SIColumnstoreSetting {
+    <# The install's setting (cfg.Setting, solution scope): @{ Known; On }. Known = $false when it cannot be read -- then
+       NOTHING is queued, removed or dropped on a guess. Never throws. #>
+    param([Parameter(Mandatory)][scriptblock]$Invoke)
+    try {
+        $r = @(Get-SIIndexReaderRows (& $Invoke "SET NOCOUNT ON; IF OBJECT_ID(N'cfg.Setting') IS NOT NULL SELECT ValueJson FROM cfg.Setting WHERE Name = @N AND Scope = N'solution';" ([ordered]@{ N = $script:SIColumnstore.Setting }) 'reader'))
+        $v = if ($r.Count) { Get-SIIndexRowValue $r[0] 'ValueJson' } else { $null }
+        [pscustomobject]@{ Known = $true; On = (Test-SIColumnstoreSettingOn -Value $v) }
+    } catch { [pscustomobject]@{ Known = $false; On = $false } }
+}
+
+function Test-SIColumnstoreIndexName {
+    <# PURE. Is -Table / -Index one of THIS list's columnstore indexes (the only ones the updater may remove or drop)? #>
+    param([string]$Table, [string]$Index)
+    [bool](@($script:SIColumnstore.Indexes | Where-Object { $_.Table -ieq $Table -and $_.Name -ieq $Index }).Count)
+}
+
+function Get-SIColumnstoreStatement {
+    <# PURE. The CREATE statement of one index of the list (no WITH: the index build job adds ONLINE = ON). #>
+    param([Parameter(Mandatory)]$Index)
+    'CREATE NONCLUSTERED COLUMNSTORE INDEX {0} ON {1} ({2})' -f (Get-SIIndexQuotedName ([string]$Index.Name)), (Get-SIIndexBuildQuotedTable -Table ([string]$Index.Table)),
+        (@($Index.Columns | ForEach-Object { Get-SIIndexQuotedName ([string]$_) }) -join ', ')
+}
+
+function Test-SIColumnstoreSupported {
+    <# PURE. Does this database take a columnstore index? -EngineEdition (SERVERPROPERTY: 5 = Azure SQL Database, 8 = Managed
+       Instance, 2/3/4 = SQL Server Standard / Enterprise / Express), -Objective (DATABASEPROPERTYEX ServiceObjective, Azure SQL
+       Database only). @{ Ok; Why }. #>
+    param([AllowEmptyString()][string]$EngineEdition, [AllowEmptyString()][string]$Objective)
+    $e = "$EngineEdition".Trim(); $o = "$Objective".Trim()
+    if ($e -eq '5') {
+        if (-not $o) { return [pscustomobject]@{ Ok = $false; Why = 'the database''s size could not be read' } }
+        if (@($script:SIColumnstore.NoColumnstore) -contains $o) { return [pscustomobject]@{ Ok = $false; Why = ('the database''s size {0} does not support columnstore indexes (Standard S3 or above does)' -f $o) } }
+        return [pscustomobject]@{ Ok = $true; Why = ('size {0}' -f $o) }
+    }
+    if ($e -in @('2', '3', '4', '8')) { return [pscustomobject]@{ Ok = $true; Why = ('engine edition {0}' -f $e) } }
+    [pscustomobject]@{ Ok = $false; Why = ('the engine edition ({0}) is not known to support columnstore indexes' -f $(if ($e) { $e } else { 'not read' })) }
+}
+
+function Get-SIColumnstoreStateSql {
+    <# ONE read: the engine edition and size (K 'db'), and per index of the list whether it is there (K 'ix', A = 'table|name',
+       N = 1 / 0) and whether every one of its columns is there yet (K 'cols', N = the columns missing). Catalog only. #>
+    $parts = New-Object System.Collections.Generic.List[string]
+    $parts.Add("SELECT N'db' AS K, CONVERT(nvarchar(300), SERVERPROPERTY('EngineEdition')) AS A, CONVERT(nvarchar(300), DATABASEPROPERTYEX(DB_NAME(), 'ServiceObjective')) AS B, CONVERT(int, 0) AS N")
+    foreach ($ix in @($script:SIColumnstore.Indexes)) {
+        $key = '{0}|{1}' -f $ix.Table, $ix.Name
+        $qtab = Get-SIIndexSqlText (Get-SIIndexBuildQuotedTable -Table ([string]$ix.Table))
+        $parts.Add(("SELECT N'ix', N'{0}', N'', CASE WHEN EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'{1}' AND object_id = OBJECT_ID(N'{2}')) THEN 1 ELSE 0 END" -f (Get-SIIndexSqlText $key), (Get-SIIndexSqlText ([string]$ix.Name)), $qtab))
+        $miss = @($ix.Columns | ForEach-Object { "CASE WHEN COL_LENGTH(N'{0}', N'{1}') IS NULL THEN 1 ELSE 0 END" -f $qtab, (Get-SIIndexSqlText ([string]$_)) }) -join ' + '
+        $parts.Add(("SELECT N'cols', N'{0}', N'', {1}" -f (Get-SIIndexSqlText $key), $miss))
+    }
+    "SET NOCOUNT ON;`n" + ($parts -join "`nUNION ALL`n") + ';'
+}
+
+function Read-SIColumnstoreState {
+    <# @{ Supported (@{ Ok; Why }); Exists (hashtable 'table|name' -> bool); Missing ('table|name' -> columns missing) }, or
+       $null when it cannot be read. Never throws. #>
+    param([Parameter(Mandatory)][scriptblock]$Invoke)
+    try {
+        $st = [pscustomobject]@{ Supported = $null; Exists = @{}; Missing = @{} }
+        $ed = ''; $ob = ''
+        foreach ($r in @(Get-SIIndexReaderRows (& $Invoke (Get-SIColumnstoreStateSql) @{} 'reader'))) {
+            $k = [string](Get-SIIndexRowValue $r 'K'); $a = [string](Get-SIIndexRowValue $r 'A'); $n = Get-SIIndexRowValue $r 'N'
+            switch ($k) {
+                'db'   { $ed = $a; $b = Get-SIIndexRowValue $r 'B'; $ob = if ($null -eq $b -or $b -is [DBNull]) { '' } else { [string]$b } }
+                'ix'   { $st.Exists[$a.ToLowerInvariant()] = ([int]$n -gt 0) }
+                'cols' { $st.Missing[$a.ToLowerInvariant()] = [int]$n }
+            }
+        }
+        $st.Supported = Test-SIColumnstoreSupported -EngineEdition $ed -Objective $ob
+        $st
+    } catch { $null }
+}
+
+function Get-SIColumnstorePlan {
+    <#
+        PURE. What the updater does for each index of the list. -Setting @{ Known; On }; -State (Read-SIColumnstoreState);
+        -Rows (cfg.IndexBuild). Returns one @{ Index; Action; Why } per index:
+          queue       setting on, supported, not there, its columns there, no row waiting / paused / building -> 'waiting'
+          remove-row  setting off (or the size does not take it): its waiting / failed / built row goes (never one that builds
+                      or is paused -- the job owns that; the next update looks again)
+          drop        setting off and the index is there -> DROP INDEX (the rollback)
+          none        nothing to do (said why)
+        The setting not readable (Known $false) or the state not readable = 'none' for every index: nothing on a guess.
+    #>
+    param([Parameter(Mandatory)]$Setting, $State, [object[]]$Rows = @())
+    $out = New-Object System.Collections.Generic.List[object]
+    foreach ($ix in @($script:SIColumnstore.Indexes)) {
+        $key = ('{0}|{1}' -f $ix.Table, $ix.Name).ToLowerInvariant()
+        $row = @($Rows | Where-Object { $_ -and [string]$_.Table -ieq $ix.Table -and [string]$_.Name -ieq $ix.Name })[0]
+        $one = { param($a, $w) $out.Add([pscustomobject]@{ Index = $ix; Action = $a; Why = $w }) }
+        if (-not $Setting.Known) { & $one 'none' 'the setting could not be read -- nothing changed'; continue }
+        if ($null -eq $State) { & $one 'none' 'the database could not be read -- nothing changed'; continue }
+        $there = [bool]$State.Exists[$key]
+        $rowState = if ($row) { [string]$row.State } else { '' }
+        $owned = $rowState -in @('building', 'paused')
+        if (-not $Setting.On -or -not $State.Supported.Ok) {
+            $why = if (-not $Setting.On) { 'the setting is off' } else { $State.Supported.Why }
+            if ($there -and -not $Setting.On) { & $one 'drop' ('{0}: the index is dropped (the rollback)' -f $why); continue }
+            if ($row -and -not $owned) { & $one 'remove-row' ('{0}: its waiting row is removed' -f $why); continue }
+            & $one 'none' $(if ($owned) { '{0}: it is being built -- the next update looks again' -f $why } else { $why }); continue
+        }
+        if ($there) { & $one 'none' 'there'; continue }
+        if ([int]$State.Missing[$key] -gt 0) { & $one 'none' ('{0} of its columns are not there yet -- the next update records it' -f [int]$State.Missing[$key]); continue }
+        if ($rowState -in @('waiting', 'paused', 'building')) { & $one 'none' ('it {0} for the index build job' -f $(if ($rowState -eq 'waiting') { 'waits' } else { 'is ' + $rowState })); continue }
+        & $one 'queue' 'the setting is on -- recorded for the index build job (an idle window)'
+    }
+    $out.ToArray()
+}
+
+function Get-SIColumnstoreRemoveRowSql {
+    <# One cfg.IndexBuild row of the list removed (never one that is building or paused). #>
+    "SET NOCOUNT ON; IF OBJECT_ID(N'cfg.IndexBuild') IS NOT NULL DELETE FROM cfg.IndexBuild WHERE TableName = @T AND IndexName = @I AND State NOT IN (N'building', N'paused');"
+}
+
+function Get-SIColumnstoreDropSql {
+    <# PURE. The rollback of one index of the list; '' for any other name. A lock that does not come within DropLockMs = not now. #>
+    param([Parameter(Mandatory)][string]$Table, [Parameter(Mandatory)][string]$Index)
+    if (-not (Test-SIColumnstoreIndexName -Table $Table -Index $Index) -or -not (Test-SIIndexBuildName -Table $Table -Index $Index)) { return '' }
+    $qt = Get-SIIndexBuildQuotedTable -Table $Table
+    "SET LOCK_TIMEOUT {0}; IF EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'{1}' AND object_id = OBJECT_ID(N'{2}') AND type = 6) DROP INDEX {3} ON {4};" -f [int]$script:SIColumnstore.DropLockMs, (Get-SIIndexSqlText $Index), (Get-SIIndexSqlText $qt), (Get-SIIndexQuotedName $Index), $qt
+}
+
+# =====================================================================================================================
+#  #1316 x #1317 COLUMNSTORE x PARTITIONS -- ONE rule (2026-11-23, both features ON by default)
+# =====================================================================================================================
+#  sidata.Finding carries NCCI_Finding_Load (#1316) AND is moved onto PS_SICollection (#1317, SI_Data_RetireByPartition).
+#  TRUNCATE ... WITH (PARTITIONS) needs every index of the table ALIGNED on the scheme, and the move copies only row-store
+#  indexes. So:
+#    1. ORDER: while sidata.Finding's move is PENDING (the switch on, the move's state table there, the table not on the
+#       scheme yet, its move not 'blocked') the index waits -- the runner does not start the job for it, the job does not
+#       build it, the update says it in one line. Once the table is on the scheme (or the switch is off, or the move is
+#       blocked for another reason) it is built as usual -- ALIGNED (ON PS_SICollection ([CollectionId])) when the table is on
+#       the scheme.
+#    2. AN INDEX BUILT BEFORE (on the old table): the move drops it right before its copy starts (it is only an index: no
+#       result changes; the row-store indexes stay) and sets its row back to 'waiting'; rule 1 then builds it aligned on the
+#       new table after the swap. Never blocked, never a run held.
+#  On the scheme = the catalog says so (the clustered index on PS_SICollection), or -- for a reader that may not see the
+#  scheme in the catalog -- sidata.PartitionMove says the table was swapped / checked / done.
+function Get-SIColumnstorePartitionSql {
+    <# ONE row about a #1317 table (@T = 'Finding'): Live, OnScheme (catalog), Scheme (seen), MoveTable, MoveState. Catalog +
+       sidata.PartitionMove only; readable by the engine's identity (data only) and the updater's. #>
+    @'
+SET NOCOUNT ON;
+DECLARE @f int = OBJECT_ID(N'sidata.' + @T, N'U');
+DECLARE @ps int = (SELECT data_space_id FROM sys.data_spaces WHERE name = N'PS_SICollection' AND type = 'PS');
+DECLARE @mt int = CASE WHEN OBJECT_ID(N'sidata.PartitionMove', N'U') IS NULL THEN 0 ELSE 1 END;
+DECLARE @mv nvarchar(32) = NULL;
+IF @mt = 1 EXEC sp_executesql N'SELECT TOP (1) @s = State FROM sidata.PartitionMove WHERE TableName = @n', N'@s nvarchar(32) OUTPUT, @n nvarchar(128)', @s = @mv OUTPUT, @n = @T;
+SELECT CASE WHEN @f IS NULL THEN 0 ELSE 1 END AS Live,
+       CASE WHEN @f IS NOT NULL AND @ps IS NOT NULL AND EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = @f AND index_id IN (0, 1) AND data_space_id = @ps) THEN 1 ELSE 0 END AS OnScheme,
+       CASE WHEN @ps IS NULL THEN 0 ELSE 1 END AS Scheme, @mt AS MoveTable, @mv AS MoveState;
+'@
+}
+
+function Read-SIColumnstorePartitionState {
+    <# The partition state of one table of the list (-Table 'sidata.Finding'): @{ Live; OnScheme; Scheme; MoveTable;
+       MoveState }, or $null when it cannot be read. Never throws. #>
+    param([Parameter(Mandatory)][scriptblock]$Invoke, [string]$Table = 'sidata.Finding')
+    try {
+        $r = @(Get-SIIndexReaderRows (& $Invoke (Get-SIColumnstorePartitionSql) ([ordered]@{ T = ($Table -replace '^sidata\.', '') }) 'reader'))
+        if (-not $r.Count) { return $null }
+        $ms = Get-SIIndexRowValue $r[0] 'MoveState'
+        [pscustomobject]@{ Live = ([int](Get-SIIndexRowValue $r[0] 'Live') -eq 1); OnScheme = ([int](Get-SIIndexRowValue $r[0] 'OnScheme') -eq 1)
+                           Scheme = ([int](Get-SIIndexRowValue $r[0] 'Scheme') -eq 1); MoveTable = ([int](Get-SIIndexRowValue $r[0] 'MoveTable') -eq 1)
+                           MoveState = $(if ($null -eq $ms -or $ms -is [DBNull]) { '' } else { ([string]$ms).Trim().ToLowerInvariant() }) }
+    } catch { $null }
+}
+
+function Get-SIColumnstorePartitionHold {
+    <#
+        PURE. Rule 1 above for ONE index of the list (-Index: an entry of Get-SIColumnstoreContract).Indexes, or a row with
+        Table / Name). -SwitchOn: SI_Data_RetireByPartition. -State: Read-SIColumnstorePartitionState ($null = not read).
+        Returns @{ Hold; Aligned; Why }: Hold = the index waits now; Aligned = build it ON the scheme (the catalog shows the
+        table on it). An index of a table that is not partitioned is never held (CiFindingState).
+    #>
+    param([Parameter(Mandatory)]$Index, [bool]$SwitchOn = $true, $State)
+    $ok = { param($a, $w) [pscustomobject]@{ Hold = $false; Aligned = [bool]$a; Why = $w } }
+    $entry = @($script:SIColumnstore.Indexes | Where-Object { $_.Table -ieq [string]$Index.Table -and $_.Name -ieq [string]$Index.Name })[0]
+    if (-not $entry -or -not $entry.Partitioned) { return (& $ok $false 'the table is not partitioned') }
+    if ($null -eq $State) {
+        return [pscustomobject]@{ Hold = $true; Aligned = $false; Why = ('whether {0} is on the collection partitions could not be read -- it waits; the next wake-up looks again' -f $entry.Table) }
+    }
+    $moved = $State.OnScheme -or ($State.MoveState -in @('swapped', 'checked', 'done'))
+    if ($moved) { return (& $ok $State.OnScheme ('{0} is on the collection partitions -- built aligned on them' -f $entry.Table)) }
+    if (-not $SwitchOn) { return (& $ok $false 'SI_Data_RetireByPartition is off -- built on the table as it is') }
+    if (-not $State.MoveTable) { return (& $ok $false 'the database does not carry the collection partitions yet -- built on the table as it is (the move takes it along later)') }
+    if ($State.MoveState -in 'blocked', 'gave-up', 'waiting-space') { return (& $ok $false ('the move of {0} onto the collection partitions is blocked for another reason -- built on the table as it is' -f $entry.Table)) }
+    [pscustomobject]@{ Hold = $true; Aligned = $false
+                       Why = ('waits until {0} is on the collection partitions (SI_Data_RetireByPartition: the move goes first) -- it is then built aligned on them' -f $entry.Table) }
+}
+
+function Select-SIColumnstoreRowsNotHeld {
+    <#
+        THE RUNNER's side of rule 1: -Rows (cfg.IndexBuild) without the rows of an index that waits for its table's move, so
+        the idle wake-up never starts the job for it (and picks the next index instead). Reads the partition state ONCE, only
+        when such a row waits. -State: a seam (tests). Returns @{ Rows; Held (the held rows, each with its Why) }. Never throws:
+        a state that cannot be read holds the index (nothing on a guess).
+    #>
+    param([object[]]$Rows = @(), [scriptblock]$Invoke, [bool]$SwitchOn = $true, $State = 'read')
+    $keep = New-Object System.Collections.Generic.List[object]; $held = New-Object System.Collections.Generic.List[object]
+    $read = $false; $st = $null
+    foreach ($r in @($Rows)) {
+        if (-not $r) { continue }
+        $e = @($script:SIColumnstore.Indexes | Where-Object { $_.Partitioned -and $_.Table -ieq [string]$r.Table -and $_.Name -ieq [string]$r.Name })[0]
+        if (-not $e -or [string]$r.State -notin @('waiting', 'paused', 'building')) { $keep.Add($r); continue }
+        if (-not $read) { $read = $true; $st = if ($State -is [string] -and $State -eq 'read') { if ($Invoke) { Read-SIColumnstorePartitionState -Invoke $Invoke -Table $e.Table } else { $null } } else { $State } }
+        $h = Get-SIColumnstorePartitionHold -Index $e -SwitchOn $SwitchOn -State $st
+        if ($h.Hold) { $held.Add([pscustomobject]@{ Row = $r; Why = $h.Why }) } else { $keep.Add($r) }
+    }
+    [pscustomobject]@{ Rows = $keep.ToArray(); Held = $held.ToArray() }
+}
+
+function Get-SIColumnstorePartitionSwitch {
+    <# SI_Data_RetireByPartition where the caller has no value of its own: $global:, else SI_CFG_SI_Data_RetireByPartition / the
+       job's SI_INDEXBUILD_PARTITIONSWITCH; not set = ON (Test-SIIndexBuildPartitionSwitch's rule). #>
+    $g = $null; try { $g = Get-Variable -Name 'SI_Data_RetireByPartition' -Scope Global -ValueOnly -ErrorAction Stop } catch { $g = $null }
+    if ($null -eq $g -or ($g -isnot [bool] -and "$g".Trim() -eq '')) { $g = [Environment]::GetEnvironmentVariable('SI_CFG_SI_Data_RetireByPartition') }
+    if ($null -eq $g -or ($g -isnot [bool] -and "$g".Trim() -eq '')) { $g = [Environment]::GetEnvironmentVariable('SI_INDEXBUILD_PARTITIONSWITCH') }
+    if ($null -eq $g -or ($g -isnot [bool] -and "$g".Trim() -eq '')) { return $true }
+    Test-SIIndexBuildPartitionSwitch -Value $g
+}
+
+# =====================================================================================================================
+#  #1332 THE FINDING HISTORY'S PAGE INDEXES (the readers on the history; docs\DESIGN.md "Finding history model")
+# =====================================================================================================================
+#  The readers read a collection served from the history off the member's page keys (sidata.FindingStateMember: CollectionId +
+#  the copies of AssetKey, Severity, Tier, the scores, ExemptionId, Cve, ConfigurationId) exactly as they read sidata.Finding off
+#  its (CollectionId, ...) indexes: the same seeks, the same sorts. They are built ONLY by the index build job in an idle window
+#  (the updater records them 'waiting'; it never builds one) and a collection is SERVED from its history only once every one of
+#  them is there (SI-DataHistoryServe.ps1: until then the stored rows serve and the run says why). Additive: an index only
+#  makes a read faster; dropping one = the stored rows serve again.
+function Get-SIHistoryIndexDefinitions {
+    <# PURE. The history's page indexes -- built ONLY by the index build job (the updater's identity), never by the engine. #>
+    @(
+    [pscustomobject]@{ Table = 'sidata.FindingStateMember'; Name = 'IX_FindingStateMember_RiskPage';      Statement = 'CREATE INDEX IX_FindingStateMember_RiskPage ON sidata.FindingStateMember (CollectionId, RiskScore DESC) INCLUDE (ExemptionId, StateId)' }
+    [pscustomobject]@{ Table = 'sidata.FindingStateMember'; Name = 'IX_FindingStateMember_CvssPage';      Statement = 'CREATE INDEX IX_FindingStateMember_CvssPage ON sidata.FindingStateMember (CollectionId, Cvss DESC) INCLUDE (ExemptionId, StateId)' }
+    [pscustomobject]@{ Table = 'sidata.FindingStateMember'; Name = 'IX_FindingStateMember_WeightedPage';  Statement = 'CREATE INDEX IX_FindingStateMember_WeightedPage ON sidata.FindingStateMember (CollectionId, RiskScoreWeighted DESC) INCLUDE (ExemptionId, StateId)' }
+    [pscustomobject]@{ Table = 'sidata.FindingStateMember'; Name = 'IX_FindingStateMember_AssetSidePage'; Statement = 'CREATE INDEX IX_FindingStateMember_AssetSidePage ON sidata.FindingStateMember (CollectionId, RiskAssetSide DESC) INCLUDE (ExemptionId, StateId)' }
+    [pscustomobject]@{ Table = 'sidata.FindingStateMember'; Name = 'IX_FindingStateMember_VulnSidePage';  Statement = 'CREATE INDEX IX_FindingStateMember_VulnSidePage ON sidata.FindingStateMember (CollectionId, RiskVulnSide DESC) INCLUDE (ExemptionId, StateId)' }
+    [pscustomobject]@{ Table = 'sidata.FindingStateMember'; Name = 'IX_FindingStateMember_Asset';         Statement = 'CREATE INDEX IX_FindingStateMember_Asset ON sidata.FindingStateMember (CollectionId, AssetKey) INCLUDE (StateId, AssetName, Title, Severity, Tier, RiskScore, Cve, ConfigurationId, ExemptionId, CiLifecycle, ReportName)' }
+    [pscustomobject]@{ Table = 'sidata.FindingStateMember'; Name = 'IX_FindingStateMember_Cve';           Statement = 'CREATE INDEX IX_FindingStateMember_Cve ON sidata.FindingStateMember (CollectionId, Cve) INCLUDE (StateId, AssetKey, Severity, Tier, RiskScore)' }
+    [pscustomobject]@{ Table = 'sidata.FindingStateMember'; Name = 'IX_FindingStateMember_Config';        Statement = 'CREATE INDEX IX_FindingStateMember_Config ON sidata.FindingStateMember (CollectionId, ConfigurationId) INCLUDE (StateId, AssetKey, Severity, Tier, RiskScore)' }
+    [pscustomobject]@{ Table = 'sidata.FindingStateMember'; Name = 'IX_FindingStateMember_Counts';        Statement = 'CREATE INDEX IX_FindingStateMember_Counts ON sidata.FindingStateMember (CollectionId, Severity, Tier) INCLUDE (ExemptionId, RiskScore, AssetKey)' }
+    [pscustomobject]@{ Table = 'sidata.FindingStateMember'; Name = 'IX_FindingStateMember_Importance';    Statement = 'CREATE INDEX IX_FindingStateMember_Importance ON sidata.FindingStateMember (CollectionId, ImportanceRank) INCLUDE (StateId, Tier, Severity, ExemptionId)' }
+)
+}
+$script:SIHistoryIndexes = Get-SIHistoryIndexDefinitions
+
+function Get-SIHistoryIndexContract { $script:SIHistoryIndexes }
+
+function Get-SIHistoryIndexStateSql {
+    <# Per index of the list: is it there (X), are its columns there (C = how many are missing), the member table there. #>
+    $rows = foreach ($ix in $script:SIHistoryIndexes) {
+        $cols = @([regex]::Matches(($ix.Statement -replace '^.*?\((.*)$', '$1'), '[A-Za-z_][A-Za-z0-9_]*') | ForEach-Object { $_.Value } | Where-Object { $_ -notin 'DESC', 'ASC', 'INCLUDE' } | Select-Object -Unique)
+        $miss = (@($cols | ForEach-Object { "CASE WHEN COL_LENGTH(N'$($ix.Table)', N'$_') IS NULL THEN 1 ELSE 0 END" })) -join ' + '
+        "SELECT N'$($ix.Name)' AS Name, CASE WHEN EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'$($ix.Name)' AND object_id = OBJECT_ID(N'$($ix.Table)')) THEN 1 ELSE 0 END AS X, $miss AS C"
+    }
+    "SET NOCOUNT ON; IF OBJECT_ID(N'sidata.FindingStateMember') IS NULL SELECT CAST(NULL AS nvarchar(128)) AS Name, 0 AS X, 0 AS C WHERE 1 = 0; ELSE " + ($rows -join ' UNION ALL ') + ';'
+}
+
+function Read-SIHistoryIndexState {
+    <# @{ Known; There = [names]; Missing = [names]; ColumnsMissing = [names] } of the list. Known $false = not readable. #>
+    param([Parameter(Mandatory)][scriptblock]$Invoke)
+    try {
+        $r = @(Get-SIIndexReaderRows (& $Invoke (Get-SIHistoryIndexStateSql) @{} 'reader'))
+        $there = @($r | Where-Object { [int](Get-SIIndexRowValue $_ 'X') -eq 1 } | ForEach-Object { [string](Get-SIIndexRowValue $_ 'Name') })
+        $cm = @($r | Where-Object { [int](Get-SIIndexRowValue $_ 'X') -ne 1 -and [int](Get-SIIndexRowValue $_ 'C') -gt 0 } | ForEach-Object { [string](Get-SIIndexRowValue $_ 'Name') })
+        $miss = @($script:SIHistoryIndexes | Where-Object { $there -notcontains $_.Name } | ForEach-Object { $_.Name })
+        [pscustomobject]@{ Known = ($r.Count -gt 0); There = $there; Missing = $miss; ColumnsMissing = $cm }
+    } catch { [pscustomobject]@{ Known = $false; There = @(); Missing = @($script:SIHistoryIndexes | ForEach-Object { $_.Name }); ColumnsMissing = @() } }
+}
+
+function Invoke-SIHistoryIndexStep {
+    <#
+        #1332 THE UPDATER'S STEP (every run, beside the columnstore step): each page index of the finding history that is not
+        there, whose columns are there, and has no row waiting / paused / building is recorded 'waiting' in cfg.IndexBuild with
+        its statement and estimate; the index build job builds it in an idle window. NEVER builds one itself, never throws,
+        never holds the update. Seams: -State (Read-SIHistoryIndexState), -Rows (cfg.IndexBuild), -Estimate. Returns @{ Queued; Lines }.
+    #>
+    param([Parameter(Mandatory)][scriptblock]$Invoke, [scriptblock]$Log = { param($m) }, $State, [object[]]$Rows, [scriptblock]$Estimate, [string]$By = 'caj-si-updater')
+    $lines = New-Object System.Collections.Generic.List[string]
+    $say = { param($m) $lines.Add($m); try { $null = & $Log $m } catch { } }
+    $queued = New-Object System.Collections.Generic.List[string]
+    try {
+        if ($null -eq $State) { $State = Read-SIHistoryIndexState -Invoke $Invoke }
+        if (-not $State.Known) { return [pscustomobject]@{ Queued = @(); Lines = $lines.ToArray() } }
+        if ($null -eq $Rows) { try { $Rows = @(Read-SIIndexBuildRows -Invoke $Invoke) } catch { $Rows = $null } }
+        if ($null -eq $Rows) { & $say 'finding history indexes: the waiting indexes could not be read -- nothing changed; the next update looks again'; return [pscustomobject]@{ Queued = @(); Lines = $lines.ToArray() } }
+        foreach ($ix in $script:SIHistoryIndexes) {
+            if (@($State.There) -contains $ix.Name -or @($State.ColumnsMissing) -contains $ix.Name) { continue }
+            $row = @($Rows | Where-Object { $_ -and [string]$_.Table -ieq $ix.Table -and [string]$_.Name -ieq $ix.Name })[0]
+            if ($row -and [string]$row.State -in @('waiting', 'paused', 'building')) { continue }
+            if (-not $Estimate) { $Estimate = New-SIIndexBuildEstimator -Invoke $Invoke }
+            $est = $null; try { $est = & $Estimate ([pscustomobject]@{ Table = $ix.Table; Name = $ix.Name }) } catch { $est = $null }
+            $ok = Save-SIIndexBuildRow -Invoke $Invoke -Table $ix.Table -Index $ix.Name -State 'waiting' -Statement $ix.Statement `
+                    -Pages $(if ($est -and $est.Pages) { [long]$est.Pages } else { $null }) -EstMinutes $(if ($est -and $est.Known) { [int]$est.Minutes } else { $null }) `
+                    -Source $(if ($est) { [string]$est.Source } else { '' }) -Why 'a page index of the finding history: built by the index build job in an idle window; until every one is there the stored rows serve the pages' -By $By
+            if ($ok) { $queued.Add($ix.Name); & $say ('finding history indexes: {0} recorded for the index build job' -f $ix.Name) }
+            else { & $say ('WARNING: finding history indexes: {0} could not be recorded -- the next update tries again' -f $ix.Name) }
+        }
+        # #1385 READ BACK, one line every run (the 3.1.50 gap stayed invisible because a run that recorded nothing said nothing):
+        # how many of the list are there, and how many wait / build for the index build job -- read from cfg.IndexBuild again
+        $all = @($script:SIHistoryIndexes); $there = @($all | Where-Object { @($State.There) -contains $_.Name }).Count
+        $back = $null; try { $back = @(Read-SIIndexBuildRows -Invoke $Invoke) } catch { $back = $null }
+        if ($null -eq $back) { & $say ('finding history indexes: {0} of {1} there; the waiting indexes could not be read back -- the next update looks again' -f $there, $all.Count) }
+        else {
+            $wait = @($all | Where-Object { $n = $_.Name; @($State.There) -notcontains $n -and @($back | Where-Object { $_ -and [string]$_.Name -ieq $n -and [string]$_.State -in @('waiting', 'paused', 'building') }).Count })
+            $lost = @($queued | Where-Object { $n = $_; -not @($wait | Where-Object { $_.Name -ieq $n }).Count })
+            $cm = @($State.ColumnsMissing).Count
+            & $say ('finding history indexes: {0} of {1} there, {2} waiting for the index build job (read back){3}{4}' -f $there, $all.Count, $wait.Count,
+                     $(if ($cm) { ('; {0} wait(s) for their columns' -f $cm) } else { '' }),
+                     $(if ($lost.Count) { ('; WARNING: {0} recorded but not read back ({1}) -- the next update records it again' -f $lost.Count, ($lost -join ', ')) } else { '' }))
+        }
+    } catch { & $say ('WARNING: finding history indexes: not checked ({0}) -- the next update looks again' -f $_.Exception.Message) }
+    [pscustomobject]@{ Queued = $queued.ToArray(); Lines = $lines.ToArray() }
+}
+
+function Invoke-SIColumnstoreIndexStep {
+    <#
+        #1316 THE UPDATER'S STEP (every run, from Invoke-SIUpdaterIndexBuildJob): reads the setting and the database once,
+        then per index of the list does what Get-SIColumnstorePlan says -- 'queue' records the row 'waiting' with its
+        statement and its estimate (this database's rate, New-SIIndexBuildEstimator); the index build job builds it.
+        Seams: -Setting @{ Known; On }, -State, -Rows, -Estimate { param($Index) }. Returns @{ Plan; Lines }. NEVER throws,
+        never fails or holds the update; it never builds an index itself.
+    #>
+    # -PartitionSwitch (SI_Data_RetireByPartition; $null = Get-SIColumnstorePartitionSwitch) and -PartitionState (seam):
+    # #1316 x #1317 -- an index of a partitioned table is still recorded, and its line says it waits for the table's move
+    param([Parameter(Mandatory)][scriptblock]$Invoke, [scriptblock]$Log = { param($m) }, $Setting, $State, [object[]]$Rows, [scriptblock]$Estimate,
+          [string]$By = 'caj-si-updater', $PartitionSwitch = $null, $PartitionState = 'read')
+    $lines = New-Object System.Collections.Generic.List[string]
+    $say = { param($m) $lines.Add($m); try { $null = & $Log $m } catch { } }
+    $plan = @()
+    $holdOf = {
+        param($ix)
+        if (-not $ix.Partitioned) { return $null }
+        $sw = if ($null -ne $PartitionSwitch) { Test-SIIndexBuildPartitionSwitch -Value $PartitionSwitch } else { Get-SIColumnstorePartitionSwitch }
+        $st = if ($PartitionState -is [string] -and $PartitionState -eq 'read') { Read-SIColumnstorePartitionState -Invoke $Invoke -Table $ix.Table } else { $PartitionState }
+        $h = Get-SIColumnstorePartitionHold -Index $ix -SwitchOn $sw -State $st
+        if ($h.Hold) { $h } else { $null }
+    }
+    try {
+        if ($null -eq $Setting) { $Setting = Read-SIColumnstoreSetting -Invoke $Invoke }
+        # one catalog read (also while off: a row or an index left from an earlier "on" is undone)
+        if (-not $Setting.Known) { & $say 'columnstore indexes: the setting could not be read -- nothing changed; the next update looks again'; return [pscustomobject]@{ Plan = @(); Lines = $lines.ToArray() } }
+        if ($null -eq $State) { $State = Read-SIColumnstoreState -Invoke $Invoke }
+        if ($null -eq $Rows) { try { $Rows = @(Read-SIIndexBuildRows -Invoke $Invoke) } catch { $Rows = $null } }
+        if ($null -eq $Rows) { & $say 'columnstore indexes: the waiting indexes could not be read -- nothing changed; the next update looks again'; return [pscustomobject]@{ Plan = @(); Lines = $lines.ToArray() } }
+        $plan = @(Get-SIColumnstorePlan -Setting $Setting -State $State -Rows @($Rows))
+        if (-not $Estimate -and @($plan | Where-Object { $_.Action -eq 'queue' }).Count) { $Estimate = New-SIIndexBuildEstimator -Invoke $Invoke }
+        foreach ($p in $plan) {
+            $ix = $p.Index
+            switch ($p.Action) {
+                'queue' {
+                    $est = $null; if ($Estimate) { try { $est = & $Estimate ([pscustomobject]@{ Table = $ix.Table; Name = $ix.Name }) } catch { $est = $null } }
+                    $ok = Save-SIIndexBuildRow -Invoke $Invoke -Table $ix.Table -Index $ix.Name -State 'waiting' -Statement (Get-SIColumnstoreStatement -Index $ix) `
+                            -Pages $(if ($est -and $est.Pages) { [long]$est.Pages } else { $null }) -EstMinutes $(if ($est -and $est.Known) { [int]$est.Minutes } else { $null }) `
+                            -Source $(if ($est) { [string]$est.Source } else { '' }) -Why 'columnstore index (SI_Data_ColumnstoreIndexes on): built by the index build job in an idle window' -By $By
+                    $hold = if ($ok) { & $holdOf $ix } else { $null }
+                    & $say $(if ($ok) { 'columnstore indexes: {0} on {1} recorded for the index build job ({2}){3}' -f $ix.Name, $ix.Table, $(if ($est -and $est.Known) { 'about ' + (Format-SIIndexDuration ([int]$est.Minutes)) } else { 'its time is not known yet' }), $(if ($hold) { '; it ' + $hold.Why } else { '' }) }
+                             else { 'WARNING: columnstore indexes: {0} on {1} could not be recorded -- the next update tries again' -f $ix.Name, $ix.Table })
+                }
+                'remove-row' {
+                    try { $null = & $Invoke (Get-SIColumnstoreRemoveRowSql) ([ordered]@{ T = $ix.Table; I = $ix.Name }) 'nonquery'; & $say ('columnstore indexes: {0} on {1} -- {2}' -f $ix.Name, $ix.Table, $p.Why) }
+                    catch { & $say ('WARNING: columnstore indexes: the row of {0} could not be removed ({1}) -- the next update tries again' -f $ix.Name, $_.Exception.Message) }
+                }
+                'drop' {
+                    $sql = Get-SIColumnstoreDropSql -Table $ix.Table -Index $ix.Name
+                    if (-not $sql) { continue }
+                    try {
+                        $null = & $Invoke $sql @{} 'nonquery'
+                        $null = & $Invoke (Get-SIColumnstoreRemoveRowSql) ([ordered]@{ T = $ix.Table; I = $ix.Name }) 'nonquery'
+                        & $say ('columnstore indexes: {0} on {1} -- {2}' -f $ix.Name, $ix.Table, $p.Why)
+                    } catch { & $say ('WARNING: columnstore indexes: {0} on {1} could not be dropped now ({2}) -- the next update tries again; results are the same with or without it' -f $ix.Name, $ix.Table, $_.Exception.Message) }
+                }
+                default {
+                    if ($Setting.On) {
+                        $hold = if ($p.Why -match '^it waits for the index build job') { & $holdOf $ix } else { $null }
+                        & $say ('columnstore indexes: {0} on {1} -- {2}' -f $ix.Name, $ix.Table, $(if ($hold) { 'it ' + $hold.Why } else { $p.Why }))
+                    }
+                }
+            }
+        }
+    } catch { & $say ('WARNING: columnstore indexes: not checked ({0}) -- the next update looks again' -f $_.Exception.Message) }
+    [pscustomobject]@{ Plan = @($plan); Lines = $lines.ToArray() }
 }

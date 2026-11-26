@@ -68,6 +68,16 @@ SELECT TOP (2) ObjectId, Kind, DisplayName, Upn, Mail, AccountEnabled, Guest FRO
     UNION SELECT ObjectId, Kind, DisplayName, Upn, Mail, AccountEnabled, Guest FROM sidata.DirectoryName WHERE Kind = N'user' AND Upn = @m) AS x;
 """;
 
+    /// #995b: the users whose mail or sign-in name is this address (up to 3, so "more than one" is told apart) -- disabled
+    /// accounts left out. No table = NoTable 1 (the lookup is not possible yet, never "not found").
+    public const string MatchMailSql = """
+SET NOCOUNT ON;
+IF OBJECT_ID(N'sidata.DirectoryName') IS NULL BEGIN SELECT CAST(1 AS int) AS NoTable; RETURN; END
+SELECT TOP (3) ObjectId, Kind, DisplayName, Upn, Mail, AccountEnabled, Guest FROM (
+    SELECT ObjectId, Kind, DisplayName, Upn, Mail, AccountEnabled, Guest FROM sidata.DirectoryName WHERE Kind = N'user' AND Mail = @m AND (AccountEnabled IS NULL OR AccountEnabled = 1)
+    UNION SELECT ObjectId, Kind, DisplayName, Upn, Mail, AccountEnabled, Guest FROM sidata.DirectoryName WHERE Kind = N'user' AND Upn = @m AND (AccountEnabled IS NULL OR AccountEnabled = 1)) AS x;
+""";
+
     public const string FreshnessSql = """
 SET NOCOUNT ON;
 IF OBJECT_ID(N'sidata.DirectoryNameLoad') IS NULL BEGIN SELECT CAST(NULL AS nvarchar(8)) AS Kind WHERE 1 = 0; RETURN; END
@@ -152,6 +162,25 @@ SELECT Kind, ReadAt, CAST(Complete AS int) AS Complete FROM sidata.DirectoryName
         {
             log.LogWarning(ex, "a person could not be looked up in SecurityInsight's names");
             return null;
+        }
+    }
+
+    /// #995b: the names SecurityInsight's engine read from Microsoft Graph (the identity collection, User.Read.All -- a
+    /// right it already holds); the web app reads them with its database reader right. No Graph call here.
+    public async Task<MailMatch> MatchMailAsync(string mail, CancellationToken ct)
+    {
+        var q = (mail ?? "").Trim();
+        if (!SI.Management.Web.Departments.DepartmentPeople.IsMail(q)) return MailMatch.NotFound;
+        try
+        {
+            var rows = await sql.QueryAsync(MatchMailSql, new Dictionary<string, object?> { ["m"] = q }, ct);
+            if (rows.Count == 1 && rows[0].Long("NoTable") == 1) return MailMatch.Unavailable;
+            return MailMatch.Judge(q, rows.Select(r => (Person(r), r.Str("Mail"), r.Str("Upn"))).Where(x => x.Item1 is not null).Select(x => (x.Item1!, x.Item2, x.Item3)));
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            log.LogWarning(ex, "an address could not be looked up in SecurityInsight's names");
+            return MailMatch.Unavailable;
         }
     }
 

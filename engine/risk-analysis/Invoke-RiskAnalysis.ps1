@@ -355,8 +355,10 @@ function Send-RARunHealthEnd {
     # these runs -- which is the point, but worth knowing before you go looking for them.
     try {
         if ($null -ne $script:_RABucketLossRun -and $script:_RABucketLossRun.Count -gt 0) {
-            $__otherPartial = $true
             if ($ExitReason -eq 'success') { $ExitReason = 'success-partial' }
+            # #1323 review: a lost slice is ALWAYS a partial cause to Invardia (report-incomplete), also when its report is held
+            # at its last complete result for it -- the held report's own code (si-ra-0916) rides on the run record beside it
+            $__otherPartial = $true
             # #414: a lost bucket is a query that FAILED (timeout, error, a result that could not be read) -- never a bucket that
             # legitimately matched no data (that one is not recorded as lost). Said so, so nobody reads it as an empty result.
             $__bl = ("{0} bucket(s) could not be read (a query that timed out or failed, not an empty result) -- affected report(s) are partial" -f $script:_RABucketLossRun.Count)
@@ -1043,6 +1045,18 @@ if ($script:RAScaleRole -eq 'worker') {
     # #831 A: how many items of the run are still open (one listing of the run's markers, at a report's start and every few
     # minutes) -- the last workers of a run share the Defender budget the others left free (RA-PartsInParallel.ps1)
     $script:RAPartsOpenProbe = { Get-RAScaleOutOpenItems -Store $script:RAScaleStore -Manifest $script:RAScaleManifest }
+    # 2026-11-23: THE RUN'S MEASURED BUDGET -- the workers keep one budget in the run's storage (RA-PartsInParallel.ps1
+    # Sync-RAPartsRunBudget): halved for all on any throttle, grown after quiet rounds, weighted by the slices each running
+    # report still has to ask. Not for the producer's own worker in its container (the only one: the whole budget is its own).
+    if (([string][Environment]::GetEnvironmentVariable('SI_RA_SCALEOUT_LOCAL')).Trim() -ne '1') {
+        $script:RAPartsBudgetProbe = {
+            param($Event, $Remaining, $RetryAfterSec)
+            if ($null -eq $script:RAScaleItem -or $null -eq $script:RAScaleManifest) { return $null }
+            $__bw = 0; $null = [int]::TryParse(([string][Environment]::GetEnvironmentVariable('SI_RA_WORKERS')).Trim(), [ref]$__bw); if ($__bw -lt 1) { $__bw = 4 }
+            Sync-RAPartsRunBudget -Store $script:RAScaleStore -Engine ([string]$script:RAScaleManifest['Engine']) -RunId ([string]$script:RAScaleRunId) -Item ([int]$script:RAScaleItem.Payload.Item) `
+                -Remaining ([long]$Remaining) -Event ([string]$Event) -RetryAfterSec ([int]$RetryAfterSec) -Start $__bw -Ceiling (Get-RAPartsBudgetCeiling) -Bound (Get-RAPartsInParallelMax -Setting $null)
+        }
+    }
     # #882 -- A WORKER OF A RUN THAT IS OVER WRITES NOTHING (live 2026-10-22, internal: the pipeline closed the Detailed step
     # Interrupted at 09:40Z; this worker went on querying until 10:30 and wrote the remembered slice count the next run
     # used). Is this worker's run still the live one? (RA-ScaleOut.ps1 Test-RAScaleOutRunLive: not closed, its manifest there,
@@ -2722,7 +2736,9 @@ function Get-RABucketRows {
     }
     try {
         $__phConvSw = [System.Diagnostics.Stopwatch]::StartNew()   # #873 A
-        $rows = @(ConvertTo-PSObjectDeep $Resp.Results.AdditionalProperties -StripOData -CastPrimitiveArrays)
+        # #1321 (SI_RA_HuntingStreamRead = on): a part at a time, each part's bags let go as it goes -- the same rows
+        if ((Get-Command -Name Test-RAHuntingResultsByPart -ErrorAction SilentlyContinue) -and (Test-RAHuntingResultsByPart -Resp $Resp)) { $rows = ConvertFrom-RAHuntingResults -Results $Resp.Results }
+        else { $rows = @(ConvertTo-PSObjectDeep $Resp.Results.AdditionalProperties -StripOData -CastPrimitiveArrays) }
         if ($script:RAStreamOn) { Add-RAStreamTime -Stream $script:RAStream -Phase 'convert' -Seconds $__phConvSw.Elapsed.TotalSeconds }
         return @{ Ok = $true; Rows = $rows; Error = $null }
     } catch {
@@ -3079,7 +3095,7 @@ if ($ResultAll.Count -eq 0) {
     }
     # ... and what Defender says about the recommendation itself: its exposure impact and whether it has an active alert
     # (the Defender recommendations API) -- context columns only, one read per run, a refused read is said once
-    try { $ResultFiltered = Add-RADefenderRecommendationContext -Rows @($ResultFiltered) -Log { param($m) Write-Warn2 $m } } catch { Write-Warn2 ("The exposure impact and active alert of the Defender recommendations could not be added -- the findings are unchanged: {0}" -f $_.Exception.Message) }
+    try { $ResultFiltered = Add-RADefenderRecommendationContext -Rows @($ResultFiltered) -Log { param($m) Write-Warn2 $m } -ReportName ([string]$ReportName) } catch { Write-Warn2 ("The exposure impact and active alert of the Defender recommendations could not be added -- the findings are unchanged: {0}" -f $_.Exception.Message) }
 
     # #546 (5) known false positives of a provider's recommendation in a stated situation: the data model's default
     # exclusion rules (customer-overridable) leave them out, counted per rule with its reason. No rule = unchanged.
@@ -3678,6 +3694,8 @@ function Get-RAReportExpectedRows {
         if ($script:__cntN -gt 1) { $script:_CurrentBucketCount = $script:__cntN; $script:_CurrentBucketIndex = $i } else { $script:_CurrentBucketCount = 0; $script:_CurrentBucketIndex = 0 }
         # SUP-2026-00496: a count is a measurement -- every path failing is said by the verdict (INFO), never a run WARN
         $script:_RAHuntingMeasurement = $true
+        # #1310: every call of the count writes the report's progress record again (#1274, at most every 15 s)
+        if ($null -ne $script:RACountBeat -and (Get-Command -Name Step-RAReportProgressBeat -ErrorAction SilentlyContinue)) { Step-RAReportProgressBeat -Beat $script:RACountBeat }
         try { Get-RABucketRows -Resp (Invoke-GraphHuntingQuery -Query (Get-RAReportCountKql -Query $q -GroupKeys $script:__cntKeys) -ReconnectMaxAgeMinutes $global:GraphReconnectMaxAgeMinutes -MaxRetries 1) }
         finally { $script:_RAHuntingMeasurement = $false }
     }
@@ -3763,8 +3781,20 @@ function Invoke-RAReadCount {
         'count' phase. Never throws; every engine variable a hunting request touches is put back (the slices are asked
         exactly as without it -- the slice coordinates, the request measures, the cross-domain flags, the key answers).
     #>
-    param([Parameter(Mandatory)][ValidateSet('Before', 'After')][string]$When, [Parameter(Mandatory)][string]$Query, [string]$ReportName)
+    # #1310 (SUP-2026-00674): -Slices = the report's query slices (a whole count the run's stored attack-path graph answers
+    # is counted in them, Invoke-RAGraphStageSlicedCount); -Beat = the report's progress beat (#1274), written again while
+    # the count runs, so a long count never reads as a step that does not move.
+    param([Parameter(Mandatory)][ValidateSet('Before', 'After')][string]$When, [Parameter(Mandatory)][string]$Query, [string]$ReportName,
+          [long]$Slices = 0, $Beat = $null)
     if ($null -eq $script:RAReadCounts) { Reset-RAReadCounts }
+    # #1310: the run's stored attack-path graph (and the CI lookups read once per run) does not change while the run reads
+    # it -- a count it gave just before the read is its count just after the read too; it is not built a second time
+    $__b = $script:RAReadCounts['Before']
+    if ($When -eq 'After' -and $null -ne $__b -and $__b['FromStage'] -and $null -ne $__b['Count']) {
+        $script:RAReadCounts['After'] = @{ Count = $__b['Count']; Error = ''; How = 'whole'; At = [datetime]::UtcNow; FromStage = $true }
+        Write-Info ("completeness: the source's count just after the read: {0} row(s) -- the run's stored attack-path graph does not change during the run, so its count from just before the read stands" -f [long]$__b['Count'])
+        return
+    }
     $s01 = $script:_CurrentBucketCount; $s02 = $script:_CurrentBucketIndex; $s03 = $script:_LastHybridInlineBytes
     $s04 = $script:_LastHybridQueryBodyOverheadBytes; $s05 = $script:_LastHybridSnapshotRowCount; $s06 = $script:_LastHybridBytesPerRow
     $s07 = $script:_RAHybridLastRequest; $s08 = $script:_RAHybridLookups; $s09 = $script:_RALookupNeededKeySets
@@ -3775,9 +3805,12 @@ function Invoke-RAReadCount {
     $at = [datetime]::UtcNow
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
     $r = $null
+    $script:RAGpsCountSlices = [long]$Slices; $script:RACountBeat = $Beat; $script:RAGpsCountFromStage = $false
     try { $r = Get-RAReportExpectedRows -Query $Query -ReportName $ReportName -BucketCount 1 -WholeOnly }
     catch { $r = @{ Count = $null; Error = [string]$_.Exception.Message; How = 'whole' } }
     finally {
+        $__fromStage = [bool]$script:RAGpsCountFromStage
+        $script:RAGpsCountSlices = 0L; $script:RACountBeat = $null; $script:RAGpsCountFromStage = $false
         $script:_CurrentBucketCount = $s01; $script:_CurrentBucketIndex = $s02; $script:_LastHybridInlineBytes = $s03
         $script:_LastHybridQueryBodyOverheadBytes = $s04; $script:_LastHybridSnapshotRowCount = $s05; $script:_LastHybridBytesPerRow = $s06
         $script:_RAHybridLastRequest = $s07; $script:_RAHybridLookups = $s08; $script:_RALookupNeededKeySets = $s09
@@ -3788,7 +3821,7 @@ function Invoke-RAReadCount {
     }
     $sw.Stop()
     if ($null -eq $r) { $r = @{ Count = $null; Error = 'no answer'; How = 'whole' } }
-    $script:RAReadCounts[$When] = @{ Count = $r.Count; Error = [string]$r.Error; How = 'whole'; At = $at }
+    $script:RAReadCounts[$When] = @{ Count = $r.Count; Error = [string]$r.Error; How = 'whole'; At = $at; FromStage = ($__fromStage -and $null -ne $r.Count) }
     if ($script:RAStreamOn) { Add-RAStreamTime -Stream $script:RAStream -Phase 'count' -Seconds $sw.Elapsed.TotalSeconds }
     $__w = $(if ($When -eq 'Before') { 'just before the read' } else { 'just after the read' })
     if ($null -ne $r.Count) { Write-Info ("completeness: the source's count {0}: {1} row(s) ({2:N1} s)" -f $__w, [long]$r.Count, $sw.Elapsed.TotalSeconds) }
@@ -5028,6 +5061,15 @@ while (-not $bucketRunSucceeded -and -not $reportCannotFit) {
       $__soFrom = [int]$script:RAScaleSplit.From; $__soTo = [int]$script:RAScaleSplit.To
       if ($script:RAScaleSplit.Done) { $__soTo = $__soFrom }
   }
+  # 2026-11-23 A SMALL SLICE MERGES WITH ITS UNTOUCHED PARTNER (RA-PartsInParallel.ps1 New-RASliceMerge): slice b of N with
+  # its partners b + j*N/D is exactly slice b of N/D -- asked together while the answers stay small, only partners nothing has
+  # touched, inside [From, To). Not when a slice is the whole report (#401: the exposure-graph filter is off).
+  $__mgOn = (Test-RASliceMergeWanted) -and -not [bool]$script:_SkipEGBucketForCrossDomain
+  $__mgRows = 30000; $__mgSec = 180
+  try { $__mgRows = [double](Get-SIRaPlanningRowLimit); $__mgSec = [double](Get-SIRaSliceSecondsLimit) } catch { }
+  $script:RASliceMerge = New-RASliceMerge -Count ([int]$bucketCountToUse) -From $__soFrom -To $__soTo -RowLimit $__mgRows -SecondsLimit $__mgSec -On $__mgOn
+  $__mg = $script:RASliceMerge
+  $__mgHeld = @{}   # slice -> the rows a merged answer brought for it, written in the slice's own turn (today's write order)
   for ($b = $__soFrom; $b -lt $__soTo; $b++) {
 
       # #576: the running step's progress on Operations > Jobs -- this report, query slice b of n (best effort, never fails it)
@@ -5047,9 +5089,34 @@ while (-not $bucketRunSucceeded -and -not $reportCannotFit) {
       }
 
       $bucketNo = $b + 1
+      # 2026-11-23: this slice's rows came in with an earlier slice's request (merged with its partner): nothing is asked --
+      # the rows the answer brought for THIS slice are written now, in the slice's own turn and under its own name, so the
+      # write order (and with it which copy of a finding two slices both returned is kept) is the one of today
+      if (Test-RASliceCovered -Merge $__mg -Slice $b) {
+          $__mgRows = @(); if ($__mgHeld.ContainsKey($b)) { $__mgRows = @($__mgHeld[$b]); $__mgHeld.Remove($b) }
+          Write-Info ("bucket {0}/{1}: {2} rows -- asked together with bucket {3}/{1}" -f $bucketNo, $bucketCountToUse, $__mgRows.Count, ([int]$__mg.TakenBy[$b] + 1))
+          if ($script:RAStreamOn) {
+              if (-not (Add-RAStreamBucketGuarded -Rows $__mgRows -Bucket ('{0}/{1}' -f $bucketNo, $bucketCountToUse))) {
+                  # not enough memory for its rows at once: the same rows in smaller slices (the sub-bucket pass), as for any slice
+                  $__abMemSplit++; if (Get-Command -Name Stop-RAPartsAheadForMemory -ErrorAction SilentlyContinue) { $null = Stop-RAPartsAheadForMemory }
+                  $null = Stop-RASliceMerge -Merge $__mg -Why 'a part was too large for this worker''s memory'
+                  $__abMemRoots[[int]$b] = $true
+                  $__abSplitCause[[int]$b] = $true
+                  [void]$failedBucketIndices.Add($b)
+              }
+          } else { $ResultAll = @($ResultAll) + @($__mgRows) }
+          $__mgRows = $null
+          continue
+      }
       # count timing C1: the source's count just BEFORE the report's first query slice is read
-      if ($null -eq $script:RAReadCounts['Before']) { Invoke-RAReadCount -When Before -Query $Query -ReportName $ReportName }
-      $bucketFilter = New-BucketFilterKql -BucketCount $bucketCountToUse -BucketIndex $b -ReportName $ReportName
+      if ($null -eq $script:RAReadCounts['Before']) { Invoke-RAReadCount -When Before -Query $Query -ReportName $ReportName -Slices ([long]$bucketCountToUse) -Beat $__rpBeat }
+      # the request that asks this slice: the slice alone, or (small answers so far) the slice with its untouched partners as
+      # ONE slice of a coarser count -- the same rows, one request (Get-RASliceRequest; decided once, as the part asked ahead)
+      $__mgReq = Get-RASliceRequest -Merge $__mg -Slice $b
+      $__mgCount = [int]$__mgReq.Count; $__mgIndex = [int]$__mgReq.Index
+      $__sliceLabel = if (@($__mgReq.Covers).Count -gt 0) { '{0}/{1}' -f ($__mgIndex + 1), $__mgCount } else { '{0}/{1}' -f $bucketNo, $bucketCountToUse }
+      if (@($__mgReq.Covers).Count -gt 0) { Write-Info ("bucket {0}/{1}: small answers so far -- asked together with its untouched partner(s) {2} as one slice {3}" -f $bucketNo, $bucketCountToUse, ((@($__mgReq.Covers) | ForEach-Object { '{0}/{1}' -f ([int]$_ + 1), $bucketCountToUse }) -join ', '), $__sliceLabel) }
+      $bucketFilter = New-BucketFilterKql -BucketCount $__mgCount -BucketIndex $__mgIndex -ReportName $ReportName
       # #401 -- whether THIS query was built without the EG-side filter. The flag is raised by
       # Resolve-ProfileCLLetBlocks INSIDE the call below, so on an AutoBucket cache hit (no probe) the first
       # bucket's query was already built WITH the filter: that bucket is a correct slice, not the whole.
@@ -5062,8 +5129,9 @@ while (-not $bucketRunSucceeded -and -not $reportCannotFit) {
       # SHA256-bucket matches THIS EG bucket. Without these vars set the
       # legacy path reused the full snapshot per bucket, so escalation past
       # ~30 buckets accomplished nothing (CL body, not EG body, was the cap-buster).
-      $script:_CurrentBucketCount = $bucketCountToUse
-      $script:_CurrentBucketIndex = $b
+      # (a merged request: the coarser count and index -- the inline lookups are cut to exactly the same rows)
+      $script:_CurrentBucketCount = $__mgCount
+      $script:_CurrentBucketIndex = $__mgIndex
 
       Write-Info ("bucket {0}/{1}: running query (auto-routed: LA-direct or XDR Advanced Hunting based on table mix)" -f $bucketNo, $bucketCountToUse)
       Tock
@@ -5115,6 +5183,20 @@ while (-not $bucketRunSucceeded -and -not $reportCannotFit) {
               Tick ("hunting query bucket {0}/{1}" -f $bucketNo, $bucketCountToUse)
               $bucketAttemptDone = $true
           } catch {
+              # 2026-11-23: a MERGED request that fails in any way is never classified, retried, split or lost as such: the
+              # slice is asked again at once as its own slice (its partners in their own turn), and merging stops for the
+              # report. Every rule below then applies to plain slices of the report's count only.
+              if (@($__mgReq.Covers).Count -gt 0) {
+                  $__mgErr = [string]$_.Exception.Message
+                  $__mgReq = Stop-RASliceMerge -Merge $__mg -Slice $b -Why 'a request that held several parts failed'
+                  $__mgCount = [int]$bucketCountToUse; $__mgIndex = $b; $__sliceLabel = '{0}/{1}' -f $bucketNo, $bucketCountToUse
+                  Write-Warn2 ("bucket {0}/{1}: the request that held it with its partner(s) failed -- asked again as its own slice, its partners each in their own turn ({2})" -f $bucketNo, $bucketCountToUse, $__mgErr)
+                  $bucketFilter = New-BucketFilterKql -BucketCount $bucketCountToUse -BucketIndex $b -ReportName $ReportName
+                  $thisQuery = Replace-BucketFilterBlock -Query $Query -BucketFilterKql $bucketFilter
+                  $script:_CurrentBucketCount = $bucketCountToUse; $script:_CurrentBucketIndex = $b
+                  $bucketAttempt = 0
+                  continue
+              }
               # The bare message first (classifiers below still see it), then the service's code and message.
               $errMsg = Get-SIKqlErrorSummary -ErrorRecord $_
 
@@ -5275,7 +5357,7 @@ while (-not $bucketRunSucceeded -and -not $reportCannotFit) {
       if ($reportCannotFit) { break }     # no slice count can fit: the remaining slices are not tried
       # count timing C2: the source's count just AFTER the report's last query slice is read -- before that slice is
       # converted, scored and written (a slice that returned the whole report, #401, is its last)
-      if ($b -eq ($__soTo - 1) -or ($null -ne $resp -and $egFilterOffAtBuild -and [bool]$script:_RACrossDomainReplicated)) { Invoke-RAReadCount -When After -Query $Query -ReportName $ReportName }
+      if ($b -eq ($__soTo - 1) -or ($null -ne $resp -and $egFilterOffAtBuild -and [bool]$script:_RACrossDomainReplicated)) { Invoke-RAReadCount -When After -Query $Query -ReportName $ReportName -Slices ([long]$bucketCountToUse) -Beat $__rpBeat }
       # #753: this part's request is answered -- the next parts are asked ahead while it is processed. Not for a part built
       # without the slice filter (#401: the next part would be the whole report again) nor once the lake answers.
       if (-not [bool]$script:_SkipEGBucketForCrossDomain -and -not [bool]$script:RALakeAnswered) {
@@ -5295,11 +5377,15 @@ while (-not $bucketRunSucceeded -and -not $reportCannotFit) {
               Add-AutoBucketMeasure -Rows 0 -Seconds ([double]$__abSliceSw.Elapsed.TotalSeconds)
               if ($bucketIsComplete) { $ResultAll = @(); $completeBucketDone = $true; Add-RAStreamBucket -Rows @() -Bucket ('{0}/{1}' -f $bucketNo, $bucketCountToUse) -Complete }
               elseif ($script:RAStreamOn) { Add-RAStreamBucket -Rows @() -Bucket ('{0}/{1}' -f $bucketNo, $bucketCountToUse) }   # #673: a slice the Defender filter emptied is still booked
+              $null = Complete-RASliceRequest -Merge $__mg -Slice $b -Rows 0 -Seconds ([double]$__abSliceSw.Elapsed.TotalSeconds)   # in: its partners too
               continue
           }
       } else {
           $rawResults = $null
-          if ($null -ne $resp -and $null -ne $resp.Results) { $rawResults = $resp.Results.AdditionalProperties }
+          # #1321 (SI_RA_HuntingStreamRead = on): the answer converted a part at a time, each part's bags let go as it goes
+          $__byPart = (Get-Command -Name Test-RAHuntingResultsByPart -ErrorAction SilentlyContinue) -and (Test-RAHuntingResultsByPart -Resp $resp)
+          if ($__byPart) { $rawResults = $resp.Results }
+          elseif ($null -ne $resp -and $null -ne $resp.Results) { $rawResults = $resp.Results.AdditionalProperties }
 
           if ($null -eq $rawResults) {
               Write-Info ("bucket {0}/{1}: no results" -f $bucketNo, $bucketCountToUse)
@@ -5308,15 +5394,19 @@ while (-not $bucketRunSucceeded -and -not $reportCannotFit) {
                 -RequestShape $(if ([long]$script:_LastHybridInlineBytes -gt 0) { $script:_RAHybridLastRequest } else { $null }) -Seconds ([double]$__abSliceSw.Elapsed.TotalSeconds)
               if ($bucketIsComplete) { $ResultAll = @(); $completeBucketDone = $true; Add-RAStreamBucket -Rows @() -Bucket ('{0}/{1}' -f $bucketNo, $bucketCountToUse) -Complete }
               elseif ($script:RAStreamOn) { Add-RAStreamBucket -Rows @() -Bucket ('{0}/{1}' -f $bucketNo, $bucketCountToUse) }   # #673: a slice the Defender filter emptied is still booked
+              $null = Complete-RASliceRequest -Merge $__mg -Slice $b -Rows 0 -Seconds ([double]$__abSliceSw.Elapsed.TotalSeconds)   # in: its partners too
               continue
           }
 
           Tock
           try {
               $__phConvSw = [System.Diagnostics.Stopwatch]::StartNew()   # #873 A
-              $bucketResult = ConvertTo-PSObjectDeep $rawResults -StripOData -CastPrimitiveArrays
+              if ($__byPart) { $bucketResult = ConvertFrom-RAHuntingResults -Results $rawResults; $rawResults = $null; $resp = $null }
+              else { $bucketResult = ConvertTo-PSObjectDeep $rawResults -StripOData -CastPrimitiveArrays }
               if ($script:RAStreamOn) { Add-RAStreamTime -Stream $script:RAStream -Phase 'convert' -Seconds $__phConvSw.Elapsed.TotalSeconds }
           } catch {
+              # (a merged answer that cannot be converted: its partners are given back, each asked in its own turn; this slice goes on as any slice)
+              if (@($__mgReq.Covers).Count -gt 0) { $null = Stop-RASliceMerge -Merge $__mg -Why 'the answer of a request that held several parts could not be read' }
               if ((Test-RABucketOutOfMemory -Err $_) -and -not $bucketIsComplete) {
                   # no memory to convert this slice's answer: the same rows in smaller slices (as for a read the worker cannot hold)
                   $rawResults = $null; $resp = $null
@@ -5341,7 +5431,10 @@ while (-not $bucketRunSucceeded -and -not $reportCannotFit) {
       Write-Info ("bucket {0}/{1}: {2} rows" -f $bucketNo, $bucketCountToUse, $bucketCount)
       # #640: measure only (rows, estimated answer bytes, request bytes) -- the rows themselves are not touched here
       # #697 (2): the request is measured from what THIS bucket really sent (its shape: the split lookups and the rest)
-      Add-AutoBucketMeasure -Rows $bucketCount -Sample @($bucketResult | Select-Object -First 20) -RequestBytes $(if ([long]$script:_LastHybridInlineBytes -gt 0) { [long]$script:_LastHybridInlineBytes + [long]$script:_LastHybridQueryBodyOverheadBytes } else { 0 }) `
+      # (a merged request is measured per slice of the report's count -- its rows over the slices it held -- so the next
+      # run's count is sized from the slices it really has, not from the merged request)
+      $__mgWidth = 1 + @($__mgReq.Covers).Count
+      Add-AutoBucketMeasure -Rows $(if ($__mgWidth -gt 1) { [long][Math]::Ceiling([double]$bucketCount / $__mgWidth) } else { $bucketCount }) -Sample @($bucketResult | Select-Object -First 20) -RequestBytes $(if ([long]$script:_LastHybridInlineBytes -gt 0) { [long]$script:_LastHybridInlineBytes + [long]$script:_LastHybridQueryBodyOverheadBytes } else { 0 }) `
         -RequestShape $(if ([long]$script:_LastHybridInlineBytes -gt 0) { $script:_RAHybridLastRequest } else { $null }) -Seconds ([double]$__abSliceSw.Elapsed.TotalSeconds)
       # #641: A SHORT BUCKET IS CAUGHT. The source can answer short with no error (measured at a large install: one report's
       # rows swung 935 -> 25,267 -> 1,330 on the same code). The bucket's own count (the same query, '| count') is asked;
@@ -5370,6 +5463,23 @@ while (-not $bucketRunSucceeded -and -not $reportCannotFit) {
               } else { Write-Info ("bucket {0}/{1}: complete on the second answer -- {2} rows" -f $bucketNo, $bucketCountToUse, $bucketCount) }
           }
       }
+      # 2026-11-23: a MERGED answer -- each row is put in the slice it belongs to (Split-RASliceRows: the slice key the filter
+      # hashed, read back from the row); this slice's rows are written now, each partner's in the partner's own turn. A row
+      # that cannot be placed is written with this slice, and merging stops for the report.
+      if (@($__mgReq.Covers).Count -gt 0 -and -not $bucketIsComplete) {
+          $__mgSplit = Split-RASliceRows -Rows @($bucketResult) -Count ([int]$bucketCountToUse) -Slice $b -Covers @($__mgReq.Covers)
+          $bucketResult = @($__mgSplit.Own)
+          foreach ($__mgK in @($__mgSplit.Held.Keys)) { $__mgHeld[[int]$__mgK] = @($__mgSplit.Held[$__mgK]) }
+          $null = Complete-RASliceRequest -Merge $__mg -Slice $b -Rows ([long]$bucketCount) -Seconds ([double]$__abSliceSw.Elapsed.TotalSeconds)
+          if ([int]$__mgSplit.Unplaced -gt 0) {
+              Write-Warn2 ("bucket {0}/{1}: {2} row(s) of the request that held it with its partner(s) could not be placed in their own slice -- written with this slice; the rest of the report asks every slice on its own" -f $bucketNo, $bucketCountToUse, [int]$__mgSplit.Unplaced)
+              $null = Stop-RASliceMerge -Merge $__mg -Why 'rows of a request that held several parts could not be placed in their own part'
+          }
+          $__mgSplit = $null
+      } else {
+          # the slice is in (its width adapts to what was measured)
+          $null = Complete-RASliceRequest -Merge $__mg -Slice $b -Rows ([long]$bucketCount) -Seconds ([double]$__abSliceSw.Elapsed.TotalSeconds)
+      }
       if ($bucketIsComplete) {
           # #401 -- rows from an earlier bucket are a slice of these (built before the filter went off); keep one copy.
           if (@($ResultAll).Count -gt 0) { Write-Info ("bucket {0}/{1}: complete result -- replaces {2} row(s) from earlier bucket(s)" -f $bucketNo, $bucketCountToUse, @($ResultAll).Count) }
@@ -5383,6 +5493,8 @@ while (-not $bucketRunSucceeded -and -not $reportCannotFit) {
               # not enough memory for this slice's rows at once: the sub-bucket pass asks the same rows in smaller slices,
               # and the finer count is kept for the next run (a split for size, as a slice the service called too large)
               $__abMemSplit++; if (Get-Command -Name Stop-RAPartsAheadForMemory -ErrorAction SilentlyContinue) { $null = Stop-RAPartsAheadForMemory }
+              # (a merged request: what it stored was taken back -- its partners are given back and asked in their own turn)
+              $null = Stop-RASliceMerge -Merge $__mg -Why 'a part was too large for this worker''s memory'
               $__abMemRoots[[int]$b] = $true
               $__abSplitCause[[int]$b] = $true
               [void]$failedBucketIndices.Add($b)
@@ -5402,8 +5514,12 @@ while (-not $bucketRunSucceeded -and -not $reportCannotFit) {
   }
   # #753: the main pass is over -- what was asked ahead and not read is dropped (the late retry and the sub-slices run one at a time)
   Stop-RAPartsInParallel
+  # 2026-11-23: what merging did in this pass (the late retry and the sub-slices ask plain slices of the report's count)
+  $__mgLine = Format-RASliceMergeLine -Merge $__mg
+  if ($__mgLine) { Write-Info $__mgLine }
+  $script:RASliceMerge = $null
   # count timing C2: a main pass whose last slice did not take it (it ended before its last slice) takes it here
-  if (-not $needEscalation -and -not $reportCannotFit -and $null -ne $script:RAReadCounts['Before'] -and $null -eq $script:RAReadCounts['After']) { Invoke-RAReadCount -When After -Query $Query -ReportName $ReportName }
+  if (-not $needEscalation -and -not $reportCannotFit -and $null -ne $script:RAReadCounts['Before'] -and $null -eq $script:RAReadCounts['After']) { Invoke-RAReadCount -When After -Query $Query -ReportName $ReportName -Slices ([long]$bucketCountToUse) -Beat $__rpBeat }
 
   # No slice count can fit: leave the escalation loop too -- no late retry, no sub-slices, no larger count.
   if ($reportCannotFit) { break }
@@ -6148,6 +6264,7 @@ if ($bucketRunSucceeded -and [bool]$global:AutoBucketCount) {
   # #640 SELF-HEALING: a bucket had to be split this run (too large / too slow) -- the next run starts from twice the
   # count, so it does not pay the split again ("better to small than too big"). The rows of THIS run are unchanged.
   $__abRemember = [int]$bucketCountToUse
+  $__abSizedToFit = $false   # #1378: set when the shrink to fit decided the next count
   # #880: a report that ended NOT COMPLETE (a slice's rows are unknown) never changes its count -- its answers are partial
   $__abIncomplete = ($null -ne $script:_RABucketLoss -and $script:_RABucketLoss.Count -gt 0)
   if ($__abSplitUsed -and [int]$bucketCountToUse -lt [int]$capBucket) {
@@ -6172,6 +6289,24 @@ if ($bucketRunSucceeded -and [bool]$global:AutoBucketCount) {
     # slices before, on the same query (Get-SIRaBucketCompleteLowerCount), comes back towards that count by halving even when
     # its slices are not far below every limit (each slice pays the same fixed reads however many there are).
     $__abFar = Test-RABucketRunFarBelow -Measure $script:AutoBucketMeasure
+    # #1378 SHRINK TO FIT (owner 2026-11-25): the next run's count is sized from THIS run's own answer -- its rows, bytes,
+    # request and slice time against half of every limit (Get-SIRaBucketFitCount) -- and taken AT ONCE when it is lower (a
+    # small tenant drops back to 1-2 in one run, not one halving per run). It only lowers: raising stays with a slice that
+    # really hit a limit (the split above). Where it does not lower, the halving rules below apply as before.
+    $__abFit = $null
+    if (Get-Command -Name Get-SIRaBucketFitCount -ErrorAction SilentlyContinue) {
+      try {
+        $__abFitFp = ''; $__abFitKp = Split-SIRaBucketKey -Key $queryKey; if ($__abFitKp) { $__abFitFp = [string]$__abFitKp.Fingerprint }
+        $__abFitHist = if (Test-AutoBucketSqlActive) { @($script:AutoBucketSql.History[$ReportName] | Where-Object { $_ }) } else { @() }
+        $__abFit = Get-SIRaBucketFitCount -Measure (Get-AutoBucketFitMeasure -Measure $script:AutoBucketMeasure) -RanCount ([int]$bucketCountToUse) -Floor ([int]$__abLearnFloor) `
+                     -History $__abFitHist -ProbeFloor ([int]$effectiveBucketCount) -Fingerprint $__abFitFp -FarBelow:$__abFar
+      } catch { $__abFit = $null }
+    }
+    if ($null -ne $__abFit -and [bool]$__abFit.Down -and [int]$__abFit.Count -lt [int]$bucketCountToUse) {
+      Write-Info ("bucket sizing: '{0}' -- {1}; the next run uses {2}" -f $ReportName, $__abFit.Why, $__abFit.Count)
+      $__abRemember = [int]$__abFit.Count
+      $__abSizedToFit = $true
+    } else {
     $__abLower = 0
     if (-not $__abFar -and (Test-AutoBucketSqlActive) -and (Get-Command -Name Get-SIRaBucketCompleteLowerCount -ErrorAction SilentlyContinue)) {
       $__abFp = ''; $__abKp = Split-SIRaBucketKey -Key $queryKey; if ($__abKp) { $__abFp = [string]$__abKp.Fingerprint }
@@ -6191,6 +6326,7 @@ if ($bucketRunSucceeded -and [bool]$global:AutoBucketCount) {
         $__abRemember = $__abHalf
       }
     }
+    }   # #1378: close the else of the shrink to fit
   }
   try {
     $script:AutoBucketMemo[$queryKey] = [int]$__abRemember
@@ -6230,7 +6366,7 @@ if ($bucketRunSucceeded -and [bool]$global:AutoBucketCount) {
   # bucket count shrinks) -- the run-wide largest snapshot, row width and query text sized three small reports to 16
   $__abReq = Get-AutoBucketRequestMeasure -Measure $script:AutoBucketMeasure
   $__abJump = Complete-AutoBucketReport -ReportName $ReportName -QueryKey $queryKey -StartCount $__abStartCount -FinalCount ([int]$__abRemember) -Source $__abStartSource `
-                -RequestRows ([long]$__abReq.Rows) -RequestBytesPerRow ([int]$__abReq.BytesPerRow) -RequestOverheadBytes ([int]$__abReq.OverheadBytes) -RanCount ([int]$bucketCountToUse) -Incomplete:$__abIncomplete
+                -RequestRows ([long]$__abReq.Rows) -RequestBytesPerRow ([int]$__abReq.BytesPerRow) -RequestOverheadBytes ([int]$__abReq.OverheadBytes) -RanCount ([int]$bucketCountToUse) -Incomplete:$__abIncomplete -SizedToFit:$__abSizedToFit
   if ($__abJump) { Write-Warn2 ("bucket sizing: '{0}' -- {1}; the query or its data may be wrong (see Operations > Risk Analysis query splitting)" -f $ReportName, $__abJump) }
 }
         # $ResultAll = @(Deduplicate-Rows -Rows $ResultAll)
@@ -6323,7 +6459,10 @@ if ($bucketRunSucceeded -and [bool]$global:AutoBucketCount) {
             Tick "result conversion"
         } else {
             $rawResults = $null
-            if ($null -ne $resp -and $null -ne $resp.Results) { $rawResults = $resp.Results.AdditionalProperties }
+            # #1321 (SI_RA_HuntingStreamRead = on): a part at a time, each part's bags let go as it goes -- the same rows
+            $__byPart = (Get-Command -Name Test-RAHuntingResultsByPart -ErrorAction SilentlyContinue) -and (Test-RAHuntingResultsByPart -Resp $resp)
+            if ($__byPart) { $rawResults = $resp.Results }
+            elseif ($null -ne $resp -and $null -ne $resp.Results) { $rawResults = $resp.Results.AdditionalProperties }
             if ($null -eq $rawResults) {
                 Write-Info "Query returned no results"
                 if ($null -ne $global:RA_RowCountsThisRun) { $global:RA_RowCountsThisRun[[string]$ReportName] = 0 }
@@ -6333,7 +6472,8 @@ if ($bucketRunSucceeded -and [bool]$global:AutoBucketCount) {
 
             Tock
             try {
-                $ResultSingle = ConvertTo-PSObjectDeep $rawResults -StripOData -CastPrimitiveArrays
+                if ($__byPart) { $ResultSingle = ConvertFrom-RAHuntingResults -Results $rawResults; $rawResults = $null }
+                else { $ResultSingle = ConvertTo-PSObjectDeep $rawResults -StripOData -CastPrimitiveArrays }
             } catch {
                 Write-Err2 "result conversion failed: $($_.Exception.Message)"
                 Add-RAReportFailure -ReportName $ReportName -Reason ("its result could not be read: {0}" -f $_.Exception.Message)
@@ -7442,6 +7582,18 @@ try {
         if ($script:RAStreamOn) { try { Set-RAStreamReportStatus -Stream $script:RAStream -ReportName ([string]$__tn) -State NotComplete -Reason ([string]$__why) } catch { } }
     }
 } catch { Write-Warn2 ("completeness: the reports not in this run could not all be recorded -- {0}" -f $_.Exception.Message) }
+# #1323 (owner: "a report fails alone, the job completes ... we use last known good data"): a report NOT COMPLETE only because
+# query slices of it could not be read is held on purpose at its last complete result, like a silent source -- after every
+# other hold and the row-count guard, so a report with anything else wrong stays a real failure. Never fails the run: not
+# decided = no hold (the run stays partial for it, as before).
+try {
+    if ($script:RAStreamOn) {
+        $__usHeld = @(Add-RAUnreadableSliceHolds -Store $script:RADeliberateHolds -Failures @($script:_RAReportFailures.ToArray()) `
+                        -BucketLoss @($script:_RABucketLossRun | Where-Object { $_ } | ForEach-Object { [string]$_ }) -Flagged @($script:_RARowCountFlagged) `
+                        -HeldBack @(Get-RAStreamHeldReports -Stream $script:RAStream | Where-Object { $_ } | ForEach-Object { [string]$_.Report }))
+        if ($__usHeld.Count) { Write-Warn2 ("{0} report(s) could not be read in full this run and keep their last complete result: {1} -- every other report is current; nothing of them is closed" -f $__usHeld.Count, ($__usHeld -join ', ')) }
+    }
+} catch { Write-Diag ("unreadable-slice holds: not decided ({0}) -- those reports stay not complete" -f $_.Exception.Message) }
 # #902 (4): each report held on purpose -- how many runs of this grain in a row it is held (its previous verdict row) and when
 # its kept result is from. ONE read, before the counts, the mail and the run record use it. Never fails the run: not
 # readable = 1 run, kept result not known (never an escalation by guess).
@@ -7554,7 +7706,10 @@ if ($script:RAStreamOn -and $null -eq $script:_RAEndFailure) {
         # #877: a report held back is one of them (a named report: the others load)
         foreach ($__hr in @(Get-RAStreamHeldReports -Stream $script:RAStream)) { if ($__hr -and [string]$__hr.Report) { [void]$__incSet.Add([string]$__hr.Report) } }
         foreach ($__rn in @($__incSet)) {
-            if ([string]$script:RAReportStatusDone[[string]$__rn] -eq 'NotComplete') { continue }
+            # #1323: a report NotComplete by its own verdict keeps it -- unless that verdict IS its hold (lost slices,
+            # 'unreadable-slices'): then only the hold's kind and facts are written on its row (-OwnVerdict)
+            $__ownNc = ([string]$script:RAReportStatusDone[[string]$__rn] -eq 'NotComplete')
+            if ($__ownNc -and -not ($script:RADeliberateHolds.ContainsKey([string]$__rn) -and [string]$script:RADeliberateHolds[[string]$__rn].Kind -eq 'unreadable-slices')) { continue }
             $__w = @(@($script:_RAIncompleteReports) + @($__raInc) | Where-Object { $_ -and [string]$_.Report -eq $__rn } | ForEach-Object { [string]$_.Why }) | Select-Object -First 1
             if (-not $__w) { $__w = 'a query slice of the report could not be read this run' }
             $script:RAReportStatusDone[[string]$__rn] = 'NotComplete'
@@ -7572,7 +7727,7 @@ if ($script:RAStreamOn -and $null -eq $script:_RAEndFailure) {
                            KeptResultAt = $(if ($__hsr -and $__hsr.KeptResultAt) { ([datetime]$__hsr.KeptResultAt).ToString('yyyy-MM-ddTHH:mm:ss.fff', [Globalization.CultureInfo]::InvariantCulture) } else { '' })
                            HoldNames = $(if ($script:RADeliberateHolds[[string]$__rn] -and $script:RADeliberateHolds[[string]$__rn].Names) { (@($script:RADeliberateHolds[[string]$__rn].Names.ToArray()) -join ';') } else { '' }) }
             }
-            Set-RAStreamReportNotComplete -Stream $script:RAStream -ReportName ([string]$__rn) -Reason ([string]$__w) -HoldKind $__hk @__hf
+            Set-RAStreamReportNotComplete -Stream $script:RAStream -ReportName ([string]$__rn) -Reason ([string]$__w) -HoldKind $__hk @__hf -OwnVerdict:$__ownNc
         }
         $__dHeld = @($script:RADeliberateHolds.Keys | Sort-Object)
         if ($__dHeld.Count) { Write-Warn2 ("{0} report(s) held at their last complete result on purpose: {1} -- they do not hold the publish of this run" -f $__dHeld.Count, ($__dHeld -join ', ')) }

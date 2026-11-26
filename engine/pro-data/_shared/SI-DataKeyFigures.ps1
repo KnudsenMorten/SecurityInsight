@@ -46,6 +46,7 @@ function Get-SIDataUnfiguredSql {
     # #1218: the newest -Newest are counted among the collections the retention keeps (a removed one never takes a place)
     param([int]$Newest = 4)
     $live = ''; $liveN = ''; if (Get-Command -Name Get-SIDataLiveFilter -ErrorAction SilentlyContinue) { $live = Get-SIDataLiveFilter; $liveN = Get-SIDataLiveFilter -Alias 'n' }
+    if (Get-Command -Name Get-SIDataBuildFilter -ErrorAction SilentlyContinue) { $live += Get-SIDataBuildFilter }   # #1226
     $n = [Math]::Max(1, $Newest)
     "SELECT CollectionId, CollectionTime FROM sidata.Collection WHERE Kind = N'Detailed' AND Status = 'Complete' AND ContextAt IS NOT NULL" +
     " AND (KeyFiguresAt IS NULL OR KeyFiguresAt < ContextAt OR NOT EXISTS (SELECT 1 FROM sidata.KeyFigure AS kx WHERE kx.CollectionId = sidata.Collection.CollectionId AND kx.Block = N'protection' AND kx.Figure = N'findings_lifecycle')" +
@@ -192,15 +193,29 @@ LEFT JOIN #d AS d ON d.CiId = s.CiId
 WHERE s.Rn <= 50;
 "@
 }
+function Get-SIProtectionPointsSql {
+    <#
+        PURE. #1361: THE ONE PLACE the Pro SQL takes an item's points from -- the twin of Get-SIProtectionItemPoints: the points
+        of its severity rank (-Rank: a column, 4 Very High .. 1 Low) from the install's SI_ProtectionScore_SeverityPoints
+        (@pVH / @pH / @pM / @pL, declared by Get-SIKeyFigureProtectionSql).
+    #>
+    param([Parameter(Mandatory)][ValidatePattern('^[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*$')][string]$Rank)
+    "CASE $Rank WHEN 4 THEN @pVH WHEN 3 THEN @pH WHEN 2 THEN @pM WHEN 1 THEN @pL ELSE 0 END"
+}
+
 function Get-SIKeyFigureProtectionSql {
     <#
         PURE. THE PROTECTION SCORE (#636, owner 2026-10-19: "here i propose we define a new number which defines our ability to
         protect our assets. that is a % from 0-100. a higher number is good" / "i think we need to have 2 views as both are
         accepted by mgmt: view 1 shows the raw protection score where a new patch coming out yesterday impacts our score ...
         the other includes our lifecycle, which are under 'accepted risks' lifecycle process"):
-          the share of the in-scope ACTIVE CIs (devices, identities but groups, cloud resources, public IPs) in GOOD STANDING
-          -- no open, non-exempted finding of a counted severity (@Sevs, default Very High / Critical / High) -- each CI
-          weighted by its tier (@W0..@W3, default 8 / 4 / 2 / 1; unclassified = @W3). Two views:
+          #1361 (owner 2026-11-25, "Yes, this model"): over the in-scope ACTIVE CIs (devices, identities but groups, cloud
+          resources, public IPs), each CI's HEALTH = max(0, 100 - its open Very High / High items' points - min(@MinorCap, its
+          Medium / Low items' points)); an ITEM = a fix (one recommended update, however many CVEs; its highest severity) or any
+          other open, non-exempted finding; points per severity @PointsVeryHigh .. @PointsLow (25 / 10 / 3 / 1). A tier's % =
+          its CIs' average health; the SCORE = sum of the tier shares (@S0..@S3, 40 / 30 / 20 / 10; unclassified = Tier 3) x
+          the tier's %, a tier without CIs handing its share to the others pro rata. Assets = CIs in good standing (no open
+          Very High / High item). The engine's twin: Complete-SIProtectionTally. Two views:
             technical  every such finding counts
             lifecycle  "within accepted lifecycle": a finding younger than its asset type's grace (@GraceDevice,
                        @GraceIdentity, @GraceCloud, @GracePublicIp; SI_ProtectionScore_GraceDays_*, default 30) does not count
@@ -225,39 +240,88 @@ function Get-SIKeyFigureProtectionSql {
     $patch = "CASE WHEN f.FixRelease IS NOT NULL OR f.FixId IS NOT NULL OR f.FixName IS NOT NULL OR LOWER(f.Cycle) LIKE N'in monthly%' OR LOWER(f.Cycle) LIKE N'catch%' THEN 1 ELSE 0 END"
     $graceOf = "CASE d.Class WHEN N'device' THEN @pgDev WHEN N'identity' THEN @pgId WHEN N'cloud_resource' THEN @pgCloud ELSE @pgIp END"
     $otherOf = "CASE d.Class WHEN N'device' THEN @ogDev WHEN N'identity' THEN @ogId WHEN N'cloud_resource' THEN @ogCloud ELSE @ogIp END"
+    # #1361: a finding's severity rank on SI's scale (Very High 4 .. Low 1; Critical = Very High, Medium-High = High) -- the
+    # engine's twin is ConvertTo-SIProtectionSeverity; its points come from ONE place (Get-SIProtectionPointsSql)
+    $rank = "CASE LOWER(LTRIM(RTRIM(f.Sev))) WHEN N'very high' THEN 4 WHEN N'critical' THEN 4 WHEN N'high' THEN 3 WHEN N'medium-high' THEN 3 WHEN N'mediumhigh' THEN 3 WHEN N'medium' THEN 2 WHEN N'low' THEN 1 ELSE 0 END"
+    $pointsOfSv = Get-SIProtectionPointsSql -Rank 'sv.R'
+    $pointsOfI = Get-SIProtectionPointsSql -Rank 'i.R'
     @"
-DECLARE @pw0 float = TRY_CONVERT(float, @W0), @pw1 float = TRY_CONVERT(float, @W1), @pw2 float = TRY_CONVERT(float, @W2), @pw3 float = TRY_CONVERT(float, @W3),
+DECLARE @ps0 float = TRY_CONVERT(float, @S0), @ps1 float = TRY_CONVERT(float, @S1), @ps2 float = TRY_CONVERT(float, @S2), @ps3 float = TRY_CONVERT(float, @S3),
+        @pVH int = TRY_CONVERT(int, @PointsVeryHigh), @pH int = TRY_CONVERT(int, @PointsHigh), @pM int = TRY_CONVERT(int, @PointsMedium), @pL int = TRY_CONVERT(int, @PointsLow),
+        @pCap int = TRY_CONVERT(int, @MinorCap),
         @pgDev int = TRY_CONVERT(int, @GraceDevice), @pgId int = TRY_CONVERT(int, @GraceIdentity), @pgCloud int = TRY_CONVERT(int, @GraceCloud), @pgIp int = TRY_CONVERT(int, @GracePublicIp),
         @ogDev int = TRY_CONVERT(int, @OtherGraceDevice), @ogId int = TRY_CONVERT(int, @OtherGraceIdentity), @ogCloud int = TRY_CONVERT(int, @OtherGraceCloud), @ogIp int = TRY_CONVERT(int, @OtherGracePublicIp);
-CREATE TABLE #pf (CiId NVARCHAR(64) COLLATE DATABASE_DEFAULT NOT NULL, AgeDate DATETIME2(3) NULL, Basis TINYINT NOT NULL, Patch BIT NOT NULL);
-INSERT #pf (CiId, AgeDate, Basis, Patch)
-SELECT m.CiId, COALESCE(f.FixRelease, r.Released, f.First, s.FirstDetected),
+-- #1361: every counted finding (points > 0) on a CI: its age, whether it counts in the lifecycle view, its severity rank
+-- (Very High 4 .. Low 1) and its ITEM -- a fix (its recommended update: the id, else the name) or the finding itself (Rid)
+CREATE TABLE #pf (Rid INT IDENTITY(1, 1) NOT NULL, CiId NVARCHAR(64) COLLATE DATABASE_DEFAULT NOT NULL, AgeDate DATETIME2(3) NULL, Basis TINYINT NOT NULL, Patch BIT NOT NULL,
+                  R TINYINT NOT NULL, Life BIT NOT NULL, Fix NVARCHAR(400) COLLATE DATABASE_DEFAULT NULL);
+INSERT #pf (CiId, AgeDate, Basis, Patch, R, Life, Fix)
+SELECT m.CiId, a.AgeDate,
        CASE WHEN f.FixRelease IS NOT NULL OR r.Released IS NOT NULL THEN 1 WHEN f.First IS NOT NULL THEN 2 WHEN s.FirstDetected IS NOT NULL THEN 3 ELSE 0 END,
-       $patch
+       pt.Patch, sv.R,
+       CASE WHEN a.AgeDate IS NULL OR DATEDIFF(day, a.AgeDate, @t) >= CASE WHEN pt.Patch = 1 THEN $graceOf ELSE $otherOf END THEN 1 ELSE 0 END,
+       COALESCE(NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(400), f.FixId))), N''), NULLIF(LTRIM(RTRIM(CONVERT(nvarchar(400), f.FixName))), N''))
 FROM #f AS f
 JOIN #m AS m ON m.AssetKey = f.AssetKey AND m.CiId IS NOT NULL
+LEFT JOIN #d AS d ON d.CiId = m.CiId
+CROSS APPLY (SELECT $rank AS R) AS sv
+CROSS APPLY (SELECT $patch AS Patch) AS pt
 CROSS APPLY (SELECT CASE WHEN f.FixMonth IS NULL THEN NULL ELSE DATEADD(day, 7 + ((1 - (DATEDIFF(day, '19000101', f.FixMonth) % 7) + 7) % 7), CONVERT(datetime2(3), f.FixMonth)) END AS Released) AS r
 OUTER APPLY (SELECT MIN(st.FirstDetected) AS FirstDetected FROM sidata.CiFindingState AS st WHERE st.OwnerKey = m.CiId AND st.FindingKey IN (f.Rec, f.Cve) AND st.State <> N'closed') AS s
-WHERE f.Sev IN (SELECT LTRIM(RTRIM(v.[value])) FROM OPENJSON(@Sevs) AS v);
+CROSS APPLY (SELECT COALESCE(f.FixRelease, r.Released, f.First, s.FirstDetected) AS AgeDate) AS a
+WHERE sv.R > 0 AND $pointsOfSv > 0;
 CREATE INDEX IX_pf ON #pf (CiId);
-CREATE TABLE #pc (CiId NVARCHAR(64) COLLATE DATABASE_DEFAULT NOT NULL PRIMARY KEY, TypeName NVARCHAR(24) NOT NULL, TierName NVARCHAR(16) NOT NULL, W FLOAT NOT NULL,
-                  BadTech BIT NOT NULL, BadLife BIT NOT NULL);
+-- the ITEMS: a fix once per CI (its highest severity; it counts in the lifecycle view when one of its findings does), every
+-- other finding once -- GROUP BY, never a list per finding (the twin: Add-SIProtectionFinding / Complete-SIProtectionTally)
+CREATE TABLE #pi (CiId NVARCHAR(64) COLLATE DATABASE_DEFAULT NOT NULL, R TINYINT NOT NULL, Life BIT NOT NULL);
+INSERT #pi (CiId, R, Life)
+SELECT p.CiId, MAX(p.R), MAX(CONVERT(tinyint, p.Life))
+FROM #pf AS p
+GROUP BY p.CiId, CASE WHEN p.Fix IS NULL THEN N'#' + CONVERT(nvarchar(12), p.Rid) ELSE N'u:' + p.Fix END;
+CREATE INDEX IX_pi ON #pi (CiId);
+-- each in-scope CI's health per view: max(0, 100 - its Very High / High points - min(the minor cap, its Medium / Low points));
+-- good standing = no Very High / High item; B = the tier whose share it counts in (unclassified = Tier 3)
+CREATE TABLE #pc (CiId NVARCHAR(64) COLLATE DATABASE_DEFAULT NOT NULL PRIMARY KEY, TypeName NVARCHAR(24) NOT NULL, TierName NVARCHAR(16) NOT NULL, B TINYINT NOT NULL,
+                  HTech FLOAT NOT NULL, HLife FLOAT NOT NULL, GoodTech BIT NOT NULL, GoodLife BIT NOT NULL);
 INSERT #pc
 SELECT d.CiId,
        CASE d.Class WHEN N'device' THEN N'Devices' WHEN N'identity' THEN N'Identities' WHEN N'cloud_resource' THEN N'Cloud resources' ELSE N'Public IPs' END,
        CASE d.Tier WHEN 0 THEN N'Tier 0' WHEN 1 THEN N'Tier 1' WHEN 2 THEN N'Tier 2' WHEN 3 THEN N'Tier 3' ELSE N'Unclassified' END,
-       CONVERT(float, CASE d.Tier WHEN 0 THEN @pw0 WHEN 1 THEN @pw1 WHEN 2 THEN @pw2 ELSE @pw3 END),
-       CASE WHEN EXISTS (SELECT 1 FROM #pf AS p WHERE p.CiId = d.CiId) THEN 1 ELSE 0 END,
-       CASE WHEN EXISTS (SELECT 1 FROM #pf AS p WHERE p.CiId = d.CiId
-                         AND (p.AgeDate IS NULL OR DATEDIFF(day, p.AgeDate, @t) >= CASE WHEN p.Patch = 1 THEN $graceOf ELSE $otherOf END)) THEN 1 ELSE 0 END
+       CASE WHEN d.Tier IN (0, 1, 2) THEN d.Tier ELSE 3 END,
+       CONVERT(float, CASE WHEN 100 - x.TMaj - CASE WHEN x.TMin < @pCap THEN x.TMin ELSE @pCap END < 0 THEN 0 ELSE 100 - x.TMaj - CASE WHEN x.TMin < @pCap THEN x.TMin ELSE @pCap END END),
+       CONVERT(float, CASE WHEN 100 - x.LMaj - CASE WHEN x.LMin < @pCap THEN x.LMin ELSE @pCap END < 0 THEN 0 ELSE 100 - x.LMaj - CASE WHEN x.LMin < @pCap THEN x.LMin ELSE @pCap END END),
+       CASE WHEN x.THi = 0 THEN 1 ELSE 0 END, CASE WHEN x.LHi = 0 THEN 1 ELSE 0 END
 FROM #d AS d
+CROSS APPLY (SELECT ISNULL(SUM(CASE WHEN i.R >= 3 THEN $pointsOfI ELSE 0 END), 0) AS TMaj,
+                    ISNULL(SUM(CASE WHEN i.R < 3 THEN $pointsOfI ELSE 0 END), 0) AS TMin,
+                    ISNULL(SUM(CASE WHEN i.Life = 1 AND i.R >= 3 THEN $pointsOfI ELSE 0 END), 0) AS LMaj,
+                    ISNULL(SUM(CASE WHEN i.Life = 1 AND i.R < 3 THEN $pointsOfI ELSE 0 END), 0) AS LMin,
+                    ISNULL(MAX(CASE WHEN i.R >= 3 THEN 1 ELSE 0 END), 0) AS THi,
+                    ISNULL(MAX(CASE WHEN i.Life = 1 AND i.R >= 3 THEN 1 ELSE 0 END), 0) AS LHi
+             FROM #pi AS i WHERE i.CiId = d.CiId) AS x
 WHERE d.Active = 1 AND d.Class IN (N'device', N'identity', N'cloud_resource', N'public_ip') AND ISNULL(d.AssetType, N'') NOT IN (N'Group', N'Security group', N'Microsoft 365 group');
+-- the rows: a tier's cell (and type x tier) = the average health; the cells over every tier ((all), each type) are then set to
+-- the tier-share score below. Assets = in good standing, Total = in scope.
 INSERT #kf (Block, Figure, Dim1, Dim2, Value, Assets, Total, Available, Note)
 SELECT N'protection', v.Fig, CASE WHEN GROUPING(c.TypeName) = 1 THEN N'(all)' ELSE c.TypeName END, CASE WHEN GROUPING(c.TierName) = 1 THEN N'(all)' ELSE c.TierName END,
-       ROUND(100.0 * SUM(CASE WHEN (v.Fig = N'technical' AND c.BadTech = 0) OR (v.Fig = N'lifecycle' AND c.BadLife = 0) THEN c.W ELSE 0 END) / NULLIF(SUM(c.W), 0), 1),
-       SUM(CASE WHEN (v.Fig = N'technical' AND c.BadTech = 0) OR (v.Fig = N'lifecycle' AND c.BadLife = 0) THEN 1 ELSE 0 END), COUNT(*), 1, NULL
+       ROUND(AVG(CASE WHEN v.Fig = N'technical' THEN c.HTech ELSE c.HLife END), 1),
+       SUM(CASE WHEN (v.Fig = N'technical' AND c.GoodTech = 1) OR (v.Fig = N'lifecycle' AND c.GoodLife = 1) THEN 1 ELSE 0 END), COUNT(*), 1, NULL
 FROM #pc AS c CROSS JOIN (VALUES (N'technical'), (N'lifecycle')) AS v (Fig)
 GROUP BY GROUPING SETS ((v.Fig, c.TypeName, c.TierName), (v.Fig, c.TypeName), (v.Fig, c.TierName), (v.Fig));
+-- #1361 THE SCORE: sum over the tiers with assets of share x the tier's average health, the shares scaled to 100 (a tier with no
+-- asset hands its share to the others); every share 0 = the plain average (kept above). The twin: Get-SIProtectionShareScore.
+;WITH tb AS (
+    SELECT v.Fig, CASE WHEN GROUPING(c.TypeName) = 1 THEN N'(all)' ELSE c.TypeName END AS D1, c.B, AVG(CASE WHEN v.Fig = N'technical' THEN c.HTech ELSE c.HLife END) AS A
+    FROM #pc AS c CROSS JOIN (VALUES (N'technical'), (N'lifecycle')) AS v (Fig)
+    GROUP BY GROUPING SETS ((v.Fig, c.TypeName, c.B), (v.Fig, c.B))
+), sc AS (
+    SELECT tb.Fig, tb.D1, SUM(sh.S * tb.A) AS Num, SUM(sh.S) AS Den
+    FROM tb JOIN (VALUES (0, @ps0), (1, @ps1), (2, @ps2), (3, @ps3)) AS sh (B, S) ON sh.B = tb.B
+    GROUP BY tb.Fig, tb.D1
+)
+UPDATE k SET Value = ROUND(sc.Num / sc.Den, 1)
+FROM #kf AS k JOIN sc ON k.Block = N'protection' AND k.Figure = sc.Fig COLLATE DATABASE_DEFAULT AND k.Dim1 = sc.D1 COLLATE DATABASE_DEFAULT AND k.Dim2 = N'(all)'
+WHERE sc.Den > 0;
 -- the figure's name from the view list, never from the joined row: a collection with NO active asset in scope has no
 -- protection row to join, and its two headline rows still say so (Available = 0, the reason) -- the mail prints that line
 INSERT #kf (Block, Figure, Dim1, Dim2, Value, Assets, Total, Available, Note)
@@ -276,8 +340,8 @@ GROUP BY b.Basis, b.Name;
 -- numbers around, but the numbers below doesnt chg"): findings_technical = every open finding of the run; findings_lifecycle =
 -- the ones the lifecycle view counts -- on an active in-scope CI and past its asset type's grace (no date = it counts)
 CREATE TABLE #pg (Dom NVARCHAR(16) NOT NULL, SevB NVARCHAR(16) NOT NULL, Life BIT NOT NULL,
-                  AssetKey NVARCHAR(400) COLLATE DATABASE_DEFAULT NULL, Sev NVARCHAR(30) NULL, InScope BIT NOT NULL);
-INSERT #pg (Dom, SevB, Life, AssetKey, Sev, InScope)
+                  AssetKey NVARCHAR(400) COLLATE DATABASE_DEFAULT NULL, Sev NVARCHAR(30) NULL, InScope BIT NOT NULL, FindingId BIGINT NULL);
+INSERT #pg (Dom, SevB, Life, AssetKey, Sev, InScope, FindingId)
 SELECT f.Dom,
        CASE WHEN f.Sev IN (N'Very High', N'Critical') THEN N'Critical' WHEN f.Sev IN (N'High', N'Medium-High', N'MediumHigh') THEN N'High'
             WHEN f.Sev = N'Medium' THEN N'Medium' WHEN f.Sev = N'Low' THEN N'Low' ELSE N'Other' END,
@@ -285,7 +349,7 @@ SELECT f.Dom,
             WHEN a.AgeDate IS NULL THEN 1
             WHEN DATEDIFF(day, a.AgeDate, @t) >= CASE WHEN $patch = 1 THEN $graceOf ELSE $otherOf END THEN 1
             ELSE 0 END,
-       f.AssetKey, f.Sev, CASE WHEN d.CiId IS NULL THEN 0 ELSE 1 END
+       f.AssetKey, f.Sev, CASE WHEN d.CiId IS NULL THEN 0 ELSE 1 END, f.FindingId
 FROM #f AS f
 LEFT JOIN #m AS m ON m.AssetKey = f.AssetKey
 LEFT JOIN #d AS d ON d.CiId = m.CiId AND d.Active = 1 AND d.Class IN (N'device', N'identity', N'cloud_resource', N'public_ip')
@@ -359,7 +423,7 @@ CREATE TABLE #f (AssetKey NVARCHAR(400) COLLATE DATABASE_DEFAULT NULL, Cve NVARC
                  Tier TINYINT NULL, Exploit BIT NOT NULL, Eos BIT NOT NULL, Due DATETIME2(3) NULL, First DATETIME2(3) NULL,
                  Rec NVARCHAR(256) COLLATE DATABASE_DEFAULT NULL, Comp NVARCHAR(64) COLLATE DATABASE_DEFAULT NULL, Soft NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
                  FixId NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL, FixName NVARCHAR(120) COLLATE DATABASE_DEFAULT NULL, Remedy NVARCHAR(120) COLLATE DATABASE_DEFAULT NULL, FixMonth DATE NULL, Cycle NVARCHAR(40) COLLATE DATABASE_DEFAULT NULL,
-                 FixRelease DATETIME2(3) NULL, Dom NVARCHAR(16) NOT NULL);
+                 FixRelease DATETIME2(3) NULL, Dom NVARCHAR(16) NOT NULL, FindingId BIGINT NULL);
 -- SI:STEP findings
 -- (one key range of the collection's findings at a time when run in steps: @kfLo < FindingId <= @kfHi, a clustered-key seek)
 INSERT #f
@@ -381,7 +445,7 @@ SELECT f.AssetKey, NULLIF(f.Cve, N''), f.Severity,
        CASE WHEN f.DetailJson IS NOT NULL AND ISJSON(f.DetailJson) = 1 THEN NULLIF(LEFT(LTRIM(RTRIM(JSON_VALUE(f.DetailJson, '$.si_patch_cycle'))), 40), N'') END,
        -- the fix's release date a source gives (si_fix_release_date), the protection score's first age basis
        CASE WHEN f.DetailJson IS NOT NULL AND ISJSON(f.DetailJson) = 1 THEN TRY_CONVERT(datetime2(3), LEFT(JSON_VALUE(f.DetailJson, '$.si_fix_release_date'), 23), 126) END,
-       $dom
+       $dom, f.FindingId
 FROM sidata.Finding AS f WHERE f.CollectionId = @c AND f.FindingId > @kfLo AND f.FindingId <= @kfHi AND f.ExemptionId IS NULL;
 -- SI:STEP assets
 -- each finding's CI: the CI id itself, else the CI that carries the id as a linked object (built ONCE per distinct asset)
@@ -552,12 +616,37 @@ VALUES (N'meta', N'window', N'recent_days', N'', @kfRecent, NULL, NULL, 1, NULL)
 INSERT #kf (Block, Figure, Dim1, Dim2, Value, Assets, Total, Available, Note)
 SELECT N'meta', N'window', N'cve_age_band', CONVERT(nvarchar(10), Days), Days, NULL, NULL, 1, NULL FROM #ageBand;
 INSERT #kf (Block, Figure, Dim1, Dim2, Value, Assets, Total, Available, Note) VALUES (N'meta', N'onboarding_by_status', N'', N'', 1, NULL, NULL, 1, NULL);
+-- #1382 how the protection score of these figures was calculated: 2 = the tier-share score of the assets' health (#1361). The web
+-- app says a score change across two calculations is not comparable (no collection is figured again for it)
+INSERT #kf (Block, Figure, Dim1, Dim2, Value, Assets, Total, Available, Note) VALUES (N'meta', N'protection_model', N'', N'', 2, NULL, NULL, 1, NULL);
+-- #1355 the marker: this collection's findings the lifecycle view counts are stored (sidata.FindingLifecycleRisk, below). The
+-- security recommendations views offer "Within Accepted Lifecycle" only for a collection that has it (no collection is figured
+-- again for it: a collection figured before it simply does not offer the choice)
+IF OBJECT_ID('sidata.FindingLifecycleRisk') IS NOT NULL
+    INSERT #kf (Block, Figure, Dim1, Dim2, Value, Assets, Total, Available, Note) VALUES (N'meta', N'lifecycle_rows', N'', N'', 1, NULL, NULL, 1, NULL);
 
 BEGIN TRAN;
 DELETE FROM sidata.KeyFigure WHERE CollectionId = @c;
 INSERT sidata.KeyFigure (CollectionId, Block, Figure, Dim1, Dim2, Value, Assets, Total, Available, Note, Items, VeryHigh, Servers, Clients)
 SELECT @c, Block, Figure, LEFT(Dim1, 200), LEFT(Dim2, 120), Value, Assets, Total, Available, Note, Items, VeryHigh, Servers, Clients FROM #kf;
 DECLARE @n INT = @@ROWCOUNT;
+-- #1355 THE FINDINGS THE LIFECYCLE VIEW COUNTS -- the same verdict findings_lifecycle above counts (#pg.Life = 1: an open finding
+-- on an active in-scope CI past its asset type's accepted time to fix; no date = it counts), for the security recommendations
+-- views (Detailed filters on it, the lifecycle Summary groupings are built from it) -- one calculation, never two
+IF OBJECT_ID('sidata.FindingLifecycleRisk') IS NOT NULL
+BEGIN
+    DELETE FROM sidata.FindingLifecycleRisk WHERE CollectionId = @c;
+    INSERT sidata.FindingLifecycleRisk (CollectionId, FindingId) SELECT @c, g.FindingId FROM #pg AS g WHERE g.Life = 1 AND g.FindingId IS NOT NULL;
+END
+-- #1334 the CI rows this build read (#d), as one order-free fingerprint: the build from the changes carries the CI figures only
+-- when the collection before it read the same (SI-DataHistory.ps1 Get-SIDataHistoryKeyFiguresCheckSql)
+IF OBJECT_ID('sidata.KeyFigureInput') IS NOT NULL
+BEGIN
+    DELETE FROM sidata.KeyFigureInput WHERE CollectionId = @c;
+    INSERT sidata.KeyFigureInput (CollectionId, CiRows, CiFp1, CiFp2)
+    SELECT @c, COUNT_BIG(*), ISNULL(SUM(CONVERT(decimal(38, 0), CONVERT(bigint, SUBSTRING(x.H, 1, 8)))), 0), ISNULL(SUM(CONVERT(decimal(38, 0), CONVERT(bigint, SUBSTRING(x.H, 9, 8)))), 0)
+    FROM (SELECT HASHBYTES('SHA2_256', CONCAT(ISNULL(CiId, N'~'), NCHAR(31), ISNULL(Class, N'~'), NCHAR(31), Fam, NCHAR(31), Typ, NCHAR(31), CONVERT(nchar(1), Active), NCHAR(31), ISNULL(CONVERT(nvarchar(4), Tier), N'~'), NCHAR(31), CONVERT(nchar(1), Internet), NCHAR(31), ISNULL(Onboarded, N'~'), NCHAR(31), CONVERT(nchar(1), NotSeen), NCHAR(31), CONVERT(nchar(1), AzureVm), NCHAR(31), CONVERT(nchar(1), HasMde), NCHAR(31), ISNULL(AssetType, N'~'), NCHAR(31), ISNULL(CONVERT(nchar(1), Enabled), N'~'), NCHAR(31), ISNULL(CONVERT(nchar(1), Mfa), N'~'), NCHAR(31), ISNULL(CONVERT(nvarchar(30), LastSignIn, 126), N'~'), NCHAR(31), CONVERT(nchar(1), Privileged), NCHAR(31), ISNULL(Sub, N'~'), NCHAR(31), ISNULL(Name, N'~'))) AS H FROM #d) AS x;
+END
 UPDATE sidata.Collection SET KeyFiguresAt = SYSUTCDATETIME() WHERE CollectionId = @c;
 COMMIT;
 SELECT @n;
@@ -578,8 +667,11 @@ function Get-SIProtectionScoreParams {
     $w = Get-SIKeyFigureWindowSettings -Settings $Settings
     $inv = [Globalization.CultureInfo]::InvariantCulture
     [ordered]@{
-        Sevs = (ConvertTo-Json -InputObject @($c.Severities) -Compress)
-        W0 = ([double]$c.Weights[0]).ToString($inv); W1 = ([double]$c.Weights[1]).ToString($inv); W2 = ([double]$c.Weights[2]).ToString($inv); W3 = ([double]$c.Weights[3]).ToString($inv)
+        # #1361: the tier shares, the points per SI severity and the cap of the Medium / Low points per asset
+        S0 = ([double]$c.Shares[0]).ToString($inv); S1 = ([double]$c.Shares[1]).ToString($inv); S2 = ([double]$c.Shares[2]).ToString($inv); S3 = ([double]$c.Shares[3]).ToString($inv)
+        PointsVeryHigh = ([int]$c.Points['Very High']).ToString($inv); PointsHigh = ([int]$c.Points['High']).ToString($inv)
+        PointsMedium = ([int]$c.Points['Medium']).ToString($inv); PointsLow = ([int]$c.Points['Low']).ToString($inv)
+        MinorCap = ([int]$c.MinorCap).ToString($inv)
         GraceDevice = [string]$c.Grace.device; GraceIdentity = [string]$c.Grace.identity
         GraceCloud = [string]$c.Grace.cloud_resource; GracePublicIp = [string]$c.Grace.public_ip
         OtherGraceDevice = [string]$c.OtherGrace.device; OtherGraceIdentity = [string]$c.OtherGrace.identity
@@ -673,10 +765,12 @@ function Invoke-SIDataKeyFiguresStepped {
         sized from the measured seconds of the one before (aim -TargetSeconds a range; never a fixed row count). The result
         is identical to the one-statement run (the same text, the same order). Answers the number of figure rows.
     #>
+    # -Narrow (#1213 B4): the step 'findings' reads this run's narrow findings of the collection (Get-SIDataKeyFiguresFindingsSource)
     param([Parameter(Mandatory)][scriptblock]$Invoke, [Parameter(Mandatory)][System.Collections.IDictionary]$Params, [int]$CatchUpDays = 30,
-          [scriptblock]$Log, [double]$TargetSeconds = 20, [long]$FirstSpan = 200000)
+          [scriptblock]$Log, [double]$TargetSeconds = 20, [long]$FirstSpan = 200000, [switch]$Narrow)
     if (-not $Log) { $Log = { param($l, $m) } }
     $plan = Get-SIDataKeyFiguresSteps -CatchUpDays $CatchUpDays
+    if ($Narrow) { $plan.Steps['findings'] = ConvertTo-SIDataNarrowSql -Sql $plan.Steps['findings'] }
     $decl = ConvertTo-SIKeyFigureParamDeclare -Params $Params
     $cid = [string]$Params['CollectionId']
     $batchOf = {
@@ -726,6 +820,18 @@ function Invoke-SIDataKeyFiguresStepped {
     [long](& $Invoke $null $null 'session' $onSession)
 }
 
+function Get-SIDataKeyFiguresFindingsSource {
+    <#
+        #1213 B4 (SCALE-3): the key-figure script (-Sql) carried over to this run's narrow findings (ConvertTo-SIDataNarrowSql:
+        the same statement, sidata.Finding -> sidata.FindingNarrow, each document field -> its column) when THIS run has
+        filled them whole for -CollectionId (Test-SIDataFindingNarrowReady), else $null: read sidata.Finding as before. Never
+        throws (a statement that cannot be carried over exactly is read from the wide rows).
+    #>
+    param([Parameter(Mandatory)][long]$CollectionId, [Parameter(Mandatory)][string]$Sql)
+    if (-not (Get-Command -Name Test-SIDataFindingNarrowReady -ErrorAction SilentlyContinue) -or -not (Get-Command -Name ConvertTo-SIDataNarrowSql -ErrorAction SilentlyContinue)) { return $null }
+    try { if (-not (Test-SIDataFindingNarrowReady -CollectionId $CollectionId)) { return $null }; return (ConvertTo-SIDataNarrowSql -Sql $Sql) } catch { return $null }
+}
+
 function Invoke-SIDataKeyFigures {
     <#
     .SYNOPSIS  Writes the key figures of the newest complete collections that have none (newest first). Never throws.
@@ -766,10 +872,13 @@ function Invoke-SIDataKeyFigures {
             $one = [Diagnostics.Stopwatch]::StartNew()
             $cid = $(if ($p -is [System.Collections.IDictionary]) { $p['CollectionId'] } else { $p.CollectionId })
             $ps = Get-SIProtectionScoreParams -Settings $Settings; $ps['CollectionId'] = [string][int]$cid
+            # #1213 B4: the findings from this run's narrow findings of the collection when the run has them (never a fill of
+            # its own -- the figures read the collection once either way), else from sidata.Finding as before
+            $narrow = Get-SIDataKeyFiguresFindingsSource -CollectionId ([long]$cid) -Sql $sql
             if ($Invoke.PSObject.Properties['SISqlSession'] -and $Invoke.SISqlSession) {
-                $rows += Invoke-SIDataKeyFiguresStepped -Invoke $Invoke -Params $ps -CatchUpDays $days -Log $Log
+                $rows += Invoke-SIDataKeyFiguresStepped -Invoke $Invoke -Params $ps -CatchUpDays $days -Log $Log -Narrow:([bool]$narrow)
             } else {
-                $rows += [long](& $Invoke $sql $ps 'scalar')
+                $rows += [long](& $Invoke $(if ($narrow) { $narrow } else { $sql }) $ps 'scalar')
             }
             $one.Stop(); $lastMs = $one.ElapsedMilliseconds
             $done++

@@ -61,6 +61,7 @@ function Get-SIDataChangesPendingSql {
         stored comparison is missing, is with another collection, or is older than either collection's derive. Newest first.
     #>
     $live = ''; if (Get-Command -Name Get-SIDataLiveFilter -ErrorAction SilentlyContinue) { $live = Get-SIDataLiveFilter -Alias 'c' }
+    if (Get-Command -Name Get-SIDataBuildFilter -ErrorAction SilentlyContinue) { $live += Get-SIDataBuildFilter -Alias 'c' }   # #1226
     $prev = Get-SIDataChangePrevSql -Of 'c' -Columns 'p.CollectionId AS PrevId, p.DerivedAt AS PrevDerivedAt'
     "SELECT c.CollectionId, c.CollectionTime FROM sidata.Collection AS c OUTER APPLY ($prev) AS pv LEFT JOIN sidata.ChangeState AS s ON s.CollectionId = c.CollectionId WHERE c.Status = 'Complete' AND c.Kind = 'Detailed' AND c.DerivedAt IS NOT NULL AND pv.PrevId IS NOT NULL AND (c.ViewsReadyAt IS NOT NULL OR NOT EXISTS (SELECT 1 FROM sidata.Collection AS r WHERE r.ViewsReadyAt IS NOT NULL)) AND (s.CollectionId IS NULL OR s.PrevCollectionId <> pv.PrevId OR s.BuiltAt < c.DerivedAt OR s.BuiltAt < pv.PrevDerivedAt)$live ORDER BY c.CollectionTime DESC"
 }
@@ -160,14 +161,14 @@ CREATE TABLE #fc (Counted BIT NOT NULL, ChangeKey NVARCHAR(1800) NOT NULL, Chang
                   Issue NVARCHAR(1000) NULL, Title NVARCHAR(1000) NULL, ReportName NVARCHAR(256) NULL, SeverityBefore NVARCHAR(30) NULL, SeverityAfter NVARCHAR(30) NULL,
                   RiskBefore FLOAT NULL, RiskAfter FLOAT NULL, RiskDelta FLOAT NULL, TierBefore NVARCHAR(12) NULL, TierAfter NVARCHAR(12) NULL);
 {FCINSERTS}
--- one row per CI and side, both variants
+-- one row per CI and side, both variants (#1334: the risk totals summed EXACTLY, decimal(38,10) -- the same bits in whatever order SQL adds)
 CREATE TABLE #a (Side TINYINT NOT NULL, AssetKey NVARCHAR(400) COLLATE DATABASE_DEFAULT NOT NULL, AssetName NVARCHAR(400) NULL, Findings BIGINT NOT NULL, TotalRisk FLOAT NULL, Tier TINYINT NULL,
                  cFindings BIGINT NOT NULL, cAssetName NVARCHAR(400) NULL, cTotalRisk FLOAT NULL, cTier TINYINT NULL);
 INSERT #a
-SELECT s.Side, f.AssetKey, COALESCE(MAX(an.AssetName), MAX(f.AssetName)), COUNT_BIG(*), SUM(f.RiskScore), MIN(f.Tier),
+SELECT s.Side, f.AssetKey, COALESCE(MAX(an.AssetName), MAX(f.AssetName)), COUNT_BIG(*), CONVERT(float, SUM(CONVERT(decimal(38, 10), f.RiskScore))), MIN(f.Tier),
        SUM(CASE WHEN f.ExemptionId IS NULL THEN 1 ELSE 0 END),
        COALESCE(MAX(CASE WHEN f.ExemptionId IS NULL THEN an.AssetName END), MAX(CASE WHEN f.ExemptionId IS NULL THEN f.AssetName END)),
-       SUM(CASE WHEN f.ExemptionId IS NULL THEN f.RiskScore END), MIN(CASE WHEN f.ExemptionId IS NULL THEN f.Tier END)
+       CONVERT(float, SUM(CONVERT(decimal(38, 10), CASE WHEN f.ExemptionId IS NULL THEN f.RiskScore END))), MIN(CASE WHEN f.ExemptionId IS NULL THEN f.Tier END)
 FROM sidata.Finding AS f
 JOIN (VALUES (@A, CONVERT(tinyint, 0)), (@CollectionId, CONVERT(tinyint, 1))) AS s (C, Side) ON f.CollectionId = s.C
 LEFT JOIN sidata.Asset AS an ON an.AssetKey = f.AssetKey
@@ -231,6 +232,7 @@ function Get-SIDataTier0SchemaCheckSql {
 function Get-SIDataTier0PendingSql {
     <# Complete Detailed collections whose views' columns are derived and whose tier-0 rows are missing or older than the derive. Newest first. #>
     $live = ''; if (Get-Command -Name Get-SIDataLiveFilter -ErrorAction SilentlyContinue) { $live = Get-SIDataLiveFilter -Alias 'c' }
+    if (Get-Command -Name Get-SIDataBuildFilter -ErrorAction SilentlyContinue) { $live += Get-SIDataBuildFilter -Alias 'c' }   # #1226
     "SELECT c.CollectionId, c.CollectionTime FROM sidata.Collection AS c LEFT JOIN sidata.Tier0AssetState AS s ON s.CollectionId = c.CollectionId WHERE c.Status = 'Complete' AND c.Kind = 'Detailed' AND c.DerivedAt IS NOT NULL AND (s.CollectionId IS NULL OR s.BuiltAt < c.DerivedAt)$live ORDER BY c.CollectionTime DESC"
 }
 

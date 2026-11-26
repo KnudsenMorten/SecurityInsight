@@ -565,7 +565,7 @@ function Get-SIProfileBreakGlass {
         si_break_glass_attribute = [string](& $get 'ENTRA_BreakGlassAttribute')
     }
     if ($ProviderSignal) { $ci['si_is_break_glass'] = $true }
-    if (-not (Get-Command -Name Get-SIBreakGlassClassification -ErrorAction SilentlyContinue)) {
+    if (-not (Test-Path -Path 'function:Get-SIBreakGlassClassification')) {
         if ($ProviderSignal) { return [pscustomobject]@{ IsBreakGlass = $true; Reasons = @('provider'); Reason = 'Break-glass because the identity collection marks it as an emergency-access account.' } }
         return $none
     }

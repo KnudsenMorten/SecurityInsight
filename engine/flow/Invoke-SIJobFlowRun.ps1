@@ -649,7 +649,9 @@ $pipeRunOne = {
     if (Get-Command -Name Invoke-SIGuardCalls -ErrorAction SilentlyContinue) { $null = Invoke-SIGuardCalls -Calls @(Get-SIGuardCallsForFlow -Result $pipeResult) -Common @{ Engine = 'flow'; RunId = [string]$pipeResult.FlowRunId; Invoke = $(if ($proStore) { $proStore.Invoke } else { $null }) } }
     $pipeSummary = Get-SIJobFlowSummary -State $pipeResult
     $pipeText = Get-SIPipelineStatusText -State $pipeResult -Definition $pipeDefinition
-    $pipeBad = @($pipeResult.Steps | Where-Object { $_.State -in @('Failed', 'TimedOut', 'Interrupted') } | Select-Object -First 1)
+    # #1392: a step a person's CANCEL closed (Interrupted, class 'cancelled') did not fail -- on 3.1.50 the cancel closed ptc,
+    # whose execution had already ended Succeeded, and the report called it "failed (unknown)" with a stray line of its log
+    $pipeBad = @($pipeResult.Steps | Where-Object { Test-SIJobFlowStepFailed -Step $_ } | Select-Object -First 1)
     # THE WARNING THAT OPENS A FIX REQUEST (owner 2026-10-13): a run that went on after a failed step names THAT step in
     # its report (not a source it went on without) -- Outcome warning + FailedStep + the step's own class, which Invardia
     # treats as a fix request. No new channel: the run's own run-health record and its report, as every run.
@@ -823,11 +825,24 @@ if ($HostKind -eq 'Container' -and "$env:CONTAINER_APP_JOB_NAME".Trim()) {
 # The job takes the install's lock (a run waits for it) and gives it up -- pausing its build -- the moment an update wants
 # to go. One plain line when it starts; nothing said while it waits. A job that is not there yet (an install the next update
 # brings it to) is said once per wake-up as a warning. Never stops the wake-up.
+# #1316 follow-up: on an install whose runs go back to back, a long-waiting index is built in the gap before a SCHEDULED run
+# (Get-SIIndexBuildWindowDecision -StartDue) -- this wake-up then starts no run ($ixHoldsRun) and the run starts late.
+$ixHoldsRun = ''
 if ($HostKind -eq 'Container' -and $updaterJobName -and $proStore -and $runStore -and $updateRunning) {
     try {
         if (-not (Get-Command -Name Get-SIIndexBuildWindowDecision -ErrorAction SilentlyContinue)) { . (Join-Path $siRoot 'engine/_shared/SI-IndexBuild.ps1') }
         $ixRows = @(Read-SIIndexBuildRows -Invoke $proStore.Invoke)
-        if (@($ixRows | Where-Object { $_.State -in @('waiting', 'paused', 'building') }).Count) {
+        $ptSwitch = Test-SIIndexBuildPartitionSwitch -Value $global:SI_Data_RetireByPartition
+        # #1316 x #1317: a columnstore index of sidata.Finding waits while the table's move onto the collection partitions is
+        # pending -- never started for it now (the next index or the partitions go instead); it is built aligned after the move
+        $ixRows = @((Select-SIColumnstoreRowsNotHeld -Rows $ixRows -Invoke $proStore.Invoke -SwitchOn $ptSwitch).Rows)
+        # #1317 (SI_Data_RetireByPartition, on by default): the collection partitions in the same idle window -- the job is
+        # started for them only when no index starts and partition work waits (read with the engine's own read rights)
+        $ptWork = $false
+        if (Test-SIIndexBuildPartitionSwitch -Value $global:SI_Data_RetireByPartition) {
+            try { $ptWork = [int](& $proStore.Invoke (Get-SIPartitionWorkSql) @{ Low = '4' } 'scalar') -eq 1 } catch { $ptWork = $false; & $say 'WARN' ('whether the collection partitions wait could not be read ({0}) -- the next wake-up looks again' -f $_.Exception.Message) }
+        }
+        if (@($ixRows | Where-Object { $_.State -in @('waiting', 'paused', 'building') }).Count -or $ptWork) {
             if (-not (Get-Command -Name Get-SIDataHousekeepingBusy -ErrorAction SilentlyContinue)) {
                 . (Join-Path $siRoot 'engine/_shared/data-sql/SI-DataModel.ps1')
                 . (Join-Path $siRoot 'engine/_shared/data-sql/SI-DataSql.ps1')
@@ -843,17 +858,44 @@ if ($HostKind -eq 'Container' -and $updaterJobName -and $proStore -and $runStore
             $ixWaits = ''; if ($updateWaits) { try { $ixW = & $updateWaits; if ($ixW) { $ixWaits = $(if ([string]$ixW.Reason) { [string]$ixW.Reason } else { 'the updater''s wait mark is set' }) } } catch { $ixWaits = 'whether an update waits could not be read' } }
             if (-not (Get-Command -Name New-SIJobStartTemplate -ErrorAction SilentlyContinue)) { . (Join-Path $siRoot 'engine/_shared/SI-UpdaterStart.ps1') }
             $ixJobName = (Get-SIIndexBuildContract).Job
-            $ixJobRunning = ''; $ixJobThere = $true
-            try { $ixEx = & $armSeams.Arm 'GET' ('{0}/{1}/executions' -f $armSeams.Base, $ixJobName) $null; $ixJobRunning = [string](Test-SIUpdateNowUpdaterRunning -Executions @($ixEx.value) -NowUtc $ixNow -RunLimitSeconds 86400) }
+            $ixJobRunning = ''; $ixJobThere = $true; $ixRecent = $true
+            try {
+                $ixEx = & $armSeams.Arm 'GET' ('{0}/{1}/executions' -f $armSeams.Base, $ixJobName) $null; $ixJobRunning = [string](Test-SIUpdateNowUpdaterRunning -Executions @($ixEx.value) -NowUtc $ixNow -RunLimitSeconds 86400)
+                $ixRecent = Test-SIIndexBuildJobStartedRecently -Executions @($ixEx.value) -NowUtc $ixNow
+            }
             catch { if ("$($_.Exception.Message)" -match '404|ResourceNotFound|not found') { $ixJobThere = $false } else { $ixJobRunning = 'whether the index build job runs could not be read' } }
-            $ixDec = Get-SIIndexBuildWindowDecision -Rows $ixRows -NowUtc $ixNow -NextRunUtc $ixDue.NextUtc -Busy $ixBusy -UpdaterRunning $ixUpd -UpdateWaits $ixWaits -IndexJobRunning $ixJobRunning -RunDue ([string]$ixDue.Action -in @('Start', 'Resume', 'Busy') -or [bool]$pipeRequest)
+            # #1316 follow-up: a SCHEDULED start (no run runs or resumes, no Run now) is the gap an index may take first on an
+            # install whose runs go back to back -- the run then starts late (Get-SIIndexBuildWindowDecision -StartDue)
+            $ixStartDue = ([string]$ixDue.Action -eq 'Start') -and -not [bool]$pipeRequest
+            $ixDec = Get-SIIndexBuildWindowDecision -Rows $ixRows -NowUtc $ixNow -NextRunUtc $ixDue.NextUtc -Busy $ixBusy -UpdaterRunning $ixUpd -UpdateWaits $ixWaits -IndexJobRunning $ixJobRunning -RunDue ([string]$ixDue.Action -in @('Resume', 'Busy') -or [bool]$pipeRequest) -StartDue $ixStartDue -IndexJobStartedRecently $ixRecent -LastGapHoldUtc $(if ($ixStartDue) { Read-SIIndexBuildGapHold -Invoke $proStore.Invoke -NowUtc $ixNow } else { $null })
+            # #1317: no index starts now -- the collection partitions, by the same window rule (a resumable piece of work). Its own
+            # rule: idle windows only (a scheduled start counts as a run due -- the busy-install path is the update's bounded step)
+            $ptStart = $false
+            if (-not $ixDec.Start -and $ptWork) {
+                $ptRunDue = ([string]$ixDue.Action -in @('Start', 'Resume', 'Busy') -or [bool]$pipeRequest)
+                $ptDec = Get-SIIndexBuildWindowDecision -Rows @(Get-SIPartitionWorkRow -NowUtc $ixNow) -NowUtc $ixNow -NextRunUtc $ixDue.NextUtc -Busy $ixBusy -UpdaterRunning $ixUpd -UpdateWaits $ixWaits -IndexJobRunning $ixJobRunning -RunDue $ptRunDue
+                if ($ptDec.Start) { $ixDec = $ptDec; $ptStart = $true }
+            }
             if ($ixDec.Start -and -not $ixJobThere) {
                 & $say 'WARN' ('index {0} on {1} waits: the index build job {2} is not there yet -- the next update makes it' -f $ixDec.Index.Name, $ixDec.Index.Table, $ixJobName)
+            } elseif ($ixDec.Start -and $ptStart) {
+                $ixJob = & $armSeams.Arm 'GET' ('{0}/{1}' -f $armSeams.Base, $ixJobName) $null
+                $ptKeep = Get-SIDataKeepCollectionsSetting -Globals @{ SI_Data_KeepCollections = $global:SI_Data_KeepCollections }
+                $ixEnv = [ordered]@{ SI_INDEXBUILD_TABLE = ''; SI_INDEXBUILD_INDEX = ''; SI_INDEXBUILD_MINUTES = [string][int]$ixDec.Minutes; SI_INDEXBUILD_FORCE = '0'; SI_INDEXBUILD_PARTITIONS = '1'; SI_INDEXBUILD_KEEP = [string][int]$ptKeep }
+                $ixR = & $armSeams.Arm 'POST' ('{0}/{1}/start' -f $armSeams.Base, $ixJobName) (New-SIJobStartTemplate -Job $ixJob -Env $ixEnv -What 'the index build job')
+                & $say 'INFO' ('the collection partitions: the index build job works on them now ({0}) -- execution {1}' -f $ixDec.Why, $(if ($ixR -and $ixR.PSObject.Properties['name']) { [string]$ixR.name } else { '(started)' }))
             } elseif ($ixDec.Start) {
                 $ixJob = & $armSeams.Arm 'GET' ('{0}/{1}' -f $armSeams.Base, $ixJobName) $null
-                $ixEnv = [ordered]@{ SI_INDEXBUILD_TABLE = [string]$ixDec.Index.Table; SI_INDEXBUILD_INDEX = [string]$ixDec.Index.Name; SI_INDEXBUILD_MINUTES = [string][int]$ixDec.Minutes; SI_INDEXBUILD_FORCE = $(if ($ixDec.Force) { '1' } else { '0' }) }
+                $ixEnv = [ordered]@{ SI_INDEXBUILD_TABLE = [string]$ixDec.Index.Table; SI_INDEXBUILD_INDEX = [string]$ixDec.Index.Name; SI_INDEXBUILD_MINUTES = [string][int]$ixDec.Minutes; SI_INDEXBUILD_FORCE = $(if ($ixDec.Force) { '1' } else { '0' }); SI_INDEXBUILD_PARTITIONSWITCH = $(if ($ptSwitch) { '1' } else { '0' }); SI_INDEXBUILD_CAP = $(if ($ixDec.PSObject.Properties['Cap'] -and $ixDec.Cap) { '1' } else { '0' }) }
                 $ixR = & $armSeams.Arm 'POST' ('{0}/{1}/start' -f $armSeams.Base, $ixJobName) (New-SIJobStartTemplate -Job $ixJob -Env $ixEnv -What 'the index build job')
                 & $say 'INFO' ('index {0} on {1}: the index build job builds it now ({2}) -- execution {3}' -f $ixDec.Index.Name, $ixDec.Index.Table, $ixDec.Why, $(if ($ixR -and $ixR.PSObject.Properties['name']) { [string]$ixR.name } else { '(started)' }))
+                # the gap before a scheduled run: THIS wake-up starts no run (the job takes the install's lock in its first
+                # minute; the next wake-up finds it held and the run waits -- never cancelled), said once here
+                if ($ixDec.HoldsRun) {
+                    $null = Save-SIIndexBuildGapHold -Invoke $proStore.Invoke -NowUtc $ixNow
+                    $ixHoldsRun = ('the scheduled run starts late: index {0} on {1} is built first (the runs go back to back, so no idle window comes); the next wake-up starts the run once the index build job lets the install go' -f $ixDec.Index.Name, $ixDec.Index.Table)
+                    & $say 'WARN' $ixHoldsRun
+                }
             }
         }
     } catch { & $say 'WARN' ('an index waiting for an idle window was not looked at by this wake-up ({0}) -- the next one tries again' -f $_.Exception.Message) }
@@ -941,7 +983,12 @@ $drain = $null
 try {
     # OPEN-04: a change without a verified signed request holds every NEW run (the sentence said above); a resume never
     $startHold = { [string]$signedHold.Text }.GetNewClosure()
+    # #1316 follow-up: the index build job was started for the gap before the scheduled run -- no run from this wake-up (it
+    # would take the install before the job does); held like a busy install, the next wake-up starts the run
+    if ($ixHoldsRun) { $drain = [pscustomobject]@{ Outcome = 'Blocked'; Runs = @(); Lock = [pscustomobject]@{ What = $ixHoldsRun } } }
+    else {
     $drain = Invoke-SIPipelineDrain -Definition $pipeDefinition -Control $control -LoadLast { $runStore.Load() } -RunOne $pipeRunOne -Request $pipeRequest -Holder $lockHolder -Log $say -UpdateRunning $updateRunning -CodeCurrent $codeCurrent -CloseCancelled $closeCancelled -UpdateWaits $updateWaits -StartUpdate $startUpdate -StartHold $startHold
+    }
 } catch {
     # #913: the pipeline lock could not be reached because Azure SQL answered a transient error for about a minute (the lock
     # calls retried it -- Invoke-SIPipelineLockCall). Nothing was started under it, so no run was affected: one WARN, a

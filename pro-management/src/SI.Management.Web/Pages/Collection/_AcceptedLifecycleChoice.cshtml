@@ -1,0 +1,12 @@
+@* #1355 the wall board's choice on Security recommendations > Summary and Detailed (AcceptedLifecycleChoice.cs): its label, its two
+   views in its order and words, each a link to the same page (Actual Risks = no parameter, the default), and -- while "Within
+   Accepted Lifecycle" is chosen -- its sentence of the accepted lifecycle in force; the shared segmented control. *@
+@model SI.Management.Web.Pages.Collection.AcceptedLifecycleChoice
+<div class="seg risk-view-choice" role="group" aria-label="@SI.Management.Web.Pages.Collection.AcceptedLifecycleChoice.Label" data-risk-view-choice data-risk-view="@(Model.Lifecycle ? "lifecycle" : "technical")">
+    <span class="seg-label">@SI.Management.Web.Pages.Collection.AcceptedLifecycleChoice.Label</span>
+    @foreach (var o in Model.Options)
+    {
+        <a href="@o.Href" data-risk-view-option="@o.Code" aria-current="@(o.Chosen ? "true" : "false")">@o.Label</a>
+    }
+</div>
+@if (Model.Lifecycle) { <p class="hint" data-lifecycle-line>@Model.Line</p> }

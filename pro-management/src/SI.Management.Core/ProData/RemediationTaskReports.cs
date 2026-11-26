@@ -133,6 +133,11 @@ public static class RemediationTaskReports
         + " WHEN DATEDIFF(day, t.FirstSeen, (SELECT ax.CollectionTime FROM sidata.Collection AS ax WHERE ax.CollectionId = t.CollectionId)) <= 90 THEN N'31-90 days'"
         + " WHEN DATEDIFF(day, t.FirstSeen, (SELECT ax.CollectionTime FROM sidata.Collection AS ax WHERE ax.CollectionId = t.CollectionId)) <= 180 THEN N'91-180 days' ELSE N'Over 180 days' END";
 
+    /// #1372 the same bands as <see cref="AgeExpr"/> over a collection time already read (<paramref name="time"/>).
+    private static string AgeOver(string time) => $"CASE WHEN DATEDIFF(day, t.FirstSeen, {time}) <= 30 THEN N'0-30 days'"
+        + $" WHEN DATEDIFF(day, t.FirstSeen, {time}) <= 90 THEN N'31-90 days'"
+        + $" WHEN DATEDIFF(day, t.FirstSeen, {time}) <= 180 THEN N'91-180 days' ELSE N'Over 180 days' END";
+
     /// Every dimension the reports filter and group by, in the order the page offers them.
     public static readonly IReadOnlyList<TaskDimension> Dimensions =
     [
@@ -201,7 +206,7 @@ public static class RemediationTaskReports
         var state = openOnly ? "t.State = N'open'" : "1 = 1";
         var head = $"""
 SELECT {group}t.CollectionId, t.TaskId, ISNULL(t.TaskKeyHash, HASHBYTES('SHA2_256', t.TaskKey)) AS TaskKeyHash, t.OwnerKey, t.CiId, t.AssetKey, t.AssetName, t.TaskName, t.Kind,
-       {ChannelOf("t")} AS Channel, t.Product, t.Version, t.Application, t.ApplicationPaths, t.State, t.ClosedWhy, t.ClosedAt, t.FirstSeen, t.LastSeen, t.ReopenCount,
+       {ChannelOf("t")} AS Channel, t.Product, t.Version, t.Application, t.ApplicationVersion, t.ApplicationPaths, t.State, t.ClosedWhy, t.ClosedAt, t.FirstSeen, t.LastSeen, t.ReopenCount,
        t.InThisCollection, t.CiOwner, t.CiDepartment, t.DepartmentId,
 """;
         if (!links)
@@ -408,7 +413,7 @@ LEFT JOIN cv ON cv.G = a.G
 SELECT LOWER(CONVERT(varchar(64), {from}.TaskId, 2)) AS TaskId, {from}.AssetKey, {from}.OwnerKey, COALESCE({from}.AssetName, {from}.AssetKey, {from}.OwnerKey) AS AssetName,
        {ProDataSql.TierExpr(from + ".Tier")} AS Tier, {from}.TaskName, {from}.Kind, {from}.State, {from}.ClosedWhy, {from}.Findings, {from}.Cves,
        {SevText(from + ".SevRank")} AS HighestSeverity, {from}.MaxRiskScore, {from}.MaxWeightedRisk,
-       {from}.Product, {from}.Version, {from}.Application, {from}.ApplicationPaths, {from}.FirstSeen, {from}.LastSeen, {from}.ClosedAt, {from}.ReopenCount,
+       {from}.Product, {from}.Version, {from}.Application, {from}.ApplicationVersion, {from}.ApplicationPaths, {from}.FirstSeen, {from}.LastSeen, {from}.ClosedAt, {from}.ReopenCount,
        CASE WHEN {from}.InThisCollection = 1 THEN N'{RemediationTaskSql.SeenNow}' ELSE N'{RemediationTaskSql.SeenKept}' END AS Seen,
        {from}.CiOwner, {from}.CiDepartment, (SELECT dd.Name FROM cfg.Department AS dd WHERE dd.DepartmentId = {from}.DepartmentId) AS Department, {from}.SecurityDomain,
        LOWER(CONVERT(varchar(64), {from}.TaskKeyHash, 2)) AS TaskGroup, {from}.Channel, {RatingText(from + ".RatingRank")} AS HighestRiskRating,
@@ -452,7 +457,7 @@ SELECT LOWER(CONVERT(varchar(64), {from}.TaskId, 2)) AS TaskId, {from}.AssetKey,
             Source = $"""
 SELECT LOWER(CONVERT(varchar(64), l.TaskId, 2)) + N'|' + l.FindingKey AS LinkKey, LOWER(CONVERT(varchar(64), l.TaskId, 2)) AS TaskId, t.TaskName, t.Kind, t.State AS TaskState,
        COALESCE(t.AssetName, t.AssetKey, t.OwnerKey) AS AssetName, t.AssetKey, l.FindingKey, l.Cve AS CveId, l.Title, l.Severity, l.RiskScore,
-       l.Version, t.Application, t.ApplicationPaths, CASE WHEN l.InThisCollection = 1 THEN N'{RemediationTaskSql.SeenNow}' ELSE N'{RemediationTaskSql.SeenKept}' END AS Seen,
+       l.Version, t.Application, t.ApplicationVersion, t.ApplicationPaths, CASE WHEN l.InThisCollection = 1 THEN N'{RemediationTaskSql.SeenNow}' ELSE N'{RemediationTaskSql.SeenKept}' END AS Seen,
        {RemediationTaskSql.DetectedPaths("t")} AS DetectedPaths
 FROM {from}
 JOIN sidata.RemediationTask AS t ON t.CollectionId = l.CollectionId AND t.TaskId = l.TaskId
@@ -527,6 +532,14 @@ GROUP BY r.Channel
     /// <summary>
     /// The values each dimension has among the open tasks of the marked collection the person may see (for a limited person:
     /// only the values of tasks and findings they may see -- never a value of a finding they may not see). Dim, Value.
+    /// <para>#1372 (owner 2026-11-25, "Cache task report values"; measured at internal: up to 7.98 s, 7.26 s of it buffer IO, on
+    /// every visit): the answer reads only the marked collection's own rows, so it is <see cref="GridSpec.Immutable"/> -- cached
+    /// long per collection (+ the person's visibility) like the other per-collection grids. The one LIVE part, the department's
+    /// NAME, is not in it: the Department dimension answers the department's id (<see cref="DepartmentIdValue"/>) and the page
+    /// puts the current name on it (<see cref="DepartmentNames"/>, cached briefly). The values are read in FOUR passes, not
+    /// one per dimension: every task dimension in ONE read of the open tasks (the task columns of IX_RemediationTask_Group),
+    /// every CI dimension in ONE read of their CIs (each CI once, not once per task), each unpivoted with CROSS APPLY
+    /// (VALUES ...); the IT services in one; every finding dimension in one read of the links.</para>
     /// </summary>
     public static GridSpec Values(RowVisibility? v)
     {
@@ -534,29 +547,76 @@ GROUP BY r.Channel
         var lf = scoped
             ? $"sidata.RemediationTaskFinding AS l JOIN sidata.Finding AS f ON f.CollectionId = l.CollectionId AND f.FindingId = l.FindingId WHERE l.CollectionId = {M} AND l.InThisCollection = 1 AND l.FindingId IS NOT NULL AND ({RemediationTaskSql.Visible(v!)})"
             : $"sidata.RemediationTaskFinding AS l WHERE l.CollectionId = {M}";
-        var parts = new List<string>();
-        foreach (var d in Dimensions)
-        {
-            // over vl (alias l) the finding values carry the link's column names, for a limited person too
-            var val = d.Expr;
-            parts.Add(d.Level switch
-            {
-                TaskDimLevel.Finding => $"SELECT N'{d.Key}' AS Dim, CONVERT(nvarchar(400), {val}) AS Value FROM vl AS l WHERE {val} IS NOT NULL",
-                TaskDimLevel.Service => $"SELECT N'{d.Key}' AS Dim, CONVERT(nvarchar(400), sv.ServiceName) AS Value FROM vt AS t JOIN sidata.CiService AS sv ON sv.CiId = t.CiId WHERE sv.ServiceName IS NOT NULL",
-                _ => $"SELECT N'{d.Key}' AS Dim, CONVERT(nvarchar(400), {val}) AS Value FROM vt AS t LEFT JOIN sidata.Ci AS c ON c.CiId = t.CiId WHERE {val} IS NOT NULL",
-            });
-        }
+        // over vl (alias l) the finding values carry the link's column names, for a limited person too
+        // the age bands over the collection's time read ONCE (ct), not three lookups of the collection per task (measured on the
+        // fixture: the per-task lookups were most of the statement's reads)
+        string Pair(TaskDimension d) => $"(N'{d.Key}', CONVERT(nvarchar(400), {(d.Key == "Department" ? DepartmentIdValue : d.Key == "Age" ? AgeOver("ct.CollectionTime") : d.Expr)}))";
+        var taskPairs = string.Join(",\n        ", Dimensions.Where(d => d.Level == TaskDimLevel.Task).Select(Pair));
+        var ciPairs = string.Join(",\n        ", Dimensions.Where(d => d.Level == TaskDimLevel.Ci).Select(Pair));
+        var linkPairs = string.Join(",\n        ", Dimensions.Where(d => d.Level == TaskDimLevel.Finding).Select(Pair));
+        var service = Dimensions.Single(d => d.Level == TaskDimLevel.Service);
         var vlCols = scoped ? "l.TaskId, l.Severity, f.RiskRating, f.SecurityDomain, f.Category, f.Subcategory" : "l.TaskId, l.Severity, l.RiskRating, l.SecurityDomain, l.Category, l.Subcategory";
+        // only the task columns the dimensions read (all of them in IX_RemediationTask_Group): never the whole task row
         var ctes = $"""
 vl0 AS (SELECT {vlCols} FROM {lf}),
-vt AS (SELECT t.* FROM sidata.RemediationTask AS t WHERE t.CollectionId = {M} AND t.State = N'open'{(scoped ? " AND EXISTS (SELECT 1 FROM vl0 WHERE vl0.TaskId = t.TaskId)" : "")}),
-vl AS (SELECT vl0.* FROM vl0 JOIN vt ON vt.TaskId = vl0.TaskId)
+vt AS (SELECT t.CollectionId, t.TaskId, t.CiId, t.Kind, t.Channel, t.Product, t.Tier, t.CiOwner, t.DepartmentId, t.FirstSeen
+       FROM sidata.RemediationTask AS t WHERE t.CollectionId = {M} AND t.State = N'open'{(scoped ? " AND EXISTS (SELECT 1 FROM vl0 WHERE vl0.TaskId = t.TaskId)" : "")}),
+vl AS (SELECT vl0.* FROM vl0 JOIN vt ON vt.TaskId = vl0.TaskId),
+ct AS (SELECT ax.CollectionTime FROM sidata.Collection AS ax WHERE ax.CollectionId = {M})
 """;
-        var source = "SELECT x.Dim + N'|' + x.Value AS DimValue, x.Dim, x.Value FROM (\n" + string.Join("\nUNION\n", parts) + "\n) AS x";
+        var source = $"""
+SELECT x.Dim + N'|' + x.Value AS DimValue, x.Dim, x.Value FROM (
+SELECT v.Dim, v.Value FROM vt AS t CROSS JOIN ct
+CROSS APPLY (VALUES {taskPairs}) AS v (Dim, Value)
+WHERE v.Value IS NOT NULL
+UNION
+SELECT v.Dim, v.Value FROM sidata.Ci AS c
+CROSS APPLY (VALUES {ciPairs}) AS v (Dim, Value)
+WHERE c.CiId IN (SELECT t.CiId FROM vt AS t) AND v.Value IS NOT NULL
+UNION
+SELECT N'{service.Key}' AS Dim, CONVERT(nvarchar(400), sv.ServiceName) AS Value FROM vt AS t JOIN sidata.CiService AS sv ON sv.CiId = t.CiId WHERE sv.ServiceName IS NOT NULL
+UNION
+SELECT v.Dim, v.Value FROM vl AS l
+CROSS APPLY (VALUES {linkPairs}) AS v (Dim, Value)
+WHERE v.Value IS NOT NULL
+) AS x
+""";
         return GridSql.Check(new GridSpec("remtaskrep-values" + (scoped ? "@dept" : ""), ctes, source, new GridColumn[]
         {
             new("DimValue", "Key", Hidden: true), new("Dim", "Dimension"), new("Value", "Value"),
-        }, "Dim", false, "DimValue", new[] { "CollectionId" }.Concat(v?.Parameters.Keys ?? Enumerable.Empty<string>()).Distinct(StringComparer.Ordinal).ToList(), Immutable: false));
+        }, "Dim", false, "DimValue", new[] { "CollectionId" }.Concat(v?.Parameters.Keys ?? Enumerable.Empty<string>()).Distinct(StringComparer.Ordinal).ToList(), Immutable: true));
+    }
+
+    /// #1372 what <see cref="Values"/> answers for the Department dimension: the department's id (the name is live, read apart).
+    public const string DepartmentIdValue = "t.DepartmentId";
+
+    /// #1372 every department's id and its CURRENT name (cfg.Department, a small table): the live part of the dimension values,
+    /// cached briefly -- a renamed department shows its new name within minutes, while the values stay cached long.
+    public static readonly GridSpec DepartmentNames = GridSql.Check(new GridSpec("remtaskrep-deptnames", "", """
+SELECT CONVERT(nvarchar(12), d.DepartmentId) AS DepartmentId, d.Name FROM cfg.Department AS d
+""", new GridColumn[]
+    {
+        new("DepartmentId", "Id"), new("Name", "Department"),
+    }, "Name", false, "DepartmentId", Array.Empty<string>(), Immutable: false));
+
+    /// #1372 the values read from the cache, with the department ids replaced by their current names (an id no department has
+    /// any more is left out: it cannot be filtered on by name). Dim -> values, sorted, as the page offers them.
+    public static IReadOnlyDictionary<string, IReadOnlyList<string>> ValuesByDimension(IEnumerable<IReadOnlyDictionary<string, object?>> values,
+        IEnumerable<IReadOnlyDictionary<string, object?>> departmentNames)
+    {
+        static string S(IReadOnlyDictionary<string, object?> r, string k) =>
+            r.TryGetValue(k, out var v) ? Convert.ToString(v, System.Globalization.CultureInfo.InvariantCulture) ?? "" : "";
+        var names = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var r in departmentNames) { var id = S(r, "DepartmentId"); if (id.Length > 0) names[id] = S(r, "Name"); }
+        var result = new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var g in values.GroupBy(r => S(r, "Dim"), StringComparer.OrdinalIgnoreCase))
+        {
+            var list = string.Equals(g.Key, "Department", StringComparison.OrdinalIgnoreCase)
+                ? g.Select(r => names.TryGetValue(S(r, "Value"), out var n) ? n : null).Where(n => !string.IsNullOrEmpty(n)).Select(n => n!)
+                : g.Select(r => S(r, "Value"));
+            result[g.Key] = list.Distinct(StringComparer.Ordinal).OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToList();
+        }
+        return result;
     }
 
     /// The dimension values a page address carries ("d.Os=windows|linux", several values joined with '|' or as several

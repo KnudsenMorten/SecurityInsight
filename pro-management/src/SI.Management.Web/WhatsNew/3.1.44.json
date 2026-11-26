@@ -1,0 +1,50 @@
+{
+  "version": "3.1.44",
+  "date": "2026-11-24",
+  "type": "feature",
+  "summary": "Large installations finish their runs much sooner: results are prepared as they arrive, only what changed is worked out again, and every run checks itself.",
+  "new": [
+    {
+      "title": "Only what changed is worked out again",
+      "text": "Findings are stored ready to show, and the data sync and the vulnerability connector work on what changed. Every run also checks a rotating seventh of the assets in full."
+    },
+    {
+      "title": "Finding history",
+      "text": "Each run is kept as finding states and checked every run. Pages and connectors read it only when that run was verified."
+    },
+    {
+      "title": "Totals from what changed",
+      "text": "Key figures and summary groups are worked out from what changed and compared with a full build every run."
+    },
+    {
+      "title": "Faster data sync and vulnerability report",
+      "text": "The data sync starts per report and loads in checked batches; the vulnerability report asks Defender in parallel within its limits."
+    },
+    {
+      "title": "Faster on large installations",
+      "text": "Old collections leave the database in one step, and the largest tables get columnstore indexes built when the installation is not busy."
+    }
+  ],
+  "fixes": [
+    {
+      "title": "One unreadable report no longer holds the run",
+      "text": "A report that could not be read because of a passing service problem shows its last complete result, marked with its date."
+    },
+    {
+      "title": "Parallel loading no longer blocks itself",
+      "text": "Risk Analysis workers loading findings at the same time no longer wait on each other."
+    },
+    {
+      "title": "Time limits on Azure reads",
+      "text": "Each Azure read has a time limit and a progress line each minute; a read that gives up is marked unknown, never empty."
+    },
+    {
+      "title": "Smaller fixes",
+      "text": "Mail can be set up through the update; the database load and a size recommendation go to support as numbers only."
+    },
+    {
+      "title": "First run after the update builds in full",
+      "text": "The first run after this update builds everything once in full; the runs after it are the faster ones."
+    }
+  ]
+}

@@ -10,6 +10,10 @@
 
       * NEVER fails or holds an update, NEVER grants or changes anything: every call here is a GET (or the Log Analytics
         query POST). Nothing is said when every permission is granted.
+        The ONE permission an update grants (#1390, owner 2026-11-25 "Yes, add the right") lives in its own file,
+        setup/_shared/SI-PermissionUpdateGrant.ps1 (Invoke-SIPermissionUpdateGrant: ONLY DeviceManagementApps.Read.All, read back --
+        where the update's sign-in may grant (a Support-app or person-run update); the updater identity may not, and then
+        it is one line naming Invardia's Support step.
       * What the identity holds is READ, never guessed:
           1. the directory: the identity's application permissions (Microsoft Graph appRoleAssignments) against the app
              roles of each API in the list;
@@ -66,6 +70,8 @@ $script:SIPermissionNoteText = @{
                                                    Empty = 'the Invardia support link carries no exposure score' }
     'DeviceManagementManagedDevices.Read.All' = @{ For = 'Intune devices: serial numbers and MAC addresses for the full asset details'
                                                    Empty = 'the serial number and MAC address columns from Intune stay empty' }
+    'DeviceManagementApps.Read.All'           = @{ For = 'Intune''s audit events: the proof that a managed device was deleted in Intune, so its asset retires at once (Intune deletion proof)'
+                                                   Empty = 'a device deleted in Intune waits the not-seen grace period before it is retired' }
     'UserAuthenticationMethod.Read.All'       = @{ For = 'the sign-in methods of each user'
                                                    Empty = 'the passwordless-only and MFA strength columns stay unknown' }
 }
@@ -98,8 +104,11 @@ function Get-SIPermissionNoteCatalog {
     foreach ($a in @($id.api)) {
         if (-not $a -or -not "$($a.resourceAppId)".Trim()) { continue }
         $roles = @(@($a.roles) | Where-Object { $_ } | ForEach-Object { [string]$_ })
-        if (-not $roles.Count) { continue }
-        $apis.Add([pscustomobject]@{ Resource = [string]$a.resource; ResourceAppId = ([string]$a.resourceAppId).Trim().ToLowerInvariant(); Roles = $roles })
+        # #1390: the roles an existing install gets through the Invardia Support step (conditionalRoles with grantedBy
+        # 'support') -- NOT in Roles (this note never names them); the update's one grant reads them
+        $support = @(@($a.conditionalRoles) | Where-Object { $_ -and $_.role -and $_.PSObject.Properties['grantedBy'] -and ([string]$_.grantedBy).Trim() -ieq 'support' } | ForEach-Object { [string]$_.role })
+        if (-not $roles.Count -and -not $support.Count) { continue }
+        $apis.Add([pscustomobject]@{ Resource = [string]$a.resource; ResourceAppId = ([string]$a.resourceAppId).Trim().ToLowerInvariant(); Roles = $roles; SupportRoles = $support })
     }
     $engines = New-Object System.Collections.Generic.List[string]
     $eng = Get-SIPermissionNoteProp $cat @('engines')

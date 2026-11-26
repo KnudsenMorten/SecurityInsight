@@ -346,7 +346,7 @@ feature here working normally.
 - **Microsoft's own sign-in in front of the web app.** ✅ 2026-11-15 -- The web app and its API sit behind the built-in
   authentication of Azure Container Apps. Every visitor signs in with Microsoft Entra before any page of SecurityInsight
   answers, so your organisation's Conditional Access, MFA and sign-in policies apply. Microsoft always shows the account
-  picker, so an admin can sign in with a separate admin account. No password and no client secret is stored anywhere:
+  picker, so an admin can sign in with a separate admin account. The sign-in has no password, client secret or certificate:
   the web app proves itself to Entra with its own managed identity. Who may do what is still decided inside
   SecurityInsight, by its roles and the groups you give them. A request without a valid Microsoft sign-in -- also one
   with made-up sign-in headers or tokens -- gets no data. It is switched on per installation by the support partner:

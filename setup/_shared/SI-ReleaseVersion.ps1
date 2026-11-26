@@ -185,17 +185,32 @@ function Get-SICommunityPublishDispatch {
         (3.1.16.1, 3.1.23.1 and 3.1.24.1 were published by hand from the tag). For a 4-part -Version this returns the exact
         dispatch -- the workflow run FROM the tag, stable channel, not a dry run (the workflow's default is a dry run):
             gh workflow run publish.yml -R <Repo> --ref SecurityInsight-v<version> -f solution=SecurityInsight -f version=<version> -f dryRun=false
-        @{ Needed; Tag; Args (the gh arguments); Command; Why }. A 3-part version: Needed $false (the tag push publishes it).
+        @{ Needed; Tag; Args (the gh arguments); Command; Why; Api = @{ Path; Body } (the same dispatch over the GitHub REST
+        API) }. A 3-part version: Needed $false (the tag push publishes it). -TagTriggerFourPart (live 3.1.43.3, 2026-11-23):
+        GitHub runs the workflow file OF THE TAGGED COMMIT -- a patch built on an older release carries the X.Y.Z-only trigger
+        even after main's file gained the 4-part lines; only when the tagged commit's own file triggers on a 4-part tag does the
+        push start it (Needed $false then: never published twice). Test-SIPublishWorkflowFourPart reads that file.
     #>
-    param([Parameter(Mandatory)][AllowEmptyString()][string]$Version, [string]$Repo = 'KnudsenMorten/AutomateIT', [string]$Solution = 'SecurityInsight')
+    param([Parameter(Mandatory)][AllowEmptyString()][string]$Version, [string]$Repo = 'KnudsenMorten/AutomateIT', [string]$Solution = 'SecurityInsight', [switch]$TagTriggerFourPart)
     $v = "$Version".Trim()
     $tag = '{0}-v{1}' -f $Solution, $v
     if ($v -notmatch '^\d{1,6}(\.\d{1,12}){3}$') {
-        return [pscustomobject]@{ Needed = $false; Tag = $tag; Args = @(); Command = ''; Why = ('{0} is not a 4-part version -- the tag push starts the publish workflow' -f $v) }
+        return [pscustomobject]@{ Needed = $false; Tag = $tag; Args = @(); Command = ''; Api = $null; Why = ('{0} is not a 4-part version -- the tag push starts the publish workflow' -f $v) }
+    }
+    if ($TagTriggerFourPart) {
+        return [pscustomobject]@{ Needed = $false; Tag = $tag; Args = @(); Command = ''; Api = $null; Why = ('the publish workflow of the tagged commit triggers on a 4-part tag -- the push of {0} starts it' -f $tag) }
     }
     $a = @('workflow', 'run', 'publish.yml', '-R', $Repo, '--ref', $tag, '-f', ('solution={0}' -f $Solution), '-f', ('version={0}' -f $v), '-f', 'dryRun=false')
-    [pscustomobject]@{ Needed = $true; Tag = $tag; Args = $a; Command = ('gh ' + ($a -join ' '))
+    $api = [pscustomobject]@{ Path = ('/repos/{0}/actions/workflows/publish.yml/dispatches' -f $Repo)
+                              Body = [ordered]@{ ref = $tag; inputs = [ordered]@{ solution = $Solution; version = $v; preview = 'false'; dryRun = 'false' } } }
+    [pscustomobject]@{ Needed = $true; Tag = $tag; Args = $a; Command = ('gh ' + ($a -join ' ')); Api = $api
                        Why = ('{0} is a 4-part version: the publish workflow''s tag trigger (X.Y.Z only) skips {1} -- it is started by hand from the tag' -f $v, $tag) }
+}
+
+function Test-SIPublishWorkflowFourPart {
+    <# PURE. Does this publish.yml text (the file AT the tagged commit) start on a pushed 4-part tag '<solution>-vX.Y.Z.N'? #>
+    param([AllowEmptyString()][string]$Text)
+    [bool]([regex]::IsMatch("$Text", "(?m)^\s*-\s*'\*-v\[0-9\]\+\.\[0-9\]\+\.\[0-9\]\+\.\[0-9\]"))
 }
 
 function Invoke-SICommunityPublishDispatch {
@@ -204,15 +219,23 @@ function Invoke-SICommunityPublishDispatch {
         say the exact command so it is never forgotten. -Gh { param([string[]]$A) } -> @{ Code; Out } is the seam (tests;
         default: the gh CLI when it is on PATH). Returns @{ Needed; Dispatched; Command; Line }. Never throws.
     #>
-    param([Parameter(Mandatory)][string]$Version, [scriptblock]$Gh, [string]$Repo = 'KnudsenMorten/AutomateIT')
-    $d = Get-SICommunityPublishDispatch -Version $Version -Repo $Repo
-    if (-not $d.Needed) { return [pscustomobject]@{ Needed = $false; Dispatched = $false; Command = ''; Line = '' } }
+    # -Api { param([string]$Path, $Body) } (live 3.1.43.3: gh is not signed in where the release runs): the GitHub REST dispatch
+    # with the PAT the caller read from Key Vault -- tried FIRST when given, gh after it. -TagTriggerFourPart: see
+    # Get-SICommunityPublishDispatch (the tag push publishes; nothing is dispatched).
+    param([Parameter(Mandatory)][string]$Version, [scriptblock]$Gh, [string]$Repo = 'KnudsenMorten/AutomateIT', [scriptblock]$Api, [switch]$TagTriggerFourPart)
+    $d = Get-SICommunityPublishDispatch -Version $Version -Repo $Repo -TagTriggerFourPart:$TagTriggerFourPart
+    if (-not $d.Needed) { return [pscustomobject]@{ Needed = $false; Dispatched = $false; Command = ''; Line = $(if ($TagTriggerFourPart) { $d.Why } else { '' }) } }
+    $apiWhy = ''
+    if ($Api) {
+        try { $null = & $Api $d.Api.Path $d.Api.Body; return [pscustomobject]@{ Needed = $true; Dispatched = $true; Command = $d.Command; Line = ('{0} -- started over the GitHub API (POST {1}, ref {2})' -f $d.Why, $d.Api.Path, $d.Tag) } }
+        catch { $apiWhy = ('the GitHub API dispatch failed ({0})' -f (("$($_.Exception.Message)" -replace '\s+', ' ').Trim())); if ($apiWhy.Length -gt 300) { $apiWhy = $apiWhy.Substring(0, 297) + '...' } }
+    }
     if (-not $Gh -and (Get-Command -Name gh -ErrorAction SilentlyContinue)) {
         $Gh = { param([string[]]$A) $global:LASTEXITCODE = 0; $o = @(& gh @A 2>&1 | ForEach-Object { "$_" }); [pscustomobject]@{ Code = [int]$LASTEXITCODE; Out = $o } }
     }
     if (-not $Gh) {
         return [pscustomobject]@{ Needed = $true; Dispatched = $false; Command = $d.Command
-                                  Line = ('{0}. gh is not on this machine -- RUN IT NOW: {1}' -f $d.Why, $d.Command) }
+                                  Line = ('{0}. {1}gh is not on this machine -- RUN IT NOW: {2}' -f $d.Why, $(if ($apiWhy) { "$apiWhy; " } else { '' }), $d.Command) }
     }
     try {
         $r = & $Gh $d.Args

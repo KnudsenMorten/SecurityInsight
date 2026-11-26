@@ -21,6 +21,15 @@
     CONTEXT ONLY: nothing here changes a risk factor or a score. A value the API does not give is left out (unknown),
     never written as false / 0.
 
+    #1373 DEFENDER'S OWN REMEDIATION TYPE (owner 2026-11-25: "why does fx update openssl show as policy" -> "Use Defender's type";
+    "problem is that you left out the remediation task"): the same read gives every recommendation's remediationType (Update |
+    Upgrade | ConfigurationChange | Uninstall), productName and vendor (Microsoft Defender for Endpoint API, Recommendation
+    resource type). A recommendation row of ANOTHER provider that names the same recommendation by title (Defender for Cloud's
+    "Update openssl" -- Defender's "<remediationType> <productName>", or its recommendationName) gets them as
+    si_recommendation_remediation_type / si_recommendation_product / si_recommendation_vendor (stored with the finding only,
+    never in a report's own columns): the remediation task's kind and tool follow Defender's type (finding-fields.locked.json).
+    No other row changes; no new permission (the same read).
+
     NEVER BLOCKS: a refused read (the permission is not granted yet) or a read that does not complete is said ONCE in
     plain words and the rows go on unchanged. PURE except Get-RADefenderRecommendationIndex. PowerShell 7, REST only.
 #>
@@ -113,7 +122,20 @@ function Get-RADefenderRecommendationKey {
         $k = 'va|' + $vendor + '|' + $product
         if (-not $keys.Contains($k)) { $keys.Add($k) }
     }
+    # #1373 by title: its own name, and "<remediationType> <productName>" (how Defender for Cloud names the same recommendation)
+    foreach ($nm in @((& $g 'recommendationName'), $(if ((& $g 'remediationType') -and $product) { (& $g 'remediationType') + ' ' + $product } else { '' }))) {
+        $nk = ConvertTo-RADefenderRecommendationTitleKey $nm
+        if ($nk -and -not $keys.Contains($nk)) { $keys.Add($nk) }
+    }
     return $keys.ToArray()
+}
+
+function ConvertTo-RADefenderRecommendationTitleKey {
+    <# PURE. #1373 a recommendation title as the index compares it: 'name|' + lower case, '_' and runs of spaces one space. '' for none. #>
+    param([AllowNull()][AllowEmptyString()][string]$Title)
+    $s = (([string]$Title).Trim().ToLowerInvariant() -replace '[\s_]+', ' ').Trim()
+    if (-not $s) { return '' }
+    'name|' + $s
 }
 
 function ConvertTo-RADefenderRecommendationEntry {
@@ -130,6 +152,13 @@ function ConvertTo-RADefenderRecommendationEntry {
     $a = & $g 'activeAlert'
     if ($a -is [bool]) { $e['si_active_alert'] = $a }
     elseif ($null -ne $a -and "$a" -match '^(?i)(true|false)$') { $e['si_active_alert'] = ("$a" -ieq 'true') }
+    # #1373 Defender's remediation type and the software it is about (as Defender states them)
+    $rt = ([string](& $g 'remediationType')).Trim()
+    if ($rt) {
+        $e['si_recommendation_remediation_type'] = $rt
+        $pn = ([string](& $g 'productName')).Trim(); if ($pn) { $e['si_recommendation_product'] = $pn }
+        $vn = ([string](& $g 'vendor')).Trim(); if ($vn) { $e['si_recommendation_vendor'] = $vn }
+    }
     if ($e.Count -eq 0) { return $null }
     return $e
 }
@@ -152,6 +181,10 @@ function Merge-RADefenderRecommendationEntry {
     $ab = if ($B.Contains('si_active_alert')) { [bool]$B['si_active_alert'] } else { $null }
     if ($aa -eq $true -or $ab -eq $true) { $e['si_active_alert'] = $true }
     elseif ($null -ne $aa -or $null -ne $ab) { $e['si_active_alert'] = $false }
+    # #1373 the remediation type and its software: the first entry that states them (one recommendation, one type)
+    foreach ($n in 'si_recommendation_remediation_type', 'si_recommendation_product', 'si_recommendation_vendor') {
+        if ($A.Contains($n) -and [string]$A[$n]) { $e[$n] = $A[$n] } elseif ($B.Contains($n) -and [string]$B[$n]) { $e[$n] = $B[$n] }
+    }
     return $e
 }
 
@@ -267,6 +300,56 @@ function Get-RADefenderRecommendationRowKeys {
 
 function Add-RADefenderRecommendationContext {
     <#
+    .SYNOPSIS  The Defender recommendation context on the rows (Add-RADefenderRecommendationContextCore), then #1373's title rule
+               for a Defender for Cloud / Exposure Graph recommendation the Defender for Endpoint list does not hold
+               (Add-RARecommendationTitleType). Returns the rows.
+    #>
+    param([AllowEmptyCollection()][object[]]$Rows = @(), [hashtable]$Index, [scriptblock]$Log, [string]$ReportName = '')
+    $out = Add-RADefenderRecommendationContextCore -Rows $Rows -Index $Index -Log $Log
+    $null = Add-RARecommendationTitleType -Rows @($out) -ReportName $ReportName
+    return , @($out)
+}
+
+function Get-RARecommendationTitleTypeReports {
+    <# PURE. #1373 the reports whose recommendations are Defender's own (Defender for Cloud, the Exposure Graph). #>
+    , @('^(?i)Azure_DefenderRecommendations_', '^(?i)Azure_Recommendations_')
+}
+
+function Add-RARecommendationTitleType {
+    <#
+        PURE. #1373 (live on internal 3.1.50, collection 126: 179 of 180 Defender for Cloud "Update <software>" rows had no type --
+        their assets are scanned by Defender for Cloud itself (containers, registries, servers without Defender for Endpoint), so
+        Defender for Endpoint's recommendation list does not hold them). Defender names such a recommendation "<remediationType>
+        <productName>" -- the type is the title's verb: a row of those reports titled "Update | Upgrade | Uninstall <one word>"
+        (the product id: no space) that the Defender list did not type gets that verb as si_recommendation_remediation_type and the
+        word as si_recommendation_product. Anything else (a title of several words, another report) is left as it is. Returns the
+        rows typed.
+    #>
+    param([AllowEmptyCollection()][object[]]$Rows = @(), [string]$ReportName = '')
+    $n = 0
+    $reports = Get-RARecommendationTitleTypeReports
+    foreach ($r in @($Rows)) {
+        if ($null -eq $r -or -not $r.PSObject.Properties['ConfigurationName']) { continue }
+        if ($r.PSObject.Properties['si_recommendation_remediation_type'] -and [string]$r.si_recommendation_remediation_type) { continue }
+        $cid = if ($r.PSObject.Properties['ConfigurationId']) { [string]$r.ConfigurationId } else { '' }
+        if ($cid -match '^(?i)(scid-|CVE-\d{4}-\d+$)') { continue }
+        $rep = $ReportName
+        if (-not $rep) { foreach ($c in 'ReportName', 'AssetDetectedInReportName') { if ($r.PSObject.Properties[$c] -and [string]$r.$c) { $rep = [string]$r.$c; break } } }
+        $ok = $false; foreach ($p in $reports) { if ($rep -match $p) { $ok = $true; break } }
+        if (-not $ok) { continue }
+        $m = [regex]::Match(([string]$r.ConfigurationName).Trim(), '^(?i)(update|upgrade|uninstall)\s+(\S+)$')
+        if (-not $m.Success) { continue }
+        $verb = $m.Groups[1].Value.Substring(0, 1).ToUpperInvariant() + $m.Groups[1].Value.Substring(1).ToLowerInvariant()
+        foreach ($kv in @(@('si_recommendation_remediation_type', $verb), @('si_recommendation_product', $m.Groups[2].Value))) {
+            if ($r.PSObject.Properties[$kv[0]]) { $r.($kv[0]) = $kv[1] } else { $r.PSObject.Properties.Add([System.Management.Automation.PSNoteProperty]::new($kv[0], $kv[1])) }
+        }
+        $n++
+    }
+    $n
+}
+
+function Add-RADefenderRecommendationContextCore {
+    <#
     .SYNOPSIS  Puts the exposure impact and the active alert of the Defender recommendation on every vulnerability and
                configuration row that names one. Returns the rows. Rows of other reports, and a run whose read did not
                complete, come back unchanged (the reason said once per run).
@@ -277,9 +360,16 @@ function Add-RADefenderRecommendationContext {
     if ($global:SI_RA_DefenderRecommendationContext -and ([string]$global:SI_RA_DefenderRecommendationContext).Trim().ToLowerInvariant() -in 'off', 'false', '0') { return , @($Rows) }
     # (a loop, not a pipeline over every row of the slice)
     $mineL = [System.Collections.Generic.List[object]]::new()
-    foreach ($x in @($Rows)) { if ($null -ne $x -and $x.PSObject.Properties['ConfigurationId'] -and [string]$x.ConfigurationId -match '^(?i)(scid-|CVE-\d{4}-\d+$)') { $mineL.Add($x) } }
+    # #1373 a recommendation row of another provider (not a Defender configuration id, not a CVE) with a title: Defender's
+    # remediation type by that title
+    $byTitleL = [System.Collections.Generic.List[object]]::new()
+    foreach ($x in @($Rows)) {
+        if ($null -eq $x -or -not $x.PSObject.Properties['ConfigurationId']) { continue }
+        if ([string]$x.ConfigurationId -match '^(?i)(scid-|CVE-\d{4}-\d+$)') { $mineL.Add($x); continue }
+        if ($x.PSObject.Properties['ConfigurationName'] -and ([string]$x.ConfigurationName).Trim()) { $byTitleL.Add($x) }
+    }
     $mine = $mineL.ToArray()
-    if ($mine.Count -eq 0) { return , @($Rows) }
+    if ($mine.Count -eq 0 -and $byTitleL.Count -eq 0) { return , @($Rows) }
     if ($null -eq $Index) { $Index = Get-RADefenderRecommendationIndex }
     if ($null -eq $Index -or -not $Index.Complete) {
         if (-not $global:RA_DefenderRecSaid) {
@@ -297,6 +387,17 @@ function Add-RADefenderRecommendationContext {
         }
         if ($null -eq $e) { continue }
         foreach ($name in 'si_exposure_impact', 'si_active_alert') {
+            if (-not $e.Contains($name)) { continue }
+            if ($r.PSObject.Properties[$name]) { $r.$name = $e[$name] } else { $r.PSObject.Properties.Add([System.Management.Automation.PSNoteProperty]::new($name, $e[$name])) }
+        }
+    }
+    # #1373 the title rows: Defender's remediation type and its software, nothing else
+    foreach ($r in $byTitleL) {
+        $tk = ConvertTo-RADefenderRecommendationTitleKey ([string]$r.ConfigurationName)
+        if (-not $tk -or -not $ix.ContainsKey($tk)) { continue }
+        $e = $ix[$tk]
+        if (-not $e.Contains('si_recommendation_remediation_type')) { continue }
+        foreach ($name in 'si_recommendation_remediation_type', 'si_recommendation_product', 'si_recommendation_vendor') {
             if (-not $e.Contains($name)) { continue }
             if ($r.PSObject.Properties[$name]) { $r.$name = $e[$name] } else { $r.PSObject.Properties.Add([System.Management.Automation.PSNoteProperty]::new($name, $e[$name])) }
         }

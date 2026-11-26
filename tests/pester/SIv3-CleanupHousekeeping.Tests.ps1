@@ -485,7 +485,7 @@ Describe '#1063 (3.0.30): a flow wake-up DURING a run (FlowBusy) reaches the cle
             $engine = 'flow'
             $g = @(. ([scriptblock]::Create($script:GuardBlock)) 3>&1 6>&1)
             $g -contains 'exited-0' | Should -BeFalse -Because 'a busy flow wake-up no longer ends at the guard'
-            ($g | ForEach-Object { "$_" }) -join "`n" | Should -Match 'this wake-up starts nothing -- it only does the paced housekeeping'
+            ($g | ForEach-Object { "$_" }) -join "`n" | Should -Match 'this wake-up starts nothing -- it removes old collections'' rows, paced by the database''s load and giving way to the data sync and a data out'
             [Environment]::GetEnvironmentVariable('SI_FLOW_HOUSEKEEPING_ONLY') | Should -Be '1'
             $SIv3WakeHealth.Count | Should -Be 0 -Because 'normal operation: no run-health row, no guard event'
             # 2. the runner, as the entry dispatches it (-HostKind Container), with the settings the Pro layer loaded

@@ -1,0 +1,18 @@
+{
+  "version": "3.1.47",
+  "date": "2026-11-25",
+  "type": "feature",
+  "summary": "Each remediation task has its own page.",
+  "new": [
+    {
+      "title": "A page for every remediation task",
+      "text": "Each remediation task has its own page: what to do, the application, its version and every path, the asset, the dates, and every finding behind the task, with export."
+    }
+  ],
+  "fixes": [
+    {
+      "title": "Signed requests show local times",
+      "text": "The signed requests page shows its times like every other page."
+    }
+  ]
+}

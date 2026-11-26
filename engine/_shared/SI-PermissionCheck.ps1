@@ -19,7 +19,7 @@
     permission the run actually needs still fails the run exactly as before.
 
     Result (Invoke-SIPermissionSelfCheck, kept in $global:SI_PermissionCheck):
-      { Engine; Identity (client id); IdentityKey; Label; Checked = @( { Area; Item; State = ok|missing|not-checked; Fix; When } ) }
+      { Engine; Identity (client id); IdentityKey; Label; Checked = @( { Area; Item; State = ok|missing|not-checked|support-step (#1390: a grantedBy support role not there yet -- information, never a gap); Fix; When } ) }
     The run-health END record carries ConvertTo-SIPermissionGapsJson of it (only the gaps and the not-checked items).
 
     PS 5.1 safe, no PowerShell modules (REST / .NET only). Shipped in both editions; it never loads a Pro path.
@@ -81,8 +81,10 @@ function Test-SIPermissionTruthy {
 }
 
 function New-SIPermissionItem {
-    param([string]$Area, [string]$Item, [string]$State, [string]$Fix, [string]$When)
-    [pscustomobject]@{ Area = $Area; Item = $Item; State = $State; Fix = $Fix; When = $When }
+    # State: ok | missing | not-checked | support-step (#1390: a 'grantedBy: support' role that is not there yet -- the
+    # Invardia Support step grants it; said as information, never a gap)
+    param([string]$Area, [string]$Item, [string]$State, [string]$Fix, [string]$When, [string]$GrantedBy = '')
+    [pscustomobject]@{ Area = $Area; Item = $Item; State = $State; Fix = $Fix; When = $When; GrantedBy = $GrantedBy }
 }
 
 function Test-SIPermissionApiRoles {
@@ -98,11 +100,20 @@ function Test-SIPermissionApiRoles {
     $out = New-Object System.Collections.Generic.List[object]
     $want = New-Object System.Collections.Generic.List[object]
     foreach ($r in @($Api.roles)) { if ($r) { $want.Add(@{ Role = [string]$r; When = '' }) } }
-    foreach ($c in @($Api.conditionalRoles)) { if ($c -and $c.role) { $want.Add(@{ Role = [string]$c.role; When = [string]$c.when }) } }
+    foreach ($c in @($Api.conditionalRoles)) {
+        if (-not $c -or -not $c.role) { continue }
+        $gb = ''; $step = ''
+        if ($c.PSObject.Properties['grantedBy']) { $gb = ([string]$c.grantedBy).Trim().ToLowerInvariant() }
+        if ($c.PSObject.Properties['supportStep']) { $step = ([string]$c.supportStep).Trim() }
+        $want.Add(@{ Role = [string]$c.role; When = [string]$c.when; GrantedBy = $gb; Step = $step })
+    }
     foreach ($w in $want) {
-        $state = if (-not $known) { 'not-checked' } elseif ($have.ContainsKey($w.Role.ToLowerInvariant())) { 'ok' } else { 'missing' }
-        $fixText = if ($state -eq 'not-checked' -and $Reason) { $Reason } else { $Fix }
-        $out.Add((New-SIPermissionItem -Area ([string]$Api.resource) -Item $w.Role -State $state -Fix $fixText -When $w.When))
+        $gb = [string]$w['GrantedBy']
+        $state = if (-not $known) { 'not-checked' } elseif ($have.ContainsKey($w.Role.ToLowerInvariant())) { 'ok' } elseif ($gb -eq 'support') { 'support-step' } else { 'missing' }
+        $fixText = if ($state -eq 'not-checked' -and $Reason) { $Reason }
+                   elseif ($state -eq 'support-step') { $(if ([string]$w['Step']) { 'granted by the Invardia Support step: ' + [string]$w['Step'] } else { 'granted by the Invardia Support step' }) }
+                   else { $Fix }
+        $out.Add((New-SIPermissionItem -Area ([string]$Api.resource) -Item $w.Role -State $state -Fix $fixText -When $w.When -GrantedBy $gb))
     }
     $out.ToArray()
 }
@@ -370,7 +381,8 @@ function ConvertTo-SIPermissionGapsJson {
         items = $list.ToArray(); more = ($gaps.Count - $keep.Count) }
     if ([string]$Check.Error) { $o['error'] = [string]$Check.Error }
     # the application permissions this run checked on its own token (every area but the Azure roles and the database)
-    $apiNames = @(@($Check.Checked) | Where-Object { $_ -and [string]$_.State -ne 'not-checked' -and @('Azure', 'Pro database') -notcontains [string]$_.Area } | ForEach-Object { '{0}|{1}' -f $_.Area, $_.Item })
+    # (#1390: a role the Support step grants is not in the fingerprint -- the update's note compares the PLAIN roles only)
+    $apiNames = @(@($Check.Checked) | Where-Object { $_ -and [string]$_.State -ne 'not-checked' -and @('Azure', 'Pro database') -notcontains [string]$_.Area -and [string]$_.GrantedBy -ne 'support' } | ForEach-Object { '{0}|{1}' -f $_.Area, $_.Item })
     if ($apiNames.Count) { $o['apiChecked'] = Get-SIPermissionListFingerprint -Names $apiNames }
     # -InputObject: a 1-item list stays a list in PS 5.1
     ConvertTo-Json -InputObject $o -Depth 5 -Compress
@@ -406,4 +418,11 @@ function Write-SIPermissionCheckSummary {
     if (-not $missing.Count) { Write-Host ('[permissions] {0}: every permission checked is in place{1}.' -f $who, $(if ($notChecked.Count) { ' ({0} could not be checked)' -f $notChecked.Count } else { '' })) }
     foreach ($m in $missing) { Write-Warning ('[permissions] {0} is missing {1} {2} -- {3}' -f $who, $m.Area, $m.Item, $m.Fix) }
     foreach ($a in @($notChecked | Group-Object Area)) { Write-Host ('[permissions] {0}: {1} not checked -- {2}' -f $who, $a.Name, $a.Group[0].Fix) }
+    # #1390: a role the Invardia Support step grants, not there yet: ONE information line each (only while its setting is
+    # on) -- never a warning, never a gap; what it feeds decides nothing until then
+    $g = @{}; try { $g = Get-SIPermissionGlobals } catch { $g = @{} }
+    foreach ($s in @(@($Check.Checked) | Where-Object { $_ -and $_.State -eq 'support-step' })) {
+        if ($s.When -and -not (Test-SIPermissionTruthy $(if ($g.ContainsKey([string]$s.When)) { $g[[string]$s.When] } else { $null }))) { continue }
+        Write-Host ('[permissions] {0}: {1} {2} is not granted yet -- {3}; until then what it feeds decides nothing (information, not a failure).' -f $who, $s.Area, $s.Item, $s.Fix)
+    }
 }

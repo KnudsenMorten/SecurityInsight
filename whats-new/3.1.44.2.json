@@ -1,0 +1,21 @@
+{
+  "version": "3.1.44.2",
+  "date": "2026-11-24",
+  "type": "fix-only",
+  "summary": "The finding history writes only what changed; bundled applications get their own tasks; disabled service principals are handled like disabled users.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "Finding history writes only what changed",
+      "text": "A finding that did not change keeps its state, so each run records only new, changed and closed findings."
+    },
+    {
+      "title": "Bundled applications get their own tasks",
+      "text": "A library bundled in several applications is one task per application, named after its install folder, with full paths and the application version."
+    },
+    {
+      "title": "Disabled service principals handled like disabled users",
+      "text": "A disabled service principal no longer counts as a vulnerable asset, even with high privileges."
+    }
+  ]
+}

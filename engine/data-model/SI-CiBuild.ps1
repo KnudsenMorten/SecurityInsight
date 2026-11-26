@@ -80,7 +80,8 @@ function Get-SICiUnnamedDeviceName {
     param([AllowEmptyString()][string]$RecordKey)
     $id = [string]$RecordKey; $i = $id.IndexOf(':'); if ($i -ge 0) { $id = $id.Substring($i + 1) }
     if (-not $id) { return $null }
-    if (Get-Command -Name Get-SISyntheticAssetName -ErrorAction SilentlyContinue) { return (Get-SISyntheticAssetName -Engine 'device' -Id $id) }
+    # #1389 per device: `Test-Path function:` (0.08 ms), not Get-Command (8 ms) -- SI-AssetName.ps1 is loaded at the top
+    if (Test-Path -Path 'function:Get-SISyntheticAssetName') { return (Get-SISyntheticAssetName -Engine 'device' -Id $id) }
     $clean = ($id -replace '[^A-Za-z0-9]', ''); if (-not $clean) { return $null }
     $take = [Math]::Min(8, $clean.Length)
     'unnamed-device-' + $clean.Substring($clean.Length - $take, $take).ToLowerInvariant()

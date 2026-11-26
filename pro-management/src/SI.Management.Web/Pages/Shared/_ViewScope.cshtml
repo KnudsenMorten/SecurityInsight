@@ -1,9 +1,20 @@
-@* THE "What you're looking at" line of every view (ViewScope.cs, owner 2026-10-19): directly under the page title, from
-   the page's real state -- the run, the lifecycle, the other defaults, the person's filters as chips, "Show everything"
-   and the definitions with the numbers from the settings. *@
+@* THE "What you're looking at" statement of every view (ViewScope.cs, owner 2026-10-19), from the page's real state -- the
+   run, the lifecycle, the other defaults, the person's filters as chips, "Show everything" and the definitions with the
+   numbers from the settings.
+   #1386 (owner 2026-11-25: "i feel the si views contain much noise that takes of space" -- chose "One line"): the
+   statement is the normal informative text of a view, so it sits INSIDE the collapsed "About" -- every word kept, one
+   click away. What stays visible is what the person did: the filters in force as removable chips (_ViewScopeChips).
+   A collection view's header (_Header) puts it in its own "About this page" (view-data "ViewScopeInAbout" = true); any
+   other page gets its own collapsed "About this view" here. *@
 @model SI.Management.Web.Pages.ViewScope
 @{
     var s = Model;
+    var inAbout = ViewData["ViewScopeInAbout"] is true;
+}
+@if (!inAbout)
+{
+    <partial name="~/Pages/Shared/_ViewScopeChips.cshtml" model="s" />
+    @Html.Raw("<details class=\"about\" data-about data-vs-about><summary>About this view</summary>")
 }
 <div class="view-scope" data-view-scope role="note" aria-label="What you're looking at">
     <p class="vs-line">
@@ -29,3 +40,4 @@
         </details>
     }
 </div>
+@if (!inAbout) { @Html.Raw("</details>") }

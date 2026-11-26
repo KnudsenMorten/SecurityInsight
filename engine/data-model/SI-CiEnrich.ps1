@@ -918,7 +918,7 @@ function Set-SICiCriticality {
     # #496 INHERITED from the business services that own the CI (Set-SICiServices): their strictest criticality wins when
     # its factor is higher than the CI's own -- the CI and its findings carry the service's criticality
     $svcCrit = [string]$Ci['si_service_criticality']
-    if ($svcCrit -and (Get-Command -Name Get-SICiCriticalityEntry -ErrorAction SilentlyContinue)) {
+    if ($svcCrit -and (Test-Path -Path 'function:Get-SICiCriticalityEntry')) {
         $se = Get-SICiCriticalityEntry -Mapping $Mapping -Section 'criticality' -Value $svcCrit -Owner $CmdbOwner
         if ($se -and [double]$se.factor -gt $factor) {
             $factor = [double]$se.factor; $Ci['si_cmdb_criticality_level'] = [string]$se.level
@@ -935,7 +935,7 @@ function Set-SICiCriticality {
     }
     # #496 the services' strictest data sensitivity, when it weighs more than the CI's own
     $svcSens = [string]$Ci['si_service_data_sensitivity']
-    if ($svcSens -and (Get-Command -Name Get-SICiCriticalityEntry -ErrorAction SilentlyContinue)) {
+    if ($svcSens -and (Test-Path -Path 'function:Get-SICiCriticalityEntry')) {
         $se = Get-SICiCriticalityEntry -Mapping $Mapping -Section 'dataSensitivity' -Value $svcSens -Owner $CmdbOwner
         if ($se -and ($null -eq $sensEntry -or [double]$se.factor -gt [double]$sensEntry.factor)) { $sensEntry = $se; $sens = $svcSens; $source['data_sensitivity_inherited_from'] = 'service' }
     }

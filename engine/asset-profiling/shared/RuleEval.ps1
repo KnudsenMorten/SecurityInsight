@@ -430,7 +430,7 @@ function Invoke-SIRuleEvalSoftwareConditions {
         if (-not $script:SIRuleIndexes.Contains('softwareRuleFallbacks') -or $null -eq $script:SIRuleIndexes['softwareRuleFallbacks']) { $script:SIRuleIndexes['softwareRuleFallbacks'] = @{} }
     }
     # the module missing (a stripped copy of the engine): today's answer, counted as a fallback
-    if (-not (Get-Command -Name Test-SISoftwareSpecConditions -ErrorAction SilentlyContinue)) {
+    if (-not (Test-Path -Path 'function:Test-SISoftwareSpecConditions')) {
         if ($hasIdx) { $script:SIRuleIndexes['softwareRuleFallbacks'][$DeviceId] = 'module-missing' }
         return $true
     }

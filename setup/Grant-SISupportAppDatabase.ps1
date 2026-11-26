@@ -1,13 +1,22 @@
 <#
 .SYNOPSIS
-    SecurityInsight Pro -- the Invardia Support app holds BOTH parts of its database access: its place in the database
-    admin group, and its own database user in each product database. Run once per install that is already there.
-    PLAN BY DEFAULT; -Apply writes. It only ever ADDS.
+    SecurityInsight Pro -- LEGACY ONLY: the STANDING database admin earlier releases gave the Invardia Support app (its
+    place in the database admin group, and db_owner for its own database user). REFUSED unless -LegacyStandingAccess.
 
 .DESCRIPTION
-    THE PRODUCT DOES THIS NOW: the install's database setup job (caj-si-dbinit) makes the Invardia Support app's own database user (in the install's run, and a support repair, that names the Support app)
-    as its own identity -- at the install and on every update -- so no person needs database admin rights for it. This
-    script stays as a fallback: run it only when Invardia support asks for it.
+    NO STANDING ADMIN (framework SECAUDIT-1a; owner 2026-11-25: "the old support scripts can only give just-in-time access,
+    never permanent"). The Invardia Support app keeps only its own READ-ONLY database user (si_support_read); admin comes
+    only just in time, through the signed support grant procedures, for at most 8 hours at the level you consented to.
+    That access is put in place by the install's database setup job (caj-si-dbinit), by setup\Grant-SISupportAccess.ps1
+    -AppId <id> -Level <troubleshoot|setup> (you, the customer) and by setup\Install-SISupportGrantProcedure.ps1 (Invardia
+    support, in a Support session) -- use those.
+
+    WITHOUT -LegacyStandingAccess THIS SCRIPT REFUSES (in every mode, also the plan): it says the commands above and
+    changes nothing (exit 1). -LegacyStandingAccess (OFF; only on Invardia's word, for an install that cannot use the
+    just-in-time grant yet) runs the earlier model described below. To take standing admin away again: Invardia support's
+    setup\Remove-SISupportStandingAccess.ps1.
+
+    THE EARLIER MODEL (-LegacyStandingAccess only):
 
     The Invardia Support app is an application in YOUR tenant that you created and consented to for support. Setup
     scripts that touch the Pro database (a setting, a grant, a repair) are run for you through it. For that it must be
@@ -44,11 +53,15 @@
 .PARAMETER GroupName
     The admin group's name, used only when the server's administrator is not a group at that moment.
 
+.PARAMETER LegacyStandingAccess
+    OFF. Only on Invardia's word: runs the earlier standing-admin model. Without it the script refuses and changes nothing.
+
 .EXAMPLE
-    .\setup\Grant-SISupportAppDatabase.ps1 -AppId <the Support app's client id>
-    The plan: what is there and what would be changed. Nothing is changed.
+    .\setup\Grant-SISupportAccess.ps1 -AppId <the Support app's client id> -Level troubleshoot
+    What to run instead: the Support app's read-only database user and the just-in-time support grant.
 .EXAMPLE
-    .\setup\Grant-SISupportAppDatabase.ps1 -AppId <the Support app's client id> -Apply
+    .\setup\Grant-SISupportAppDatabase.ps1 -AppId <the Support app's client id> -LegacyStandingAccess
+    LEGACY, on Invardia's word only -- the plan of the earlier standing model. Nothing is changed.
 
 .LINK
     https://invardia.com/docs/si/scripts/Grant-SISupportAppDatabase/
@@ -63,6 +76,8 @@ param(
     [string]$ResourceGroupName,
     [string]$GroupName = 'grp-si-sql-admins',
     [switch]$Apply,
+    # OFF: the earlier STANDING admin model, only on Invardia's word (framework SECAUDIT-1a). Without it: refused.
+    [switch]$LegacyStandingAccess,
     [switch]$PassThru
 )
 
@@ -74,6 +89,18 @@ if ($WhatIfPreference) { $Apply = [switch]$false }   # -WhatIf = the plan: nothi
 $siExit = 0
 try {
 $ErrorActionPreference = 'Stop'
+# #1374 SECAUDIT-1a (owner 2026-11-25): no standing admin for the Support app -- REFUSED before anything is read or signed
+# in, unless -LegacyStandingAccess. The just-in-time path is what to run instead.
+if (-not $LegacyStandingAccess) {
+    $lvl = 'troubleshoot'
+    Write-Host 'REFUSED: this script gives the Invardia Support app STANDING database admin (db_owner, the SQL admin group) -- earlier releases'' model. SecurityInsight gives it only its read-only database user (si_support_read); admin comes only just in time, through the signed support grant procedures (at most 8 hours, at the level you consented to). Nothing was read or changed.' -ForegroundColor Red
+    Write-Host '  Run instead (you, the customer, in this install''s folder):' -ForegroundColor Yellow
+    Write-Host ('    ./setup/Grant-SISupportAccess.ps1 -AppId {0} -Level {1}' -f $(if ($AppId) { $AppId } else { '<the Support app''s client id>' }), $lvl) -ForegroundColor Yellow
+    Write-Host '  Invardia support, in the install''s Support session: ./setup/Install-SISupportGrantProcedure.ps1 -ResourceGroup <rg> -Server <sql server> -Databases ''<pro>;<ledger>''' -ForegroundColor Yellow
+    Write-Host '  Only on Invardia''s word: -LegacyStandingAccess runs the earlier standing model.' -ForegroundColor DarkGray
+    if ($PassThru) { [pscustomobject]@{ Ok = $false; Refused = 'standing admin without -LegacyStandingAccess (SECAUDIT-1a)' } }
+    exit 1   # (the finally below still ends the script's transcript)
+}
 $siRoot = Split-Path -Parent $PSScriptRoot
 . ([IO.Path]::Combine($PSScriptRoot, '_shared', 'SI-SupportAppDatabase.ps1'))
 # Azure over native REST, no PowerShell module. An existing sign-in in this process (a support session, the guided
@@ -167,8 +194,9 @@ if ($Apply) {
         exit 1   # (the finally below still ends the script's transcript)
     }
 }
+Write-Host '  LEGACY (-LegacyStandingAccess, on Invardia''s word): the earlier STANDING admin model -- setup\Remove-SISupportStandingAccess.ps1 takes it away again' -ForegroundColor Yellow
 $res = Invoke-SISupportAppDatabaseEnsure -ClientId $AppId -Databases $dbs -RecordDatabase $recordDb -Graph $graph -Sql $sql -GetAdmin $getAdmin -SetAdmin $setAdmin `
-    -CallerAppId $callerApp -GroupName $GroupName -Apply:$Apply -Say $say -By ('setup: ' + $(if ($callerApp) { 'the Support app' } else { $callerId }))
+    -CallerAppId $callerApp -GroupName $GroupName -Apply:$Apply -LegacyStandingAccess:$LegacyStandingAccess -Say $say -By ('setup: ' + $(if ($callerApp) { 'the Support app' } else { $callerId }))
 foreach ($p in @($res.Problems)) { Write-Warning $p }
 if (-not $Apply) { Write-Host 'Plan only -- nothing was changed. Run again with -Apply.' -ForegroundColor Yellow }
 elseif ($res.Ok) { Write-Host 'Done: the Invardia Support app is a member of the database admin group and has its own database user, with the owner role, in every product database.' -ForegroundColor Green }

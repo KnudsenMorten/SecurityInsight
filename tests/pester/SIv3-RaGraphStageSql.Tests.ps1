@@ -118,6 +118,39 @@ Describe 'the attack-path graph in SQL' -Skip:(-not $script:HasSql) {
         Write-RAGraphStageNote; Write-RAGraphStageNote
         @($script:RAGsLog | Where-Object { $_ -match 'that are themselves vulnerable devices' }).Count | Should -Be 1
     }
+    It '#1310: a WHOLE count is counted in the report''s slices -- the same number as one build of every path, and it beats after each slice' {
+        # live at a large install 2026-11-22 (SUP-2026-00674): one build of the whole graph for the count took 7,039 s and wrote nothing
+        $set = Sync-RAGraphStage -Stream $script:Stream -Hunt (New-RAGsHunt -Graph $script:G) -TargetRows 50 -Pause { }
+        $script:RAStreamOn = $true; $script:RAStream = $script:Stream
+        $link = New-RAGpsCiIndex -Key '_ciKey' -Columns @('_ciKey', 'si_ci_id', 'si_in_scope_') -Rows @()
+        $peer = New-RAGpsCiIndex -Key '_peerKey' -Columns @('_peerKey', 'peer_tier') -Rows @()
+        $whole = Get-RAGraphStagePlan -Query (Get-RAGsRendered -Query (Get-RAGsCatalogQuery Detailed) -AsCount)
+        $whole | Should -Not -BeNullOrEmpty
+        [long]$whole.Count | Should -Be 1
+        # as before: no slices given -- one build of every path
+        $script:RAGpsCountSlices = 0
+        $one = [long](Invoke-RAGraphStageAnswer -Plan $whole -Link $link -Peer $peer)._SIDirectRows[0].Count
+        $one | Should -Be $script:Ref.Count
+        # the count asked whole while the report reads in 8 slices: counted slice by slice, the same number
+        $beats = New-Object System.Collections.Generic.List[string]
+        $sliced = Invoke-RAGraphStageSlicedCount -Plan $whole -Slices 8 -Link $link -Peer $peer -OnSlice { param($d, $t) $beats.Add(('{0}/{1}' -f $d, $t)) }.GetNewClosure() -Log { }
+        [long]$sliced._SIDirectRows[0].Count | Should -Be $one
+        @($beats) | Should -Be @(1..8 | ForEach-Object { '{0}/8' -f $_ })
+        $script:RAGpsCountFromStage | Should -BeTrue
+        # and the hook takes that way by itself when Invoke-RAReadCount has set the report's slices
+        $script:RAGpsCountSlices = 8; $script:RAGpsCountFromStage = $false
+        try { $hooked = [long](Invoke-RAGraphStageAnswer -Plan $whole -Link $link -Peer $peer)._SIDirectRows[0].Count } finally { $script:RAGpsCountSlices = 0 }
+        $hooked | Should -Be $one
+        $script:RAGpsCountFromStage | Should -BeTrue
+        # a slice's own count, a row read and a group count are not touched by it
+        $script:RAGpsCountSlices = 8
+        try {
+            $s3 = Get-RAGraphStagePlan -Query (Get-RAGsRendered -Query (Get-RAGsCatalogQuery Detailed) -Count 8 -Index 3 -AsCount)
+            $r3 = Get-RAGraphStagePlan -Query (Get-RAGsRendered -Query (Get-RAGsCatalogQuery Detailed) -Count 8 -Index 3)
+            [long](Invoke-RAGraphStageAnswer -Plan $s3 -Link $link -Peer $peer)._SIDirectRows[0].Count | Should -Be @((Invoke-RAGraphStageAnswer -Plan $r3 -Link $link -Peer $peer)._SIDirectRows).Count
+        } finally { $script:RAGpsCountSlices = 0 }
+        Write-Host ("RAGS-EQUIV #1310 whole count in 8 slices: {0} = {1} (one build), 8 beats" -f [long]$sliced._SIDirectRows[0].Count, $one)
+    }
     It 'a part answered 504 twice is read as two halves, and a part too large too -- every row once' {
         $first = @{}
         $hunt = New-RAGsHunt -Graph $script:G -OnPart {

@@ -51,6 +51,8 @@ if (-not (Get-Command -Name Get-SIObjectLedgerProvider -ErrorAction SilentlyCont
 if (-not (Get-Command -Name Get-SIObjectLedgerSubset -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot 'identity\SI-ObjectLedgerStore.ps1') }
 if (-not (Get-Command -Name Invoke-SICiGrouping -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot 'SI-CiBuildSql.ps1') }
 if (-not (Get-Command -Name Invoke-SICiClassification -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot 'SI-Classification.ps1') }
+# the ledger's seam (New-SIRecordSqlInvoke -> Invoke-SIRecordSqlDb) is loaded here, never assumed from the job (SUP-2026-00687)
+if (-not (Get-Command -Name Invoke-SIRecordSqlDb -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot 'SI-RecordSql.ps1') }
 # #1057 retire at once on proof of deletion (per source, off by default)
 if (-not (Get-Command -Name Invoke-SIDeletionProof -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot 'SI-DeletionProof.ps1') }
 # #533 (b): disabled accounts and devices -- SI_DisabledAssets_Correlate (engine/_shared)

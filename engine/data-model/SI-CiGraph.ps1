@@ -392,7 +392,7 @@ function Set-SICiServices {
 function Get-SICiServiceKeyText {
     <# PURE. One business-service lookup key: '<kind>|<value>' in lower case (the CMDB key form, Get-SICiCmdbKey, when loaded). #>
     param([Parameter(Mandatory)][string]$Kind, [AllowNull()][AllowEmptyString()][string]$Value)
-    if (Get-Command -Name Get-SICiCmdbKey -ErrorAction SilentlyContinue) { return (Get-SICiCmdbKey -Kind $Kind -Value $Value) }
+    if (Test-Path -Path 'function:Get-SICiCmdbKey') { return (Get-SICiCmdbKey -Kind $Kind -Value $Value) }
     $v = ([string]$Value).Trim().ToLowerInvariant()
     if (-not $v) { return '' }
     $Kind + '|' + $v

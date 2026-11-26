@@ -26,9 +26,9 @@ BeforeAll {
     # container), Platform (authConfig platform enabled), Drop (what the job's drop records: removed | none | kept | refused;
     # $null = a job image that does not know it -- no row), NoJob.
     function script:New-SdWorld([hashtable]$Opt = @{}) {
-        $o = @{ Setting = '1'; Front = $false; Platform = $true; Drop = 'removed'; NoJob = $false }
+        $o = @{ Setting = '1'; Front = $false; Platform = $true; Drop = 'removed'; NoJob = $false; Exec = 'Succeeded'; LateRow = 0 }
         foreach ($k in $Opt.Keys) { $o[$k] = $Opt[$k] }
-        $script:SW = @{ Opt = $o; Calls = New-Object System.Collections.Generic.List[string]; Starts = New-Object System.Collections.Generic.List[object]; Row = $null; Sql = New-Object System.Collections.Generic.List[string] }
+        $script:SW = @{ Opt = $o; Calls = New-Object System.Collections.Generic.List[string]; Starts = New-Object System.Collections.Generic.List[object]; Row = $null; Sql = New-Object System.Collections.Generic.List[string]; RowReads = 0 }
         $script:SW.Arm = {
             param($Method, $Path, $Body)
             $W = $script:SW
@@ -52,12 +52,13 @@ BeforeAll {
                 if ($W.Opt.Drop) { $W.Row = New-SIDbInitSigninDropRecordValue -State $W.Opt.Drop -Run $env['SI_DBINIT_RUN'] -Tables $(if ($W.Opt.Drop -eq 'removed') { 1 } else { 0 }) -Why $(if ($W.Opt.Drop -eq 'refused') { 'The specified schema name "signin" either does not exist or you do not have permission to use it.' } else { '' }) }
                 return [pscustomobject]@{ name = 'caj-si-dbinit-sd1' }
             }
-            if ($Method -eq 'GET' -and $Path -match '/executions/') { return [pscustomobject]@{ properties = [pscustomobject]@{ status = 'Succeeded' } } }
+            if ($Method -eq 'GET' -and $Path -match '/executions/') { return [pscustomobject]@{ properties = [pscustomobject]@{ status = [string]$W.Opt.Exec } } }
             $null
         }
         $script:SW.Store = [pscustomobject]@{ Server = 'sqlserver.example'
             Invoke = { param($Sql, $Params, $Mode) $W = $script:SW; $W.Sql.Add([string]$Sql)
-                if ($Sql -match "N'DbJobSigninDrop'" -and $W.Row) { return , @(@{ Value = $W.Row }) }
+                # LateRow = N: the run writes its row only after N reads (it was still going when Azure said Failed)
+                if ($Sql -match "N'DbJobSigninDrop'") { $W.RowReads++; if ($W.Row -and $W.RowReads -gt [int]$W.Opt.LateRow) { return , @(@{ Value = $W.Row }) } }
                 , @() } }
         $script:SW
     }
@@ -108,17 +109,18 @@ Describe 'the job''s side: the store is no longer made, and dropped -- by the ex
     It 'the job judges the read-back: <Want>' -ForEach @(
         @{ Row = @{ Existed = 1; TablesDropped = 2; SchemaLeft = 0; TablesLeft = 0; Why = '' }; Want = 'removed'; Line = 'the earlier sign-in''s database tables are removed' }
         @{ Row = @{ Existed = 0; TablesDropped = 0; SchemaLeft = 0; TablesLeft = 0; Why = '' }; Want = 'none';    Line = 'none left' }
-        @{ Row = @{ Existed = 1; TablesDropped = 0; SchemaLeft = 1; TablesLeft = 1; Why = 'a table outside the schema signin refers to one of its tables -- nothing was dropped' }; Want = 'kept'; Line = 'support step' }
+        @{ Row = @{ Existed = 1; TablesDropped = 0; SchemaLeft = 1; TablesLeft = 1; Why = 'a table outside the schema signin refers to one of its tables -- nothing was dropped' }; Want = 'kept'; Line = 'the next update tries again' }
     ) {
         $row = $Row
         $r = Invoke-SIDbInitSigninDrop -Sql { param($db, $q, $p, $m) , @($row) }.GetNewClosure() -Database 'sqldb-si-pro'
         $r.State | Should -Be $Want
         $r.Line | Should -Match ([regex]::Escape($Line))
     }
-    It 'a refusal is "refused" with a support step in plain words -- never a throw, never a failure of the run' {
+    It 'a refusal is "refused" in plain words, the product tries again -- never a support step, never a throw, never a failure of the run' {
         $r = Invoke-SIDbInitSigninDrop -Sql { param($db, $q, $p, $m) throw 'Cannot drop the schema ''signin'', because it does not exist or you do not have permission.' } -Database 'sqldb-si-pro'
         $r.State | Should -Be 'refused'
-        $r.Line | Should -Match 'could not be removed .*the update goes on; support step: the support partner removes them through the Support app'
+        $r.Line | Should -Match 'are still there .*the update goes on; the next update tries again'
+        foreach ($st in 'kept', 'refused', 'removed', 'none', 'skipped') { Get-SIDbInitSigninDropLine -State $st -Why 'x' | Should -Not -Match '(?i)support (step|partner)|through the Support app' }
         $r.Line | Should -Not -Match '#\d|SECURE-WEB|G5' -Because 'plain words, no internal numbers'
         $v = New-SIDbInitSigninDropRecordValue -State refused -Run 'r1' -Why ('x' * 600)
         $v.Length | Should -BeLessOrEqual 400
@@ -169,11 +171,42 @@ Describe 'the updater''s side: only where the web app reads back switched' {
         $r = Invoke-Sd @{ Drop = 'none' }
         $r.State | Should -Be 'none'; $r.Line | Should -Be 'the earlier sign-in''s database tables: none left'; $r.Support | Should -BeNullOrEmpty
     }
-    It 'a refusal: a warning line and a support step, never a failure' {
-        $r = Invoke-Sd @{ Drop = 'refused' }
-        $r.State | Should -Be 'refused'
-        $r.Line | Should -Match 'could not be removed'
-        $r.Support | Should -Match 'the support partner removes the earlier sign-in''s database tables .*through the Support app'
+    It 'a refusal / tables kept: one information line, the next update tries again -- no support step, never a failure' {
+        foreach ($d in 'refused', 'kept') {
+            $r = Invoke-Sd @{ Drop = $d }
+            $r.State | Should -Be $d
+            $r.Line | Should -Match 'are still there .*the next update tries again'
+            $r.Support | Should -BeNullOrEmpty
+        }
+    }
+    It 'live 2026-11-23: Azure says the execution Failed while the run is still going, the run then records "none" -> state none, no warning, no support step' {
+        $r = Invoke-Sd @{ Drop = 'none'; Exec = 'Failed'; LateRow = 2 }
+        $r.State | Should -Be 'none'
+        $r.Line | Should -Be 'the earlier sign-in''s database tables: none left'
+        $r.Support | Should -BeNullOrEmpty
+        $script:SW.Starts.Count | Should -Be 1 -Because 'the run is waited for, never started twice'
+        $script:SW.RowReads | Should -Be 3 -Because 'its own row is read again until it is there'
+        ($script:Lines -join "`n") | Should -Not -Match 'WARNING'
+    }
+    It 'an early Failed, then the run records "kept": one information line, no support step' {
+        $r = Invoke-Sd @{ Drop = 'kept'; Exec = 'Failed'; LateRow = 1 }
+        $r.State | Should -Be 'kept'
+        $r.Line | Should -Match 'the next update tries again'
+        $r.Line | Should -Not -Match '(?i)support'
+        $r.Support | Should -BeNullOrEmpty
+    }
+    It 'a run whose execution never ends: ONE information line, the next update removes them -- no warning, no support step' {
+        $r = Invoke-Sd @{ Drop = $null; Exec = 'Running' }
+        $r.State | Should -Be 'not-run'
+        $r.Line | Should -Match 'did not finish removing them \(execution caj-si-dbinit-sd1: TimedOut\) -- the next update removes them'
+        $r.Support | Should -BeNullOrEmpty
+        ($script:Lines -join "`n") | Should -Not -Match 'WARNING'
+    }
+    It 'an ended execution without this run''s row (Failed, nothing written in the wait): the next update removes them, no support step' {
+        $r = Invoke-Sd @{ Drop = $null; Exec = 'Failed' }
+        $r.State | Should -Be 'not-run'
+        $r.Line | Should -Match 'did not finish removing them \(execution caj-si-dbinit-sd1: Failed\)'
+        $r.Support | Should -BeNullOrEmpty
     }
     It 'this update''s database setup run already did it: its result is said and no second run is started' {
         $global:SI_UpdaterSigninDrop = [pscustomobject]@{ Run = 'pre1'; State = 'removed' }
@@ -195,9 +228,10 @@ Describe 'the updater''s side: only where the web app reads back switched' {
 Describe 'the built-in sign-in step calls it ONLY after a switch that read back, next to the key-ring move' {
     BeforeEach { $script:Lines.Clear(); $global:SI_UpdaterFailures = $null }
     AfterAll { $global:SI_UpdaterFailures = $null }
-    It 'off, plan, a failed or rolled-back apply: never called; apply applied / in-place: called with the web app''s id; a support step is recorded' {
+    It 'off, plan, a failed or rolled-back apply: never called; apply applied / in-place: called with the web app''s id; its line is information -- no warning, no support step' {
         $script:sdCalls = New-Object System.Collections.Generic.List[object]
-        $script:sdAnswer = [pscustomobject]@{ State = 'refused'; Line = 'the earlier sign-in''s database tables could not be removed (x)'; Support = 'the support partner removes the earlier sign-in''s database tables (the schema signin) through the Support app' }
+        # (a Support text from an older drop function is ignored too: the step never records one)
+        $script:sdAnswer = [pscustomobject]@{ State = 'refused'; Line = 'the earlier sign-in''s database tables are still there (x) -- the update goes on; the next update tries again'; Support = 'an old support text' }
         $sd = { param($a) $script:sdCalls.Add($a); $script:sdAnswer }
         $e = @{ SI_UPDATER_WEB_APP = 'ca-si-management' }
         foreach ($case in @(@{ Mode = 'plan'; State = 'in-place'; Ok = $true }, @{ Mode = 'apply'; State = 'failed'; Ok = $false }, @{ Mode = 'apply'; State = 'rolled-back'; Ok = $false })) {
@@ -214,9 +248,12 @@ Describe 'the built-in sign-in step calls it ONLY after a switch that read back,
         $script:sdCalls.Count | Should -Be 2
         $script:sdCalls[0].WebAppId | Should -BeLike '/subscriptions/s/resourceGroups/rg/providers/Microsoft.App/containerApps/*'
         $script:sdCalls[0].SIRoot | Should -Be $script:SIRoot
-        ($script:Lines -join "`n") | Should -Match 'WARNING: the earlier sign-in''s database tables could not be removed'
-        @($global:SI_UpdaterFailures | Where-Object { $_.Kind -eq 'customer-action' -and $_.Text -match '^Support-app step: the support partner removes the earlier sign-in' }).Count | Should -Be 1 -Because 'the same step twice is one entry'
+        ($script:Lines -join "`n") | Should -Match '(?m)^the earlier sign-in''s database tables are still there \(x\)'
+        ($script:Lines -join "`n") | Should -Not -Match 'WARNING: the earlier sign-in'
+        @($global:SI_UpdaterFailures | Where-Object { $_.Text -match 'sign-in''s database tables|old support text' }).Count | Should -Be 0 -Because 'no support step and no arm-403 for this step'
         $src = (Get-Command Invoke-SIUpdaterBuiltInAuthStep).ScriptBlock.ToString()
         $src.IndexOf('KeyRingMove $args2') | Should -BeLessThan $src.IndexOf('& $SigninDrop')
+        $drop = $src.Substring($src.IndexOf('& $SigninDrop'), $src.IndexOf('$r | Add-Member -NotePropertyName SigninDrop') - $src.IndexOf('& $SigninDrop'))
+        $drop | Should -Not -Match 'arm-403|Add-SIUpdaterCustomerAction|WARNING'
     }
 }

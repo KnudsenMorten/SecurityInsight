@@ -194,6 +194,8 @@ public sealed class DetailModel : PageModel
     /// The links this finding is in (active first, then the undone ones as history); empty when there is none or the
     /// database does not record them yet.
     public IReadOnlyList<FindingLink> Links { get; private set; } = Array.Empty<FindingLink>();
+    /// #1364 what else reported the same weakness on this CI (evidence on this finding, never a finding of its own).
+    public IReadOnlyList<FindingEvidenceRow> Evidence { get; private set; } = Array.Empty<FindingEvidenceRow>();
     /// The CI Risk Analysis keyed this finding on (null = not recorded yet: linking is offered after the next run).
     public string? LinkOwner { get; private set; }
     [BindProperty] public string? LinkId { get; set; }
@@ -207,6 +209,7 @@ public sealed class DetailModel : PageModel
             var owners = await links.OwnersAsync(f.CollectionId, new[] { f.FindingId }, ct);
             LinkOwner = owners is not null && owners.TryGetValue(f.FindingId, out var o) ? o : null;
             Links = await links.ForFindingAsync(LinkOwner, FindingLinks.KeyOf(f.ConfigurationId, f.Cve), ct);
+            Evidence = await links.EvidenceAsync(f.CollectionId, f.FindingId, ct);
         }
         catch (Exception ex) when (ex is not OperationCanceledException) { _log.LogWarning(ex, "the finding's links could not be read"); }
     }

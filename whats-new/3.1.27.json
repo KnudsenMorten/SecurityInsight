@@ -11,7 +11,7 @@
     },
     {
       "title": "The web app reads no Azure details",
-      "text": "The environment report's facts come from the update, so the web app needs no read right on your resources."
+      "text": "The System Documentation's facts come from the update, so the web app needs no read right on your resources."
     },
     {
       "title": "Settings change only through the update",

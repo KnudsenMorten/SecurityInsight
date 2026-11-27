@@ -807,9 +807,12 @@ function Invoke-SIOpenAIAccessCheck {
     # failed sign-in); 16, not 1, so a reasoning model can still answer
     $body = @{ messages = @(@{ role = 'user'; content = 'ping' }); max_completion_tokens = 16 } | ConvertTo-Json -Depth 5 -Compress
     # the probe through the shared Azure OpenAI seam (engine\_shared\SI-OpenAIAuth.ps1: the host is checked first)
+    # the probe CAPTURED and called through & $fn: a .GetNewClosure() block cannot see a function dot-sourced into this
+    # script's scope (engine\_shared\SI-OpenAIAuth.ps1), only global ones
+    $probeFn = Get-Command -Name Get-SIOpenAIProbeStatus -CommandType Function -ErrorAction Stop
     $send = {
         param($Headers)
-        Get-SIOpenAIProbeStatus -Uri $uri -Headers $Headers -Body $body -TimeoutSec 60
+        & $probeFn -Uri $uri -Headers $Headers -Body $body -TimeoutSec 60
     }.GetNewClosure()
     $getToken = { Get-SIAzureToken -Resource 'https://cognitiveservices.azure.com/' }
     # the engine's identity: read by name, then its role on this account (or above it)

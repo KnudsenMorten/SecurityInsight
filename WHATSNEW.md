@@ -1,5 +1,19 @@
 # What's new in SecurityInsight
 
+## 3.1.55 · 2026-11-27 · Fix-only
+
+The Azure recommendation reports complete again, and AI requests run again.
+
+### New features
+
+None in this version.
+
+### Fixes
+
+- **Azure recommendation reports complete again** - Since 3.1.53 the detailed Azure recommendations report and the detailed Defender for Cloud recommendations report ended not complete at every run. Their findings were kept, and none were closed.
+- **AI requests run again** - With AI switched on, AI requests have been refused since 3.1.42 because the daily AI limit could not be read. They run again, within the daily limit, and the saved AI answers are kept again.
+- **The same fix in other places** - The quick notice to Invardia when support access is opened or closed, the update progress reported to Invardia, and the setup check of the Azure OpenAI sign-in read their data the same way and are fixed too.
+
 ## 3.1.54 · 2026-11-27 · Fix-only
 
 Large installations show their newest data again.

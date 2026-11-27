@@ -194,7 +194,10 @@ function Start-SIUpdateTrack {
         if (-not $Transport) {
             if (Get-Module -Name Pester) { return (& $out $false 'a test session never posts without its own transport') }
             $to = $script:SIUpdateTrackConfig.TimeoutSec
-            $Transport = { param($u, $h, $b) Send-SIUpdateTrackHttp -Uri $u -Headers $h -Body $b -TimeoutSec $to }.GetNewClosure()
+            # the sender CAPTURED and called through & $fn: the transport is kept for the whole run and called from other
+            # functions, and a .GetNewClosure() block cannot see a function dot-sourced into the updater's script scope
+            $sendFn = Get-Command -Name Send-SIUpdateTrackHttp -CommandType Function -ErrorAction Stop
+            $Transport = { param($u, $h, $b) & $sendFn -Uri $u -Headers $h -Body $b -TimeoutSec $to }.GetNewClosure()
         }
         $base = "$BaseUrl".Trim().TrimEnd('/')
         if (-not $base) { $base = $script:SIUpdateTrackConfig.DefaultBase }

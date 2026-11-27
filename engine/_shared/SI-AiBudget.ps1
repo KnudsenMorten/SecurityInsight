@@ -53,12 +53,18 @@ function New-SIAiBudgetBlobLedger {
     #>
     param([Parameter(Mandatory)][string]$Account, [string]$Container = 'sistaging')
     $state = @{ Account = $Account; Container = $Container; Writer = (Get-SIAiBudgetWriter); Mine = @{} }
+    # the blob functions CAPTURED here and called through & $fn: a .GetNewClosure() block cannot see a function that was
+    # dot-sourced into a script scope (engine\_shared\SI-AzRest.ps1), only global ones
+    $listFn = Get-Command -Name Get-SIBlobList -CommandType Function -ErrorAction SilentlyContinue
+    $getFn = Get-Command -Name Get-SIBlobContent -CommandType Function -ErrorAction SilentlyContinue
+    $setFn = Get-Command -Name Set-SIBlobContent -CommandType Function -ErrorAction SilentlyContinue
     @{
         Read = {
             param($Day)
             $sum = 0L
-            foreach ($b in @(Get-SIBlobList -Account $state.Account -Container $state.Container -Prefix ("ai-usage/{0}/" -f $Day))) {
-                $bytes = Get-SIBlobContent -Account $state.Account -Container $state.Container -Blob $b.Name -AllowMissing
+            if (-not $listFn -or -not $getFn) { throw 'the AI usage ledger cannot be read in this job (Get-SIBlobList / Get-SIBlobContent not loaded from engine\_shared\SI-AzRest.ps1)' }
+            foreach ($b in @(& $listFn -Account $state.Account -Container $state.Container -Prefix ("ai-usage/{0}/" -f $Day))) {
+                $bytes = & $getFn -Account $state.Account -Container $state.Container -Blob $b.Name -AllowMissing
                 if ($null -eq $bytes) { continue }
                 $o = [Text.Encoding]::UTF8.GetString([byte[]]$bytes) | ConvertFrom-Json
                 $sum += [long]$o.tokens
@@ -70,7 +76,8 @@ function New-SIAiBudgetBlobLedger {
             if (-not $state.Mine.ContainsKey($Day)) { $state.Mine[$Day] = 0L }
             $state.Mine[$Day] = [long]$state.Mine[$Day] + [long]$Tokens
             $json = @{ writer = $state.Writer; day = $Day; tokens = [long]$state.Mine[$Day]; at = [datetime]::UtcNow.ToString('o') } | ConvertTo-Json -Compress
-            $null = Set-SIBlobContent -Account $state.Account -Container $state.Container -Blob ("ai-usage/{0}/{1}.json" -f $Day, $state.Writer) -Bytes ([Text.Encoding]::UTF8.GetBytes($json)) -ContentType 'application/json'
+            if (-not $setFn) { throw 'the AI usage ledger cannot be written in this job (Set-SIBlobContent not loaded from engine\_shared\SI-AzRest.ps1)' }
+            $null = & $setFn -Account $state.Account -Container $state.Container -Blob ("ai-usage/{0}/{1}.json" -f $Day, $state.Writer) -Bytes ([Text.Encoding]::UTF8.GetBytes($json)) -ContentType 'application/json'
         }.GetNewClosure()
     }
 }

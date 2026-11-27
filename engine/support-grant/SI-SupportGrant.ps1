@@ -453,7 +453,9 @@ function Start-SISupportAccessHeartbeat {
         if (-not $SubscriptionId -or -not $ResourceGroup) { return (& $res $false '' 'where the install''s jobs are is not known (SI_JOBS_SUBSCRIPTIONID / SI_JOBS_RESOURCEGROUP)') }
         if (-not $Arm) {
             if (-not (Get-Command -Name Invoke-SIArm -ErrorAction SilentlyContinue)) { return (& $res $false '' 'no Azure client is loaded') }
-            $Arm = { param($Method, $Path, $Body) Invoke-SIArm -Method $Method -Path $Path -ApiVersion $ArmApi -Body $Body }.GetNewClosure()
+            # a PLAIN block, used only in this function (it sees $ArmApi and Invoke-SIArm by scope). Never .GetNewClosure(): that
+            # block cannot see Invoke-SIArm, dot-sourced into the job's script scope (engine\_shared\SI-AzRest.ps1).
+            $Arm = { param($Method, $Path, $Body) Invoke-SIArm -Method $Method -Path $Path -ApiVersion $ArmApi -Body $Body }
         }
         if (-not (Get-Command -Name New-SIJobStartTemplate -ErrorAction SilentlyContinue)) { . ([IO.Path]::Combine($PSScriptRoot, '..', '_shared', 'SI-UpdaterStart.ps1')) }
         $path = '/subscriptions/{0}/resourceGroups/{1}/providers/Microsoft.App/jobs/{2}' -f $SubscriptionId, $ResourceGroup, $Job

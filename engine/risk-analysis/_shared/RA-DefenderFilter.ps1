@@ -283,7 +283,11 @@ function Get-RARecSnapshotPartialError {
     if ($null -eq $script:RARecSnapVerdict) {
         if (-not $Read) {
             $ws = if (-not [string]::IsNullOrWhiteSpace([string]$global:SI_WorkspaceResourceId)) { [string]$global:SI_WorkspaceResourceId } else { [string]$global:WorkspaceResourceId }
-            $Read = { param($Kql) $laRows = Invoke-LogAnalyticsKqlQuery -WorkspaceResourceId $ws -Query $Kql; $laRows }.GetNewClosure()
+            # A PLAIN scriptblock, invoked below in THIS function (it sees $ws and the caller's commands by scope). Never
+            # .GetNewClosure(): that binds the block to a new dynamic module whose command lookup skips the engine's script
+            # scope, where Invoke-LogAnalyticsKqlQuery is dot-sourced -- every run then read "is not recognized" and the
+            # Defender recommendation reports never completed (3.1.53/3.1.54).
+            $Read = { param($Kql) $laRows = Invoke-LogAnalyticsKqlQuery -WorkspaceResourceId $ws -Query $Kql; $laRows }
         }
         $why = ''
         $kql = Get-SIAzureRecPartialKql

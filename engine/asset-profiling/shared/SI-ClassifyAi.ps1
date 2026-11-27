@@ -149,12 +149,18 @@ function New-SIClassifyAnswerStore {
             Write = { param($Engine, $Map) $st.Mem[$Engine] = $Map }.GetNewClosure()
         }
     }
+    # the blob functions CAPTURED here and called through & $fn: a .GetNewClosure() block cannot see a function that was
+    # dot-sourced into a script scope (engine\_shared\SI-AzRest.ps1), only global ones
+    $listFn = Get-Command -Name Get-SIBlobList -CommandType Function -ErrorAction SilentlyContinue
+    $getFn = Get-Command -Name Get-SIBlobContent -CommandType Function -ErrorAction SilentlyContinue
+    $setFn = Get-Command -Name Set-SIBlobContent -CommandType Function -ErrorAction SilentlyContinue
     @{
         Read = {
             param($Engine)
             $all = @{}
-            foreach ($b in @(Get-SIBlobList -Account $st.Account -Container $st.Container -Prefix ("ai-answers/{0}/" -f $Engine))) {
-                $bytes = Get-SIBlobContent -Account $st.Account -Container $st.Container -Blob $b.Name -AllowMissing
+            if (-not $listFn -or -not $getFn) { throw 'the AI answer cache cannot be read in this job (Get-SIBlobList / Get-SIBlobContent not loaded from engine\_shared\SI-AzRest.ps1)' }
+            foreach ($b in @(& $listFn -Account $st.Account -Container $st.Container -Prefix ("ai-answers/{0}/" -f $Engine))) {
+                $bytes = & $getFn -Account $st.Account -Container $st.Container -Blob $b.Name -AllowMissing
                 if ($null -eq $bytes) { continue }
                 $o = [Text.Encoding]::UTF8.GetString([byte[]]$bytes) | ConvertFrom-Json -AsHashtable
                 foreach ($k in @($o.Keys)) {
@@ -167,7 +173,8 @@ function New-SIClassifyAnswerStore {
         Write = {
             param($Engine, $Map)
             $json = $Map | ConvertTo-Json -Compress -Depth 10
-            $null = Set-SIBlobContent -Account $st.Account -Container $st.Container -Blob ("ai-answers/{0}/{1}.json" -f $Engine, $st.Writer) -Bytes ([Text.Encoding]::UTF8.GetBytes($json)) -ContentType 'application/json'
+            if (-not $setFn) { throw 'the AI answer cache cannot be written in this job (Set-SIBlobContent not loaded from engine\_shared\SI-AzRest.ps1)' }
+            $null = & $setFn -Account $st.Account -Container $st.Container -Blob ("ai-answers/{0}/{1}.json" -f $Engine, $st.Writer) -Bytes ([Text.Encoding]::UTF8.GetBytes($json)) -ContentType 'application/json'
         }.GetNewClosure()
     }
 }

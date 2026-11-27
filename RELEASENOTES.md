@@ -13,6 +13,17 @@ SecurityInsight Pro and the Pro trial install from invardia.com, never from GitH
 [invardia.com/trial](https://invardia.com/trial/), and your installation page there gives your two lines.
 <!-- /install lines -->
 
+## v3.1.55 — the Azure recommendation reports complete again
+
+### Fixes
+- **Two Azure recommendation reports complete again.** Since 3.1.53 the detailed Azure recommendations report and the
+  detailed Defender for Cloud recommendations report ended not complete at every run, because the check of whether the newest
+  recommendations were read in full could not run. Their findings were kept, and none were closed.
+- **With AI switched on, AI requests have been refused since 3.1.42 because the daily AI limit could not be read; they
+  run again now, within the daily limit.** The saved AI answers are read and kept again too.
+- **The same fix in a few other places that read data the same way**: the quick notice to Invardia when support access
+  is opened or closed, the update progress reported to Invardia, and the setup check of the Azure OpenAI sign-in.
+
 ## v3.1.54 — large installations show their newest data again
 
 ### Fixes

@@ -1,0 +1,21 @@
+{
+  "version": "3.1.55",
+  "date": "2026-11-27",
+  "type": "fix-only",
+  "summary": "The Azure recommendation reports complete again, and AI requests run again.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "Azure recommendation reports complete again",
+      "text": "Since 3.1.53 the detailed Azure recommendations report and the detailed Defender for Cloud recommendations report ended not complete at every run. Their findings were kept, and none were closed."
+    },
+    {
+      "title": "AI requests run again",
+      "text": "With AI switched on, AI requests have been refused since 3.1.42 because the daily AI limit could not be read. They run again, within the daily limit, and the saved AI answers are kept again."
+    },
+    {
+      "title": "The same fix in other places",
+      "text": "The quick notice to Invardia when support access is opened or closed, the update progress reported to Invardia, and the setup check of the Azure OpenAI sign-in read their data the same way and are fixed too."
+    }
+  ]
+}

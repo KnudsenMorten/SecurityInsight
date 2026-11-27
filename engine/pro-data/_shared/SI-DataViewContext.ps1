@@ -316,6 +316,12 @@ function Get-SIDataIssueContextSql {
     @"
 SET NOCOUNT ON;
 SET XACT_ABORT ON;
+-- #1432 ONE SPELLING, EVERY RUN: a key, an item and an asset name are grouped ignoring case and trailing blanks (the database's
+-- collation), and the spelling a group kept was whichever the plan met first -- two runs over the same rows stored 'CVE-1' once
+-- and 'cve-1 ' the next time. Each is now the group's BYTE-FIRST spelling: the smallest by its UTF-16LE bytes, with an end mark
+-- (0x01) added before the compare so that two spellings that differ only by trailing blanks or trailing zero bytes -- which a
+-- text compare, and even a plain binary compare, calls equal -- are told apart (the mark is taken off again); the groups, their
+-- counts and their order are unchanged.
 -- the collection's findings, read ONCE (#1213 B3): only the findings that carry a key, only the columns used below
 SELECT $fsel INTO #f FROM sidata.Finding AS f
 WHERE f.CollectionId = @CollectionId AND ((f.Cve IS NOT NULL AND f.Cve <> N'') OR (f.ConfigurationId IS NOT NULL AND f.ConfigurationId <> N''));
@@ -328,22 +334,44 @@ WITH m AS (
 )
 INSERT #k (K, FindingId, Rn)
 SELECT m.K, m.FindingId, ROW_NUMBER() OVER (PARTITION BY m.K ORDER BY m.RiskScore DESC, m.FindingId) FROM m;
-CREATE TABLE #v (K NVARCHAR(256) COLLATE DATABASE_DEFAULT NOT NULL, Col TINYINT NOT NULL, Item NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NOT NULL, Rn INT NOT NULL);
-INSERT #v (K, Col, Item, Rn)
-SELECT k.K, c.Col, LTRIM(RTRIM(s.[value])), k.Rn
+-- #1432 (a large install: the prepared context 4 h): each key's column VALUES are made distinct first (byte for byte, the most
+-- risky finding's place kept: MIN(Rn)) and only those are split into items -- the findings of one CVE carry the same
+-- description, remediation, fix ... thousands of times, and every copy was split and sorted. The items and their places are
+-- the same as before: an item's place is the lowest place of any finding whose value holds it, which is the lowest place of
+-- the distinct values that hold it.
+-- (grouped on the value's SHA-256 and length only -- never on the long text itself, which a grouping sorts and spills -- and the
+-- value then read from ONE finding of each group: every finding of a group holds exactly these bytes)
+CREATE TABLE #u0 (K NVARCHAR(256) COLLATE DATABASE_DEFAULT NOT NULL, Col TINYINT NOT NULL, Rn INT NOT NULL, F BIGINT NOT NULL);
+INSERT #u0 (K, Col, Rn, F)
+SELECT k.K, c.Col, MIN(k.Rn), MIN(k.FindingId)
 FROM #k AS k
 JOIN #f AS f ON f.FindingId = k.FindingId
 CROSS APPLY (VALUES $($values -join ",`r`n                    ")) AS c (Col, V)
-CROSS APPLY STRING_SPLIT(c.V, N';') AS s
-WHERE c.V IS NOT NULL AND LTRIM(RTRIM(s.[value])) <> N'';
+WHERE c.V IS NOT NULL
+GROUP BY k.K, c.Col, HASHBYTES('SHA2_256', CONVERT(varbinary(max), c.V)), DATALENGTH(c.V);
+CREATE TABLE #u (K NVARCHAR(256) COLLATE DATABASE_DEFAULT NOT NULL, Col TINYINT NOT NULL, V NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NOT NULL, Rn INT NOT NULL);
+INSERT #u (K, Col, V, Rn)
+SELECT u.K, u.Col, c.V, u.Rn
+FROM #u0 AS u
+JOIN #f AS f ON f.FindingId = u.F
+CROSS APPLY (VALUES $($values -join ",`r`n                    ")) AS c (Col, V)
+WHERE c.Col = u.Col;
+CREATE TABLE #v (K NVARCHAR(256) COLLATE DATABASE_DEFAULT NOT NULL, Col TINYINT NOT NULL, Item NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NOT NULL, Rn INT NOT NULL);
+INSERT #v (K, Col, Item, Rn)
+SELECT u.K, u.Col, LTRIM(RTRIM(s.[value])), u.Rn
+FROM #u AS u
+CROSS APPLY STRING_SPLIT(u.V, N';') AS s
+WHERE LTRIM(RTRIM(s.[value])) <> N'';
+-- (the distinct values are split: they leave tempdb now, never next to the items until the statement ends)
+DROP TABLE #u0, #u;
 CREATE TABLE #a (K NVARCHAR(256) COLLATE DATABASE_DEFAULT NOT NULL PRIMARY KEY, Findings INT NOT NULL, Assets INT NOT NULL$typedDecl);
 INSERT #a (K, Findings, Assets$typedCols)
-SELECT k.K, COUNT(*), COUNT(DISTINCT f.AssetKey)$typedAgg
+SELECT CONVERT(nvarchar(256), SUBSTRING(MIN(CONVERT(varbinary(512), k.K) + 0x01), 1, DATALENGTH(MIN(CONVERT(varbinary(512), k.K) + 0x01)) - 1)) COLLATE DATABASE_DEFAULT, COUNT(*), COUNT(DISTINCT f.AssetKey)$typedAgg
 FROM #k AS k JOIN #f AS f ON f.FindingId = k.FindingId
 GROUP BY k.K;
 CREATE TABLE #n (K NVARCHAR(256) COLLATE DATABASE_DEFAULT NOT NULL PRIMARY KEY, Shown INT NOT NULL, Names NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL);
 WITH nm AS (
-    SELECT k.K, f.AssetName, MIN(k.Rn) AS Rn
+    SELECT k.K, CONVERT(nvarchar(400), SUBSTRING(MIN(CONVERT(varbinary(800), f.AssetName) + 0x01), 1, DATALENGTH(MIN(CONVERT(varbinary(800), f.AssetName) + 0x01)) - 1)) COLLATE DATABASE_DEFAULT AS AssetName, MIN(k.Rn) AS Rn
     FROM #k AS k JOIN #f AS f ON f.FindingId = k.FindingId
     WHERE f.AssetName IS NOT NULL AND LTRIM(RTRIM(f.AssetName)) <> N''
     GROUP BY k.K, f.AssetName
@@ -356,7 +384,7 @@ FROM r WHERE r.P <= $($script:SIDataIssueAssetNames)
 GROUP BY r.K;
 SELECT TOP (0) CollectionId, IssueKey, Findings, Assets, AssetNamesShown, AssetNames, $names$typedCols INTO #ic FROM sidata.IssueContext;
 WITH d AS (
-    SELECT v.K, v.Col, v.Item, MIN(v.Rn) AS Rn FROM #v AS v GROUP BY v.K, v.Col, v.Item
+    SELECT v.K, v.Col, CONVERT(nvarchar(max), SUBSTRING(MIN(CONVERT(varbinary(max), v.Item) + 0x01), 1, DATALENGTH(MIN(CONVERT(varbinary(max), v.Item) + 0x01)) - 1)) COLLATE DATABASE_DEFAULT AS Item, MIN(v.Rn) AS Rn FROM #v AS v GROUP BY v.K, v.Col, v.Item
 ), g AS (
     SELECT d.K, d.Col, STRING_AGG(CONVERT(nvarchar(max), d.Item), N'; ') WITHIN GROUP (ORDER BY d.Rn, d.Item) AS T
     FROM d GROUP BY d.K, d.Col
@@ -370,6 +398,7 @@ FROM #a AS a
 LEFT JOIN #n AS nn ON nn.K = a.K
 LEFT JOIN p ON p.K = a.K;
 DECLARE @n INT = @@ROWCOUNT;
+DROP TABLE #v;
 DECLARE @whole bit = CASE WHEN EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID(N'sidata.IssueContext') AND name NOT IN ($knownSql)) THEN 1 ELSE 0 END;
 BEGIN TRAN;
 IF @whole = 1

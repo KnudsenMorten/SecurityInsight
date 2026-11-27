@@ -15,7 +15,7 @@ asset). This page describes who can reach them and with which rights. The model 
 4. **No standing security or DDL right on a runtime identity**, except the updater's right to apply a release's schema.
    Grants after a release go through one certificate-signed procedure (below).
 5. **The Invardia Support app has no standing admin.** When you create it, it gets its own database user in a read-only
-   role (metadata and health, no data) in each database; more comes only just in time, through the signed support grant,
+   role (metadata, health and query plans; no table data) in each database; more comes only just in time, through the signed support grant,
    at most at the level you chose and for at most 8 hours. `Grant-SISupportAccess -Remove` takes it away. An install that
    still has the Support app in the admin group from an earlier release loses that through its updates and one recorded
    support step, which keeps the group as the server's administrator with your own members. The updater is not a member. People get in just in

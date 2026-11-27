@@ -298,6 +298,12 @@ $script:SIEngineGatedProcedures = @('cfg.AuditRetentionApply', 'cfg.ConfigBackup
 
 $script:SIEngineProductSchemas = @('sidata', 'cfg', 'cmdbsync', 'vuln', 'snowstage')
 
+# #1430: the ONLY objects whose absence from the Pro database makes a refused statement a note instead of a refusal -- the
+# SQL CMDB hand-off's own tables (sql\si-cmdb-handoff-target.sql), which live in the customer's hand-off database (the
+# connector refuses the Pro database). Any OTHER missing object stays a refusal. The static test proves each is created
+# by the hand-off file and by no Pro schema file.
+$script:SIEngineAbsentExempt = @('snowstage.BatchCi', 'snowstage.BatchCiKeyValue', 'snowstage.BatchCiRelation')
+
 function Get-SIEngineGrantList {
     <# PURE. The shipped grant list as rows @{ Kind = schema | object | deny; Target; Permission } (one per verb). #>
     $rows = New-Object System.Collections.Generic.List[object]
@@ -397,10 +403,29 @@ function Get-SIEngineAccessStateSql {
         PURE. ONE read-only statement: the engine user's role memberships, and every permission the role si_engine and
         public hold (schema / object, GRANT or DENY). Rows: Kind = member | perm; Name (role); Class; Target; Permission; State.
         Needs only VIEW DEFINITION-level catalog reads (the admin group, the updater).
+        #1430 -Objects (the release's required objects, 'schema.Name'): also one row per object, Kind = object, State =
+        present | absent | unknown (absent only when the reader may see every definition -- VIEW DEFINITION on the
+        database or the schema; names compared case-insensitively). A statement on a table of $script:SIEngineAbsentExempt
+        this database does not have is not a refusal (the checks say so as a note). A name that is not a plain
+        'schema.Name' is left out.
     #>
-    param([Parameter(Mandatory)][string]$UserName)
+    param([Parameter(Mandatory)][string]$UserName, [string[]]$Objects = @())
     $u = $UserName.Replace("'", "''"); $r = $script:SIEngineRole
     $gates = ($script:SIEngineGatedProcedures | ForEach-Object { "(N'$_')" }) -join ', '
+    $objs = @($Objects | Where-Object { $_ -and $_ -match '^[A-Za-z_]\w*\.[A-Za-z_]\w*$' } | Sort-Object -Unique)
+    # present = an object of that schema + name, compared case-insensitively whatever the database's collation;
+    # absent  = none, AND the reader may see every definition there (VIEW DEFINITION on the database or on that schema) --
+    #           else 'unknown': an object hidden from the reader is never taken for a missing one (it stays a refusal)
+    $objSql = if ($objs.Count) {
+        "`r`nUNION ALL`r`nSELECT N'object', v.n, NULL, NULL, NULL,`r`n" +
+        "       CASE WHEN EXISTS (SELECT 1 FROM sys.objects AS o JOIN sys.schemas AS s ON s.schema_id = o.schema_id`r`n" +
+        "                         WHERE s.name COLLATE Latin1_General_CI_AS = PARSENAME(v.n, 2) COLLATE Latin1_General_CI_AS`r`n" +
+        "                           AND o.name COLLATE Latin1_General_CI_AS = PARSENAME(v.n, 1) COLLATE Latin1_General_CI_AS) THEN N'present'`r`n" +
+        "            WHEN ISNULL(HAS_PERMS_BY_NAME(DB_NAME(), N'DATABASE', N'VIEW DEFINITION'), 0) = 1 THEN N'absent'`r`n" +
+        "            WHEN ISNULL(HAS_PERMS_BY_NAME(PARSENAME(v.n, 2), N'SCHEMA', N'VIEW DEFINITION'), 0) = 1 THEN N'absent'`r`n" +
+        "            ELSE N'unknown' END`r`n" +
+        "FROM (VALUES " + (($objs | ForEach-Object { "(N'$_')" }) -join ', ') + ") AS v(n)"
+    } else { '' }
     @"
 SELECT N'member' AS Kind, rp.name AS Name, CAST(NULL AS nvarchar(60)) AS Class, CAST(NULL AS nvarchar(300)) AS Target, CAST(NULL AS nvarchar(128)) AS Permission, CAST(NULL AS nvarchar(60)) AS State
 FROM sys.database_role_members AS m JOIN sys.database_principals AS rp ON rp.principal_id = m.role_principal_id
@@ -416,15 +441,16 @@ SELECT N'gate', v.n, NULL, NULL, NULL,
        CASE WHEN OBJECT_ID(v.n) IS NULL THEN N'absent' WHEN CHARINDEX(N'$r', OBJECT_DEFINITION(OBJECT_ID(v.n))) > 0 THEN N'engine' ELSE N'old' END
 FROM (VALUES $gates) AS v(n)
 UNION ALL
-SELECT N'user', USER_NAME(DATABASE_PRINCIPAL_ID(N'$u')), NULL, NULL, NULL, CASE WHEN DATABASE_PRINCIPAL_ID(N'$u') IS NULL THEN N'missing' ELSE N'present' END;
+SELECT N'user', USER_NAME(DATABASE_PRINCIPAL_ID(N'$u')), NULL, NULL, NULL, CASE WHEN DATABASE_PRINCIPAL_ID(N'$u') IS NULL THEN N'missing' ELSE N'present' END$objSql;
 "@
 }
 
 function ConvertFrom-SIEngineAccessRows {
-    <# PURE. Rows of Get-SIEngineAccessStateSql (hashtables, PSObjects or DataRows) -> @{ UserPresent; Roles; Granted (schema/object grant rows); Denied; Gates (procedure + engine | old | absent) }. #>
+    <# PURE. Rows of Get-SIEngineAccessStateSql (hashtables, PSObjects or DataRows) -> @{ UserPresent; Roles; Granted (schema/object grant rows); Denied; Gates (procedure + engine | old | absent); Absent (#1430: the asked objects this database does not have); ObjectsRead (were they asked) }. #>
     param([object[]]$Rows = @())
     $get = { param($r, $k) if ($r -is [System.Collections.IDictionary]) { $r[$k] } elseif ($r -is [System.Data.DataRow]) { $r[$k] } else { $r.$k } }
     $gates = New-Object System.Collections.Generic.List[object]
+    $absent = New-Object System.Collections.Generic.List[string]; $objectsRead = $false
     $roles = New-Object System.Collections.Generic.List[string]; $granted = New-Object System.Collections.Generic.List[object]; $denied = New-Object System.Collections.Generic.List[object]
     $present = $false
     foreach ($r in @($Rows)) {
@@ -433,6 +459,7 @@ function ConvertFrom-SIEngineAccessRows {
         if ($kind -eq 'member') { $roles.Add([string](& $get $r 'Name')) }
         elseif ($kind -eq 'gate') { $gates.Add([pscustomobject]@{ Procedure = [string](& $get $r 'Name'); State = [string](& $get $r 'State') }) }
         elseif ($kind -eq 'user') { $present = ([string](& $get $r 'State')) -eq 'present' }
+        elseif ($kind -eq 'object') { $objectsRead = $true; if ([string](& $get $r 'State') -eq 'absent') { $absent.Add([string](& $get $r 'Name')) } }
         elseif ($kind -eq 'perm') {
             $class = [string](& $get $r 'Class')
             $row = [pscustomobject]@{ Grantee = [string](& $get $r 'Name'); Kind = $(if ($class -like 'SCHEMA*') { 'schema' } elseif ($class -like 'DATABASE') { 'database' } else { 'object' })
@@ -440,7 +467,8 @@ function ConvertFrom-SIEngineAccessRows {
             if ([string](& $get $r 'State') -like 'DENY*') { $denied.Add($row) } else { $granted.Add($row) }
         }
     }
-    [pscustomobject]@{ UserPresent = $present; Roles = $roles.ToArray(); Granted = $granted.ToArray(); Denied = $denied.ToArray(); Gates = $gates.ToArray() }
+    [pscustomobject]@{ UserPresent = $present; Roles = $roles.ToArray(); Granted = $granted.ToArray(); Denied = $denied.ToArray(); Gates = $gates.ToArray()
+                       Absent = $absent.ToArray(); ObjectsRead = $objectsRead }
 }
 
 function Test-SIEngineHasPermission {
@@ -608,10 +636,15 @@ function Get-SIEngineAccessDrift {
           ok           the user is in si_engine only and the role allows every statement of this release;
           drift        anything else, each in plain words: a statement the role would refuse (with file:line), a role the
                        user should not have (db_owner, db_ddladmin, db_securityadmin, ...), or the user not in si_engine.
+        #1430 Notes (never a warning): a statement on an object this database does not have ($State.Absent, read with
+        Get-SIEngineAccessStateSql -Objects) is NOT a refusal -- nothing runs on it here (the SQL CMDB hand-off's tables,
+        for one, live in the customer's own hand-off database). It is one short note; once the object exists, the check
+        compares its grants again.
     #>
     param([Parameter(Mandatory)]$State, [object[]]$Required = @(), [string]$UserName = 'the engine identity')
     $lines = New-Object System.Collections.Generic.List[string]
-    if (-not $State.UserPresent) { return [pscustomobject]@{ Status = 'missing'; Lines = @("$UserName has no user in the Pro database -- nothing to check") } }
+    $notes = New-Object System.Collections.Generic.List[string]
+    if (-not $State.UserPresent) { return [pscustomobject]@{ Status = 'missing'; Lines = @("$UserName has no user in the Pro database -- nothing to check"); Notes = @() } }
     $roles = @($State.Roles)
     $broad = @($roles | Where-Object { $_ -in 'db_datareader', 'db_datawriter' })
     $extra = @($roles | Where-Object { $_ -notin @('db_datareader', 'db_datawriter', $script:SIEngineRole) })
@@ -619,21 +652,24 @@ function Get-SIEngineAccessDrift {
     if ($extra.Count) { $lines.Add(('{0} is also in {1} -- the engine needs none of these; remove them through the Support app' -f $UserName, ($extra -join ', '))) }
     if ($inRole) {
         $cov = Test-SIEngineGrantCoverage -Required $Required -Granted @($State.Granted) -Denied @($State.Denied)
-        if (-not $cov.Ok) {
-            $lines.Add(('the role {0} would refuse {1} statement(s) of this release -- run setup\Move-SIEngineToLeastPrivilege.ps1 (step 1, the grants) through the Support app:' -f $script:SIEngineRole, $cov.Refused.Count))
-            foreach ($l in (Format-SIEngineRefused -Refused $cov.Refused)) { $lines.Add('  ' + $l) }
+        $split = Split-SIEngineRefusedByAbsent -Refused @($cov.Refused) -State $State
+        $refused = @($split.Refused)
+        if ($refused.Count) {
+            $lines.Add(('the role {0} would refuse {1} statement(s) of this release -- run setup\Move-SIEngineToLeastPrivilege.ps1 (step 1, the grants) through the Support app:' -f $script:SIEngineRole, $refused.Count))
+            foreach ($l in (Format-SIEngineRefused -Refused $refused)) { $lines.Add('  ' + $l) }
         }
+        foreach ($n in @($split.Notes)) { $notes.Add($n) }
     } elseif (-not $broad.Count) {
         $lines.Add(('{0} is neither in {1} nor in db_datareader / db_datawriter -- the engine cannot read or write; run setup\Move-SIEngineToLeastPrivilege.ps1 through the Support app' -f $UserName, $script:SIEngineRole))
     }
     $old = @(@($State.PSObject.Properties['Gates'] | ForEach-Object { $_.Value }) | ForEach-Object { $_ } | Where-Object { $_ -and $_.State -eq 'old' } | ForEach-Object { $_.Procedure })
     if ($old.Count -and $inRole -and -not $broad.Count) { $lines.Add(('{0} still let(s) only db_datawriter in -- the engine''s retention / backup step is refused; apply this release''s schema' -f ($old -join ', '))) }
-    if ($lines.Count) { return [pscustomobject]@{ Status = 'drift'; Lines = $lines.ToArray() } }
+    if ($lines.Count) { return [pscustomobject]@{ Status = 'drift'; Lines = $lines.ToArray(); Notes = $notes.ToArray() } }
     if ($broad.Count) {
         $how = if ($inRole) { 'it is in {0} too: the cut-over''s second run (-RemoveBroadRoles) has not run' -f $script:SIEngineRole } else { 'the cut-over (setup\Move-SIEngineToLeastPrivilege.ps1) has not run' }
-        return [pscustomobject]@{ Status = 'not-moved'; Lines = @(('{0} still has {1} -- {2}' -f $UserName, ($broad -join ' + '), $how)) }
+        return [pscustomobject]@{ Status = 'not-moved'; Lines = @(('{0} still has {1} -- {2}' -f $UserName, ($broad -join ' + '), $how)); Notes = $notes.ToArray() }
     }
-    [pscustomobject]@{ Status = 'ok'; Lines = @(('{0} has exactly the agreed rights (role {1}; every statement of this release allowed)' -f $UserName, $script:SIEngineRole)) }
+    [pscustomobject]@{ Status = 'ok'; Lines = @(('{0} has exactly the agreed rights (role {1}; every statement of this release allowed)' -f $UserName, $script:SIEngineRole)); Notes = $notes.ToArray() }
 }
 
 function Test-SIEngineCutoverReady {
@@ -649,15 +685,48 @@ function Test-SIEngineCutoverReady {
     if (-not $State.UserPresent) { $lines.Add("$UserName has no user in this database") }
     elseif (@($State.Roles) -notcontains $script:SIEngineRole) { $lines.Add(('{0} is not in the role {1} yet (step 2)' -f $UserName, $script:SIEngineRole)) }
     $cov = Test-SIEngineGrantCoverage -Required $Required -Granted @($State.Granted) -Denied @($State.Denied)
-    if (-not $cov.Ok) {
-        $refused = @($cov.Refused)
+    # #1430: a statement on a table this database does not have ($State.Absent, read with -Objects) never blocks the proof --
+    # nothing runs on it here; the same note as the update's check. A missing grant on a table it has still blocks.
+    $split = Split-SIEngineRefusedByAbsent -Refused @($cov.Refused) -State $State
+    $refused = @($split.Refused)
+    if ($refused.Count) {
         $lines.Add(('the role {0} would refuse {1} statement(s) the engine runs:' -f $script:SIEngineRole, $refused.Count))
         foreach ($l in (Format-SIEngineRefused -Refused $refused)) { $lines.Add('  ' + $l) }
     }
     foreach ($g in @($State.Gates | Where-Object { $_ -and $_.State -eq 'old' })) {
         $lines.Add(('{0} still lets only db_datawriter in -- apply this release''s schema first (the update does it)' -f $g.Procedure))
     }
-    [pscustomobject]@{ Ok = ($lines.Count -eq 0); Lines = $lines.ToArray(); Refused = $refused }
+    [pscustomobject]@{ Ok = ($lines.Count -eq 0); Lines = $lines.ToArray(); Refused = $refused; Notes = @($split.Notes); OnAbsent = @($split.OnAbsent).Count }
+}
+
+function Get-SIEngineRequiredObjects {
+    <# PURE. #1430: the plain objects (schema.Name) of the release's required permissions -- the -Objects of Get-SIEngineAccessStateSql. A template name (schema.*) is left out. #>
+    param([object[]]$Required = @())
+    # unrolled (callers wrap in @() or pass it to [string[]] -Objects): a wrapped array inside @(...) would bind as ONE joined string
+    @($Required | Where-Object { $_ } | ForEach-Object { [string]$_.Object } | Where-Object { $_ -match '^[A-Za-z_]\w*\.[A-Za-z_]\w*$' } | Sort-Object -Unique)
+}
+
+function Split-SIEngineRefusedByAbsent {
+    <#
+        PURE. #1430: refused statements (Test-SIEngineGrantCoverage) split by the objects this database does not have
+        ($State.Absent; none when the state was read without -Objects) -- ONLY those of $script:SIEngineAbsentExempt
+        (the hand-off tables); a refusal on any other missing object stays a refusal. @{ Refused (kept); OnAbsent;
+        Notes (one plain line when any is on an absent hand-off table) }.
+    #>
+    param([object[]]$Refused = @(), $State)
+    $absent = @(); if ($State -and $State.PSObject.Properties['Absent']) { $absent = @($State.Absent | Where-Object { $_ }) }
+    # only the exempt hand-off tables count (any other missing object stays a refusal)
+    $absent = @($absent | Where-Object { $a = [string]$_; @($script:SIEngineAbsentExempt | Where-Object { $_ -ieq $a }).Count -gt 0 })
+    $on = New-Object System.Collections.Generic.List[object]; $keep = New-Object System.Collections.Generic.List[object]
+    foreach ($x in @($Refused | Where-Object { $_ })) {
+        $o = [string]$x.Object
+        if (@($absent | Where-Object { $_ -ieq $o }).Count) { $on.Add($x) } else { $keep.Add($x) }
+    }
+    $notes = @()
+    if ($on.Count) {
+        $notes = @(('{0} statement(s) of this release are on tables this database does not have ({1}) -- not refused: nothing runs on them here; their grants are checked again once they exist' -f $on.Count, ((@($on | ForEach-Object { $_.Object } | Sort-Object -Unique)) -join ', ')))
+    }
+    [pscustomobject]@{ Refused = $keep.ToArray(); OnAbsent = $on.ToArray(); Notes = $notes }
 }
 
 function Test-SIEngineLeastPrivilegeSetup {

@@ -20,8 +20,9 @@
       Pro database(s), Entra-only SQL                both levels:  in each product database the support grant's tables and
                                                                    its four SIGNED procedures, the Support app's OWN database
                                                                    user (from its client id: WITH SID, TYPE = E) in the
-                                                                   standing READ-ONLY role si_support_read (metadata and
-                                                                   health, no data), and your CONSENT at this level -- the
+                                                                   standing READ-ONLY role si_support_read (metadata,
+                                                                   health and query plans; no table data), and your CONSENT at
+                                                                   this level -- the
                                                                    same steps the install's database setup job runs. NOT
                                                                    db_owner and NOT the SQL admin group: those come only
                                                                    while a support session is open (just in time).
@@ -278,8 +279,8 @@ if ($sqlServer -and $dbs.Count) {
             catch { $failed++; Show 'FAILED' ("{0}: remove the consent -- {1}" -f $db, $_.Exception.Message); $tasks.Add(("-- as the SQL Entra admin, in database {0}:  DELETE FROM cfg.SupportConsent WHERE Id = 1;" -f $db)) }
             continue
         }
-        # the Support app in the standing READ-ONLY role where the database has it (the role and its rights -- metadata and health,
-        # no data -- are made by the support grant's own install step), and the consent at this level where the database
+        # the Support app in the standing READ-ONLY role where the database has it (the role and its rights -- metadata, health and
+        # query plans, no data -- are made by the support grant's own install step), and the consent at this level where the database
         # carries cfg.SupportConsent. #1093: the consent's statements are dynamic SQL, so the batch compiles in a database that
         # does not carry the table yet -- the identity ledger of a new install, whose support grant tables come right after
         # this script (setup\_shared\SI-SupportConsentSql.ps1)
@@ -297,6 +298,8 @@ if ($sqlServer -and $dbs.Count) {
             if ($sgState.Ok) { Show 'ok' ("{0}: the just-in-time support grant is in place (read back: 4 procedures signed, the read-only role, consent {1})" -f $db, $sgState.Consent) }
             elseif (-not $hard.Count) { Show 'note' ("{0}: the just-in-time support grant is in place; {1} -- the database setup job grants it on its next run" -f $db, ($sgState.Lines -join '; ')) }
             else { $failed++; Show 'FAILED' ("{0}: the just-in-time support grant does not read back -- {1}" -f $db, ($sgState.Lines -join '; ')) }
+            # SHOWPLAN on the read-only role (owner 2026-11-27): a note only, never a failure
+            foreach ($nt in @($(if ($sgState -and $sgState.PSObject.Properties['Notes']) { $sgState.Notes }) | Where-Object { $_ })) { Show 'note' ("{0}: {1}" -f $db, $nt) }
         } catch { $failed++; Show 'FAILED' ("{0}: the just-in-time support grant could not be read back -- {1}" -f $db, $_.Exception.Message) }
     }
     # the two Azure roles, each on its ONE resource

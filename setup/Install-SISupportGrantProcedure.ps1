@@ -209,6 +209,8 @@ foreach ($db in $dbs) {
         $result.Databases += $st
         if ($st.Ok) { & $say 'Green' ('{0}: in place -- 4 procedures signed (2099, key removed), the read-only role, consent {1}, the engine may EXECUTE them' -f $db, $st.Consent) }
         else { $all = $false; foreach ($l in $st.Lines) { & $say 'Yellow' ('{0}: {1}' -f $db, $l) } }
+        # SHOWPLAN on the read-only role (owner 2026-11-27): a note only, never a failure
+        foreach ($nt in @($(if ($st -and $st.PSObject.Properties['Notes']) { $st.Notes }) | Where-Object { $_ })) { & $say 'Gray' ('{0}: note -- {1}' -f $db, $nt) }
     } catch { $all = $false; & $say 'Red' ('{0}: the read-back failed: {1}' -f $db, $_.Exception.Message) }
 }
 foreach ($l in $result.Lines) { & $say 'Yellow' $l }

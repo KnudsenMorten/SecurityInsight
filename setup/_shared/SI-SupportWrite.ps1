@@ -5,7 +5,7 @@
     engine\support-grant\SI-SupportGrant.ps1).
 
     After setup\Remove-SISupportStandingAccess.ps1 the Invardia Support app keeps only its read-only role si_support_read
-    (metadata and health, no data) and gets admin JUST IN TIME: the Support session puts ONE request on the install's queue
+    (metadata, health and query plans; no table data) and gets admin JUST IN TIME: the Support session puts ONE request on the install's queue
     si-support-requests, the queue starts caj-si-support-grant, and its signed procedures add the role of the granted level
     (setup = db_owner, troubleshoot = db_datareader) for at most 8 hours -- never above the customer's consent. Invardia's
     Support session does all of that in ONE call, Open-InvardiaSupportGrant -Product si (and Close-InvardiaSupportGrant):

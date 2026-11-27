@@ -100,6 +100,24 @@ Describe 'REAL SQL: the Invardia Support app''s just-in-time grant (#1021)' -Ski
         (& $script:Member 'db_owner') | Should -Be 0
     }
 
+    It 'owner 2026-11-27: the read-only role holds SHOWPLAN (and nothing new besides) -- read back; without it the read-back is Ok with one note' {
+        $perms = @(& $script:A "SELECT p.permission_name AS Value FROM sys.database_permissions AS p WHERE p.class = 0 AND p.grantee_principal_id = DATABASE_PRINCIPAL_ID(N'si_support_read') AND p.[state] IN ('G', 'W') ORDER BY p.permission_name" @{} 'rows' | ForEach-Object { [string]$_.Value })
+        $perms | Should -Be @('SHOWPLAN', 'VIEW DATABASE STATE', 'VIEW DEFINITION')
+        $st = ConvertFrom-SISupportGrantState -Row (@(& $script:A (Get-SISupportGrantStateSql -ClientId $script:App) @{} 'rows')[0])
+        $st.ReadRolePlan | Should -BeTrue; $st.Notes | Should -BeNullOrEmpty
+        $null = & $script:A 'REVOKE SHOWPLAN FROM [si_support_read];' @{} 'scalar'
+        try {
+            $st = ConvertFrom-SISupportGrantState -Row (@(& $script:A (Get-SISupportGrantStateSql -ClientId $script:App) @{} 'rows')[0])
+            $st.Ok | Should -BeTrue -Because 'an install without SHOWPLAN fails no check'
+            $st.ReadRolePlan | Should -BeFalse
+            $st.Notes | Should -Be @('the read-only support role cannot read query plans yet')
+        } finally {
+            # the 'user' step gives it back (the route for an existing install: the database setup job's support run)
+            $null = & $script:A (@($script:Steps | Where-Object Step -eq 'user')[0].Sql) @{} 'scalar'
+        }
+        (ConvertFrom-SISupportGrantState -Row (@(& $script:A (Get-SISupportGrantStateSql -ClientId $script:App) @{} 'rows')[0])).ReadRolePlan | Should -BeTrue
+    }
+
     It 'the admin steps are idempotent: a second run changes nothing and signs nothing again' {
         $before = [int](& $script:A "SELECT COUNT(*) FROM sys.certificates WHERE name LIKE N'si_support_signer%'" @{} 'scalar')
         foreach ($s in $script:Steps) { $null = & $script:A $s.Sql @{} 'scalar' }

@@ -10,6 +10,21 @@
 --                                 opened / closed as fixed / closed for another reason (#tr: Channel, Opened, ClosedFixed,
 --                                 ClosedOther -- added up per range by the build)
 -- A trend row of a collection no longer stored is removed. One code path at every size; no cap.
+-- #1435 the DISTINCT CVEs per task key, worked out BEFORE the rollup: the collection's open keyed tasks once (#rtr_t), their links
+-- joined to them by task, the distinct (key, CVE) pairs counted -- exactly COUNT(DISTINCT l.Cve) per key (a NULL CVE is not
+-- counted; a key whose links carry none counts 0). Before, the count was one expression of the rollup over every link (measured:
+-- 1.4 s at 150,000 findings, 19.5 s at 1,000,000).
+CREATE TABLE #rtr_t (TaskId BINARY(32) NOT NULL PRIMARY KEY, TaskKeyHash BINARY(32) NOT NULL);
+INSERT #rtr_t (TaskId, TaskKeyHash)
+SELECT t.TaskId, t.TaskKeyHash FROM sidata.RemediationTask AS t
+WHERE t.CollectionId = @c AND t.State = N'open' AND t.TaskKeyHash IS NOT NULL;
+CREATE TABLE #rtr_cv (TaskKeyHash BINARY(32) NOT NULL PRIMARY KEY, Cves INT NOT NULL);
+INSERT #rtr_cv (TaskKeyHash, Cves)
+SELECT d.TaskKeyHash, COUNT(d.Cve)
+FROM (SELECT DISTINCT x.TaskKeyHash, l.Cve
+      FROM #rtr_t AS x
+      JOIN sidata.RemediationTaskFinding AS l ON l.CollectionId = @c AND l.TaskId = x.TaskId) AS d
+GROUP BY d.TaskKeyHash;
 DELETE FROM sidata.RemediationTaskRollup WHERE CollectionId = @c;
 INSERT sidata.RemediationTaskRollup (CollectionId, TaskKeyHash, TaskName, Kind, Channel, Product, Version, Assets, Tier01Assets, Findings, Cves,
                                      HighestSeverity, HighestRiskRating, MaxWeightedRisk, SumWeightedRisk, OldestFirstSeen)
@@ -27,11 +42,9 @@ FROM (SELECT t.TaskKeyHash, MAX(t.TaskName) AS TaskName, MAX(t.Kind) AS Kind, MA
       FROM sidata.RemediationTask AS t
       WHERE t.CollectionId = @c AND t.State = N'open' AND t.TaskKeyHash IS NOT NULL
       GROUP BY t.TaskKeyHash) AS g
-LEFT JOIN (SELECT t.TaskKeyHash, COUNT(DISTINCT l.Cve) AS Cves
-           FROM sidata.RemediationTask AS t
-           JOIN sidata.RemediationTaskFinding AS l ON l.CollectionId = t.CollectionId AND l.TaskId = t.TaskId
-           WHERE t.CollectionId = @c AND t.State = N'open' AND t.TaskKeyHash IS NOT NULL
-           GROUP BY t.TaskKeyHash) AS cv ON cv.TaskKeyHash = g.TaskKeyHash;
+LEFT JOIN #rtr_cv AS cv ON cv.TaskKeyHash = g.TaskKeyHash;
+DROP TABLE #rtr_cv;
+DROP TABLE #rtr_t;
 DELETE r FROM sidata.RemediationTaskTrend AS r
 WHERE r.CollectionId = @c OR NOT EXISTS (SELECT 1 FROM sidata.Collection AS x WHERE x.CollectionId = r.CollectionId);
 INSERT sidata.RemediationTaskTrend (CollectionId, Channel, CollectionTime, OpenTasks, OpenAssets, Opened, ClosedFixed, ClosedOther, OldestOpen)

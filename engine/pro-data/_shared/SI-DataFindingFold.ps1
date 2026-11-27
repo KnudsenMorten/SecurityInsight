@@ -55,7 +55,7 @@ function Get-SIDataFoldApplySql {
     @'
 CROSS APPLY (SELECT f.RaFindingKey AS BK) AS b
 CROSS APPLY (SELECT CHARINDEX(N'|', b.BK) AS P) AS sp
-CROSS APPLY (SELECT LEFT(b.BK, sp.P - 1) AS Own, SUBSTRING(b.BK, sp.P + 1, 900) AS KeyPart) AS o
+CROSS APPLY (SELECT LEFT(b.BK, CASE WHEN sp.P > 1 THEN sp.P - 1 ELSE 0 END) AS Own, SUBSTRING(b.BK, sp.P + 1, 900) AS KeyPart) AS o
 CROSS APPLY (SELECT LEFT(CASE WHEN LOWER(f.ConfigurationId) = o.KeyPart THEN f.ConfigurationId ELSE o.KeyPart END, 256) AS FKey) AS bk
 '@
 }
@@ -281,7 +281,7 @@ INSERT sidata.CiFindingLifecycleStage (Kind, OwnerKey, FindingKey, Canonical)
 SELECT DISTINCT N'a', LEFT(o.Own, 450), LEFT(bk.FKey, 256), LEFT(ck.CKey, 256)
 FROM sidata.FindingEvidence AS e
 CROSS APPLY (SELECT CHARINDEX(N'|', e.OwnKey) AS P) AS sp
-CROSS APPLY (SELECT LEFT(e.OwnKey, sp.P - 1) AS Own, SUBSTRING(e.OwnKey, sp.P + 1, 900) AS KeyPart) AS o
+CROSS APPLY (SELECT LEFT(e.OwnKey, CASE WHEN sp.P > 1 THEN sp.P - 1 ELSE 0 END) AS Own, SUBSTRING(e.OwnKey, sp.P + 1, 900) AS KeyPart) AS o
 CROSS APPLY (SELECT LEFT(CASE WHEN LOWER(e.ConfigurationId) = o.KeyPart THEN e.ConfigurationId ELSE o.KeyPart END, 256) AS FKey) AS bk
 CROSS APPLY (SELECT SUBSTRING(e.CanonicalKey, CHARINDEX(N'|', e.CanonicalKey) + 1, 900) AS TPart) AS tp
 OUTER APPLY (SELECT TOP (1) x.ConfigurationId FROM sidata.Finding AS x

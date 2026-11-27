@@ -496,6 +496,40 @@ END
 '@
 }
 
+function Get-SIDbInitOwnDatabaseGuardSql {
+    <# PURE. The first statement of a batch that may only act in SecurityInsight's OWN databases: it ends the batch (RETURN,
+       nothing changed) in a database that is none of -Named (the Pro database, the identity ledger) and does not carry SI's
+       marker cfg.SupportConsent -- another product's or the customer's own database on a shared server. #>
+    param([string[]]$Named = @())
+    $names = @($Named | Where-Object { $_ } | ForEach-Object { "N'" + ([string]$_).Replace("'", "''") + "'" })
+    $notNamed = if ($names.Count) { ' AND DB_NAME() NOT IN ({0})' -f ($names -join ', ') } else { '' }
+    "IF OBJECT_ID(N'cfg.SupportConsent') IS NULL$notNamed RETURN;`n"
+}
+
+function Get-SIDbInitGuestOffSql {
+    <# PURE. The built-in guest holds NO database role and NO CONNECT (owner 2026-11-27: "Remove it"; a baseline, so every
+       install is the same). Every role guest is a member of (db_datareader, db_datawriter or any other) loses it, then
+       CONNECT is revoked where guest has it. READ BACK after: guest still in a role or still with CONNECT = an error (a
+       warning of this not-required batch). Where guest has neither it only reads. Nothing else is touched. #>
+    @'
+DECLARE @g int = DATABASE_PRINCIPAL_ID(N'guest'), @r sysname, @s nvarchar(400);
+DECLARE @roles TABLE (Name sysname PRIMARY KEY);
+INSERT @roles (Name) SELECT r.name FROM sys.database_role_members AS m JOIN sys.database_principals AS r ON r.principal_id = m.role_principal_id WHERE m.member_principal_id = @g;
+WHILE EXISTS (SELECT 1 FROM @roles)
+BEGIN
+    SELECT TOP (1) @r = Name FROM @roles ORDER BY Name;
+    IF IS_ROLEMEMBER(@r, N'guest') = 1 BEGIN SET @s = N'ALTER ROLE ' + QUOTENAME(@r) + N' DROP MEMBER [guest];'; EXEC (@s); END
+    DELETE @roles WHERE Name = @r;
+END
+IF EXISTS (SELECT 1 FROM sys.database_permissions WHERE class = 0 AND grantee_principal_id = @g AND permission_name = N'CONNECT' AND [state] IN ('G', 'W'))
+    REVOKE CONNECT FROM guest CASCADE;
+IF EXISTS (SELECT 1 FROM sys.database_role_members WHERE member_principal_id = @g)
+    THROW 51796, N'the built-in guest is still in a database role (read back)', 1;
+IF EXISTS (SELECT 1 FROM sys.database_permissions WHERE class = 0 AND grantee_principal_id = @g AND permission_name = N'CONNECT' AND [state] IN ('G', 'W'))
+    THROW 51797, N'the built-in guest still has CONNECT (read back)', 1;
+'@
+}
+
 function Get-SIDbInitSupportUserReplaceSql {
     <#
         PURE. support-user-replace (Invardia, framework owner, 2026-11-05; found live at an install: the Support app's user
@@ -588,8 +622,19 @@ function Get-SIDbInitPlan {
     # 2026-11-05 (framework §12.27 SQL-STATS): every product database updates a stale statistic in the background, so a page read
     # never waits for one. Only this job may change a database setting (the server's admin group); the update runs it on every
     # update, so an existing install reaches what a new one has. Not required: a setting that cannot change now is a warning.
+    # The other databases of the server ($SupportDatabases: every user database, read in master) may be another product's or
+    # the customer's own (a shared server, the CMDB hand-off database): both batches act ONLY in SI's own databases -- the
+    # Pro database, the ledger, and a database that carries SI's marker cfg.SupportConsent (Get-SIDbInitOwnDatabaseGuardSql,
+    # inside the batch); any other database is left exactly as it is (review 2026-11-27; before, stats-async changed every
+    # user database on the server).
+    $own = @(@($pro) + @($(if ($led) { $led })) | Where-Object { $_ })
+    $guard = Get-SIDbInitOwnDatabaseGuardSql -Named $own
     foreach ($d in @(@($pro) + @($(if ($led) { $led })) + @($SupportDatabases) | Where-Object { $_ } | Select-Object -Unique)) {
-        & $add 'stats-async' $d ('{0}: statistics updated in the background (a page never waits for one)' -f $d) (Get-SIDbInitStatsAsyncSql) $null $false
+        $only = if ($own -contains $d) { '' } else { ' -- only if it is a SecurityInsight database (cfg.SupportConsent); any other database is left as it is' }
+        & $add 'stats-async' $d ('{0}: statistics updated in the background (a page never waits for one){1}' -f $d, $only) ($guard + (Get-SIDbInitStatsAsyncSql)) $null $false
+        # owner 2026-11-27 ("Remove it"): the built-in guest in no database role and without CONNECT -- read back; not
+        # required (a refusal is a warning, the next update tries again)
+        & $add 'guest-off' $d ('{0}: the built-in guest is in no database role and has no CONNECT (read back){1}' -f $d, $only) ($guard + (Get-SIDbInitGuestOffSql)) $null $false
     }
 
     # the Invardia Support app: only when the caller names it (the install's Support setting, or a support repair) -- the
@@ -717,6 +762,8 @@ function Test-SIDbInitReadBack {
         $st = $SupportGrant[$d]
         foreach ($l in @($st.Lines)) { if ($l -match 'no consent is recorded') { $lines.Add(('{0}: {1} (the customer gives it)' -f $d, $l)) } else { $problems.Add(('{0}: the support grant: {1}' -f $d, $l)) } }
         if ($st.Ok) { $lines.Add(('read back: {0}: the support grant is in place' -f $d)) }
+        # SHOWPLAN on the read-only role (owner 2026-11-27): a note only, never a problem
+        foreach ($nt in @($(if ($st -is [System.Collections.IDictionary]) { $st['Notes'] } elseif ($st -and $st.PSObject.Properties['Notes']) { $st.Notes }) | Where-Object { $_ })) { $lines.Add(('{0}: note -- {1}' -f $d, $nt)) }
     }
     [pscustomobject]@{ Ok = ($problems.Count -eq 0); Problems = $problems.ToArray(); Lines = $lines.ToArray(); Count = $n }
 }

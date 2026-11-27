@@ -315,7 +315,7 @@ SELECT TOP (CONVERT(int, @Take)) st.CiId, CASE WHEN st.OwnerKey LIKE N'asset:%' 
 FROM sidata.Finding AS f
 JOIN @s AS x ON x.FromId = f.CollectionId AND x.ReportName = f.ReportName
 CROSS APPLY (SELECT CHARINDEX(N'|', f.RaFindingKey) AS P) AS sp
-JOIN sidata.CiFindingState AS st ON sp.P > 1 AND st.OwnerKey = LEFT(f.RaFindingKey, sp.P - 1) AND st.FindingKey = SUBSTRING(f.RaFindingKey, sp.P + 1, 400)
+JOIN sidata.CiFindingState AS st ON sp.P > 1 AND st.OwnerKey = LEFT(f.RaFindingKey, CASE WHEN sp.P > 1 THEN sp.P - 1 ELSE 0 END) AND st.FindingKey = SUBSTRING(f.RaFindingKey, sp.P + 1, 400)
 WHERE f.CollectionId IN (SELECT FromId FROM @s) AND f.FindingId > CONVERT(bigint, @AfterId) AND f.RaFindingKey IS NOT NULL
   AND st.State <> N'closed'
   AND NOT EXISTS (SELECT 1 FROM sidata.CiFinding AS cf WHERE cf.FindingKey = st.FindingKey AND COALESCE(cf.CiId, N'asset:' + cf.AssetId) = st.OwnerKey)

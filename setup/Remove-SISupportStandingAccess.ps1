@@ -9,7 +9,7 @@
     each product database, and membership of the SQL admin group (the group the database server names as its Entra
     administrator). With the just-in-time support grant, the Support app gets admin only while a support session is open
     (at most 8 hours, at the level the customer consented to) and keeps a standing READ-ONLY role (si_support_read:
-    metadata and health, no data). This script removes the two standing rights -- and nothing else:
+    metadata, health and query plans; no table data). This script removes the two standing rights -- and nothing else:
 
       db-owner      the Support app's user leaves db_owner in every product database (one transaction per database).
                     The user itself and its read-only role si_support_read STAY.

@@ -66,6 +66,7 @@ BeforeAll {
         [void](& (New-LocalInvoke 'master') "CREATE DATABASE [$db]" @{} 'nonquery')
         $inv = New-LocalInvoke $db
         [void](& $inv $script:Schema @{} 'nonquery')
+        [void](& $inv $script:Schema @{} 'nonquery')      # applied twice, as an install's updates do (#1443): one apply leaves a column of the findings out of the history table
         [void](& $inv "CREATE USER si_test_updater WITHOUT LOGIN; ALTER ROLE db_ddladmin ADD MEMBER si_test_updater; ALTER ROLE db_datareader ADD MEMBER si_test_updater; ALTER ROLE db_datawriter ADD MEMBER si_test_updater;" @{} 'nonquery')
         [pscustomobject]@{ Name = $db; Invoke = $inv; Updater = (New-LocalInvoke $db 'si_test_updater') }
     }

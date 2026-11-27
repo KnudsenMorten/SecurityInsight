@@ -126,19 +126,27 @@ function Invoke-Step([string]$Purpose, [string]$Query, [switch]$ReadOnly) {
 }
 function Get-RowValue($Row, [string]$Name) { [string](Get-SICutoverProp $Row @($Name)) }
 function Invoke-Proof {
-    $rows = Invoke-Step -Purpose 'proof (read-only) -- the role''s grants against every statement the engine runs' -Query (Get-SIEngineAccessStateSql -UserName $EngineUser) -ReadOnly
-    $state = ConvertFrom-SIEngineAccessRows -Rows $rows
     $req = Get-SIEngineRequiredPermission -References (Get-SIEngineSqlReference -SIRoot $siRoot)
+    # #1430: which of the release's tables this database has -- a statement on one it does not have never blocks the proof
+    $rows = Invoke-Step -Purpose 'proof (read-only) -- the role''s grants against every statement the engine runs' -Query (Get-SIEngineAccessStateSql -UserName $EngineUser -Objects (Get-SIEngineRequiredObjects -Required $req)) -ReadOnly
+    $state = ConvertFrom-SIEngineAccessRows -Rows $rows
     $ready = Test-SIEngineCutoverReady -State $state -Required $req -UserName $EngineUser
+    foreach ($rn in @($ready.Notes)) { Write-Host ('  {0}' -f $rn) }
     [pscustomobject]@{ State = $state; Ready = $ready; Statements = @($req).Count }
 }
+function Format-ProofGreen($Proof) {
+    # #1430: how many of the statements are on hand-off tables this database does not have (never run here)
+    $na = 0; if ($Proof.Ready.PSObject.Properties['OnAbsent']) { $na = [int]$Proof.Ready.OnAbsent }
+    'green -- the role allows all {0} statement kinds the engine runs{1}' -f $Proof.Statements, $(if ($na) { ', {0} of them on tables this database does not have' -f $na } else { '' })
+}
+function Get-ProofNotes($Proof) { if ($Proof -and $Proof.Ready -and $Proof.Ready.PSObject.Properties['Notes']) { @($Proof.Ready.Notes | Where-Object { $_ }) } else { @() } }
 function Get-RolesNow {
     $rows = Invoke-Step -Purpose 'read back -- the engine user''s roles now (read-only)' -ReadOnly -Query ("SELECT r.name AS RoleName FROM sys.database_role_members AS m JOIN sys.database_principals AS r ON r.principal_id = m.role_principal_id WHERE m.member_principal_id = DATABASE_PRINCIPAL_ID({0});" -f $u)
     @(@($rows) | ForEach-Object { Get-RowValue $_ 'RoleName' } | Where-Object { $_ })
 }
 
 $result = [ordered]@{ Server = $Server; Database = $Database; EngineUser = $EngineUser; Action = $(if ($Rollback) { 'rollback' } elseif ($Apply) { 'apply' } else { 'plan' }); Steps = $want
-                      Ok = $false; Lines = @(); RolesBefore = ''; RolesAfter = @(); RecordPath = $null; Observation = $null }
+                      Ok = $false; Lines = @(); Notes = @(); RolesBefore = ''; RolesAfter = @(); RecordPath = $null; Observation = $null }
 
 # the engine user, confirmed by its client id (its SID) when one is known
 if ($EngineClientId) {
@@ -189,12 +197,12 @@ $plan = [ordered]@{
     'remove-broad-roles' = $(if (-not $broad.Count) { 'nothing to do: no broad role left' } elseif (-not $inRole) { ('BLOCKED: {0} is not in {1} yet (membership first)' -f $EngineUser, $role) } elseif (-not $p.Ready.Ok) { 'BLOCKED: the proof is not green' } else { ('remove {0} (a later run, after a green pipeline on the role)' -f ($broad -join ', ')) })
 }
 Write-Host ('  roles now   : {0}' -f $(if ($rolesBefore.Count) { $rolesBefore -join ', ' } else { '(none)' }))
-Write-Host ('  proof       : {0}' -f $(if ($p.Ready.Ok) { ('green -- the role allows all {0} statement kinds the engine runs' -f $p.Statements) } else { 'NOT green: ' + (@($p.Ready.Lines) -join '; ') })) -ForegroundColor $(if ($p.Ready.Ok) { 'Green' } else { 'Yellow' })
+Write-Host ('  proof       : {0}' -f $(if ($p.Ready.Ok) { (Format-ProofGreen $p) } else { 'NOT green: ' + (@($p.Ready.Lines) -join '; ') })) -ForegroundColor $(if ($p.Ready.Ok) { 'Green' } else { 'Yellow' })
 foreach ($k in $plan.Keys) { Write-Host ('  {0,-18}: {1}' -f $k, $plan[$k]) -ForegroundColor $(if ($plan[$k] -match '^(BLOCKED|nothing)') { 'DarkGray' } else { 'White' }) }
 $result.RolesBefore = $rolesBefore -join ','
 if (-not $Apply) {
     Write-Host ('  PLAN ONLY -- nothing was changed. Apply: -Apply -Steps <{0}>' -f ($known -join ',')) -ForegroundColor Yellow
-    $result.Ok = $p.Ready.Ok; $result.Lines = $p.Ready.Lines; $result.RolesAfter = $rolesBefore
+    $result.Ok = $p.Ready.Ok; $result.Lines = $p.Ready.Lines; $result.Notes = @(Get-ProofNotes $p); $result.RolesAfter = $rolesBefore
     if ($PassThru) { return [pscustomobject]$result } else { return }
 }
 
@@ -247,6 +255,7 @@ SELECT @before AS RolesBefore, (SELECT Value FROM cfg.InstallState WHERE Name = 
         }
         'remove-broad-roles' {
             $p2 = Invoke-Proof
+            $result.Notes = @(Get-ProofNotes $p2)
             if (-not $p2.Ready.Ok) { $ok = $false; $lines.Add('Refused: the broad roles stay -- the proof is not green:'); foreach ($x in @($p2.Ready.Lines)) { $lines.Add($x) }; break }
             $now0 = @(Get-RolesNow)
             if (-not @($now0 | Where-Object { $_ -in 'db_datareader', 'db_datawriter' }).Count) { $lines.Add('remove-broad-roles: nothing to do -- no broad role left'); break }
@@ -275,13 +284,16 @@ SELECT r.name AS RoleName FROM sys.database_role_members AS m JOIN sys.database_
 if (@($want | Where-Object { $_ -in 'proof', 'grants', 'membership' }).Count) {
     $pf = Invoke-Proof
     if (-not $pf.Ready.Ok) { $ok = $false; $lines.Add('proof: NOT green -- ' + (@($pf.Ready.Lines) -join '; ')) }
-    else { $lines.Add(('proof: green -- the role allows all {0} statement kinds the engine runs' -f $pf.Statements)) }
+    else { $lines.Add(('proof: ' + (Format-ProofGreen $pf))) }
+    $result.Notes = @(Get-ProofNotes $pf)
 }
 $result.RolesAfter = @(Get-RolesNow)
 $result.Ok = $ok
 $result.Lines = $lines.ToArray()
 foreach ($l in @($result.Lines)) { Write-Host ('  ' + $l) -ForegroundColor $(if ($ok) { 'Green' } else { 'Yellow' }) }
 if (@($record.applied).Count) {
+    # #1430: the proof's notes go into the rollback record too (what the run said about tables this database does not have)
+    if (@($result.Notes).Count) { $record['notes'] = @($result.Notes); $null = Save-SICutoverRecord -Record $record -Path $recPath }
     $result.RecordPath = $recPath
     Write-Host ('  rollback record: {0} (and cfg.InstallState ''EngineSqlAccessBefore'' in the database)' -f $recPath) -ForegroundColor Cyan
     if (@($shape.Jobs).Count) {

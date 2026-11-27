@@ -144,6 +144,7 @@ Describe 'the admin steps ONLY ADD (4a) and sign only this release''s text' {
         $u | Should -Match ('WITH SID = {0}, TYPE = E' -f (ConvertTo-SISupportGrantSid -ClientId $script:App))
         $u | Should -Match 'GRANT VIEW DEFINITION TO \[si_support_read\];'
         $u | Should -Match 'GRANT VIEW DATABASE STATE TO \[si_support_read\];'
+        $u | Should -Match 'GRANT SHOWPLAN TO \[si_support_read\];' -Because 'owner 2026-11-27: query plans, never data'
         $u | Should -Not -Match '(?i)db_owner|db_datareader|GRANT SELECT'
     }
     It 'consent: a derived consent never replaces the customer''s; no -Level = no consent step' {
@@ -185,6 +186,19 @@ Describe 'the admin steps ONLY ADD (4a) and sign only this release''s text' {
         $bad = ConvertFrom-SISupportGrantState -Row @{ Database = 'd'; Tables = 3; Procedures = 4; Current = 4; Signed = 2; SignerOwner = 0; UserPresent = 1; ReadOnlyHeld = 0; Consent = ''; EngineExecute = 0 }
         $bad.Ok | Should -BeFalse
         ($bad.Lines -join ' | ') | Should -Match 'signed.*db_owner.*read-only role.*no consent.*EXECUTE'
+    }
+    It 'SHOWPLAN on the read-only role (owner 2026-11-27): read back; a role WITHOUT it is a note only, never a failed check' {
+        (Get-SISupportGrantStateSql -ClientId $script:App) | Should -Match "permission_name = N'SHOWPLAN'"
+        $row = @{ Database = 'd'; Tables = 3; Procedures = 4; Current = 4; Signed = 4; SignerOwner = 1; UserPresent = 1; ReadOnlyHeld = 1; Consent = 'setup|customer'; EngineExecute = 4 }
+        $without = ConvertFrom-SISupportGrantState -Row ($row + @{ ReadRolePlan = 0 })
+        $without.Ok | Should -BeTrue -Because 'an install made before 2026-11-27 must not fail any check'
+        $without.Lines | Should -BeNullOrEmpty
+        $without.ReadRolePlan | Should -BeFalse
+        $without.Notes | Should -Be @('the read-only support role cannot read query plans yet')
+        $with = ConvertFrom-SISupportGrantState -Row ($row + @{ ReadRolePlan = 1 })
+        $with.ReadRolePlan | Should -BeTrue; $with.Notes | Should -BeNullOrEmpty
+        $unknown = ConvertFrom-SISupportGrantState -Row $row
+        $unknown.ReadRolePlan | Should -BeNullOrEmpty; $unknown.Notes | Should -BeNullOrEmpty -Because 'not read = no note'
     }
 }
 

@@ -31,13 +31,58 @@ ORDER BY f.CollectionId;
 }
 
 function Get-SIDataReportNameFillSql {
-    <# One batch: only a NULL ReportName, only from the row's own DetailJson -- a stored value is never changed. #>
+    <#
+        One batch: only a NULL ReportName, only from the row's own DetailJson -- a stored value is never changed.
+        #1435 ONE KEYED WALK over the collection: the batch is the next @Batch findings with a NULL report name after @After
+        (their FindingId; 0 = from the first), each read ONCE over the whole walk -- before, every batch read the collection again
+        from its first row and parsed again every row whose own data names no report (measured: 0.7 s at 150,000 findings,
+        36 s at 1,000,000). Answers ONE value, '<changed>|<read>|<last FindingId>' (fewer read than @Batch = the walk is done).
+    #>
     @"
-UPDATE TOP (@Batch) f SET ReportName = $(Get-SIDataReportNameExpr)
+SET NOCOUNT ON;
+CREATE TABLE #w (FindingId BIGINT NOT NULL PRIMARY KEY);
+INSERT #w (FindingId)
+SELECT TOP (@Batch) f.FindingId FROM sidata.Finding AS f
+WHERE f.CollectionId = @CollectionId AND f.ReportName IS NULL AND f.FindingId > @After
+ORDER BY f.FindingId;
+-- the name is read only from a row that IS JSON (CASE), whatever order the optimizer evaluates the conditions in
+UPDATE f SET ReportName = CASE WHEN ISJSON(f.DetailJson) = 1 THEN $(Get-SIDataReportNameExpr) END
+-- one-statement-ok: one batch -- the keys in #w are TOP (@Batch) after @After
 FROM sidata.Finding AS f
-WHERE f.CollectionId = @CollectionId AND f.ReportName IS NULL AND ISJSON(f.DetailJson) = 1 AND $(Get-SIDataReportNameExpr) IS NOT NULL;
-SELECT @@ROWCOUNT;
+JOIN #w AS w ON w.FindingId = f.FindingId
+WHERE f.CollectionId = @CollectionId AND f.ReportName IS NULL AND ISJSON(f.DetailJson) = 1 AND (CASE WHEN ISJSON(f.DetailJson) = 1 THEN $(Get-SIDataReportNameExpr) END) IS NOT NULL;
+DECLARE @changed INT = @@ROWCOUNT;
+SELECT CONCAT(@changed, N'|', (SELECT COUNT(*) FROM #w), N'|', (SELECT MAX(w.FindingId) FROM #w AS w));
 "@
+}
+
+function Invoke-SIDataReportNameFillWalk {
+    <#
+        #1435 The report-name fill of ONE collection (Get-SIDataReportNameFillSql) as one keyed walk: every finding with a NULL
+        report name read once, the batch sized from the last one's time (Get-SIDataNextSize; the database's own load paces it
+        when SI-SqlPacing.ps1 is loaded). Exactly the rows the repeated "UPDATE TOP" filled before, with the same values: whether
+        a row is filled depends only on that row. -BatchSize: the size to start with, and the size reached (for the next
+        collection). Returns the rows filled.
+    #>
+    param([Parameter(Mandatory)][scriptblock]$Invoke, [Parameter(Mandatory)][int]$CollectionId, [ref]$BatchSize, [long]$TargetMs = 5000)
+    $size = [long]5000; if ($BatchSize -and $BatchSize.Value -gt 0) { $size = [long]$BatchSize.Value }
+    $sql = Get-SIDataReportNameFillSql
+    $paced = [bool](Get-Command -Name Invoke-SISqlPacing -ErrorAction SilentlyContinue); $lastMs = 0L
+    $after = 0L; $total = 0L
+    while ($true) {
+        if ($paced) { $pace = Invoke-SISqlPacing -Invoke $Invoke -LastBatchMs $lastMs; if ($pace -and $pace.Shrink) { $size = [Math]::Max(100L, [long][Math]::Floor($size / 2)) } }
+        $sw = [Diagnostics.Stopwatch]::StartNew()
+        $raw = [string](& $Invoke $sql @{ CollectionId = $CollectionId; Batch = $size; After = $after } 'scalar')
+        $sw.Stop(); $lastMs = $sw.ElapsedMilliseconds
+        $parts = $raw.Split([char]'|', 3)
+        if ($parts.Count -lt 3) { throw ("the report-name fill answered '{0}', not '<changed>|<read>|<last FindingId>'" -f $raw) }
+        $total += [long]$parts[0]
+        if ([long]$parts[1] -lt $size -or $parts[2] -eq '') { break }
+        $after = [long]$parts[2]
+        $size = Get-SIDataNextSize -Current $size -ElapsedMs $lastMs -TargetMs $TargetMs -Minimum 100
+    }
+    if ($BatchSize) { $BatchSize.Value = $size }
+    $total
 }
 
 function Get-SIDataRederiveSql {
@@ -73,7 +118,7 @@ function Invoke-SIDataReportNameBackfill {
     $written = 0L
     if (-not $BatchSize) { $size = [long]0; $BatchSize = [ref]$size }
     foreach ($c in $list) {
-        $n = Invoke-SIDataBatchedDelete -Invoke $Invoke -Sql (Get-SIDataReportNameFillSql) -Params @{ CollectionId = $c.CollectionId } -BatchSize $BatchSize
+        $n = Invoke-SIDataReportNameFillWalk -Invoke $Invoke -CollectionId $c.CollectionId -BatchSize $BatchSize
         $written += $n
         [void](& $Invoke (Get-SIDataRederiveSql) @{ CollectionId = $c.CollectionId } 'scalar')
     }

@@ -290,7 +290,7 @@ SELECT @id, 1, g.H, g.Owner, (SELECT $($js -join ', ') FOR JSON PATH, WITHOUT_AR
 FROM (SELECT HASHBYTES('SHA2_256', o.Owner + N'|' + o.KeyPart) AS H, MAX(o.Owner) AS Owner, $($agg -join ', ')
       FROM sidata.Finding AS f
       CROSS APPLY (SELECT CHARINDEX(N'|', f.RaFindingKey) AS P) AS sp
-      CROSS APPLY (SELECT CONVERT(nvarchar(450), LEFT(f.RaFindingKey, sp.P - 1)) AS Owner, LOWER(SUBSTRING(f.RaFindingKey, sp.P + 1, 900)) AS KeyPart) AS o
+      CROSS APPLY (SELECT CONVERT(nvarchar(450), LEFT(f.RaFindingKey, CASE WHEN sp.P > 1 THEN sp.P - 1 ELSE 0 END)) AS Owner, LOWER(SUBSTRING(f.RaFindingKey, sp.P + 1, 900)) AS KeyPart) AS o
       $(Get-SIDupFullListApplySql)
       JOIN sidata.DuplicateCheckWork AS w ON w.CheckId = @id AND w.Kind = 0 AND w.KeyHash = HASHBYTES('SHA2_256', o.Owner)
       WHERE f.CollectionId = @c AND f.FindingId BETWEEN @rlo AND @rhi AND f.RaFindingKey IS NOT NULL AND sp.P > 1
@@ -601,7 +601,7 @@ SELECT o.Owner, o.KeyPart, $($agg -join ', ')
 INTO #fx
 FROM sidata.Finding AS f
 CROSS APPLY (SELECT CHARINDEX(N'|', f.RaFindingKey) AS P) AS sp
-CROSS APPLY (SELECT CONVERT(nvarchar(450), LEFT(f.RaFindingKey, sp.P - 1)) AS Owner, CONVERT(nvarchar(900), LOWER(SUBSTRING(f.RaFindingKey, sp.P + 1, 900))) AS KeyPart) AS o
+CROSS APPLY (SELECT CONVERT(nvarchar(450), LEFT(f.RaFindingKey, CASE WHEN sp.P > 1 THEN sp.P - 1 ELSE 0 END)) AS Owner, CONVERT(nvarchar(900), LOWER(SUBSTRING(f.RaFindingKey, sp.P + 1, 900))) AS KeyPart) AS o
 $(Get-SIDupFullListApplySql)
 WHERE f.CollectionId = CONVERT(int, @cid) AND f.RaFindingKey IS NOT NULL AND sp.P > 1 AND o.Owner IN (SELECT Owner FROM @o)
 GROUP BY o.Owner, o.KeyPart;

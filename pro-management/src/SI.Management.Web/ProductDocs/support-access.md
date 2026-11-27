@@ -13,14 +13,14 @@ without any contact.
 | Microsoft Graph | Read-only application permissions | The read permissions, plus what the setup scripts need to create and repair SecurityInsight's own app registrations and groups |
 | SecurityInsight's resource group | Reader and Log Analytics Reader | Contributor, and role assignment limited to the roles SecurityInsight's own identities use, to service principals only |
 | SecurityInsight's Key Vault | Key Vault Reader: the vault's metadata, never a secret value | Key Vault Secrets Officer: can repair a secret |
-| SecurityInsight's databases | Its own database user in a read-only role (metadata and health, no data); read access to data only just in time | Its own database user in a read-only role; database admin only just in time |
+| SecurityInsight's databases | Its own database user in a read-only role (metadata, health and query plans; no table data); read access to data only just in time | Its own database user in a read-only role; database admin only just in time |
 | SecurityInsight's sign-in app registration | None | None: the install's own updater owns it |
 
 The exact list of the Support app's permissions per level is on the page of Invardia's script that creates it (below).
 SecurityInsight adds only its own part: the Key Vault role and the database access.
 
 The Support app has **no standing admin** in SecurityInsight's databases. It keeps only its own database user in a
-read-only role (metadata and health, no data). When a support session you asked for needs more, SecurityInsight's
+read-only role (metadata, health and query plans; no table data). When a support session you asked for needs more, SecurityInsight's
 support grant opens it **just in time**: at most the level you chose, for at most 8 hours, recorded, and closed again by
 three independent checks. An install that still gives the Support app standing admin from an earlier release loses it
 through its updates and one recorded support step; your own administrators keep the database admin group. See

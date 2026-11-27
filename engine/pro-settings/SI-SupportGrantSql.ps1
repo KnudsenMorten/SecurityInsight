@@ -370,7 +370,8 @@ function Get-SISupportGrantAdminSteps {
         path stays until the later, customer-run cut-over). @{ Step; Purpose; Sql }, each ending with one value (Value):
           schema   the tables, the trigger and the procedures (created once)
           user     the Support app's own database user (WITH SID = its client id, TYPE = E) when it has none, and the
-                   read-only role si_support_read (VIEW DEFINITION, VIEW DATABASE STATE -- metadata and health, no data)
+                   read-only role si_support_read (VIEW DEFINITION, VIEW DATABASE STATE, SHOWPLAN -- metadata, health and
+                   query plans, no data)
                    with the Support app in it: the standing read-only access 4a requires BEFORE anything is made JIT
           consent  the consent row (-Level, -Source customer | derived) -- a customer consent replaces a derived one; a
                    derived one never replaces a customer one
@@ -392,13 +393,14 @@ function Get-SISupportGrantAdminSteps {
     $steps = [System.Collections.Generic.List[object]]::new()
     $steps.Add([pscustomobject]@{ Step = 'schema'; Purpose = 'the support grant tables, the consent trigger and the four procedures (created once, never altered; an earlier release''s procedure is replaced by this release''s)'
         Sql = (Get-SISupportGrantRenewSql) + "`n`n" + (Get-SISupportGrantSchemaSql) + "`nSELECT N'schema' AS Value;" })
-    $steps.Add([pscustomobject]@{ Step = 'user'; Purpose = ('the Support app''s own database user and the standing READ-ONLY role {0} (metadata and health, no data)' -f $rr); Sql = @"
+    $steps.Add([pscustomobject]@{ Step = 'user'; Purpose = ('the Support app''s own database user and the standing READ-ONLY role {0} (metadata, health and query plans; no table data)' -f $rr); Sql = @"
 DECLARE @s nvarchar(400);
 DECLARE @n sysname = (SELECT TOP (1) name FROM sys.database_principals WHERE sid = $sid AND principal_id > 4 AND type NOT IN ('R', 'A', 'C', 'K'));
 IF @n IS NULL BEGIN EXEC (N'CREATE USER [$($un.Replace("'", "''"))] WITH SID = $sid, TYPE = E'); SET @n = N'$uq'; END
 IF DATABASE_PRINCIPAL_ID(N'$rr') IS NULL EXEC (N'CREATE ROLE [$rr] AUTHORIZATION [dbo]');
 GRANT VIEW DEFINITION TO [$rr];
 GRANT VIEW DATABASE STATE TO [$rr];
+GRANT SHOWPLAN TO [$rr];
 IF NOT EXISTS (SELECT 1 FROM sys.database_role_members AS m WHERE m.role_principal_id = DATABASE_PRINCIPAL_ID(N'$rr') AND m.member_principal_id = DATABASE_PRINCIPAL_ID(@n))
 BEGIN SET @s = N'ALTER ROLE [$rr] ADD MEMBER ' + QUOTENAME(@n) + N';'; EXEC (@s); END
 SELECT @n + N'|' + CASE WHEN EXISTS (SELECT 1 FROM sys.database_role_members AS m WHERE m.role_principal_id = DATABASE_PRINCIPAL_ID(N'$rr') AND m.member_principal_id = DATABASE_PRINCIPAL_ID(@n)) THEN N'1' ELSE N'0' END AS Value;
@@ -479,7 +481,8 @@ function Get-SISupportGrantStateSql {
     <#
         PURE. READ ONLY, one row -- the read-back of the admin steps (the caller's own catalog view; the admin sees all):
         the tables, the procedures (there / this release's text / signed / private key gone / signer in db_owner), the
-        Support app's user and its read-only role, the consent, si_engine's EXECUTE on the four procedures.
+        Support app's user and its read-only role, the read-only role's SHOWPLAN (owner 2026-11-27), the consent, si_engine's
+        EXECUTE on the four procedures.
     #>
     param([Parameter(Mandatory)][string]$ClientId)
     $sid = ConvertTo-SISupportGrantSid -ClientId $ClientId
@@ -500,6 +503,8 @@ SELECT DB_NAME() AS [Database],
                          WHERE c.name LIKE N'$px%') THEN 1 ELSE 0 END AS SignerOwner,
        CASE WHEN @uid IS NULL THEN 0 ELSE 1 END AS UserPresent,
        CASE WHEN EXISTS (SELECT 1 FROM sys.database_role_members AS m WHERE m.member_principal_id = @uid AND m.role_principal_id = DATABASE_PRINCIPAL_ID(N'$rr')) THEN 1 ELSE 0 END AS ReadOnlyHeld,
+       CASE WHEN DATABASE_PRINCIPAL_ID(N'$rr') IS NULL THEN NULL WHEN EXISTS (SELECT 1 FROM sys.database_permissions AS rp WHERE rp.class = 0 AND rp.grantee_principal_id = DATABASE_PRINCIPAL_ID(N'$rr')
+           AND rp.permission_name = N'SHOWPLAN' AND rp.[state] IN ('G', 'W')) THEN 1 ELSE 0 END AS ReadRolePlan,
        CASE WHEN OBJECT_ID(N'cfg.SupportConsent') IS NULL THEN NULL ELSE (SELECT [Level] + N'|' + Source FROM cfg.SupportConsent WHERE Id = 1) END AS Consent,
        (SELECT COUNT(*) FROM @want AS w JOIN sys.database_permissions AS dp ON dp.class = 1 AND dp.major_id = OBJECT_ID(w.Name)
          WHERE dp.grantee_principal_id = DATABASE_PRINCIPAL_ID(N'si_engine') AND dp.permission_name = N'EXECUTE' AND dp.[state] IN ('G', 'W')) AS EngineExecute;
@@ -508,7 +513,10 @@ SELECT DB_NAME() AS [Database],
 
 function ConvertFrom-SISupportGrantState {
     <# PURE. The row of Get-SISupportGrantStateSql -> @{ Database; Tables; Procedures; Current; Signed; SignerOwner; UserPresent;
-       ReadOnlyHeld; Consent; EngineExecute; Ok; Lines }. Ok = the model is in place on this database. #>
+       ReadOnlyHeld; ReadRolePlan; Consent; EngineExecute; Ok; Lines; Notes }. Ok = the model is in place on this database.
+       ReadRolePlan: the read-only role holds SHOWPLAN ($true / $false; $null = no role, or not read). A role WITHOUT it is a
+       NOTE only (Notes), never a line of Lines and never a reason Ok is false: an install made before 2026-11-27 lacks it
+       until Invardia gives it. #>
     param($Row)
     $get = { param($k) if ($null -eq $Row) { $null } elseif ($Row -is [System.Collections.IDictionary]) { $Row[$k] } elseif ($Row -is [System.Data.DataRow]) { $Row[$k] } elseif ($Row.PSObject.Properties[$k]) { $Row.$k } else { $null } }
     $s = { param($k) $v = & $get $k; if ($null -eq $v -or $v -is [System.DBNull]) { '' } else { [string]$v } }
@@ -516,7 +524,8 @@ function ConvertFrom-SISupportGrantState {
     $b = { param($k) (& $s $k) -in '1', 'True' }
     $o = [ordered]@{ Database = (& $s 'Database'); Tables = (& $i 'Tables'); Procedures = (& $i 'Procedures'); Current = (& $i 'Current'); Signed = (& $i 'Signed')
                      SignerOwner = (& $b 'SignerOwner'); UserPresent = (& $b 'UserPresent'); ReadOnlyHeld = (& $b 'ReadOnlyHeld'); Consent = (& $s 'Consent')
-                     EngineExecute = (& $i 'EngineExecute'); Ok = $false; Lines = @() }
+                     ReadRolePlan = $(switch (& $s 'ReadRolePlan') { { $_ -in '1', 'True' } { $true; break } { $_ -in '0', 'False' } { $false; break } default { $null } })
+                     EngineExecute = (& $i 'EngineExecute'); Ok = $false; Lines = @(); Notes = @() }
     $l = New-Object System.Collections.Generic.List[string]
     if ($o.Tables -lt 3) { $l.Add(('{0} of the 3 support grant tables are there' -f $o.Tables)) }
     if ($o.Procedures -lt 4) { $l.Add(('{0} of the 4 support grant procedures are there' -f $o.Procedures)) }
@@ -528,6 +537,7 @@ function ConvertFrom-SISupportGrantState {
     if (-not $o.Consent) { $l.Add('no consent is recorded here') }
     if ($o.EngineExecute -lt 4) { $l.Add(('the engine (si_engine) may EXECUTE {0} of the 4 procedures' -f $o.EngineExecute)) }
     $o.Lines = $l.ToArray(); $o.Ok = ($l.Count -eq 0)
+    if ($o.ReadRolePlan -eq $false) { $o.Notes = @('the read-only support role cannot read query plans yet') }
     [pscustomobject]$o
 }
 

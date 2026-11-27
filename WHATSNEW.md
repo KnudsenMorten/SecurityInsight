@@ -1,5 +1,19 @@
 # What's new in SecurityInsight
 
+## 3.1.54 · 2026-11-27 · Fix-only
+
+Large installations show their newest data again.
+
+### New features
+
+None in this version.
+
+### Fixes
+
+- **Large installations show their newest data** - The software update tasks step no longer takes hours at large installations, so the data sync finishes and the newest data is shown again. The tasks are the same as before.
+- **Faster data sync at large installations** - The finding history is checked about twice as fast, and the views' context is built faster. The repair of report names and the task reports no longer slow down faster than the data grows. Results are unchanged.
+- **Database access** - The database's built-in guest account holds no role and cannot connect, and Invardia Support can read the query plan of a slow database step, never the data.
+
 ## 3.1.53 · 2026-11-26 · Fix-only
 
 No more false "not refreshed" warning, exports read one consistent picture, and updates started by hand go through.

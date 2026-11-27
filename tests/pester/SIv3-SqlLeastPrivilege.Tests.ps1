@@ -237,6 +237,21 @@ Describe 'RULE 2 -- plan first; apply only on the planned state; snapshot, diff 
         (Invoke-Lp 'apply').State | Should -Be 'already'
         @($script:W.Sent | Where-Object { $_ -match 'DROP MEMBER' }).Count | Should -Be 0
     }
+    It '#1430 a proof that carries NOTES (tables this database does not have): the notes are said, plan writes BOTH rows and the later apply goes ahead' {
+        $note = '3 statement(s) of this release are on tables this database does not have (snowstage.BatchCi, snowstage.BatchCiKeyValue, snowstage.BatchCiRelation) -- not refused: nothing runs on them here; their grants are checked again once they exist'
+        $script:W.Ready = { param($Component, $UserName) [pscustomobject]@{ Ok = $true; Lines = @(); Grants = 120; Notes = @($note) } }.GetNewClosure()
+        $p = Invoke-Lp 'plan'
+        $p.State | Should -Be 'planned'
+        ($p.Lines -join "`n") | Should -Match ([regex]::Escape('engine: ' + $note))
+        $script:W.Rows['DbJobSqlLeastPrivilege'] | Should -Not -BeNullOrEmpty -Because 'the record row is written under its own name'
+        $script:W.Rows['DbJobSqlLeastPrivilegePlan'] | Should -Not -BeNullOrEmpty -Because 'the plan row is written under its own name'
+        @($script:W.Rows.Keys | Where-Object { -not $_ }).Count | Should -Be 0 -Because 'no row is written under an empty name'
+        ($script:W.Rows['DbJobSqlLeastPrivilegePlan'] | ConvertFrom-Json).hash | Should -Be (Get-LpRecord).hash
+        $a = Invoke-Lp 'apply'
+        $a.State | Should -Be 'applied'
+        (Get-LpRoles $script:SidE) | Should -Be @('db_owner', 'si_engine')
+        @(($script:W.Rows['DbJobSqlLeastPrivilegeRemoved'] | ConvertFrom-Json).items).Count | Should -Be 3
+    }
     It 'THE DIFF: a planned removal is not a loss; anything else that disappeared is' {
         $b = ConvertFrom-SISqlLpSnapshot -Rows (& $script:W.Sql 'x' (Get-SISqlLpSnapshotSql) @{} 'rows')
         $k = Get-SISqlLpMemberKey -Role 'db_datareader' -Sid $script:SidE

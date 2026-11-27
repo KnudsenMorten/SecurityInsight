@@ -14,7 +14,8 @@
       * ITS OWN CONTAINED DATABASE USER in each product database (the Pro database, the identity ledger, the data database
         where the install has one), made from the application's CLIENT id without a directory lookup --
             CREATE USER [<name>] WITH SID = 0x<the client id's 16 bytes, [guid]::ToByteArray() order, as hex>, TYPE = E
-        -- in the read-only role si_support_read (VIEW DEFINITION + VIEW DATABASE STATE: metadata and health, no data);
+        -- in the read-only role si_support_read (VIEW DEFINITION + VIEW DATABASE STATE + SHOWPLAN: metadata, health and
+        query plans, no data);
       * with the support grant's tables, its four SIGNED procedures and the customer's consent next to it (engine\
         pro-settings\SI-SupportGrantSql.ps1, Get-SISupportGrantAdminSteps -- the one source of those steps).
     ADMIN ONLY JUST IN TIME: more than read-only comes only through the signed support grant procedures (the support grant
@@ -62,8 +63,9 @@ function Get-SISupportStandingRefusalText {
 function Get-SISupportAppReadOnlyAccessSql {
     <# PURE, SELF-CONTAINED (the support SQL job carries it word for word). The statements that give the Support app its
        own database user (by SID -- no directory lookup; an existing user with that SID is reused whatever its name) in the
-       read-only role si_support_read (made when the database has none: VIEW DEFINITION + VIEW DATABASE STATE -- metadata and
-       health, no data). The same right as the support grant's 'user' step (engine\pro-settings\SI-SupportGrantSql.ps1).
+       read-only role si_support_read (made when the database has none: VIEW DEFINITION + VIEW DATABASE STATE + SHOWPLAN --
+       metadata, health and query plans, no data; the three are granted on every run, so a role made before SHOWPLAN
+       (owner 2026-11-27) gains it here). The same right as the support grant's 'user' step (engine\pro-settings\SI-SupportGrantSql.ps1).
        NEVER db_owner, never any other role: it only ADDS the user and that one membership. Ends with ONE value:
        '<user>|<db_owner 1/0>|<si_support_read 1/0>' (a db_owner of an earlier release is READ, never changed here). #>
     param([Parameter(Mandatory)][string]$UserName, [Parameter(Mandatory)][string]$ClientId)
@@ -77,6 +79,7 @@ IF @n IS NULL BEGIN EXEC (N'CREATE USER [$un] WITH SID = $sid, TYPE = E'); SET @
 IF DATABASE_PRINCIPAL_ID(N'si_support_read') IS NULL EXEC (N'CREATE ROLE [si_support_read] AUTHORIZATION [dbo]');
 GRANT VIEW DEFINITION TO [si_support_read];
 GRANT VIEW DATABASE STATE TO [si_support_read];
+GRANT SHOWPLAN TO [si_support_read];
 IF NOT EXISTS (SELECT 1 FROM sys.database_role_members AS m WHERE m.role_principal_id = DATABASE_PRINCIPAL_ID(N'si_support_read') AND m.member_principal_id = DATABASE_PRINCIPAL_ID(@n))
 BEGIN SET @s = N'ALTER ROLE [si_support_read] ADD MEMBER ' + QUOTENAME(@n) + N';'; EXEC (@s); END
 SELECT ISNULL((SELECT TOP (1) u.name COLLATE DATABASE_DEFAULT + N'|' + $(& $has 'db_owner') + N'|' + $(& $has 'si_support_read')

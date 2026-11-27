@@ -490,9 +490,12 @@ function Invoke-SIDbInitSqlLeastPrivilege {
             if ($Component -ne 'engine') { return [pscustomobject]@{ Ok = $false; Lines = @('no least-privilege role for this component'); Grants = 0 } }
             if (-not (Get-Command -Name Test-SIEngineCutoverReady -ErrorAction SilentlyContinue)) { return [pscustomobject]@{ Ok = $false; Lines = @('this package carries no engine grant list'); Grants = 0 } }
             if (-not @($Required).Count) { return [pscustomobject]@{ Ok = $false; Lines = @('the release''s engine code inventory could not be read -- the role cannot be proven to cover it'); Grants = 0 } }
-            $st = ConvertFrom-SIEngineAccessRows -Rows @(& $Sql $pro (Get-SIEngineAccessStateSql -UserName $UserName) @{} 'rows' | ForEach-Object { $_ })
+            # #1430: which of the release's tables this database has (a package before #1430 reads as before)
+            $sa = @{}; if (Get-Command -Name Get-SIEngineRequiredObjects -ErrorAction SilentlyContinue) { $sa.Objects = Get-SIEngineRequiredObjects -Required $Required }
+            $st = ConvertFrom-SIEngineAccessRows -Rows @(& $Sql $pro (Get-SIEngineAccessStateSql -UserName $UserName @sa) @{} 'rows' | ForEach-Object { $_ })
             $t = Test-SIEngineCutoverReady -State $st -Required $Required -UserName $UserName
-            [pscustomobject]@{ Ok = [bool]$t.Ok; Lines = @($t.Lines); Grants = (@($st.Granted).Count + @($st.Denied).Count) }
+            $tn = @(); if ($t.PSObject.Properties['Notes']) { $tn = @($t.Notes | Where-Object { $_ }) }
+            [pscustomobject]@{ Ok = [bool]$t.Ok; Lines = @($t.Lines); Grants = (@($st.Granted).Count + @($st.Denied).Count); Notes = $tn }
         }
     }
     try {
@@ -513,6 +516,8 @@ function Invoke-SIDbInitSqlLeastPrivilege {
             $dbName = @($before.Members | Where-Object { $_.Sid -ieq $sid } | ForEach-Object Member | Select-Object -First 1)[0]
             if (-not $dbName) { $dbName = [string]$p.Name }
             $readyBy[$m.Component] = & $Ready $m.Component $dbName
+            # (never $n here: it holds Get-SISqlLpNames -- the record names every later step writes and reads)
+            if ($readyBy[$m.Component] -and $readyBy[$m.Component].PSObject.Properties['Notes']) { foreach ($readyNote in @($readyBy[$m.Component].Notes | Where-Object { $_ })) { & $say ('  {0}: {1}' -f $m.Component, $readyNote) } }
         }
         $plan = Get-SISqlLpPlan -Before $before -Principals $principals -AllowedNames @($DbInput.SqlLpNames) -NeverSids $neverSids.ToArray() -Ready $readyBy -AllowedTypes $AllowedTypes
         $list = Format-SISqlLpList -Items $plan.Removals

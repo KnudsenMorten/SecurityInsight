@@ -128,10 +128,12 @@ function Get-SIRemediationTaskRuleFields {
 }
 
 function Get-SIRemediationTaskKeyApplySql {
-    <# PURE. The parts of a finding row f: its owner (the CI, or asset:<id>) and finding key, as the findings per CI make them. #>
+    <# PURE. The parts of a finding row f: its owner (the CI, or asset:<id>) and finding key, as the findings per CI make them.
+       #1431 (review B3) safe in itself: a key without '|' (sp.P = 0, left out by every statement's sp.P > 1) gives an empty owner
+       instead of LEFT's "Invalid length parameter" -- whatever order the server evaluates the filter in; no row it keeps changes. #>
     @'
 CROSS APPLY (SELECT CHARINDEX(N'|', f.RaFindingKey) AS P) AS sp
-CROSS APPLY (SELECT LEFT(f.RaFindingKey, sp.P - 1) AS OwnerKey, SUBSTRING(f.RaFindingKey, sp.P + 1, 900) AS KeyPart) AS o
+CROSS APPLY (SELECT LEFT(f.RaFindingKey, CASE WHEN sp.P > 1 THEN sp.P - 1 ELSE 0 END) AS OwnerKey, SUBSTRING(f.RaFindingKey, sp.P + 1, 900) AS KeyPart) AS o
 CROSS APPLY (SELECT LEFT(CASE WHEN LOWER(f.ConfigurationId) = o.KeyPart THEN f.ConfigurationId ELSE o.KeyPart END, 256) AS FKey) AS k0
 CROSS APPLY (SELECT k0.FKey, CASE WHEN k0.FKey LIKE N'CVE-[0-9][0-9][0-9][0-9]-%' THEN N'cve' ELSE N'recommendation' END AS Typ) AS k
 '@
@@ -401,21 +403,41 @@ function Get-SIRemediationTaskBundledUnits {
 
 function Get-SIRemediationTaskSoftwareSql {
     <# The software units on each CI of the collection (@CollectionId, the signatures of build @BuildId): owner, product, vendor,
-       version, and the CI's Defender device ids (';'). #>
+       version, and the CI's Defender device ids (';', in name order).
+       #1431 SET-BASED, THREE STEPS (the same rows as the one statement before it, which ran for hours at a large install: its join
+       compared each signature with a hash worked out per finding row -- the full lists read from the finding's document inside
+       it -- so the server could neither seek nor hash on it and replayed every signature for every finding):
+         1. each finding's signature worked out ONCE, one row per CI and signature, into an indexed working table
+         2. the signatures' software units joined on plain equality (BuildId, SigHash: the working rows' own key)
+         3. the CIs' Defender device ids aggregated once (one set over CiLink), joined once -- never a list read per row
+       The working tables take the collation of the columns they come from (SELECT ... INTO), so DISTINCT and every join compare
+       exactly as before. One code path at every size; no cap. #>
     @"
 SET NOCOUNT ON;
-WITH u AS (
-    SELECT DISTINCT LEFT(o.OwnerKey, 450) AS OwnerKey, s.Product, s.Vendor, s.Version
-    FROM sidata.Finding AS f
+IF OBJECT_ID('tempdb..#rtsf') IS NOT NULL DROP TABLE #rtsf;
+IF OBJECT_ID('tempdb..#rtsu') IS NOT NULL DROP TABLE #rtsu;
+SELECT DISTINCT LEFT(o.OwnerKey, 450) AS OwnerKey, CONVERT(binary(32), {SIG}) AS SigHash
+INTO #rtsf
+FROM sidata.Finding AS f
 $(Get-SIRemediationTaskKeyApplySql)
-    JOIN sidata.RemediationTaskSig AS s ON s.BuildId = CONVERT(uniqueidentifier, @BuildId) AND s.SigHash = {SIG}
-    WHERE f.CollectionId = CONVERT(int, @CollectionId) AND f.RaFindingKey IS NOT NULL AND sp.P > 1
-      AND s.Kind = N'software-upgrade' AND s.Product <> N'')
+WHERE f.CollectionId = CONVERT(int, @CollectionId) AND f.RaFindingKey IS NOT NULL AND sp.P > 1;
+CREATE CLUSTERED INDEX CX_rtsf ON #rtsf (SigHash);
+SELECT DISTINCT x.OwnerKey, s.Product, s.Vendor, s.Version
+INTO #rtsu
+FROM #rtsf AS x
+JOIN sidata.RemediationTaskSig AS s ON s.BuildId = CONVERT(uniqueidentifier, @BuildId) AND s.SigHash = x.SigHash
+WHERE s.Kind = N'software-upgrade' AND s.Product <> N'';
+CREATE CLUSTERED INDEX CX_rtsu ON #rtsu (OwnerKey);
 SELECT u.OwnerKey, u.Product, u.Vendor, u.Version,
-       CASE WHEN u.OwnerKey LIKE N'asset:%' THEN LOWER(SUBSTRING(u.OwnerKey, 7, 450))
-            ELSE (SELECT STRING_AGG(CONVERT(nvarchar(max), LOWER(l.NativeId)), N';') FROM sidata.CiLink AS l WHERE l.CiId = u.OwnerKey AND l.Provider = N'mde') END AS DeviceIds
-FROM u
+       CASE WHEN u.OwnerKey LIKE N'asset:%' THEN LOWER(SUBSTRING(u.OwnerKey, 7, 450)) ELSE d.DeviceIds END AS DeviceIds
+FROM #rtsu AS u
+LEFT JOIN (SELECT l.CiId, STRING_AGG(CONVERT(nvarchar(max), LOWER(l.NativeId)), N';') WITHIN GROUP (ORDER BY LOWER(l.NativeId)) AS DeviceIds
+           FROM sidata.CiLink AS l
+           WHERE l.Provider = N'mde' AND EXISTS (SELECT 1 FROM #rtsu AS y WHERE y.OwnerKey = l.CiId)
+           GROUP BY l.CiId) AS d ON d.CiId = u.OwnerKey
 ORDER BY u.OwnerKey COLLATE Latin1_General_BIN2;
+DROP TABLE #rtsf;
+DROP TABLE #rtsu;
 "@
 }
 

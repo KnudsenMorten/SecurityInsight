@@ -104,6 +104,18 @@ SELECT ISNULL((SELECT TOP (1) u.name COLLATE DATABASE_DEFAULT + N'|' + $(& $has 
 "@
 }
 
+function Get-SISupportReadRolePlanCheckSql {
+    <# PURE. READS ONLY. Does the read-only role si_support_read hold SHOWPLAN in this database (owner 2026-11-27: "give
+       reqperm at all" -- query plans, never data)? '1' / '0'; '' = the database has no such role; '?' = this connection
+       cannot see other principals' permissions (could not be checked, never "missing"). #>
+    @"
+SELECT CASE WHEN ISNULL(HAS_PERMS_BY_NAME(NULL, NULL, N'VIEW DEFINITION'), 0) = 0 THEN N'?'
+            WHEN DATABASE_PRINCIPAL_ID(N'si_support_read') IS NULL THEN N''
+            WHEN EXISTS (SELECT 1 FROM sys.database_permissions AS p WHERE p.class = 0 AND p.grantee_principal_id = DATABASE_PRINCIPAL_ID(N'si_support_read')
+                         AND p.permission_name = N'SHOWPLAN' AND p.[state] IN ('G', 'W')) THEN N'1' ELSE N'0' END AS Value;
+"@
+}
+
 function Get-SISupportAppServicePrincipal {
     <# The Support app's service principal in this tenant: @{ Id (object id); DisplayName }, or $null when the tenant has
        none. A directory that cannot be read THROWS -- "could not read" is never "not there". #>
@@ -195,6 +207,9 @@ function Get-SISupportSqlAccess {
                     if (-not $read) { $missing++; $said.Add(('{0}: its own user WITHOUT the read-only role' -f $n)) }
                     elseif ($owner) { $back.Add($n); $said.Add(('{0}: its own user, read-only role, and db_owner now (an open support grant -- or standing admin back)' -f $n)) }
                     else { $said.Add(('{0}: its own user, read-only role -- as expected' -f $n)) }
+                    # SHOWPLAN on the read-only role (owner 2026-11-27): a NOTE only -- never missing, never the wire's dbUser
+                    $plan = ''; try { $plan = ([string](Read-SISupportSqlValue -Invoke $Databases[$n] -Sql (Get-SISupportReadRolePlanCheckSql))).Trim() } catch { $plan = '' }
+                    if ($plan -eq '0') { $said.Add(('{0}: note -- the read-only support role cannot read query plans yet' -f $n)) }
                     continue
                 }
                 $a = ConvertFrom-SISupportAppDatabaseAnswer $raw

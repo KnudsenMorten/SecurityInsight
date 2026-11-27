@@ -139,11 +139,17 @@ function Invoke-SIUpdaterEngineAccessCheck {
             ForEach-Object { if ($_ -is [System.Collections.IDictionary]) { [string]$_['name'] } else { [string]$_.name } } | Where-Object { $_ -and $Exclude -notcontains $_ })
         if (-not $users.Count) { Write-UpdLog 'engine database rights: no engine identity found in the Pro database -- nothing to check'; return @() }
         $req = Get-SIEngineRequiredPermission -References (Get-SIEngineSqlReference -SIRoot $SIRoot)
+        # #1430: which of the release's objects this database has -- a statement on a table it does not have is a note, not
+        # a refusal (a release before #1430 has no -Objects: the check runs as it did)
+        $stateArgs = @{}
+        if ((Get-Command -Name Get-SIEngineAccessStateSql).Parameters.ContainsKey('Objects') -and (Get-Command -Name Get-SIEngineRequiredObjects -ErrorAction SilentlyContinue)) { $stateArgs.Objects = Get-SIEngineRequiredObjects -Required $req }
         $out = foreach ($u in $users) {
-            $state = ConvertFrom-SIEngineAccessRows -Rows @(& $Store.Invoke (Get-SIEngineAccessStateSql -UserName $u) @{} 'reader' | ForEach-Object { $_ })
+            $state = ConvertFrom-SIEngineAccessRows -Rows @(& $Store.Invoke (Get-SIEngineAccessStateSql -UserName $u @stateArgs) @{} 'reader' | ForEach-Object { $_ })
             $d = Get-SIEngineAccessDrift -State $state -Required $req -UserName $u
             foreach ($l in @($d.Lines)) { Write-UpdLog ('{0}engine database rights: {1}' -f $(if ($d.Status -eq 'drift') { 'WARNING: ' } else { '' }), $l) }
-            [pscustomobject]@{ User = $u; Status = $d.Status; Lines = @($d.Lines) }
+            $notes = @(); if ($d.PSObject.Properties['Notes']) { $notes = @($d.Notes | Where-Object { $_ }) }
+            foreach ($l in $notes) { Write-UpdLog ('engine database rights: {0}' -f $l) }
+            [pscustomobject]@{ User = $u; Status = $d.Status; Lines = @($d.Lines); Notes = $notes }
         }
         $global:SI_UpdaterEngineAccess = @($out)
         @($out)

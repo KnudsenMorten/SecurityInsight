@@ -1,0 +1,21 @@
+{
+  "version": "3.1.54",
+  "date": "2026-11-27",
+  "type": "fix-only",
+  "summary": "Large installations show their newest data again.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "Large installations show their newest data",
+      "text": "The software update tasks step no longer takes hours at large installations, so the data sync finishes and the newest data is shown again. The tasks are the same as before."
+    },
+    {
+      "title": "Faster data sync at large installations",
+      "text": "The finding history is checked about twice as fast, and the views' context is built faster. The repair of report names and the task reports no longer slow down faster than the data grows. Results are unchanged."
+    },
+    {
+      "title": "Database access",
+      "text": "The database's built-in guest account holds no role and cannot connect, and Invardia Support can read the query plan of a slow database step, never the data."
+    }
+  ]
+}

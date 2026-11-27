@@ -7089,7 +7089,7 @@ too, so none of them can make the engine act on an unverified change.
 Invardia support has no standing administrator right in your databases. Its Support app is an app registration you create
 in your own tenant, and you choose its level.
 
-- **What it holds at all times.** A read-only database role (`si_support_read`: metadata and health, no data) in each
+- **What it holds at all times.** A read-only database role (`si_support_read`: metadata, health and query plans; no table data) in each
   product database, and the right to put a message on one storage queue. It holds no right on any job.
 - **The levels you consent to.** *troubleshoot*: read access to the database while a session is open
   (`db_datareader`), and Key Vault names and metadata without secret values. *setup*: database owner while a session is open
@@ -11393,7 +11393,11 @@ step: the engine keeps db_datareader + db_datawriter there.
   server), their roles and the role's real grants, against the RELEASE's inventory (`Get-SIEngineAccessDrift`): `ok`,
   `not-moved` (still has the broad roles -- said once, no warning), `drift` in plain words (a statement the role would
   refuse with file:line, another role such as db_owner, an old gated procedure) as a WARNING line. Never a grant, never a
-  block, never throws.
+  block, never throws. The read also asks which of the release's objects the database has: a statement on a table it
+  does not have (the SQL CMDB hand-off's own tables, for one, live in the customer's hand-off database) is not a refusal
+  -- it is one plain note ("N statement(s) ... are on tables this database does not have"), and the check compares that
+  table's grants again once it exists. The cut-over's proof (before the broad roles may be removed) reads the same way:
+  a table the database does not have never blocks it; an existing table missing a grant still does.
 - **Every update: asset tagging's database access, given by the product (no person needs database admin rights).**
   `Invoke-SIUpdaterTaggingDatabaseAccess` (same file) finds asset tagging's identity in the install's resource group (the
   install record's name; none = no asset tagging, nothing said), reads its state with the release's

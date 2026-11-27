@@ -13,6 +13,21 @@ SecurityInsight Pro and the Pro trial install from invardia.com, never from GitH
 [invardia.com/trial](https://invardia.com/trial/), and your installation page there gives your two lines.
 <!-- /install lines -->
 
+## v3.1.54 — large installations show their newest data again
+
+### Fixes
+- **Large installations: the software update tasks step no longer takes hours.** It now works each finding out once
+  instead of comparing every task with every finding, so the data sync finishes and the newest data is shown again. The
+  tasks are the same as before.
+- **Invardia Support can read the query plan of a slow database step, never the data.**
+- **The database's built-in guest account holds no role and cannot connect**: the database setup step takes it out of
+  every database role where it is in one, and checks the result.
+- **The views' context of large installations is built faster**, and the same spellings are kept every run.
+- **Large installations: the data sync's repair of report names and the task reports no longer slow down faster than the
+  data grows.** Each finding is now read once instead of once per batch, and the number of vulnerabilities per remediation
+  task is counted before the summary is built. The results are the same as before.
+- **The finding history of large installations is checked about twice as fast.**
+
 ## v3.1.53 — no more false "not refreshed" warning, consistent exports, and updates started by hand go through
 
 ### Fixes

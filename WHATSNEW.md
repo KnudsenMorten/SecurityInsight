@@ -1,5 +1,21 @@
 # What's new in SecurityInsight
 
+## 3.1.53 · 2026-11-26 · Fix-only
+
+No more false "not refreshed" warning, exports read one consistent picture, and updates started by hand go through.
+
+### New features
+
+None in this version.
+
+### Fixes
+
+- **No false recommendations warning** - The run report no longer says the Defender for Cloud recommendations were not refreshed when they were.
+- **Partial results said as not complete** - When a Defender for Cloud result was not read in full, the reports that use it say it is not complete, and nothing is closed because of it.
+- **Consistent exports** - Exports read one consistent picture while data changes; an export whose rows changed while it ran is refused, never handed out mixed.
+- **Updates started by hand go through** - An update started by hand close to a scheduled update time is no longer ended early.
+- **Smaller fixes** - The identity-names report is stored whole, support sees the last run per step and the image clean-up, and large exports continue on a second sheet.
+
 ## 3.1.52 · 2026-11-26 · Feature update
 
 Large installations finish their runs, a warning shows when data is old, and the 3.1.51 data corrections.

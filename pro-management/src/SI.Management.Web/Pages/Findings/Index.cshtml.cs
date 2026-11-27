@@ -252,6 +252,10 @@ public sealed class IndexModel : SI.Management.Web.Columns.DataViewPageModel
         // a chunk at a time and written on before the next is read ("memory issues must not be a problem in any step")
         // the first chunk is read here (the file name and the workbook name its collection); the rest when it is written
         var chunks = FindingChunks(_q, ProDataFilters.Normalize(Filter()), sel);
+        // #1418 (a)(b): on the live path the keys of the findings the export reads, before its first chunk (and after its last)
+        var ids = sel.Count == 0 ? null : sel.ToList();
+        var startFilter = ProDataFilters.Normalize(Filter()) with { Skip = 0 };
+        ExportKeyStart = await ExportConsistency.StartAsync(t => _q.ExportKeyHashAsync(startFilter, ids, t), ct);
         ExportRows = (await chunks(1, ct)).Cast<FindingRow>().ToList();
         ExportChunks = chunks;
         // #1400 completeness: the exact count of what the chunks read (the same statement counted, the collection the export
@@ -261,6 +265,7 @@ public sealed class IndexModel : SI.Management.Web.Columns.DataViewPageModel
         var counted = ProDataFilters.Normalize(Filter()) with { Skip = 0 };
         if (counted.CollectionId is null && ExportRows.FirstOrDefault()?.CollectionId is { Length: > 0 } pinned) counted = counted with { CollectionId = pinned };
         ExportExpected = await _q.ExportCountAsync(counted, sel.Count == 0 ? null : sel.ToList(), ct);
+        ExportKeyRead = t => _q.ExportKeyHashAsync(counted, ids, t);
         if (sel.Count > ExportExpected)
             SI.Management.Web.Data.ExportSession.Current?.Note($"{sel.Count - ExportExpected:N0} of the {sel.Count:N0} ticked findings are not in this view (its filter or collection) and are not in the file.");
     }
@@ -268,6 +273,9 @@ public sealed class IndexModel : SI.Management.Web.Columns.DataViewPageModel
     /// #1400 the export's chunk reader (<see cref="SI.Management.Web.Columns.DataTable.Chunks"/>) and the count it began with.
     private Func<int, CancellationToken, Task<IReadOnlyList<object>>>? ExportChunks { get; set; }
     private long? ExportExpected { get; set; }
+    /// #1418 (a)(b) the keys before the first chunk (live path only) and the read of them after the last.
+    private ExportKeyHash? ExportKeyStart { get; set; }
+    private Func<CancellationToken, Task<ExportKeyHash?>>? ExportKeyRead { get; set; }
 
     /// <summary>
     /// #1400 every finding the filter keeps (only the ticked ones when <paramref name="selected"/> names any), a chunk of
@@ -330,6 +338,7 @@ public sealed class IndexModel : SI.Management.Web.Columns.DataViewPageModel
         {
             Id = "findings", View = ViewKey, Title = "Findings", Rows = rows.Cast<object>().ToList(), Columns = cols, Marker = "data-grid=\"findings\"",
             Chunks = ExportChunks, ExpectedRows = ExportChunks is null ? null : ExportExpected, KeyOf = o => F(o).CollectionId + "|" + F(o).FindingId,
+            KeyHashStart = ExportChunks is null ? null : ExportKeyStart, KeyHash = ExportChunks is null ? null : ExportKeyRead,
             Ci = RowCiKey.AssetKey, Findings = RowFindingKey.FindingId, CollectionId = collection ?? "",
             RefOf = o => new SI.Management.Web.Columns.RowRef(F(o).AssetKey, SI.Management.Web.Columns.DataViewLayout.FindingId(F(o).FindingId)),
             SelectName = User.IsReader() ? "Sel" : null, SelectValue = o => F(o).FindingId,

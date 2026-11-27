@@ -341,7 +341,7 @@ SET NOCOUNT ON;
 IF OBJECT_ID(N'cfg.InstallState') IS NULL BEGIN SELECT CAST(0 AS int) AS Claimed; RETURN; END
 SET XACT_ABORT ON;
 BEGIN TRAN;
-DECLARE @cur NVARCHAR(400) = NULL, @has int = 0, @ok int = 0;
+DECLARE @cur NVARCHAR(MAX) = NULL, @has int = 0, @ok int = 0;
 SELECT @cur = Value, @has = 1 FROM cfg.InstallState WITH (UPDLOCK, HOLDLOCK) WHERE Name = N'$($script:SISignInMethodsFill.ClaimRow)';
 DECLARE @u DATETIME2(0) = CASE WHEN ISJSON(@cur) = 1 THEN TRY_CONVERT(DATETIME2(0), JSON_VALUE(@cur, '`$.until'), 127) END;
 IF @has = 0 BEGIN INSERT cfg.InstallState (Name, Value, [Version], UpdatedBy) VALUES (N'$($script:SISignInMethodsFill.ClaimRow)', @Value, NULL, N'sign-in methods'); SET @ok = 1; END

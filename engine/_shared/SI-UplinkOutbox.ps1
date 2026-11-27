@@ -176,7 +176,7 @@ ELSE
 BEGIN
 $bound
     BEGIN TRAN;
-    DECLARE @v NVARCHAR(400) = NULL, @has int = 0;
+    DECLARE @v NVARCHAR(MAX) = NULL, @has int = 0;
     SELECT @v = Value, @has = 1 FROM cfg.InstallState WITH (UPDLOCK, HOLDLOCK) WHERE Name = @StateName;
     IF ISNULL(ISJSON(@v), 0) <> 1 SET @v = N'{"dropped":0,"said":0}';
     DECLARE @until DATETIME2(0) = TRY_CONVERT(DATETIME2(0), JSON_VALUE(@v, '$.drainUntilUtc'), 127);

@@ -61,6 +61,8 @@ $script:SINightly = @{
     OldUpdaterCron   = '0 3 * * *'
     ShippedJobTag    = '23:00 Europe/Copenhagen'
     TickWindowMin    = 10
+    ScheduledStartGraceSec = 120                # #1425: a timer's execution starts at its tick; one started later is by hand
+    ScheduledStartToleranceSec = 30             # #1425: ... and one up to 30 s before its tick still counts as the timer's
     PipelineStart    = '23:30'
     OldPipelineStart = '22:00'
     Marker           = 'NightlyScheduleRegion'
@@ -188,11 +190,24 @@ function Test-SIUpdaterNightlyTick {
         job records (tag si-nightly-schedule; an IANA id or a TimeZoneInfo). -Mode: SI_UPDATER_MODE (a run started for a
         purpose). Only a start on one of the zone's ticks, on exactly the zone's timer, is checked: it goes on when it is 18:30
         in the zone (or 23:00 on the region step's ticks, a job the 19:00 move has not reached yet), and ends (Go $false) on
-        the other tick. Everything else goes on. Returns @{ Go; Why; LocalTime }.
+        the other tick. Everything else goes on. #1425 -StartedUtc: when this execution's own start time is known (ARM's
+        startTime -- for a timer's execution it is exactly the tick, measured at internal 2026-11-26: 22 of 22 at 0 s), only a
+        start from ScheduledStartToleranceSec (30 s) before to ScheduledStartGraceSec (120 s) after a tick is the timer's; any
+        other is a start by hand and goes on; the hour is then judged on that tick. Unknown: the clock (-NowUtc,
+        TickWindowMin) decides, as before. Returns @{ Go; Why; LocalTime; OnTick (this start is taken as the timer's); Tick
+        ('HH:mm' UTC, or ''); OffsetSec (start minus tick in seconds, with -StartedUtc; else $null); ByStart }.
     #>
-    param([Parameter(Mandatory)][datetime]$NowUtc, [AllowEmptyString()][string]$Cron = '', [AllowEmptyString()][string]$Mode = '', $Zone = $script:SINightly.Zone)
+    param([Parameter(Mandatory)][datetime]$NowUtc, [AllowEmptyString()][string]$Cron = '', [AllowEmptyString()][string]$Mode = '', $Zone = $script:SINightly.Zone,
+          [AllowNull()][Nullable[datetime]]$StartedUtc = $null)
     $u = if ($NowUtc.Kind -eq 'Local') { $NowUtc.ToUniversalTime() } else { [datetime]::SpecifyKind($NowUtc, 'Utc') }
-    $go = { param($why, $lt) [pscustomobject]@{ Go = $true; Why = $why; LocalTime = $lt } }
+    $byStart = $false
+    if ($null -ne $StartedUtc) {
+        $s = [datetime]$StartedUtc
+        $u = if ($s.Kind -eq 'Local') { $s.ToUniversalTime() } else { [datetime]::SpecifyKind($s, 'Utc') }
+        $byStart = $true
+    }
+    $go = { param($why, $lt, $tick = $null, $off = $null, [bool]$on = $false)
+            [pscustomobject]@{ Go = $true; Why = $why; LocalTime = $lt; OnTick = $on; Tick = $(if ($tick) { '{0:00}:{1:00}' -f $tick.Hour, $tick.Minute } else { '' }); OffsetSec = $off; ByStart = $byStart } }
     if ("$Mode".Trim()) { return (& $go 'a run started for a purpose' $null) }
     $tz = if ($null -eq $Zone) { $null } else { Get-SINightlyZone $Zone }
     if (-not $tz) { return (& $go 'the time zone is not known on this machine -- the update runs' $null) }
@@ -205,11 +220,28 @@ function Test-SIUpdaterNightlyTick {
     }
     if (-not $at) { return (& $go 'the updater runs on its own timer' $null) }
     $ticks = @(Get-SINightlyUpdaterTicks -Zone $tz -Year $u.Year -At $at)
-    $onTick = @($ticks | Where-Object { $m = ($u.Hour * 60 + $u.Minute) - ($_.Hour * 60 + $_.Minute); $m -ge 0 -and $m -lt $script:SINightly.TickWindowMin }).Count
-    if (-not $onTick) { return (& $go 'started by hand or by a release' $null) }
-    $local = [TimeZoneInfo]::ConvertTimeFromUtc($u, $tz)
-    if ($local.Hour -eq [int]($at.Split(':')[0])) { return (& $go ('{0:HH:mm} in {1}' -f $local, $zid) $local) }
-    [pscustomobject]@{ Go = $false; LocalTime = $local
+    $tick = $null; $off = $null
+    if ($byStart) {
+        $nowSec = $u.Hour * 3600 + $u.Minute * 60 + $u.Second
+        foreach ($k in $ticks) {
+            $sec = $nowSec - ($k.Hour * 3600 + $k.Minute * 60)
+            if ($sec -ge (-1 * $script:SINightly.ScheduledStartToleranceSec) -and $sec -lt $script:SINightly.ScheduledStartGraceSec) { $tick = $k; $off = $sec; break }
+        }
+        if (-not $tick) {
+            # the nearest tick, for the log line only
+            $near = @($ticks | Sort-Object { [math]::Abs($nowSec - ($_.Hour * 3600 + $_.Minute * 60)) })[0]
+            $o = if ($near) { $nowSec - ($near.Hour * 3600 + $near.Minute * 60) } else { $null }
+            return (& $go 'started by hand or by a release' $null $near $o $false)
+        }
+    } else {
+        $tick = @($ticks | Where-Object { $m = ($u.Hour * 60 + $u.Minute) - ($_.Hour * 60 + $_.Minute); $m -ge 0 -and $m -lt $script:SINightly.TickWindowMin })[0]
+        if (-not $tick) { return (& $go 'started by hand or by a release' $null) }
+    }
+    # the hour: by the start time itself (the clock), or by the tick the start belongs to (a start just before its tick)
+    $judge = if ($byStart) { [datetime]::SpecifyKind($u.Date.AddHours($tick.Hour).AddMinutes($tick.Minute), 'Utc') } else { $u }
+    $local = [TimeZoneInfo]::ConvertTimeFromUtc($judge, $tz)
+    if ($local.Hour -eq [int]($at.Split(':')[0])) { return (& $go ('{0:HH:mm} in {1}' -f $local, $zid) $local $tick $off $true) }
+    [pscustomobject]@{ Go = $false; LocalTime = $local; OnTick = $true; Tick = ('{0:00}:{1:00}' -f $tick.Hour, $tick.Minute); OffsetSec = $off; ByStart = $byStart
         Why = ('It is {0:HH:mm} in {1}: SecurityInsight updates at {2} in the time zone of its Azure region, so this start ends here (not a failure; the update runs at the other start time tonight).' -f $local, $zid, $at) }
 }
 

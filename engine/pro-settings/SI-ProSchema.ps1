@@ -741,7 +741,7 @@ function Read-SIProSchemaState {
 }
 
 function ConvertTo-SIProSchemaStateValue {
-    <# PURE. The compact JSON stored in cfg.InstallState.Value (NVARCHAR(400)). #>
+    <# PURE. The compact JSON stored in cfg.InstallState.Value (NVARCHAR(MAX) since 3.1.53). #>
     param([Parameter(Mandatory)][string]$Hash, [string[]]$Files = @(), [string[]]$Grants = @(), [datetime]$NowUtc = [datetime]::UtcNow)
     $o = [ordered]@{ hash = $Hash; files = (@($Files) -join ','); grants = (@($Grants) -join ','); at = $NowUtc.ToString('yyyy-MM-ddTHH:mm:ssZ', [Globalization.CultureInfo]::InvariantCulture) }
     $json = ConvertTo-Json -InputObject $o -Compress
@@ -807,6 +807,104 @@ function New-SIProSchemaRunner {
     }.GetNewClosure()
 }
 
+# ---- #1418 (a) SNAPSHOT ISOLATION IN SI'S OWN DATABASE (owner's rule: "never by hand in any install") -------------------
+# A web export reads every chunk inside ONE snapshot transaction when the database allows it (ExportSession.cs); without it
+# the export reads the live tables. Azure SQL Database has ALLOW_SNAPSHOT_ISOLATION on by default, a SQL Server database
+# does not -- so setup and the updater's schema step SET it, on the database the data schema goes to: idempotent (ON
+# already = no change, nothing sent), read back afterwards, the value before and after said in the log. It never fails the
+# schema or the update: a database that refuses it (the identity may not ALTER the database) is said in one warning line
+# and the exports keep their live-path checks.
+function Get-SIProSnapshotIsolationSql {
+    <#
+        PURE. Read: the database's snapshot isolation state (0 OFF, 1 ON, 2 going off, 3 going on). Open: the transactions open
+        in this database on other sessions (the ALTER waits for every one of them to end). Set: ON (no transaction).
+        SaidRead / SaidWrite / SaidClear: the last warning said about it (cfg.InstallState 'SnapshotIsolationWarning'), so a
+        warning that is the same as the one before is said at most once a day.
+    #>
+    @{
+        Read      = "SELECT CONVERT(int, snapshot_isolation_state) AS State, CONVERT(nvarchar(60), snapshot_isolation_state_desc) AS StateDesc FROM sys.databases WHERE database_id = DB_ID();"
+        Open      = "SELECT COUNT_BIG(*) AS OpenTx FROM sys.dm_tran_database_transactions AS d JOIN sys.dm_tran_session_transactions AS s ON s.transaction_id = d.transaction_id WHERE d.database_id = DB_ID() AND s.session_id <> @@SPID;"
+        Set       = 'ALTER DATABASE CURRENT SET ALLOW_SNAPSHOT_ISOLATION ON;'
+        SaidRead  = "IF OBJECT_ID(N'cfg.InstallState') IS NOT NULL SELECT Value, UpdatedAt FROM cfg.InstallState WHERE Name = N'SnapshotIsolationWarning';"
+        SaidWrite = "IF OBJECT_ID(N'cfg.InstallState') IS NULL SELECT 0; ELSE BEGIN IF EXISTS (SELECT 1 FROM cfg.InstallState WHERE Name = N'SnapshotIsolationWarning') UPDATE cfg.InstallState SET Value = @Value, UpdatedAt = SYSUTCDATETIME(), UpdatedBy = N'SecurityInsight' WHERE Name = N'SnapshotIsolationWarning'; ELSE INSERT cfg.InstallState (Name, Value, UpdatedBy) VALUES (N'SnapshotIsolationWarning', @Value, N'SecurityInsight'); SELECT 1; END"
+        SaidClear = "IF OBJECT_ID(N'cfg.InstallState') IS NOT NULL DELETE FROM cfg.InstallState WHERE Name = N'SnapshotIsolationWarning'; SELECT 1;"
+    }
+}
+
+function Invoke-SIProSnapshotIsolationStep {
+    <#
+        Sets ALLOW_SNAPSHOT_ISOLATION ON in the database -Invoke reaches, when it is not ON already; reads it back. NEVER
+        throws. Returns @{ Before; After; Changed; Ok; Line } -- Before / After as the database says them (ON, OFF,
+        IN_TRANSITION_TO_ON, ...; '' when they could not be read); Ok = ON (or going on) afterwards.
+        BOUNDED: the ALTER waits for every transaction open in the database, so it is not sent while another session has one
+        open (sys.dm_tran_database_transactions; a read of it that is refused does not hold it back) -- the next update tries
+        again; the statement itself runs under the caller's statement timeout. A warning that is the same as the last one
+        said (cfg.InstallState 'SnapshotIsolationWarning') is a WARNING at most once a day, else one plain line; a success
+        clears it. -Now: a seam for tests.
+    #>
+    param([Parameter(Mandatory)][scriptblock]$Invoke, [scriptblock]$Log = { param($m) }, [datetime]$Now = [datetime]::UtcNow)
+    $sql = Get-SIProSnapshotIsolationSql
+    $rowsOf = { param($q) @(& $Invoke $q @{} 'reader' | ForEach-Object { $_ } | Where-Object { $null -ne $_ }) }
+    $field = { param($r, $k) $v = if ($r -is [System.Collections.IDictionary]) { $r[$k] } elseif ($r -is [System.Data.DataRow]) { $r[$k] } else { $r.$k }; if ($v -is [System.DBNull]) { $null } else { $v } }
+    $read = {
+        $rows = @(& $rowsOf $sql.Read)
+        if (-not $rows.Count) { return $null }
+        [pscustomobject]@{ State = [int](& $field $rows[0] 'State'); Desc = [string](& $field $rows[0] 'StateDesc') }
+    }
+    $readSaid = { try { $x = @(& $rowsOf $sql.SaidRead); if ($x.Count) { [pscustomobject]@{ Value = [string](& $field $x[0] 'Value'); At = (& $field $x[0] 'UpdatedAt') } } else { $null } } catch { $null } }
+    # the same warning as the last one said -> a WARNING at most once a day; the state or the outcome changed -> at once
+    $warn = {
+        param([string]$Key, [string]$Text)
+        $prev = & $readSaid
+        $recent = $false
+        if ($prev -and $prev.Value -eq $Key -and $null -ne $prev.At) { try { $recent = (($Now - ([datetime]$prev.At)).TotalHours -lt 24) } catch { $recent = $false } }
+        if ($recent) { $l = '  snapshot isolation: {0} (the same as the warning of {1:yyyy-MM-dd HH:mm} UTC; said as a warning again after a day)' -f $Text, ([datetime]$prev.At); & $Log $l; return $l }
+        $l = '  WARNING: snapshot isolation: ' + $Text
+        & $Log $l
+        try { $null = & $Invoke $sql.SaidWrite @{ Value = $Key } 'scalar' } catch { }
+        $l
+    }
+    $clear = { $prev = & $readSaid; if ($prev) { try { $null = & $Invoke $sql.SaidClear @{} 'scalar' } catch { } } }
+    $out = { param($b, $a, $changed, $ok, $line) [pscustomobject]@{ Before = $b; After = $a; Changed = [bool]$changed; Ok = [bool]$ok; Line = $line } }
+    $before = $null
+    try { $before = & $read }
+    catch {
+        $line = & $warn 'unread' ('the database''s setting could not be read ({0}) -- it is read again at the next update' -f (([string]$_.Exception.Message -split "`n") | Select-Object -First 1))
+        return (& $out '' '' $false $false $line)
+    }
+    if ($null -eq $before) { $line = & $warn 'unanswered' 'the database did not say its setting -- it is read again at the next update'; return (& $out '' '' $false $false $line) }
+    if ($before.State -eq 1) {
+        $line = '  snapshot isolation: ON (before ON, after ON) -- no change'
+        & $Log $line
+        & $clear
+        return (& $out $before.Desc $before.Desc $false $true $line)
+    }
+    # never sent while another session has a transaction open in the database (the ALTER would wait for it to end)
+    $open = 0L
+    try { $o = @(& $rowsOf $sql.Open); if ($o.Count) { $open = [long](& $field $o[0] 'OpenTx') } } catch { $open = 0L }
+    if ($open -gt 0) {
+        $line = & $warn ('open|' + $before.Desc) ('not set ON this time (before {0}, after {0}): {1} transaction(s) are open in the database and the change would wait for them -- web exports read the live tables and check their rows; the next update tries again' -f $before.Desc, $open)
+        return (& $out $before.Desc $before.Desc $false $false $line)
+    }
+    $err = ''
+    try { $null = & $Invoke $sql.Set @{} 'nonquery' } catch { $err = [string]$_.Exception.Message }
+    $after = $null
+    try { $after = & $read } catch { }
+    $a = if ($after) { $after.Desc } else { '' }
+    # IN_TRANSITION_TO_ON (3) counts as ON: the database finishes the change by itself
+    $ok = [bool]($after -and $after.State -in 1, 3)
+    if ($ok) {
+        $line = '  snapshot isolation: set ON (before {0}, after {1})' -f $before.Desc, $a
+        & $Log $line
+        & $clear
+        return (& $out $before.Desc $a $true $true $line)
+    }
+    $head = if ($err) { [string](($err -split "`n") | Select-Object -First 1) } else { '' }
+    $key = 'refused|{0}|{1}|{2}' -f $before.Desc, $a, $(if ($head.Length -gt 120) { $head.Substring(0, 120) } else { $head })
+    $line = & $warn $key ('could not be set ON (before {0}, after {1}){2} -- web exports read the live tables and check their rows; the next update tries again' -f $before.Desc, $(if ($a) { $a } else { 'not read' }), $(if ($head) { ': ' + $head } else { '' }))
+    & $out $before.Desc $a $false $false $line
+}
+
 function Invoke-SIProSchemaApply {
     <#
         THE ONE APPLY (setup, the internal build and the updater call this). In order:
@@ -835,6 +933,10 @@ function Invoke-SIProSchemaApply {
         [pscustomobject]@{ Action = $a; Hash = $plan.Hash; Files = $names; Applied = @($applied); FailedFile = $failed; Reason = $why; Findings = @($findings); Plan = $plan } }
     if (-not $plan.Ok) { return (& $out 'refused' $plan.Reason @() $plan.Refused[0].File $plan.Refused[0].Findings) }
     if (-not $plan.Files.Count) { return (& $out 'noop' $plan.Reason @() '' @()) }
+    # #1418 (a): snapshot isolation ON in the database the data schema goes to -- on EVERY apply, a no-op one too (an
+    # existing install reaches the new-install state through its next update); outside any transaction; never fails it
+    $snapIso = $null
+    if (@($plan.Files | Where-Object { $_.Name -eq 'data' }).Count) { $snapIso = Invoke-SIProSnapshotIsolationStep -Invoke $Invoke -Log $Log }
     # indexes on large tables: which statements are built outside the files (see the header of that section). A failed read
     # defers nothing -- the files then build every index as before.
     $ixState = $null
@@ -881,6 +983,7 @@ function Invoke-SIProSchemaApply {
             $ix = & $ixStep $true
             $o = & $out 'noop' ('the database schema is current (fingerprint {0}, recorded {1}{2}) -- nothing to apply{3}' -f $plan.Hash.Substring(0, 12), $state.At, $(if ($state.Version) { " for $($state.Version)" } else { '' }), (& $ixText $ix)) @() '' @()
             $o | Add-Member -NotePropertyName Indexes -NotePropertyValue $ix -Force
+            $o | Add-Member -NotePropertyName SnapshotIsolation -NotePropertyValue $snapIso -Force
             return $o
         }
     }
@@ -928,5 +1031,6 @@ function Invoke-SIProSchemaApply {
     $ix = & $ixStep $false
     $o = & $out 'applied' ('{0} schema file(s) applied: {1}{2}' -f $done.Count, ($done -join ', '), (& $ixText $ix)) $done.ToArray() '' @()
     $o | Add-Member -NotePropertyName Indexes -NotePropertyValue $ix -Force
+    $o | Add-Member -NotePropertyName SnapshotIsolation -NotePropertyValue $snapIso -Force
     $o
 }

@@ -162,8 +162,8 @@
                      SecurityInsight's earlier default, found by id, read back, put back on failure, never twice. Azure resources
                      keep their names. SI_Update_RenameDisplayNames (ON by default; the Pro setting first): off = the plan only.
                      Without the rights: one line, and setup\Set-SIDisplayNames.ps1 for an administrator. Never fails the update.
-     13. ONE ACTIVE REVISION -- (SI #1414, setup/_shared/SI-SingleRevision.ps1; framework SEC-PATCH-PIPELINE-1 point 6) the
-                     LAST step: every container app of the install with an ingress in Single revision mode with exactly one
+     13. ONE ACTIVE REVISION -- (SI #1414, setup/_shared/SI-SingleRevision.ps1; framework SEC-PATCH-PIPELINE-1 point 6) near the
+                     end of the update (only the display names and the default templates follow it): every container app of the install with an ingress in Single revision mode with exactly one
                      active revision, its newest one proven healthy, 100 % of the traffic, no traffic label -- read back. An
                      app whose newest revision is not proven healthy is not changed. So the release that brings it reaches
                      it in the same update (the web app roll that follows then replaces the one revision in Single mode);

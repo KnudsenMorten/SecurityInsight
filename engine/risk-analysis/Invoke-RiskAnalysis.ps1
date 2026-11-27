@@ -4768,8 +4768,14 @@ foreach ($includeItem in $script:RALoopList) {
         # anything is sent when the sizes alone settle it, else on the first request the service refuses for its
         # size -- and then the report is failed as a whole and the run goes on with the next report.
         $reportCannotFit = $null
+        # #1416 (a): a report that reads the Defender for Cloud recommendations while no complete snapshot of them is left in
+        # the window is not run on the partial one: it ends NOT COMPLETE here (the existing path below), never as whole
+        if (Get-Command -Name Get-RARecSnapshotPartialError -ErrorAction SilentlyContinue) {
+            $__recPartial = Get-RARecSnapshotPartialError -Query $Query
+            if ($__recPartial) { $reportCannotFit = [string]$__recPartial.Message }
+        }
 
-        if ([bool]$global:AutoBucketCount) {
+        if ([bool]$global:AutoBucketCount -and -not $reportCannotFit) {
 
           # Cache key: report name + STABLE hash of the PRE-BUCKET query.
           # NOTE:
@@ -6409,6 +6415,18 @@ if ($bucketRunSucceeded -and [bool]$global:AutoBucketCount) {
                 Add-RAReportFailure -ReportName ([string]$ReportName) -Reason ("not complete: {0}" -f $__soWhy)
             }
             continue
+        }
+
+        # #1416 (a): the single-query path ends a report that reads a partial Defender snapshot the same way as the sliced
+        # path does (before anything is asked) -- never as whole
+        if (Get-Command -Name Get-RARecSnapshotPartialError -ErrorAction SilentlyContinue) {
+            $__recPartialOne = Get-RARecSnapshotPartialError -Query $Query
+            if ($__recPartialOne) {
+                $__recWhy = [string]$__recPartialOne.Message
+                Write-Err2 ("report '{0}' is NOT in this run: {1}. Its findings are unknown for this run, not resolved. The run continues with the next report." -f $ReportName, $__recWhy)
+                Add-RAReportFailure -ReportName $ReportName -Reason ('it was not run: {0}' -f $__recWhy)
+                continue
+            }
         }
 
         if ($effectiveUseBucket -and -not $querySupportsBucket) {

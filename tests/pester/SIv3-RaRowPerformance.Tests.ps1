@@ -26,10 +26,10 @@
 BeforeAll {
     $script:SIRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
     $script:Fx = Join-Path $script:SIRoot 'tests\fixtures\ra-perf'
-    function global:Write-Info { param($m) }
-    function global:Write-Warn2 { param($m) $global:RaPerfWarned.Add([string]$m) }
-    function global:Write-Ok { param($m) }
-    function global:Write-Diag { param($m) }
+    function script:Write-Info { param($m) }
+    function script:Write-Warn2 { param($m) $global:RaPerfWarned.Add([string]$m) }
+    function script:Write-Ok { param($m) }
+    function script:Write-Diag { param($m) }
     $global:RaPerfWarned = New-Object System.Collections.Generic.List[string]
     $ProgressPreference = 'SilentlyContinue'
     . (Join-Path $script:Fx 'RaPerfFixture.ps1')
@@ -280,7 +280,7 @@ Describe '5. a Defender read never waits for ever, and a long stage is never sil
     It 'a long scoring and a long write say how far they are ("... 200 of 600 rows")' {
         $global:SI_RA_ProgressSeconds = 0; $global:SI_RA_ScoringThreads = 1   # (one core: the workers' lines are not shown)
         $global:RaPerfSaid = [System.Collections.Generic.List[string]]::new()
-        function global:Write-Info { param($m) $global:RaPerfSaid.Add([string]$m) }
+        function script:Write-Info { param($m) $global:RaPerfSaid.Add([string]$m) }
         try {
             $rows = ConvertTo-PSObjectDeep (New-RaPerfRawRows -Count 600 -Seed 21) -StripOData -CastPrimitiveArrays
             $rows = Add-RACiContext -Rows @($rows) -FactorSet @() -Index (New-RACiIndex -Cis $script:Cis)
@@ -289,7 +289,7 @@ Describe '5. a Defender read never waits for ever, and a long stage is never sil
                 -OutputPropertyOrder (Get-RaPerfOutputOrder) -ReportName 'Device_Missing_CVEs_Detailed')
             $null = ConvertTo-RAStreamRowItems -Rows $scored -FirstSeq 1 -InView ([bool[]]::new($scored.Count)) -DateCols ([System.Collections.Generic.HashSet[string]]::new()) `
                 -Context @{ Grain = 'Detailed'; Ordinal = 1; Bucket = '1/2'; IsDetailedShape = $true; ConfigurationIdInputName = 'ConfigurationId'; SortColumn = 'RiskScoreTotal_Weighted'; FallbackSortColumn = 'RiskScoreTotal'; Dedup = $true; Equivalence = $null }
-        } finally { function global:Write-Info { param($m) }; $global:SI_RA_ProgressSeconds = $null; $global:SI_RA_ScoringThreads = $null }
+        } finally { function script:Write-Info { param($m) }; $global:SI_RA_ProgressSeconds = $null; $global:SI_RA_ScoringThreads = $null }
         $all = $global:RaPerfSaid -join "`n"
         $all | Should -Match 'the CI context added to 200 of \d{3} rows'
         $all | Should -Match 'risk scores worked out for 200 of \d{3} rows'

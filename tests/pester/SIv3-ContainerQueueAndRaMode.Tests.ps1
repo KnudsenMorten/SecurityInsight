@@ -147,7 +147,7 @@ Describe 'KEDA shards: one worker at a time, and a poison shard is parked, not l
     It 'WIRING -- the worker parks an over-retried shard BEFORE running the orchestrator' {
         $src  = Get-Content -LiteralPath (Join-Path $script:SIRoot 'container\Start-SIInContainer.ps1') -Raw
         $park = $src.IndexOf('Move-SIWorkItemToPoison')
-        $run  = $src.IndexOf('& $orchestrator @orchArgs')
+        $run  = $src.IndexOf('Invoke-SIContainerOrchestrator -OrchestratorScript $orchestrator -OrchestratorArgs $orchArgs')
         $park | Should -BeGreaterThan 0
         $park | Should -BeLessThan $run
         $src  | Should -Match '\$msg\.DequeueCount -gt \$maxDequeue'

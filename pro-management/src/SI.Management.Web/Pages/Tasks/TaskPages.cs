@@ -57,7 +57,17 @@ public abstract class TaskListPage : SI.Management.Web.Columns.DataViewPageModel
         try
         {
             if (!await Tasks.Store.ReadyAsync(ct)) { Notice = "The Pro database does not have the task tables yet: apply sql\\si-pro-settings.sql again (it only adds)."; return; }
-            Results = await Tasks.ListAsync(User, Query, ct);
+            // #1418 (a)(b): an export on the live path reads the keys of the tasks before its first page (and after its last)
+            if (Exporting)
+            {
+                var keyed = Query;
+                // A4: the day is fixed ONCE per export -- every page and both key reads read the same "overdue" / "due soon"
+                var day = Tasks.Today;
+                ExportDay = day;
+                ExportKeyStart = await SI.Management.Web.Export.ExportConsistency.StartAsync(t => Tasks.KeyHashAsync(User, keyed, t, day), ct);
+                ExportKeyRead = t => Tasks.KeyHashAsync(User, keyed, t, day);
+            }
+            Results = await Tasks.ListAsync(User, Query, ct, ExportDay);
             if (Exporting)
             {
                 // #589: an export takes EVERY task matching the choices, page by page -- #1400 (owner 2026-11-26: "SI never fewer
@@ -68,7 +78,7 @@ public abstract class TaskListPage : SI.Management.Web.Columns.DataViewPageModel
                 ExportRows = Array.Empty<FindingTaskRow>();
                 ExportChunks = async (n, t) =>
                     n > first.Pages ? Array.Empty<object>()
-                    : (n == 1 ? first.Rows : (await Tasks.ListAsync(User, query with { Page = n }, t)).Rows).Cast<object>().ToList();
+                    : (n == 1 ? first.Rows : (await Tasks.ListAsync(User, query with { Page = n }, t, ExportDay)).Rows).Cast<object>().ToList();
                 return;
             }
             if (View == TaskQuery.ViewMine) Counts = await Tasks.CountsAsync(User, ct);
@@ -100,6 +110,11 @@ public abstract class TaskListPage : SI.Management.Web.Columns.DataViewPageModel
     private IReadOnlyList<FindingTaskRow>? ExportRows { get; set; }
     /// #1400 the export's pages, read one at a time (<see cref="SI.Management.Web.Columns.DataTable.Chunks"/>).
     private Func<int, CancellationToken, Task<IReadOnlyList<object>>>? ExportChunks { get; set; }
+    /// #1418 (a)(b) the tasks' keys before the first page (live path only) and the read of them after the last.
+    private ExportKeyHash? ExportKeyStart { get; set; }
+    /// A4: the day an export reads (null = not an export: today)
+    private DateOnly? ExportDay { get; set; }
+    private Func<CancellationToken, Task<ExportKeyHash?>>? ExportKeyRead { get; set; }
 
     protected override Task LoadForExportAsync(CancellationToken ct) => OnGetAsync(ct);
 
@@ -113,7 +128,8 @@ public abstract class TaskListPage : SI.Management.Web.Columns.DataViewPageModel
         var sortOf = new Dictionary<string, string> { ["Title"] = "title", ["Finding"] = "asset", ["Assignee"] = "assignee", ["CreatedBy"] = "creator", ["Department"] = "department", ["DueDate"] = "due", ["Status"] = "status" };
         var t = new SI.Management.Web.Columns.DataTable
         {
-            Id = "tasks", View = ViewKey, Title = Heading, Rows = (ExportRows ?? Results.Rows).Cast<object>().ToList(), Chunks = ExportChunks, ExpectedRows = ExportChunks is null ? null : Results.Total, KeyOf = o => T(o).TaskId.ToString(System.Globalization.CultureInfo.InvariantCulture), Marker = "data-grid=\"tasks\" data-view=\"" + View + "\"",
+            Id = "tasks", View = ViewKey, Title = Heading, Rows = (ExportRows ?? Results.Rows).Cast<object>().ToList(), Chunks = ExportChunks, ExpectedRows = ExportChunks is null ? null : Results.Total,
+            KeyHashStart = ExportChunks is null ? null : ExportKeyStart, KeyHash = ExportChunks is null ? null : ExportKeyRead, KeyOf = o => T(o).TaskId.ToString(System.Globalization.CultureInfo.InvariantCulture), Marker = "data-grid=\"tasks\" data-view=\"" + View + "\"",
             Ci = RowCiKey.AssetKey, Findings = RowFindingKey.Issue, CollectionId = "",
             RefOf = o => new SI.Management.Web.Columns.RowRef(T(o).AssetKey, null, T(o).RecommendationKey),
             RowAttributes = o => new Dictionary<string, string?> { ["data-task"] = T(o).TaskId.ToString(CultureInfo.InvariantCulture), ["data-status"] = T(o).Status, ["data-bucket"] = Bucket(T(o)) },

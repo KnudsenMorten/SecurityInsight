@@ -16,10 +16,14 @@ namespace SI.Management.Web.Export;
 /// </summary>
 public static class GridChunks
 {
+    /// #1418 (a)(b): <paramref name="keyStart"/> -- the keys of the source read BEFORE the first chunk on the live path
+    /// (<see cref="ExportConsistency.StartAsync"/>); with <paramref name="keyHash"/> they are read again after the last chunk and
+    /// compared (<see cref="ExportConsistency.CheckAsync"/>).
     public static async IAsyncEnumerable<IReadOnlyDictionary<string, object?>> RowsAsync(GridPage first, bool all,
         Func<int, CancellationToken, Task<GridPage>> next,
         Func<IReadOnlyList<IReadOnlyDictionary<string, object?>>, CancellationToken, Task<IReadOnlyList<IReadOnlyDictionary<string, object?>>>> fill,
-        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct, int size = ProDataFilters.ExportChunk, string? keyColumn = null)
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct, int size = ProDataFilters.ExportChunk, string? keyColumn = null,
+        ExportKeyHash? keyStart = null, Func<CancellationToken, Task<ExportKeyHash?>>? keyHash = null)
     {
         var expected = first.Total;
         var seen = all && keyColumn is not null ? new KeySet() : null;
@@ -42,6 +46,7 @@ public static class GridChunks
             rows = (await next(n + 1, ct)).Rows;
         }
         if (Note(expected, written) is { } note) throw new Data.ExportIncompleteException(note);
+        await ExportConsistency.CheckAsync(keyStart, keyHash, ct);
     }
 
     /// The words when the rows written differ from the count the first chunk carried (null = they agree).
@@ -52,6 +57,61 @@ public static class GridChunks
 
     /// The words when a row came twice.
     public static string Twice(string? key) => "a row came twice (key " + (key ?? "(none)") + ") -- rows moved while the export read them";
+}
+
+/// <summary>
+/// #1418 (a)(b) (the review of 6c9f60132: "the live-path +1/-1 blind spot on tables users edit"): ON THE LIVE PATH (the
+/// database has snapshot isolation off -- the export's chunks read the live tables, <see cref="Data.ExportSession.Snapshot"/>
+/// false) the keys of every row the export reads are hashed IN SQL before its first chunk and again after its last one
+/// (<see cref="ExportKeyHash"/>: the row count and the sum of each key's hash -- no key is held in the web app). A row added
+/// while another was removed leaves the count, the doubled-key check and the written rows as they were; it never leaves
+/// the keys: the two reads differ and the export is REFUSED with the existing words
+/// (<see cref="Data.ExportSessionPageFilter.Refusal"/>: "The data changed while it was exported -- nothing was downloaded.
+/// Export again."), never delivered as if it were one view of the data. A snapshot export reads one view by itself: no
+/// extra read.
+/// </summary>
+public static class ExportConsistency
+{
+    /// The keys at the start of the export -- only on the live path; null otherwise (snapshot, no export session, no reader).
+    public static async Task<ExportKeyHash?> StartAsync(Func<CancellationToken, Task<ExportKeyHash?>>? read, CancellationToken ct)
+    {
+        if (read is null || Data.ExportSession.Current is not { } session) return null;
+        // the snapshot state is settled FIRST, with one cheap statement: the keys (a full pass, a hash per row) are read only
+        // when the export really reads the live tables -- never on the snapshot path
+        await session.SettleAsync(ct);
+        if (session.Snapshot == true) return null;
+        try { return await read(ct); }
+        catch (Exception ex) when (ex is not OperationCanceledException && ex is not Data.ExportIncompleteException)
+        {
+            // the export still goes on, with its row count and doubled-row checks -- said on the Export sheet, the audit row, the log
+            session.Note(NotRead(ex));
+            return null;
+        }
+    }
+
+    /// The keys again at the end; different from <paramref name="start"/> = the export is refused.
+    public static async Task CheckAsync(ExportKeyHash? start, Func<CancellationToken, Task<ExportKeyHash?>>? read, CancellationToken ct)
+    {
+        if (start is null || read is null) return;
+        ExportKeyHash? end;
+        try { end = await read(ct); }
+        catch (Exception ex) when (ex is not OperationCanceledException && ex is not Data.ExportIncompleteException)
+        {
+            Data.ExportSession.Current?.Note(NotRead(ex));
+            return;
+        }
+        if (end is null || end == start) return;
+        throw new Data.ExportIncompleteException(Changed(start, end));
+    }
+
+    /// The words when the keys could not be read (the export keeps its other checks).
+    public static string NotRead(Exception ex) =>
+        "The rows' keys could not be compared at the start and the end of this export (" + ex.Message.Split('\n')[0].Trim() + "); its row count and doubled-row checks still applied.";
+
+    /// The words of a refused export whose keys moved.
+    public static string Changed(ExportKeyHash start, ExportKeyHash end) => string.Format(CultureInfo.InvariantCulture,
+        "rows were added or removed while the export read them -- the view's keys differ between the export's start ({0:N0} rows) and its end ({1:N0} rows)",
+        start.Rows, end.Rows);
 }
 
 /// <summary>

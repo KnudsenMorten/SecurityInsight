@@ -251,7 +251,7 @@ ELSE
 BEGIN
     SET XACT_ABORT ON;
     BEGIN TRAN;
-    DECLARE @cur NVARCHAR(400) = NULL, @has int = 0, @ok int = 0;
+    DECLARE @cur NVARCHAR(MAX) = NULL, @has int = 0, @ok int = 0;
     SELECT @cur = Value, @has = 1 FROM cfg.InstallState WITH (UPDLOCK, HOLDLOCK) WHERE Name = N'UpdateSignal';
     DECLARE @ra NVARCHAR(40) = CASE WHEN ISJSON(@cur) = 1 THEN JSON_VALUE(@cur, '$.raisedAt') END;
     DECLARE @su NVARCHAR(40) = CASE WHEN ISJSON(@cur) = 1 THEN JSON_VALUE(@cur, '$.startedUtc') END;
@@ -648,7 +648,7 @@ ELSE
 BEGIN
     SET XACT_ABORT ON;
     BEGIN TRAN;
-    DECLARE @cur NVARCHAR(400) = NULL, @has int = 0, @ok int = 0;
+    DECLARE @cur NVARCHAR(MAX) = NULL, @has int = 0, @ok int = 0;
     SELECT @cur = Value, @has = 1 FROM cfg.InstallState WITH (UPDLOCK, HOLDLOCK) WHERE Name = @N;
     IF @has = 0
     BEGIN

@@ -1005,7 +1005,7 @@ SET XACT_ABORT ON;
 BEGIN TRAN;
 IF @Whole = 1
 BEGIN
-    DECLARE @old nvarchar(400) = (SELECT Value FROM cfg.InstallState WITH (UPDLOCK, HOLDLOCK) WHERE Name = @StateName);
+    DECLARE @old nvarchar(max) = (SELECT Value FROM cfg.InstallState WITH (UPDLOCK, HOLDLOCK) WHERE Name = @StateName);
     IF NOT EXISTS (SELECT 1 FROM cfg.InstallState WHERE Name = @StateName)
         INSERT cfg.InstallState (Name, Value, [Version], UpdatedBy) VALUES (@StateName, @Pack, @Pack, @By);
     ELSE

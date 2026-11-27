@@ -74,6 +74,11 @@ public sealed class DataTable
     public long? ExpectedRows { get; init; }
     /// #1400 a row's unique key (with <see cref="Chunks"/>: a key that comes twice aborts the export); null = not compared.
     public Func<object, string?>? KeyOf { get; init; }
+    /// #1418 (a)(b) with <see cref="Chunks"/>, on the live path: the keys of the source as read BEFORE the first chunk
+    /// (<see cref="SI.Management.Web.Export.ExportConsistency.StartAsync"/>) and the read that hashes them again after the last
+    /// one -- they differ = the export is refused (a row added while another was removed). Null = not compared.
+    public ExportKeyHash? KeyHashStart { get; init; }
+    public Func<CancellationToken, Task<ExportKeyHash?>>? KeyHash { get; init; }
 
     public DataViewLayout Layout { get; private set; } = null!;
     public DataColumnCells Cells { get; private set; } = DataColumnCells.None;
@@ -232,6 +237,8 @@ public sealed class DataTable
         // (nothing is downloaded; the audit row and the log say why), never a clean-looking short file
         if (ExpectedRows is { } expected && SI.Management.Web.Export.GridChunks.Note(expected, written) is { } note)
             throw new SI.Management.Web.Data.ExportIncompleteException(note);
+        // #1418 (a)(b): on the live path the source's keys again, against the ones read before its first chunk
+        await SI.Management.Web.Export.ExportConsistency.CheckAsync(KeyHashStart, KeyHash, ct);
     }
 
     /// The CSV of every export row with these columns, written straight to the file (<see cref="SI.Management.Web.Export.CsvExport"/>).

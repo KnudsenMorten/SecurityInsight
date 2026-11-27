@@ -112,8 +112,38 @@ function Invoke-SIRecommendations {
             $nr.Summary = ('INCOMPLETE -- not published ({0} read before failure)' -f $res.RawCount)
             return $nr
         }
+        # #1416 (c) review (coordinator): an EXPLICIT scope (-SubscriptionIds) whose subscription the read did not see -- removed,
+        # moved to another tenant, Reader lost there -- would publish a snapshot without that subscription's recommendations,
+        # and they would read as fixed. Whatever the row count: NOTHING is posted, the previous snapshot stays, the reason names
+        # them. (No scope = every readable subscription: unchanged; SubscriptionsMissing is then always empty.)
+        $scopeMiss = if ($res.PSObject.Properties['SubscriptionsMissing']) { @($res.SubscriptionsMissing | Where-Object { "$_".Trim() }) } else { @() }
+        if ($scopeMiss.Count) {
+            $subsRead0 = $res.PSObject.Properties['SubscriptionsRead'] -and [bool]$res.SubscriptionsRead
+            return (& $notRefreshed ('{0} subscription(s) named in the scope were not seen by the read{3}: {1}{2} -- publishing would read their recommendations as fixed' -f $scopeMiss.Count, (@($scopeMiss | Select-Object -First 5) -join ', '), $(if ($scopeMiss.Count -gt 5) { ', ...' } else { '' }), $(if ($subsRead0) { '' } else { ' (the subscription list could not be read to the end)' })))
+        }
         if ([long]$res.RowCount -eq 0) {
-            return [pscustomobject]@{ Summary = 'Defender for Cloud: 0 unhealthy recommendations -- nothing to publish'; Published = 0 }
+            # #1416 (c) review (BLOCKER): "no unhealthy recommendation" is a fact ONLY when the read could see the estate -- its
+            # subscription read completed, saw at least one subscription, and saw every one the scope names. Reader lost, the
+            # wrong tenant, or a scope of removed subscriptions also reads as 0: then NOTHING is posted (not refreshed, said)
+            $subsOk = $res.PSObject.Properties['SubscriptionsRead'] -and [bool]$res.SubscriptionsRead
+            $subsN = if ($res.PSObject.Properties['SubscriptionCount']) { [long]$res.SubscriptionCount } else { 0L }
+            # (a subscription of an explicit scope not seen is refused above, whatever the row count)
+            $whyNot = if (-not $subsOk) { 'the read found no unhealthy recommendation, but the subscriptions it could see were not read to the end -- an empty answer is not proven' }
+                      elseif ($subsN -lt 1) { 'the read found no unhealthy recommendation, but it could see NO subscription (check that the sign-in still has Reader on the subscriptions and is in the right tenant)' }
+                      else { '' }
+            if ($whyNot) { return (& $notRefreshed $whyNot) }
+            if ([bool]$RunContext.WhatIf) { return [pscustomobject]@{ Summary = 'dry run: 0 unhealthy Defender for Cloud recommendations found, the empty snapshot not published'; Published = 0 } }
+            # #1416 (c): a COMPLETE read that found none is a snapshot of its own -- its marker of 0 is posted, so the readers take
+            # it (every recommendation fixed) instead of the last snapshot that still had rows. Nothing posted = the previous
+            # snapshot stays the newest, exactly as before (said, never silently).
+            try {
+                $tpl = New-SIDefenderEmptyRowTemplate -CollectionTime $ct
+                $null = Send-SIObjectMapRows -Rows @(New-SIDefenderSnapshotMarker -Template $tpl -Rows 0 -RunId ([string]$RunContext.RunId)) -TableName $table -DcrName $dcr
+            } catch {
+                $nr = & $notRefreshed ('the read found no unhealthy recommendation, but its completion marker could not be posted -- {0}' -f $_.Exception.Message)
+                throw ('Defender for Cloud ' + $nr.NotRefreshed)
+            }
+            return [pscustomobject]@{ Summary = ('Defender for Cloud: 0 unhealthy recommendations -> {0}_CL, an empty snapshot marked complete' -f $table); Published = 0 }
         }
         if ([bool]$RunContext.WhatIf) {
             return [pscustomobject]@{ Summary = ('dry run: {0} Defender for Cloud row(s) found, not published' -f $res.RowCount); Published = 0 }

@@ -708,12 +708,15 @@ public abstract class CollectionPageModel : PageModel
         // the selection), never only the page shown -- #1400: read a chunk at a time (ExportChunks), its first chunk here
         _exportQuery = query;
         _exportAll = !ExportChoices.PageOnly(Request);
+        // #1418 (a)(b): on the live path the source's keys are read before the first chunk (and again after the last)
+        _keyStart = _exportAll ? await ExportConsistency.StartAsync(t => Views.ExportKeyHashAsync(query, t), ct) : null;
         var g = _exportAll ? await Views.ExportChunkAsync(query, 1, ProDataFilters.ExportChunk, ct) : await Views.GridAsync(query, ct);
         return (plan, g.Data);
     }
 
     private GridQuery? _exportQuery;
     private bool _exportAll;
+    private ExportKeyHash? _keyStart;
 
     /// <summary>
     /// #1400 (owner 2026-11-26: "memory issues must not be a problem in any step"; "SI never fewer rows than the source"):
@@ -723,7 +726,8 @@ public abstract class CollectionPageModel : PageModel
     /// </summary>
     protected IAsyncEnumerable<IReadOnlyDictionary<string, object?>> ExportChunks(GridPage first, IReadOnlyList<GridColumn> cols, CancellationToken ct) =>
         GridChunks.RowsAsync(first, _exportAll && _exportQuery is not null,
-            async (n, t) => (await Views.ExportChunkAsync(_exportQuery!, n, ProDataFilters.ExportChunk, t)).Data, (rows, t) => FillAsync(cols, rows, t), ct, keyColumn: _exportQuery?.Spec.KeyColumn);
+            async (n, t) => (await Views.ExportChunkAsync(_exportQuery!, n, ProDataFilters.ExportChunk, t)).Data, (rows, t) => FillAsync(cols, rows, t), ct, keyColumn: _exportQuery?.Spec.KeyColumn,
+            keyStart: _keyStart, keyHash: _exportQuery is { } q ? t => Views.ExportKeyHashAsync(q, t) : null);
 
     /// The export's rows as Excel cells (<see cref="ExportChunks"/>).
     private async IAsyncEnumerable<IReadOnlyList<object?>> ExcelRows(GridPage first, IReadOnlyList<GridColumn> cols, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)

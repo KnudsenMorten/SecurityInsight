@@ -31,8 +31,8 @@
 
 $script:SICiCutoff = @{
     StateName = 'CiCutoff'
-    # cfg.InstallState.Value is NVARCHAR(400)
-    MaxValue  = 400
+    # #1426: 0 = no limit -- cfg.InstallState.Value is NVARCHAR(MAX); the reason is kept whole (who set it: 120 characters)
+    MaxValue  = 0
 }
 
 function ConvertTo-SICiCutoffSqlTime {
@@ -49,7 +49,7 @@ function Format-SICiCutoffTime {
 }
 
 function ConvertTo-SICiCutoffValue {
-    <# PURE. The state row's value: compact JSON, at most 400 characters (the reason is shortened first, then who set it). #>
+    <# PURE. The state row's value: compact JSON. MaxValue 0 (the widened column): whole; a positive MaxValue shortens the reason first, then who set it. #>
     param([Parameter(Mandatory)][datetime]$CutoffUtc, [string]$Reason = '', [string]$SetBy = '', [Parameter(Mandatory)][datetime]$SetUtc, [switch]$Cleared)
     $iso = { param([datetime]$d) $d.ToString('yyyy-MM-ddTHH:mm:ssZ', [Globalization.CultureInfo]::InvariantCulture) }
     $why = ([string]$Reason).Trim(); $by = ([string]$SetBy).Trim()
@@ -59,10 +59,10 @@ function ConvertTo-SICiCutoffValue {
         if ($Cleared) { $o['cleared'] = $true }
         $j = ConvertTo-Json -InputObject $o -Compress
         $over = $j.Length - $script:SICiCutoff.MaxValue
-        if ($over -le 0) { return $j }
+        if ($script:SICiCutoff.MaxValue -le 0 -or $over -le 0) { return $j }
         if ($why.Length -gt 0) { $why = $why.Substring(0, [Math]::Max(0, $why.Length - $over)).TrimEnd() }
         elseif ($by.Length -gt 0) { $by = $by.Substring(0, [Math]::Max(0, $by.Length - $over)) }
-        else { throw 'the cut-off could not be written in 400 characters' }
+        else { throw ('the cut-off could not be written in {0} characters' -f $script:SICiCutoff.MaxValue) }
     }
 }
 
@@ -259,13 +259,13 @@ function Get-SICiCutoffWriteSql {
     @"
 SET NOCOUNT ON;
 SET XACT_ABORT ON;
-IF OBJECT_ID(N'cfg.InstallState') IS NULL BEGIN SELECT N'NoTable' AS Outcome, CAST(NULL AS NVARCHAR(400)) AS Value, CAST(NULL AS NVARCHAR(400)) AS Old; RETURN; END;
+IF OBJECT_ID(N'cfg.InstallState') IS NULL BEGIN SELECT N'NoTable' AS Outcome, CAST(NULL AS NVARCHAR(MAX)) AS Value, CAST(NULL AS NVARCHAR(MAX)) AS Old; RETURN; END;
 BEGIN TRANSACTION;
-DECLARE @old NVARCHAR(400) = (SELECT Value FROM cfg.InstallState WITH (UPDLOCK, HOLDLOCK) WHERE Name = N'$n');
+DECLARE @old nvarchar(max) = (SELECT Value FROM cfg.InstallState WITH (UPDLOCK, HOLDLOCK) WHERE Name = N'$n');
 IF @old IS NULL AND NOT EXISTS (SELECT 1 FROM cfg.InstallState WHERE Name = N'$n')
-    INSERT cfg.InstallState (Name, Value, [Version], UpdatedBy) VALUES (N'$n', LEFT(@Value, 400), NULL, LEFT(@By, 256));
+    INSERT cfg.InstallState (Name, Value, [Version], UpdatedBy) VALUES (N'$n', @Value, NULL, LEFT(@By, 256));
 ELSE
-    UPDATE cfg.InstallState SET Value = LEFT(@Value, 400), UpdatedAt = SYSUTCDATETIME(), UpdatedBy = LEFT(@By, 256) WHERE Name = N'$n';
+    UPDATE cfg.InstallState SET Value = @Value, UpdatedAt = SYSUTCDATETIME(), UpdatedBy = LEFT(@By, 256) WHERE Name = N'$n';
 COMMIT TRANSACTION;
 SELECT N'Written' AS Outcome, s.Value, @old AS Old FROM cfg.InstallState s WHERE s.Name = N'$n';
 "@

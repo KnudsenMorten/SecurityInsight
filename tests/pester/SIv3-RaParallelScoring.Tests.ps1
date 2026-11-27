@@ -22,11 +22,13 @@
 BeforeAll {
     $script:SIRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
     $script:Fx = Join-Path $script:SIRoot 'tests\fixtures\ra-perf'
+    # the parallel runs ask for 4 cores; the engine caps that at the cores the host has (the Azure runner reports 2)
+    $script:ParCores = [Math]::Min(4, [Environment]::ProcessorCount)
     $global:RaPsSaid = [System.Collections.Generic.List[string]]::new()
-    function global:Write-Info { param($m) $global:RaPsSaid.Add([string]$m) }
-    function global:Write-Warn2 { param($m) $global:RaPsSaid.Add('WARN: ' + [string]$m) }
-    function global:Write-Ok { param($m) }
-    function global:Write-Diag { param($m) }
+    function script:Write-Info { param($m) $global:RaPsSaid.Add([string]$m) }
+    function script:Write-Warn2 { param($m) $global:RaPsSaid.Add('WARN: ' + [string]$m) }
+    function script:Write-Ok { param($m) }
+    function script:Write-Diag { param($m) }
     $ProgressPreference = 'SilentlyContinue'
     . (Join-Path $script:Fx 'RaPerfFixture.ps1')
     foreach ($f in (Import-RaPerfEngine -SIRoot $script:SIRoot)) { . $f }
@@ -97,8 +99,8 @@ AfterAll {
     [System.Globalization.CultureInfo]::CurrentCulture = $script:CultureBefore
     $global:SI_RA_ScoringThreads = $null; $global:SI_RA_ParallelMinRows = $null; $env:SI_RA_SCORINGTHREADS = $script:EnvBefore
     Remove-Variable -Name RaPsPlanted, RaPsPlantedFn -Scope Global -ErrorAction SilentlyContinue
-    function global:Write-Info { param($m) }
-    function global:Write-Warn2 { param($m) }
+    function script:Write-Info { param($m) }
+    function script:Write-Warn2 { param($m) }
 }
 
 Describe '1. 16,000 rows shaped like Device_Missing_CVEs_Detailed: one core and four cores give the same rows (en-US and da-DK)' {
@@ -131,10 +133,11 @@ Describe '1. 16,000 rows shaped like Device_Missing_CVEs_Detailed: one core and 
         $script:Decimal | Should -BeGreaterThan 100
         @($script:SerialEn.Rows | Where-Object { [string]$_.ConfigurationId -like 'CVE-*' }).Count | Should -BeGreaterThan 14000
     }
-    It 'four cores really scored it (the slice says so; no fall-back to one core was said)' {
-        ($script:ParEn.Said -join "`n") | Should -Match 'risk scores of \d{2},\d{3} row\(s\) worked out on 4 processor cores in \d+\.\d s'
+    It 'several cores really scored it (the slice says so; no fall-back to one core was said)' -Skip:([Environment]::ProcessorCount -lt 2) {
+        # asked for 4: the engine never uses more cores than the host has (Get-RAScoringThreads), so the line names min(4, cores)
+        ($script:ParEn.Said -join "`n") | Should -Match ('risk scores of \d{2},\d{3} row\(s\) worked out on ' + $script:ParCores + ' processor cores in \d+\.\d s')
         ($script:ParEn.Said -join "`n") | Should -Not -Match 'WARN'
-        ($script:ParDa.Said -join "`n") | Should -Match 'worked out on 4 processor cores'
+        ($script:ParDa.Said -join "`n") | Should -Match ('worked out on ' + $script:ParCores + ' processor cores')
         ($script:SerialEn.Said -join "`n") | Should -Match 'worked out on one processor core in \d+\.\d s \(SI_RA_ScoringThreads = 1\)'
     }
     It 'en-US: four cores = one core -- every row, in order, every column, type and value' {
@@ -152,7 +155,7 @@ Describe '1. 16,000 rows shaped like Device_Missing_CVEs_Detailed: one core and 
         @($script:ParDa.Rows | Where-Object { $_.Impact -is [double] -and $_.Impact -eq 12.5 }).Count | Should -BeGreaterThan 0
         @($script:ParDa.Rows | Where-Object { $_.Impact -is [double] -and $_.Impact -eq 125 }).Count | Should -Be 0
     }
-    It 'the stored form (the JSON for sidata.Finding, write order, keys, date columns): four cores = one core, also in da-DK' {
+    It 'the stored form (the JSON for sidata.Finding, write order, keys, date columns): four cores = one core, also in da-DK' -Skip:([Environment]::ProcessorCount -lt 2) {
         $script:ItemsSerial.How | Should -Be 'one'
         $script:ItemsPar.How | Should -Be 'several'
         $script:ItemsParDa.How | Should -Be 'several'
@@ -161,7 +164,7 @@ Describe '1. 16,000 rows shaped like Device_Missing_CVEs_Detailed: one core and 
         ($script:ItemsParDa.Items -join "`n") | Should -BeExactly ($script:ItemsSerial.Items -join "`n")
         $script:ItemsPar.DateCols | Should -Be $script:ItemsSerial.DateCols
         $script:ItemsPar.Illegal | Should -Be $script:ItemsSerial.Illegal
-        ($script:ItemsPar.Said -join "`n") | Should -Match 'prepared for the database: \d,\d{3} row\(s\) on 4 processor cores'
+        ($script:ItemsPar.Said -join "`n") | Should -Match ('prepared for the database: \d,\d{3} row\(s\) on ' + $script:ParCores + ' processor cores')
         # the decimal as stored: 12.5, never 12,5 or 125 (the row's JSON may sit inside another JSON text: \" quotes)
         @($script:ItemsParDa.Items | Where-Object { $_ -match 'Impact\\*"\s*:\s*\\*"?12\.5(?![0-9])' }).Count | Should -BeGreaterThan 0
         @($script:ItemsParDa.Items | Where-Object { $_ -match 'Impact\\*"\s*:\s*\\*"?(125(?![0-9.])|12,5)' }).Count | Should -Be 0

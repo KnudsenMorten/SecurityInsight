@@ -612,7 +612,7 @@ function Set-SIProTemplateFingerprint {
     $sql = @'
 SET XACT_ABORT ON;
 BEGIN TRAN;
-DECLARE @old nvarchar(400) = (SELECT Value FROM cfg.InstallState WITH (UPDLOCK, HOLDLOCK) WHERE Name = @Name);
+DECLARE @old nvarchar(max) = (SELECT Value FROM cfg.InstallState WITH (UPDLOCK, HOLDLOCK) WHERE Name = @Name);
 IF @old IS NULL AND NOT EXISTS (SELECT 1 FROM cfg.InstallState WHERE Name = @Name)
     INSERT cfg.InstallState (Name, Value, [Version], UpdatedBy) VALUES (@Name, @Value, @Version, @By);
 ELSE

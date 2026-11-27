@@ -248,11 +248,18 @@ CREATE TABLE cfg.TemplateRevision (
 IF OBJECT_ID('cfg.InstallState') IS NULL
 CREATE TABLE cfg.InstallState (
     Name        NVARCHAR(64)    NOT NULL CONSTRAINT PK_InstallState PRIMARY KEY,
-    Value       NVARCHAR(400)   NOT NULL,
+    Value       NVARCHAR(MAX)   NOT NULL,   -- #1426: no short limit (a report such as 'IdentityNames' grows with the install)
     [Version]   NVARCHAR(32)    NULL,       -- the release the value belongs to
     UpdatedAt   DATETIME2(0)    NOT NULL CONSTRAINT DF_InstallState_UpdatedAt DEFAULT SYSUTCDATETIME(),
     UpdatedBy   NVARCHAR(256)   NOT NULL
 );
+
+-- #1426 (3.1.53): an install made before it has Value NVARCHAR(400) -- the identity-names report of one install did not fit
+-- ("String or binary data would be truncated"). Widened once to NVARCHAR(MAX), which holds every value the column held (a
+-- widening, never a cut: the schema gate allows exactly this shape); a second run finds -1 and does nothing (no table:
+-- COL_LENGTH is NULL, nothing either).
+IF COL_LENGTH('cfg.InstallState', 'Value') <> -1
+ALTER TABLE cfg.InstallState ALTER COLUMN Value NVARCHAR(MAX) NOT NULL;
 
 -- THE ENVIRONMENT REPORT'S AZURE FACTS (SI #1268, the owner's approved rights list 2026-11-15): the web app holds no Reader on
 -- the install's resource group, so the UPDATER reads them with its own rights on every run (container\updater\_shared\
@@ -888,7 +895,7 @@ BEGIN
             @By, @Reason);
     IF @Kind = N''migration''
         INSERT cfg.InstallState (Name, Value, UpdatedBy)
-        VALUES (N''CmdbMigration'', LEFT(CONVERT(NVARCHAR(30), @now, 120) + N'': '' + CONVERT(NVARCHAR(12), @added) + N'' service(s), '' + CONVERT(NVARCHAR(12), @linksAdded) + N'' link(s) from '' + COALESCE(@Origin, N''a CMDB.csv''), 400), @By);
+        VALUES (N''CmdbMigration'', CONVERT(NVARCHAR(30), @now, 120) + N'': '' + CONVERT(NVARCHAR(12), @added) + N'' service(s), '' + CONVERT(NVARCHAR(12), @linksAdded) + N'' link(s) from '' + COALESCE(@Origin, N''a CMDB.csv''), @By);
     COMMIT;
     SELECT @outcome AS Outcome, @why AS Message, @importId AS ImportId, @added AS ServicesAdded, @updated AS ServicesUpdated, @retired AS ServicesRetired, @skipped AS ServicesSkipped, @unchanged AS ServicesUnchanged,
            @linksAdded AS LinksAdded, @linksRemoved AS LinksRemoved, @linksRejected AS LinksRejected, @rejected AS RejectedJson;
@@ -2659,7 +2666,7 @@ GRANT EXECUTE ON OBJECT::cfg.WebAppSignedInRecord TO public;
 -- with a reason, on Operations > Guards (safety checks) (audited guard.strict.end-early). The web app writes only this one row of
 -- cfg.InstallState ('GuardStrictEnd': { hash, strictFrom, endedAt, by, role, reason } -- it names the period it ends, so it
 -- never ends a later one), only through this procedure; it holds no write right on the table.
-EXEC (N'CREATE OR ALTER PROCEDURE cfg.GuardStrictEndSet @Value NVARCHAR(400), @By NVARCHAR(256)
+EXEC (N'CREATE OR ALTER PROCEDURE cfg.GuardStrictEndSet @Value NVARCHAR(MAX), @By NVARCHAR(256)
 AS
 BEGIN
     SET NOCOUNT ON; SET XACT_ABORT ON;
@@ -2684,7 +2691,7 @@ GRANT EXECUTE ON OBJECT::cfg.GuardStrictEndSet TO public;
 -- an Exchange administrator scoped Mail.Send to the shared mailbox. The web app writes only this one row of
 -- cfg.InstallState, only through this procedure -- it holds no write right on the table, so it can never overwrite the
 -- licence, the ring, the update state or the restriction the mail job PROVED ('MailRestriction').
-EXEC (N'CREATE OR ALTER PROCEDURE cfg.MailRestrictionAttestationSet @Value NVARCHAR(400), @By NVARCHAR(256)
+EXEC (N'CREATE OR ALTER PROCEDURE cfg.MailRestrictionAttestationSet @Value NVARCHAR(MAX), @By NVARCHAR(256)
 AS
 BEGIN
     SET NOCOUNT ON; SET XACT_ABORT ON;

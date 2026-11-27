@@ -608,14 +608,20 @@ function Get-SIDefenderRecommendations {
         & $flush
         # #202 subscription display names -- best effort: a failed read leaves the ids in place and never blocks the publish.
         $subNames = @{}
+        # #1416 (c) review: the subscriptions the read could see -- an EMPTY result is only a fact when this read completed and
+        # saw at least one subscription (every one -SubscriptionIds names); the caller decides with it whether "none" is true
+        $subsRead = $false; $subsSeen = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
         if ($res.Complete) {
             $args4 = @{ Query = (Get-SISubscriptionNameKql); SourceLabel = 'subscription names'; SubscriptionIds = $SubscriptionIds }
             if ($PageFetcher) { $args4['PageFetcher'] = $PageFetcher }
             # The pager's own warning speaks of missing assets; a missing NAME loses nothing, so say what it does mean.
             $names = Invoke-SIArgPaged @args4 -WarningAction SilentlyContinue
             if (-not $names.Complete) { Write-Warning 'Subscription names could not be read -- subscriptions are shown by their id in this run.' }
+            $subsRead = [bool]$names.Complete
             foreach ($s in @($names.Rows)) {
-                if ($null -eq $s -or -not $s.PSObject.Properties['subscriptionId'] -or -not $s.PSObject.Properties['name']) { continue }
+                if ($null -eq $s -or -not $s.PSObject.Properties['subscriptionId']) { continue }
+                if ($s.subscriptionId) { [void]$subsSeen.Add(([string]$s.subscriptionId).Trim()) }
+                if (-not $s.PSObject.Properties['name']) { continue }
                 if ($s.subscriptionId -and $s.name) { $subNames[([string]$s.subscriptionId).ToLowerInvariant()] = [string]$s.name }
             }
             # the same rows carry each subscription's management-group chain: id + name + path next to the subscription
@@ -691,15 +697,18 @@ function Get-SIDefenderRecommendations {
             }
         }
         $err = if ($res.Error) { $res.Error } else { $sub.Error }
+        $missing = @(@($SubscriptionIds) | Where-Object { "$_".Trim() } | ForEach-Object { "$_".Trim() } | Where-Object { -not $subsSeen.Contains($_) } | Select-Object -Unique)
         [pscustomobject]@{ Rows = $st.Rows.ToArray(); Complete = $complete; RawCount = [long]$res.RowCount; SubCount = [long]$sub.RowCount
-                           RowCount = [long]$st.RowCount; ByKind = $st.ByKind; Entities = [long]$st.Entities; Error = $err }
+                           RowCount = [long]$st.RowCount; ByKind = $st.ByKind; Entities = [long]$st.Entities; Error = $err
+                           SubscriptionsRead = $subsRead; SubscriptionCount = [long]$subsSeen.Count; SubscriptionsMissing = @($missing) }
     } catch {
         # NEVER THROWS (#1399 review): a failure anywhere -- a page handler, a disk bucket, a hand-on (-OnRows) -- is an INCOMPLETE
         # result; the caller publishes nothing and says why
         $why = [string]$_.Exception.Message
         Write-Warning ('Defender for Cloud recommendations: the roll-up could not be completed -- {0}' -f $why)
         [pscustomobject]@{ Rows = @(); Complete = $false; RawCount = $(if ($res) { [long]$res.RowCount } else { 0L }); SubCount = $(if ($sub) { [long]$sub.RowCount } else { 0L })
-                           RowCount = [long]$st.RowCount; ByKind = $st.ByKind; Entities = [long]$st.Entities; Error = $why }
+                           RowCount = [long]$st.RowCount; ByKind = $st.ByKind; Entities = [long]$st.Entities; Error = $why
+                           SubscriptionsRead = $false; SubscriptionCount = 0L; SubscriptionsMissing = @() }
     } finally {
         Remove-SIDiskBuckets $raw; Remove-SIDiskBuckets $subB
     }
@@ -732,6 +741,19 @@ function Read-SIDefenderStoredChildParents {
     if (Get-Command -Name Invoke-SIDataSqlStream -ErrorAction SilentlyContinue) { $null = Invoke-SIDataSqlStream -Invoke $Invoke -Sql (Get-SIDefenderStoredChildParentSql) -Params @{} -OnRow $on }
     else { $ans = & $Invoke (Get-SIDefenderStoredChildParentSql) @{} 'reader'; foreach ($a in @($ans)) { foreach ($r in @($a)) { if ($null -ne $r) { & $on $r } } } }
     $__cpMap
+}
+
+function New-SIDefenderEmptyRowTemplate {
+    <#
+        PURE. #1416 (c) the shape of one SI_AzureRecommendation_CL row when a complete read found NO row to take it from: the
+        row builder's own output for one placeholder assessment (ConvertTo-SIDefenderRecommendationRows), so the empty
+        snapshot's marker carries every column with its type, exactly as a marker after rows does (#148: the schema never
+        drifts). Only its shape is used (New-SIDefenderSnapshotMarker blanks every value); it is never posted itself.
+    #>
+    param([Parameter(Mandatory)][datetime]$CollectionTime)
+    $ph = [pscustomobject]@{ AssessmentId = 'si-empty-snapshot'; ResourceId = '/subscriptions/00000000-0000-0000-0000-000000000000'; ResourceType = 'microsoft.resources/subscriptions'
+                             SubscriptionId = '00000000-0000-0000-0000-000000000000'; AssessmentKey = 'si-empty-snapshot'; Recommendation = 'si-empty-snapshot' }
+    @(ConvertTo-SIDefenderRecommendationRows -Raw @($ph) -CollectionTime $CollectionTime -RunId 'si-empty-snapshot' -Scope $null -ChildParents @{})[0]
 }
 
 function New-SIDefenderSnapshotMarker {

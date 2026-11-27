@@ -22,7 +22,7 @@ BeforeAll {
     . (Join-Path $script:SIRoot 'setup\_shared\SI-MissingJobs.ps1')
     # the updater's serving check (Test-SIUpdaterRevisionServing) is what the clean-up waits on for an app
     . (Join-Path $script:SIRoot 'container\updater\_shared\SI-UpdaterWebApp.ps1')
-    $script:Sub = '42f21bfd-0000-0000-0000-000000000001'; $script:Rg = 'rg-si-prod-pro-ca'
+    $script:Sub = '00000000-0000-0000-0000-000000000000'; $script:Rg = 'rg-si-prod-pro-ca'
     # ARM lists ids with "resourcegroups" in lower case; jobs carry "resourceGroups" -- the same id
     $script:IdBase = '/subscriptions/{0}/resourcegroups/{1}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/' -f $script:Sub, $script:Rg
     $script:JobBase = '/subscriptions/{0}/resourceGroups/{1}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/' -f $script:Sub, $script:Rg

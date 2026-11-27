@@ -242,6 +242,8 @@ function Invoke-TestWorker([string]$Db, $Ctx, [string]$Queue, $Store, $Lock, [st
         $m.Open(); try { $c = $m.CreateCommand(); $c.CommandTimeout = 300; $c.CommandText = "ALTER DATABASE [$Name] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [$Name]"; [void]$c.ExecuteNonQuery() } finally { $m.Dispose() }
     }
     function script:Q([string]$Db, [string]$Sql) { $s = New-Seam -Db $Db; @(& $s $Sql @{} 'reader') | ForEach-Object { $_ } }
+    # #1411 (d): a worker's error record with WHERE it happened -- the message alone never says which line failed
+    function script:Format-TestWorkerError($E) { if ($null -eq $E) { return '' }; $at = if ($E.InvocationInfo) { [string]$E.InvocationInfo.PositionMessage } else { '' }; ("{0}`n  at: {1}`n  stack: {2}" -f [string]$E, $at.Trim(), ([string]$E.ScriptStackTrace).Trim()) }
     # the ONE-JOB run -- in a fresh runspace, as the workers run: what earlier suites left in this session's globals must not
     # make the two sides score differently
     function script:Invoke-OneJob([string]$Db, [int]$Assets = 40, [int]$LatencyMs = 0) {
@@ -253,7 +255,7 @@ function Invoke-TestWorker([string]$Db, $Ctx, [string]$Queue, $Store, $Lock, [st
                 [pscustomobject]@{ CollectionId = $s.CollectionId; La = $(if ($Assets -le 40) { Get-TestLaPosts -Stream $s } else { $null }) }', $true)
             foreach ($a in @($Db, $script:Reports, $Assets, $LatencyMs)) { [void]$ps.AddArgument($a) }
             $out = $ps.Invoke()
-            if ($ps.Streams.Error.Count) { throw ('the one-job run failed: {0}' -f $ps.Streams.Error[0]) }
+            if ($ps.Streams.Error.Count) { throw ('the one-job run failed: {0}' -f (Format-TestWorkerError $ps.Streams.Error[0])) }
             $out | Select-Object -Last 1
         } finally { $ps.Dispose() }
     }
@@ -265,7 +267,7 @@ function Invoke-TestWorker([string]$Db, $Ctx, [string]$Queue, $Store, $Lock, [st
             [void]$ps.AddScript('param($Db, $Ctx, $Q, $Store, $Lock, $W, $Crash, $Assets, $Lat, $Max) Invoke-TestWorker -Db $Db -Ctx $Ctx -Queue $Q -Store $Store -Lock $Lock -Worker $W -Crash $Crash -Assets $Assets -LatencyMs $Lat -MaxDequeue $Max', $true)
             foreach ($a in @($Db, $Ctx, $Queue, $Store, $Lock, $Worker, $Crash, $Assets, $LatencyMs, $MaxDequeue)) { [void]$ps.AddArgument($a) }
             $out = $ps.Invoke()
-            if ($ps.Streams.Error.Count) { throw ('a worker failed: {0}' -f $ps.Streams.Error[0]) }
+            if ($ps.Streams.Error.Count) { throw ('a worker failed: {0}' -f (Format-TestWorkerError $ps.Streams.Error[0])) }
             $out | Select-Object -Last 1
         } finally { $ps.Dispose() }
     }
@@ -293,7 +295,7 @@ function Invoke-TestWorker([string]$Db, $Ctx, [string]$Queue, $Store, $Lock, [st
                 foreach ($a in @($Db, $ctx, $q, $store, $lock, "w$w", $Crash, $Assets, $LatencyMs, $MaxDequeue)) { [void]$ps.AddArgument($a) }
                 $runs += @{ PS = $ps; H = $ps.BeginInvoke() }
             }
-            foreach ($r in $runs) { foreach ($o in $r.PS.EndInvoke($r.H)) { $results.Add($o) }; if ($r.PS.Streams.Error.Count) { throw ('a worker failed: {0}' -f $r.PS.Streams.Error[0]) }; $r.PS.Dispose() }
+            foreach ($r in $runs) { foreach ($o in $r.PS.EndInvoke($r.H)) { $results.Add($o) }; if ($r.PS.Streams.Error.Count) { throw ('a worker failed: {0}' -f (Format-TestWorkerError $r.PS.Streams.Error[0])) }; $r.PS.Dispose() }
         }
         [pscustomobject]@{ Stream = $p; Manifest = $man; Store = $store; Ctx = $ctx; Queue = $q; Lock = $lock; Plan = $plan; Results = $results.ToArray() }
     }

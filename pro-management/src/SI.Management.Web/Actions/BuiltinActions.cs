@@ -389,7 +389,8 @@ public sealed class ExportSelectedAction(IAccessScope access) : IFindingAction
     public async Task<ActionOutcome> ExecuteAsync(ClaimsPrincipal user, IReadOnlyList<GovernanceTarget> findings, ActionForm form, CancellationToken ct)
     {
         var rows = findings.Select(t => t.Finding).ToList();
-        var cols = Pages.Findings.IndexModel.ExportColumns.Append("Department").ToArray();
+        // #1421 (b): the headings made unique the same way every grid and export does (DataColumnKeys.UniqueTitles)
+        var cols = SI.Management.Core.ProData.DataColumnKeys.UniqueTitles(Pages.Findings.IndexModel.ExportColumns.Append("Department").Select(c => (c, c))).ToArray();
         object?[] Cells(GovernanceTarget t)
         {
             var r = t.Finding;

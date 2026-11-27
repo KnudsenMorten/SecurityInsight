@@ -7557,6 +7557,14 @@ covers it; a copy (`securityinsight-<version>.cdx.json`) is published with the r
 checks an archive (with `-ExpectedSha256` = the signed value first) or an installed SecurityInsight folder against it. The
 packages those packages bring in are resolved when the install builds its images and are not listed.
 
+> ⛔ **SUPERSEDED by SEC-PATCH-PIPELINE-1 (2026-11-26) -- in WHERE and BY WHAT the image update below runs, not in its
+> steps.** The five paragraphs that follow (base image security updates, one update per ring build, every ring call checked,
+> the switch-back record, the notice queue) describe the release logic as built in `setup\Release-SIImagePatch.ps1`; that
+> logic stands. What is replaced: running it from a session on the vendor's management machine with its certificates,
+> machine-local files, git pushes, the GitHub workflow for the Community release and the test VM. The agreed host is an
+> Azure Container Apps job with a managed identity -- see **Security images -- the agreement (SEC-PATCH-PIPELINE-1)** after
+> them. Kept unchanged as the record (SI #1408).
+
 **Base image security updates.** Every SecurityInsight image is built from a Microsoft base image pinned by digest, so
 an install never builds from a base nobody tested. When Microsoft publishes a newer base image, the update platform
 tells SecurityInsight which tag and digest moved, and the vendor's release tooling (`setup\Release-SIImagePatch.ps1`)
@@ -7612,6 +7620,42 @@ builds on that image, the notice is queued for the image update and then confirm
 not used. A notice that cannot be queued is not confirmed, so it comes back. The reader never releases anything and asks
 nobody anything; the image update (`Release-SIImagePatch.ps1 -FromQueue`) takes the oldest queued notice as its instruction
 and takes it off the queue once the update is out -- an update that stopped or was switched back stays queued.
+
+**Security images -- the agreement (SEC-PATCH-PIPELINE-1, 2026-11-26; SI #1408).** The platform's agreement for security
+images (2026-11-14 "where the image is built", 2026-11-24 every 15 minutes and the unattended image update, 2026-11-26:
+no GitHub, Azure, no VM, installs updated separately from the normal update, every 15 minutes in every product) has four
+parts. What SecurityInsight does for each, and what is still to be built:
+
+1. **The install builds its own patched images.** The updater takes the signed release (its size and SHA-256 checked
+   before anything is extracted), then has the install's OWN registry build every image (the registry's build service over
+   ARM: upload, schedule, follow to the end -- `setup\_shared\SI-AcrBuild.ps1`), from the base images the release names,
+   pinned by digest, with the operating system packages updated in the engine and updater images. Nobody builds an image
+   for an install centrally. What runs is reported in the heartbeat (`Update.runningImages`: per component the repository,
+   digest, .NET version and when it was read). **Built and in use.** (A Community install downloads its release from the
+   public release the update platform signs; nothing is built there.)
+2. **A short image-only path, separate from the normal update.** An image-only release (a fourth version part on the
+   release that runs, the same engine code, a What's new of type security) takes only the image path: the images built,
+   the engine jobs pointed at the new digests, the web app, the MCP server and the sign-in front on a new revision each,
+   the updater last. No run gate: a running execution keeps the image it started with, the next one takes the new one;
+   nothing is stopped, and no database, schema, template or settings step runs. Old images go only after the swap is
+   proven. It runs in its own job and schedule (`caj-si-image-check`), not inside the nightly update. **Built and in use.**
+3. **Started at once.** The pipeline runner wakes every 5 minutes and, at most every 15 minutes, asks the update platform
+   whether an image-only release waits for the install's ring; it then starts the image-only path once. Independently,
+   `caj-si-image-check` asks every 15 minutes in both editions and applies it (see *The image check every 15 minutes*).
+   **Built and in every release since the 3.1.44.1 line; the first image-only release through the 15-minute check is the
+   live proof that is still open.**
+4. **The image-only release is made in Azure.** From the update platform's image-patch task, the release is cut from the
+   build each ring runs, goes to ring 0, then ring 1, then rings 2 and 3 on the owner's standing decision for image-only
+   releases, every ring call checked first. The agreed host is an Azure Container Apps job in the update platform's
+   environment with a managed identity that holds the SecurityInsight publisher role: no stored secret, no certificate
+   (the publisher certificate is deleted once the job has proven a real update end to end), no GitHub, no VM, no
+   management machine and no session. **Open.** The release logic exists (`setup\Release-SIImagePatch.ps1`, above) and has
+   run for real, but today from a session on the management machine, with its certificates and files, git pushes, the
+   GitHub workflow that publishes the Community release, and the release gate on the test VM. To build: the job and its
+   identity; the image-only release without git or GitHub (the package's base image lines moved, renumbered, registered and
+   released through the update platform, the Community package too); the gate for an image-only release in Azure; the ring
+   0 proof read from the install's own report; plan-only first, then the first real update, then the certificate removed.
+   Until then an image update still runs from a session -- said in the task's close line each time.
 
 **Guided install as a command.** `setup/Install-SecurityInsight.psd1` exports `Install-SecurityInsight`, which forwards every parameter unchanged to `setup/Install-SecurityInsight.ps1` and leaves its exit code in `$LASTEXITCODE` (0 installed, 1 a step failed, 2 a check failed, 3 config.json not valid). Every event's action carries both a text and a command; a note without a command is part of the message, and a failure without a command of its own gets the resume command. Paths are built for Linux (Azure Cloud Shell) as well as Windows.
 

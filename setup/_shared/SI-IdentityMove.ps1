@@ -68,7 +68,8 @@ $script:SIMove = @{
     ProDatabase  = 'sqldb-si-pro'
     StateName    = 'IdentityMove'
     ReportName   = 'IdentityNames'
-    InstallStateMax = 400
+    InstallStateMax = 0   # #1426: 0 = no limit -- cfg.InstallState.Value is NVARCHAR(MAX); the whole record is kept, never cut
+    NarrowMax    = 400   # #1426: the column before 3.1.53 (an install whose widening has not run yet)
     ChangedBy    = 'Invardia Support (identity move)'
     ExecDone     = @('Succeeded', 'Failed', 'Stopped', 'Degraded')
     # the pipeline's error classes (engine\_shared\SI-ErrorClass.ps1) that mean a right or a sign-in was refused
@@ -777,9 +778,11 @@ function Get-SIIdentityNamesReport {
         PURE. Step 7: the identity-names record (cfg.InstallState 'IdentityNames') from each role's selection and use.
         -Roles: role -> @{ Selection; InUse (the identity its apps / jobs point at: @{ Name; PrincipalId }); Unknown [bool] }.
         Per role: ok (its apps / jobs use id-si-<role> and no old identity is left), missing (an old name is in use or left),
-        unknown (could not be read). A role not at the install is left out. Returns @{ Record (ordered); Value (JSON) }.
+        unknown (could not be read). A role not at the install is left out. -MaxLength: the characters the install's
+        cfg.InstallState.Value holds (Get-SIMoveInstallStateLimit; 0 = no limit). Returns @{ Record (ordered); Value (JSON);
+        TooLong (still over -MaxLength with only state and name left) }.
     #>
-    param([Parameter(Mandatory)][hashtable]$Roles, [datetime]$NowUtc = [datetime]::UtcNow)
+    param([Parameter(Mandatory)][hashtable]$Roles, [datetime]$NowUtc = [datetime]::UtcNow, [int]$MaxLength = $script:SIMove.InstallStateMax)
     $out = [ordered]@{}
     # the five moved roles, then the two that are only checked: the database setup job's own identity and the in-network SQL
     # identity (where the install has one)
@@ -808,16 +811,18 @@ function Get-SIIdentityNamesReport {
         $out[$r] = $e
     }
     $rec = [ordered]@{ checkedUtc = $NowUtc.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ', [Globalization.CultureInfo]::InvariantCulture); roles = $out }
-    # cfg.InstallState.Value holds 400 characters (seen live at internal 2026-11-04: five roles did not fit). The heartbeat
-    # reads state and name (and shows a note), so the detail goes first, field by field, until the record fits: standard,
-    # kind, objectId, then the note. state and name are always kept.
+    # #1426: cfg.InstallState.Value is NVARCHAR(MAX) since 3.1.53 (it held 400 characters: five roles did not fit at internal
+    # 2026-11-04, and at one install even state + name of every role did not, so the write failed). No limit (-MaxLength 0, the
+    # widened column): the whole record is kept. An install still on the narrow column (the move run from ops before its
+    # update widened it): the detail goes first, field by field -- standard, kind, objectId, then the note; state and name
+    # are always kept, and a record still too long is said (TooLong), never cut.
     $value = $rec | ConvertTo-Json -Depth 6 -Compress
     foreach ($drop in 'standard', 'kind', 'objectId', 'note') {
-        if ($value.Length -le $script:SIMove.InstallStateMax) { break }
+        if ($MaxLength -le 0 -or $value.Length -le $MaxLength) { break }
         foreach ($k in @($out.Keys)) { if ($out[$k].Contains($drop)) { $out[$k].Remove($drop) } }
         $value = $rec | ConvertTo-Json -Depth 6 -Compress
     }
-    [pscustomobject]@{ Record = $rec; Value = $value }
+    [pscustomobject]@{ Record = $rec; Value = $value; TooLong = ($MaxLength -gt 0 -and $value.Length -gt $MaxLength) }
 }
 
 function Get-SIIdentityMoveInUse {
@@ -1165,12 +1170,31 @@ function Save-SIMoveRoleState {
     $roleObj = Get-SIMoveProp $all @('roles', $Role)
     $one = $roleObj | ConvertTo-Json -Depth 6 -Compress
     # every step's time fits; the old / new name blocks are only a note for people -- they go first when the row is too long
+    $max = Get-SIMoveInstallStateLimit -Ctx $Ctx
     foreach ($drop in 'new', 'old') {
-        if ($one.Length -le $script:SIMove.InstallStateMax) { break }
+        if ($max -le 0 -or $one.Length -le $max) { break }
         if ($roleObj -and $roleObj.PSObject.Properties[$drop]) { $roleObj.PSObject.Properties.Remove($drop); $one = $roleObj | ConvertTo-Json -Depth 6 -Compress }
     }
-    if ($one.Length -gt $script:SIMove.InstallStateMax) { throw ("the move record of role {0} is {1} characters; the install state holds {2}" -f $Role, $one.Length, $script:SIMove.InstallStateMax) }
+    if ($max -gt 0 -and $one.Length -gt $max) { throw ("the move record of role {0} is {1} characters; the install state holds {2}" -f $Role, $one.Length, $max) }
     Save-SIMoveInstallState -Ctx $Ctx -Name ('{0}.{1}' -f $script:SIMove.StateName, $Role) -Value $one
+}
+function Get-SIMoveInstallStateLimit {
+    <#
+        #1426: the characters cfg.InstallState.Value holds at THIS install, read once per run (COL_LENGTH, cached on -Ctx):
+        -1 (NVARCHAR(MAX), every install from 3.1.53 on) -> 0 = no limit; n bytes (an install still on NVARCHAR(400), e.g. the
+        move run from ops before the update widened it) -> n / 2. No state database -> the setting. A read that fails or
+        answers nothing -> 400, the narrow column (the detail is dropped first; nothing is ever cut).
+    #>
+    param([Parameter(Mandatory)][hashtable]$Ctx)
+    if ($Ctx.ContainsKey('InstallStateLimit')) { return [int]$Ctx.InstallStateLimit }
+    if (-not $Ctx.StateDatabase) { return [int]$script:SIMove.InstallStateMax }
+    $lim = $script:SIMove.NarrowMax
+    try {
+        $row = @(Invoke-SIMoveSql -Server $Ctx.SqlServer -Database $Ctx.StateDatabase -Query "SET NOCOUNT ON; SELECT COL_LENGTH(N'cfg.InstallState', N'Value') AS L;" -Reason $Ctx.Reason)[0]
+        if ($row -and $null -ne $row.L -and -not ($row.L -is [DBNull])) { $l = [int]$row.L; $lim = if ($l -lt 0) { 0 } else { [int][math]::Floor($l / 2) } }
+    } catch { $lim = $script:SIMove.NarrowMax }
+    $Ctx['InstallStateLimit'] = $lim
+    $lim
 }
 function Save-SIMoveInstallState {
     <# One cfg.InstallState row written (upsert) and READ BACK. Returns $true when the stored value is -Value. #>
@@ -2035,13 +2059,28 @@ function Invoke-SIMoveReport {
     }
     $sqlId = @($Ctx.Identities | Where-Object { $_ -and $_.Name -ieq 'id-si-sql' })[0]
     if ($sqlId) { $roles['sql'] = @{ Selection = [pscustomobject]@{ Role = 'sql'; Standard = 'id-si-sql'; Old = $null; New = $sqlId; State = 'done' }; InUse = $sqlId; Unknown = $false } }
-    $rep = Get-SIIdentityNamesReport -Roles $roles
+    $max = Get-SIMoveInstallStateLimit -Ctx $Ctx
+    $rep = Get-SIIdentityNamesReport -Roles $roles -MaxLength $max
     $lines = @($rep.Record.roles.Keys | ForEach-Object { $e = $rep.Record.roles[$_]; '{0}: {1} ({2}{3})' -f $_, $e.state, $e.name, $(if ($e.objectId) { ", object id $($e.objectId)" } else { '' }) })
     $step = @(Get-SISetupSteps -StateRows @([pscustomobject]@{ Name = $script:SIMove.ReportName; Value = $rep.Value; UpdatedAt = $null }) -NowUtc ([datetime]::UtcNow) | Where-Object { $_.key -eq 'identity-names' })[0]
     if ($step) { $lines += ('heartbeat setup step: identity-names {0}{1}' -f $step.state, $(if ($step.PSObject.Properties['detail']) { ' -- ' + $step.detail } else { '' })) }
     if (-not $Ctx.Apply) { return New-SIIdentityMoveStepResult -Step report -State planned -Lines (@($lines) + 'plan: write cfg.InstallState IdentityNames') -Data $rep }
     if (-not $Ctx.StateDatabase) { return New-SIIdentityMoveStepResult -Step report -State stop -Lines (@($lines) + 'no state database: nothing recorded') -Data $rep }
-    if (Save-SIMoveInstallState -Ctx $Ctx -Name $script:SIMove.ReportName -Value $rep.Value) { return New-SIIdentityMoveStepResult -Step report -State done -Lines (@($lines) + 'recorded and read back: cfg.InstallState IdentityNames') -Data $rep }
+    if ($rep.TooLong) { return New-SIIdentityMoveStepResult -Step report -State stop -Lines (@($lines) + ('NOT RECORDED: the identity-names record is {0} characters; this install''s cfg.InstallState holds {1} until its next update widens it -- nothing was cut' -f $rep.Value.Length, $max)) -Data $rep }
+    $saved = $false; $how = 'recorded and read back: cfg.InstallState IdentityNames'
+    try { $saved = Save-SIMoveInstallState -Ctx $Ctx -Name $script:SIMove.ReportName -Value $rep.Value }
+    catch {
+        # #1426 (review): the column is still the narrow one although it did not say so (its widening refused or failed):
+        # the record as the 400-character column holds it (the detail dropped first, state and name kept), said -- the report
+        # never fails every run because a schema step did not run
+        if ("$($_.Exception.Message)" -notmatch '(?i)truncat' -or $max -eq $script:SIMove.NarrowMax) { throw }
+        $rep = Get-SIIdentityNamesReport -Roles $roles -MaxLength $script:SIMove.NarrowMax
+        $Ctx['InstallStateLimit'] = $script:SIMove.NarrowMax
+        if ($rep.TooLong) { return New-SIIdentityMoveStepResult -Step report -State stop -Lines (@($lines) + ('NOT RECORDED: the identity-names record is {0} characters; this install''s cfg.InstallState holds {1} until its next update widens it -- nothing was cut' -f $rep.Value.Length, $script:SIMove.NarrowMax)) -Data $rep }
+        $saved = Save-SIMoveInstallState -Ctx $Ctx -Name $script:SIMove.ReportName -Value $rep.Value
+        $how = ('recorded and read back: cfg.InstallState IdentityNames, shortened to the {0} characters this install''s column still holds (the whole record was refused as too long; the next update''s schema step widens it)' -f $script:SIMove.NarrowMax)
+    }
+    if ($saved) { return New-SIIdentityMoveStepResult -Step report -State done -Lines (@($lines) + $how) -Data $rep }
     New-SIIdentityMoveStepResult -Step report -State stop -Lines (@($lines) + 'READ BACK FAILED: cfg.InstallState IdentityNames') -Data $rep
 }
 

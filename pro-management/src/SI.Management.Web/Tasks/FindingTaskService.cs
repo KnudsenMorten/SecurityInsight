@@ -270,12 +270,22 @@ public sealed partial class FindingTaskService
     }
 
     /// A list: the user's own keys and the departments they see are added here, never taken from the request.
-    public async Task<TaskPage> ListAsync(ClaimsPrincipal user, TaskQuery q, CancellationToken ct)
+    public async Task<TaskPage> ListAsync(ClaimsPrincipal user, TaskQuery q, CancellationToken ct, DateOnly? today = null)
     {
         var me = await IdentityAsync(user, ct);
         var depts = await VisibleDepartmentsAsync(user, ct);
         if (q.View == TaskQuery.ViewAll && !user.IsAdmin()) q = q with { View = TaskQuery.ViewMine };
-        return await _store.QueryAsync(q with { Keys = me.Keys, PersonalKeys = me.PersonalKeys, Departments = depts, Today = Today }, ct);
+        return await _store.QueryAsync(q with { Keys = me.Keys, PersonalKeys = me.PersonalKeys, Departments = depts, Today = today ?? Today }, ct);
+    }
+
+    /// #1418 (a)(b) the keys of every task <see cref="ListAsync"/> lists for this person (the same view, departments and
+    /// choices; <paramref name="today"/> fixed once per export, as the list's own pages read it), hashed in SQL -- an export reads them at its start and its end on the live path.
+    public async Task<SI.Management.Core.ProData.ExportKeyHash?> KeyHashAsync(ClaimsPrincipal user, TaskQuery q, CancellationToken ct, DateOnly? today = null)
+    {
+        var me = await IdentityAsync(user, ct);
+        var depts = await VisibleDepartmentsAsync(user, ct);
+        if (q.View == TaskQuery.ViewAll && !user.IsAdmin()) q = q with { View = TaskQuery.ViewMine };
+        return await _store.KeyHashAsync(q with { Keys = me.Keys, PersonalKeys = me.PersonalKeys, Departments = depts, Today = today ?? Today }, ct);
     }
 
     /// The header's "my open / overdue tasks" -- cached for seconds; any task write refreshes it.

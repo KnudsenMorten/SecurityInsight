@@ -13,6 +13,23 @@ SecurityInsight Pro and the Pro trial install from invardia.com, never from GitH
 [invardia.com/trial](https://invardia.com/trial/), and your installation page there gives your two lines.
 <!-- /install lines -->
 
+## v3.1.53 — no more false "not refreshed" warning, consistent exports, and updates started by hand go through
+
+### Fixes
+- **The run report no longer says Defender for Cloud recommendations were not refreshed when they were.** Every Azure
+  run collected in parts warned "recommendations not refreshed this run" although the recommendations were published.
+- **A Defender for Cloud result that was not read in full: the reports that use it say it is not complete**, and nothing
+  is closed because of it. An installation with no open recommendations now shows them as
+  read, not as missing.
+- **Exports read one consistent picture while data changes**: SI's database reads each export as of one moment,
+  and an export whose rows changed while it ran is refused, never handed out mixed.
+- **An update started by hand is no longer mistaken for the scheduled one** and ended early when it starts close to a
+  scheduled update time.
+- **The identity-names report is no longer cut short** at installations with long identity names; it is stored whole.
+- **Support sees more of an installation's health**: the last pipeline run with each step's time and result, and the
+  result of the image clean-up after an update.
+- **Smaller fixes**: exports with more rows than one sheet holds continue on a second sheet ("Full details 2").
+
 ## v3.1.52 — large installations finish their runs, a warning when data is old, and the 3.1.51 data corrections
 
 ### New

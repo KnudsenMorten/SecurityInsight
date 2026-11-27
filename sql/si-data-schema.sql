@@ -5476,6 +5476,8 @@ IF OBJECT_ID(N'sidata.StatisticsRefreshTable') IS NULL
     EXEC (@SIStatsProc);
 -- the v1 gate is made only while no newer one (v2, with @Only, appended below) is there -- otherwise every re-apply made v1
 -- over v2 and v2 again (the gate flipped once per update). Its body text is unchanged; only this guard line is added.
+-- (#1412 (c)) The guard keys on the parameter @Only, not on a version marker: EVERY later gate keeps @Only (a v3 that drops it
+-- must carry a marker and this guard must key on it), or this v1 would be made over that later gate on every apply.
 IF CHARINDEX(N'@Only', ISNULL(OBJECT_DEFINITION(OBJECT_ID(N'sidata.StatisticsRefresh')), N'')) = 0
 EXEC (N'CREATE OR ALTER PROCEDURE sidata.StatisticsRefresh @After nvarchar(300) = NULL, @AsyncOnly bit = 0, @Table nvarchar(300) = NULL OUTPUT,
     @Refreshed int = NULL OUTPUT, @Failed int = NULL OUTPUT, @Error nvarchar(2000) = NULL OUTPUT, @Async bit = NULL OUTPUT

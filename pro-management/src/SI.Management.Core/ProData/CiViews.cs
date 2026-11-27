@@ -87,6 +87,9 @@ public interface ICiViews
     /// every row this way, never one capped read of all. Every reader implements it itself (no fallback over a capped read).
     Task<QueryResult<GridPage>> GridChunkAsync(GridSpec spec, GridRequest request, int chunk, int size, CancellationToken ct) =>
         throw new NotSupportedException(GetType().Name + " reads no export chunks: implement GridChunkAsync (an export never falls back to a capped read)");
+    /// #1418 (a)(b) the keys of every row an export of this grid request reads (<see cref="GridSql.KeyHash"/>), read at its start
+    /// and its end on the live path. Null = this reader cannot say (a fake): that export keeps its count and doubled-key checks.
+    Task<ExportKeyHash?> GridKeyHashAsync(GridSpec spec, GridRequest request, CancellationToken ct) => Task.FromResult<ExportKeyHash?>(null);
     /// The values the CI filters offer (Class, Lifecycle).
     Task<QueryResult<IReadOnlyList<CiFacet>>> CiFacetsAsync(CancellationToken ct);
     /// How the CI grid reads sidata.Ci now, and the version its cached filter values belong to (<see cref="CiDataState"/>).
@@ -725,6 +728,14 @@ public sealed class CiViews : ICiViews
             page = page with { Data = page.Data with { Total = c.Rows.Count > 0 ? ProDataQueries.L(c.Rows[0], "TotalRows") : 0 } };
         }
         return page;
+    }
+
+    /// #1418 (a)(b) the keys of every row the export's chunks read: the same source and WHERE, hashed in SQL, read live.
+    public async Task<ExportKeyHash?> GridKeyHashAsync(GridSpec spec, GridRequest request, CancellationToken ct)
+    {
+        var st = GridSql.Normalize(spec, request);
+        var r = await Run(GridSql.KeyHash(spec, st, new Dictionary<string, object?>()), ct).ConfigureAwait(false);
+        return r.Rows.Count > 0 ? ExportKeyHash.Of(r.Rows[0]) : new ExportKeyHash(0, "");
     }
 
     public Task<QueryResult<GridPage>> GridAsync(GridSpec spec, GridRequest request, bool export, CancellationToken ct)

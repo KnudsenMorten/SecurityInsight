@@ -375,6 +375,30 @@ OPTION (RECOMPILE);
         return new SqlQuery(text, p);
     }
 
+    /// <summary>
+    /// #1418 (a)(b) the KEYS (collection | finding) of the findings <see cref="FindingsExportChunk"/> reads in all -- the SAME
+    /// FROM / JOIN / WHERE as <see cref="FindingsExportCount(FindingFilter, IReadOnlyCollection{string}?)"/> (with
+    /// <paramref name="ids"/>: of the ticked ones), hashed in SQL (<see cref="ExportKeyHashSql"/>). Read at the export's start
+    /// and its end on the live path.
+    /// </summary>
+    public static SqlQuery FindingsExportKeyHash(FindingFilter raw, IReadOnlyCollection<string>? ids)
+    {
+        var f = ProDataFilters.Normalize(raw);
+        var ticked = ids is null ? "" : "\n  AND CONVERT(nvarchar(64), f.FindingId) IN (SELECT tv.[value] FROM OPENJSON(@Ids) AS tv)";
+        var text = $"""
+{CollectionCte}
+SELECT {ExportKeyHashSql.Columns("CONCAT(f.CollectionId, N'|', f.FindingId)")}
+FROM sidata.Finding AS f
+JOIN c ON f.CollectionId = c.CollectionId
+LEFT JOIN sidata.Asset AS a ON a.AssetKey = f.AssetKey
+{WhereOf(f)}{ticked}
+OPTION (RECOMPILE);
+""";
+        var p = FilterParams(f);
+        if (ids is not null) p["Ids"] = System.Text.Json.JsonSerializer.Serialize(ids);
+        return new SqlQuery(text, p);
+    }
+
     /// The dimension pivot (tier x severity x domain) of the filtered view of one collection.
     public static SqlQuery Pivot(FindingFilter raw)
     {

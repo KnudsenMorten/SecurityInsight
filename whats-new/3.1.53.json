@@ -1,0 +1,14 @@
+{
+  "version": "3.1.53",
+  "date": "2026-11-26",
+  "type": "fix-only",
+  "summary": "No more false \"not refreshed\" warning, exports read one consistent picture, and updates started by hand go through.",
+  "new": [],
+  "fixes": [
+    { "title": "No false recommendations warning", "text": "The run report no longer says the Defender for Cloud recommendations were not refreshed when they were." },
+    { "title": "Partial results said as not complete", "text": "When a Defender for Cloud result was not read in full, the reports that use it say it is not complete, and nothing is closed because of it." },
+    { "title": "Consistent exports", "text": "Exports read one consistent picture while data changes; an export whose rows changed while it ran is refused, never handed out mixed." },
+    { "title": "Updates started by hand go through", "text": "An update started by hand close to a scheduled update time is no longer ended early." },
+    { "title": "Smaller fixes", "text": "The identity-names report is stored whole, support sees the last run per step and the image clean-up, and large exports continue on a second sheet." }
+  ]
+}

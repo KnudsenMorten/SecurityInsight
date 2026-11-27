@@ -62,6 +62,9 @@
 
 $script:SIImagePruneManifestAccept = 'application/vnd.docker.distribution.manifest.v2+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.oci.image.index.v1+json'
 $script:SIImagePruneRecordSecret = 'SI-Release-Images'
+# #1424 review: the cfg.InstallState 'ImagePrune' record's last-resort size (the column is NVARCHAR(MAX) since #1426; the record of
+# every real registry is a few hundred characters -- detail is given up only above this, and said)
+$script:SIImagePruneValueMax = 32000
 $script:SIImagePruneEngineBase = @{ 'si-orchestrator' = 'si-base' }
 # SI's OWN ONE-OFF REPOSITORIES (Invardia's central image scan 2026-11-14): images built for a one-off proof and run only by a
 # job that is deleted again -- pro-management/deploy/Test-SIManagementDeployment.ps1's probe. Nothing ever runs them for long, so
@@ -594,18 +597,49 @@ function Invoke-SIUpdaterImagePrune {
 }
 
 function ConvertTo-SIUpdaterImagePruneValue {
-    <# PURE. The clean-up result as the cfg.InstallState 'ImagePrune' value (at most 400 characters): {"at","done","deleted","left":{repo:n},"why"}. #>
-    param([Parameter(Mandatory)]$Result, [datetime]$NowUtc = [datetime]::UtcNow)
-    $left = [ordered]@{}; $total = 0
-    foreach ($r in @($Result.Repos)) { $left[[string]$r.Repo] = [int]$r.Left; $total += [int]$r.Deleted }
+    <#
+        PURE. The clean-up result as the cfg.InstallState 'ImagePrune' value:
+        {"at","done","deleted","v","left":{repo:n},"r":{repo:[before,kept,children,deleted,left,failed]},"why"}. The heartbeat
+        sends it as Update.imagePrune (#1424, engine\_shared\SI-HeartbeatFields.ps1 Get-SIHeartbeatImagePrune). v = the release
+        that ran the clean-up (-Version; left out when not a version). left -1 = what is left could not be read back.
+        THE SIZE (#1424 review, "no short limits"): cfg.InstallState.Value is NVARCHAR(MAX) since #1426, so the record is
+        WHOLE at every real install. Only above -MaxChars ($script:SIImagePruneValueMax, a last resort far above any real
+        registry) is detail given up, in this order: why shortened (200, 80, none); then left goes (r carries the same count);
+        then r goes (left only -- never a made-up count); last at / done / deleted only. Whatever is given up is NAMED through
+        -Log { param($Line) } (one line).
+    #>
+    param([Parameter(Mandatory)]$Result, [datetime]$NowUtc = [datetime]::UtcNow, [AllowEmptyString()][string]$Version = '',
+          [int]$MaxChars = $script:SIImagePruneValueMax, [scriptblock]$Log)
+    if ($MaxChars -le 0) { $MaxChars = 32000 }
+    $note = { param([string]$what) if ($Log) { try { $null = & $Log ('NOTE: old images: the clean-up record is longer than {0} characters -- {1} (the heartbeat sends less detail this time)' -f $MaxChars, $what) } catch { } } }
+    $left = [ordered]@{}; $full = [ordered]@{}; $total = 0
+    foreach ($r in @($Result.Repos)) {
+        $left[[string]$r.Repo] = [int]$r.Left; $total += [int]$r.Deleted
+        $full[[string]$r.Repo] = @([int]$r.Before, [int]$r.Kept, [int]$r.Children, [int]$r.Deleted, [int]$r.Left, [int]$r.Failed)
+    }
+    $at = $NowUtc.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ', [Globalization.CultureInfo]::InvariantCulture)
+    $ver = "$Version".Trim(); if ($ver -notmatch '^[0-9A-Za-z.+-]{1,32}$') { $ver = '' }
     $why = if ($Result.Done) { '' } else { ([string]$Result.Reason -replace '^old images: ', '') }
+    $mk = { param([string]$w, [bool]$withLeft, [bool]$withFull)
+        $o = [ordered]@{ at = $at; done = [bool]$Result.Done; deleted = $total }
+        if ($ver) { $o['v'] = $ver }
+        if ($withLeft) { $o['left'] = $left }
+        if ($withFull -and $full.Count) { $o['r'] = $full }
+        $o['why'] = $w
+        $o | ConvertTo-Json -Compress -Depth 5 }
+    $j = & $mk $why $true $true
+    if ($j.Length -le $MaxChars) { return $j }
     foreach ($max in 200, 80, 0) {
         $w = if ($why.Length -gt $max) { if ($max -le 3) { '' } else { $why.Substring(0, $max - 3) + '...' } } else { $why }
-        $o = [ordered]@{ at = $NowUtc.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ', [Globalization.CultureInfo]::InvariantCulture); done = [bool]$Result.Done; deleted = $total; left = $left; why = $w }
-        $j = $o | ConvertTo-Json -Compress -Depth 4
-        if ($j.Length -le 400) { return $j }
+        $j = & $mk $w $true $true
+        if ($j.Length -le $MaxChars) { & $note ('the reason was shortened to {0} characters' -f $max); return $j }
     }
-    ([ordered]@{ at = $NowUtc.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ', [Globalization.CultureInfo]::InvariantCulture); done = [bool]$Result.Done; deleted = $total } | ConvertTo-Json -Compress)
+    $j = & $mk '' $false $true
+    if ($j.Length -le $MaxChars) { & $note 'the reason and the per-repository images left (also in the counts) were left out'; return $j }
+    $j = & $mk '' $true $false
+    if ($j.Length -le $MaxChars) { & $note ('the per-repository counts (before, kept, children, deleted, failed) of {0} repositories were left out; images left per repository kept' -f $full.Count); return $j }
+    & $note ('every per-repository figure of {0} repositories was left out; only the time, done and the number deleted kept' -f $full.Count)
+    ([ordered]@{ at = $at; done = [bool]$Result.Done; deleted = $total } | ConvertTo-Json -Compress)
 }
 
 function ConvertFrom-SIUpdaterReleaseImageRecord {
@@ -731,7 +765,7 @@ function Invoke-SIUpdaterImagePruneStep {
                 catch { Write-UpdLog ('NOTE: old images: what the clean-up did could not be added to the release record ({0}) -- the record written before the deletes stands' -f $_.Exception.Message) }
             }
         }
-        if ($Store -and (Get-Command -Name Save-SIUpdaterInstallStateValue -ErrorAction SilentlyContinue)) { $null = Save-SIUpdaterInstallStateValue -Store $Store -Name 'ImagePrune' -Value (ConvertTo-SIUpdaterImagePruneValue -Result $res) }
+        if ($Store -and (Get-Command -Name Save-SIUpdaterInstallStateValue -ErrorAction SilentlyContinue)) { $null = Save-SIUpdaterInstallStateValue -Store $Store -Name 'ImagePrune' -Value (ConvertTo-SIUpdaterImagePruneValue -Result $res -Version $Version -Log { param($l) Write-UpdLog $l }) }
         $res
     } catch { Write-UpdLog ('WARNING: old images: not cleaned up this time ({0}) -- every image is kept; the next update tries again' -f $_.Exception.Message); $null }
 }
@@ -892,7 +926,7 @@ function Invoke-SIUpdaterImageOnlyCleanup {
         $res = Invoke-SIUpdaterImagePrune -On $true -Healthy $true -Registry $Registry -Current $After -RunningRefs @($RunningRefs) -RunningKnown $runKnown `
                    -RegistryResourceGroup $regRg -InstallResourceGroup $ResourceGroup -Beat $Beat -Log { param($l) Write-UpdLog $l }
         if ($res.Done) { Write-UpdLog $res.Reason }
-        if ($Store -and (Get-Command -Name Save-SIUpdaterInstallStateValue -ErrorAction SilentlyContinue)) { $null = Save-SIUpdaterInstallStateValue -Store $Store -Name 'ImagePrune' -Value (ConvertTo-SIUpdaterImagePruneValue -Result $res) }
+        if ($Store -and (Get-Command -Name Save-SIUpdaterInstallStateValue -ErrorAction SilentlyContinue)) { $null = Save-SIUpdaterInstallStateValue -Store $Store -Name 'ImagePrune' -Value (ConvertTo-SIUpdaterImagePruneValue -Result $res -Version $Version -Log { param($l) Write-UpdLog $l }) }
         $res
     } catch { Write-UpdLog ('WARNING: old images: not cleaned up this time ({0}) -- every image is kept; the next update tries again' -f $_.Exception.Message); $null }
 }

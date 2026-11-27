@@ -49,8 +49,8 @@ IF OBJECT_ID('cfg.InstallState') IS NOT NULL
 BEGIN
     SET XACT_ABORT ON;
     BEGIN TRAN;
-    DECLARE @old nvarchar(400) = (SELECT Value FROM cfg.InstallState WITH (UPDLOCK, HOLDLOCK) WHERE Name = @Name);
-    DECLARE @v nvarchar(400) = CASE WHEN @old IS NOT NULL AND ISJSON(@old) = 1 THEN @old ELSE N'{}' END;
+    DECLARE @old nvarchar(max) = (SELECT Value FROM cfg.InstallState WITH (UPDLOCK, HOLDLOCK) WHERE Name = @Name);
+    DECLARE @v NVARCHAR(MAX) = CASE WHEN @old IS NOT NULL AND ISJSON(@old) = 1 THEN @old ELSE N'{}' END;
     IF @Users <> N'' SET @v = JSON_MODIFY(@v, '$.users', CONVERT(bigint, @Users));
     IF @Groups <> N'' SET @v = JSON_MODIFY(@v, '$.groups', CONVERT(bigint, @Groups));
     IF @ServicePrincipals <> N'' SET @v = JSON_MODIFY(@v, '$.servicePrincipals', CONVERT(bigint, @ServicePrincipals));

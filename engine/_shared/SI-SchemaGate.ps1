@@ -63,6 +63,23 @@ function Test-SISchemaIsAdditive {
         param($m) [regex]::Replace($m.Value, '[^\r\n]', ' ')
     })
 
+    # #1426 THE ONE WIDENING, ALLOW-LISTED: cfg.InstallState.Value (NVARCHAR(400) -> NVARCHAR(MAX): text made unbounded
+    # holds every value it held). Another table or column is NEVER allowed -- a varbinary, datetime or float column converts
+    # to NVARCHAR(MAX) and its values are damaged (proven on the runner's SQL Server, review 2026-11-26). Exactly this shape,
+    # the guard on the line right before, NULL / NOT NULL said, the semicolon, and nothing after it on that line or the next
+    # (a blank line or the end of the file follows -- a COLLATE on the next line would continue the statement):
+    # the guard on cfg.InstallState / Value (COL_LENGTH ... <> -1), then on the next line the one statement that alters that
+    # column to NVARCHAR(MAX) NOT NULL (or NULL) -- sql\si-pro-settings.sql carries it. That statement is blanked before the scan; anything else is refused below.
+    $allowed = @(@{ Table = 'cfg.installstate'; Column = 'value' })
+    $norm = { param($n) ("$n" -replace '[\[\]]', '').Trim().ToLowerInvariant() }
+    $wid = '(?im)^[ \t]*IF[ \t]+COL_LENGTH[ \t]*\([ \t]*N?''(?<t>[^'']+)''[ \t]*,[ \t]*N?''(?<c>[^'']+)''[ \t]*\)[ \t]*<>[ \t]*-1[ \t]*\r?\n[ \t]*(?<alter>ALTER[ \t]+TABLE[ \t]+(?<t2>[\w\[\]\.]+)[ \t]+ALTER[ \t]+COLUMN[ \t]+(?<c2>\[[^\]\r\n]+\]|\w+)[ \t]+NVARCHAR[ \t]*\([ \t]*MAX[ \t]*\)[ \t]+(NOT[ \t]+)?NULL[ \t]*;)[ \t]*(?=\r?\n[ \t]*(\r?\n|\z)|\r?\n?\z)'
+    foreach ($m in [regex]::Matches($Sql, $wid)) {
+        $tb = & $norm $m.Groups['t'].Value; $co = & $norm $m.Groups['c'].Value
+        if ($tb -ne (& $norm $m.Groups['t2'].Value) -or $co -ne (& $norm $m.Groups['c2'].Value)) { continue }
+        if (-not @($allowed | Where-Object { $_.Table -eq $tb -and $_.Column -eq $co }).Count) { continue }
+        $g = $m.Groups['alter']
+        $clean = $clean.Substring(0, $g.Index) + (' ' * $g.Length) + $clean.Substring($g.Index + $g.Length)
+    }
     # ALTER TABLE ... ADD is additive and must stay allowed; ALTER TABLE ... ALTER COLUMN can truncate.
     # FK clauses `ON DELETE CASCADE` / `ON UPDATE CASCADE` are additive DDL and are excluded explicitly.
     $destructive = @(

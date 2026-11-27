@@ -25,10 +25,10 @@
 BeforeAll {
     $script:SIRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
     $script:Fx = Join-Path $script:SIRoot 'tests\fixtures\ra-perf'
-    function global:Write-Info { param($m) }
-    function global:Write-Warn2 { param($m) }
-    function global:Write-Ok { param($m) }
-    function global:Write-Diag { param($m) }
+    function script:Write-Info { param($m) }
+    function script:Write-Warn2 { param($m) }
+    function script:Write-Ok { param($m) }
+    function script:Write-Diag { param($m) }
     $ProgressPreference = 'SilentlyContinue'
     . (Join-Path $script:Fx 'RaPerfFixture.ps1')
     . (Join-Path $script:SIRoot 'tests\fixtures\risk-explain\RiskExplainEdits.ps1')
@@ -170,8 +170,24 @@ Describe '2. the score does not change: every column that existed before is iden
         $script:NewSum = & $scoreSum (New-RaPerfSummaryRows -Count 120)
     }
     It 'taking the edit out gives the files exactly as they were before it (recorded hash)' {
+        # LATER EDITS OUTSIDE THE EXPLAINED SCORE, put back before the hash (each named by its commit): af440b520 (#1389,
+        # 2026-11-25) turned three helper guards of RA-RiskScore.ps1 from Get-Command into Test-Path function: -- the same
+        # question for a function, asked faster; no score changes (the row comparisons of this suite prove it on the rows)
+        $later = @{
+            'RA-RiskScore.ps1' = @(
+                @('if (Test-Path -Path ''function:Get-RARiskRatingBands'') {', 'if (Get-Command -Name Get-RARiskRatingBands -ErrorAction SilentlyContinue) {'),
+                @('if ((Test-Path -Path ''function:Resolve-SIAssetIdentity'') -and $isSummaryReport) {', 'if ((Get-Command Resolve-SIAssetIdentity -ErrorAction SilentlyContinue) -and $isSummaryReport) {'),
+                @('if ((Test-Path -Path ''function:ConvertTo-SICanonicalAssetPairs'') -and $isSummaryReport) {', 'if ((Get-Command ConvertTo-SICanonicalAssetPairs -ErrorAction SilentlyContinue) -and $isSummaryReport) {')
+            )
+        }
         foreach ($k in $script:BeforeHash.Keys) {
-            $h = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($script:BeforeText[$k])))
+            $t = $script:BeforeText[$k]
+            foreach ($p in @($later[$k])) {
+                if ($null -eq $p) { continue }
+                ([regex]::Matches($t, [regex]::Escape($p[0]))).Count | Should -Be 1 -Because "$k carries the later edit '$($p[0])' exactly once"
+                $t = $t.Replace($p[0], $p[1])
+            }
+            $h = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($t)))
             $h | Should -Be $script:BeforeHash[$k] -Because "$k without the pairs must be the file before the explained score"
         }
     }

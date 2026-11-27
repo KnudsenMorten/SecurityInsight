@@ -33,14 +33,30 @@ public sealed partial class ExportSession : IAsyncDisposable
     private bool _started;
     private readonly List<string> _notes = new();
 
-    private ExportSession(ILogger log) => _log = log;
+    private readonly ISqlExecutor? _sql;
 
-    /// Starts the session of one export (ambient for the handler that runs it).
-    public static ExportSession Begin(ILogger log)
+    private ExportSession(ILogger log, ISqlExecutor? sql) { _log = log; _sql = sql; }
+
+    /// Starts the session of one export (ambient for the handler that runs it). <paramref name="sql"/>: the Pro database's
+    /// executor (<see cref="SettleAsync"/> reads through it).
+    public static ExportSession Begin(ILogger log, ISqlExecutor? sql = null)
     {
-        var s = new ExportSession(log);
+        var s = new ExportSession(log, sql);
         Ambient.Value = s;
         return s;
+    }
+
+    /// <summary>
+    /// #1418 (a)(b) (review of a5a9cb402): tells whether this export reads one snapshot BEFORE anything costly is read -- when
+    /// no statement went to the database yet, the cheap <see cref="SnapshotStateSql"/> goes through the executor (its first
+    /// statement opens the session's connection and settles <see cref="Snapshot"/>). Nothing when it is known already, or
+    /// when there is no executor.
+    /// </summary>
+    public async Task SettleAsync(CancellationToken ct)
+    {
+        if (Snapshot is not null || _sql is null) return;
+        try { await _sql.QueryAsync(SnapshotStateSql, new Dictionary<string, object?>(), ct); }
+        catch (Exception ex) when (ex is not OperationCanceledException) { _log.LogWarning(ex, "export: whether it reads one snapshot could not be read first"); }
     }
 
     /// Whether the export reads one snapshot (null = no statement went to the database yet).
@@ -74,8 +90,51 @@ public sealed partial class ExportSession : IAsyncDisposable
     /// export. Review of e2bd16d72: a write to the statement's own table variable / #temp table is a read's scratch and stays
     /// inside; words in string literals and comments are not read as verbs.
     /// </summary>
-    public static bool Takes(string sql) =>
-        !sql.Contains(LiveTag, StringComparison.Ordinal) && !Writes().IsMatch(LiteralsAndComments().Replace(sql, " "));
+    public static bool Takes(string sql) => Takes(sql, 0);
+
+    // #1418 (c): an EXEC in the statement's code -- of a procedure (its name) or of a dynamic text (EXEC ( ... ) / sp_executesql)
+    [System.Text.RegularExpressions.GeneratedRegex(@"(?<![.@#\w\[])EXEC(?:UTE)?\b(?!\])\s*(?<t>\(|[\w.\[\]@]+)", System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant)]
+    private static partial System.Text.RegularExpressions.Regex ExecCalls();
+
+    // the literal a dynamic EXEC runs: right after "EXEC (" / "sp_executesql", N'...' with '' escapes
+    [System.Text.RegularExpressions.GeneratedRegex(@"\G\s*N?'(?<s>(?:[^']|'')*)'", System.Text.RegularExpressions.RegexOptions.CultureInvariant)]
+    private static partial System.Text.RegularExpressions.Regex NextLiteral();
+
+    // right after an EXEC ( literal: only white space and the closing parenthesis
+    [System.Text.RegularExpressions.GeneratedRegex(@"\G\s*\)", System.Text.RegularExpressions.RegexOptions.CultureInvariant)]
+    private static partial System.Text.RegularExpressions.Regex CloseAfter();
+
+    /// <summary>
+    /// #1418 (c) (review of 6c9f60132): a write made by DYNAMIC SQL or an EXEC'd PROCEDURE is a write too -- the verbs inside
+    /// the text an EXEC ( N'...' ) / sp_executesql N'...' runs are read (that text judged the same way, nested texts too); a
+    /// procedure (any EXEC of a name other than sp_executesql and sys.sp_set_session_context, which only sets this
+    /// connection's context) or a dynamic text whose content is not in the statement (EXEC (@x), sp_executesql @x) may
+    /// write, so the statement goes outside the snapshot, as it would without an export. The export's own reads carry no
+    /// such call (ExportStreamTests: every export chunk statement stays inside).
+    /// </summary>
+    private static bool Takes(string sql, int depth)
+    {
+        if (sql.Contains(LiveTag, StringComparison.Ordinal)) return false;
+        var code = LiteralsAndComments().Replace(sql, m => new string(' ', m.Length));   // same offsets as sql
+        if (Writes().IsMatch(code)) return false;
+        foreach (System.Text.RegularExpressions.Match m in ExecCalls().Matches(code))
+        {
+            var t = m.Groups["t"].Value.Replace("[", "", StringComparison.Ordinal).Replace("]", "", StringComparison.Ordinal);
+            var dynamic = t == "(" || t.Equals("sp_executesql", StringComparison.OrdinalIgnoreCase) || t.Equals("sys.sp_executesql", StringComparison.OrdinalIgnoreCase);
+            if (!dynamic)
+            {
+                if (t.Equals("sys.sp_set_session_context", StringComparison.OrdinalIgnoreCase) || t.Equals("sp_set_session_context", StringComparison.OrdinalIgnoreCase)) continue;
+                return false;                                                // a procedure: it may write
+            }
+            var lit = NextLiteral().Match(sql, m.Index + m.Length);
+            if (!lit.Success) return false;                                  // EXEC (@x) / sp_executesql @x: its text is not here
+            // review of 45c752500: EXEC (N'...' + @tail) runs more than its first literal -- the EXEC ( form is judged only when
+            // the literal is ALL it runs (only white space, then the closing parenthesis); anything else goes outside
+            if (t == "(" && !CloseAfter().IsMatch(sql, lit.Index + lit.Length)) return false;
+            if (depth > 4 || !Takes(lit.Groups["s"].Value.Replace("''", "'", StringComparison.Ordinal), depth + 1)) return false;
+        }
+        return true;
+    }
 
     /// Whether the database allows snapshot transactions (1 = ON).
     public const string SnapshotStateSql = "SELECT CONVERT(int, snapshot_isolation_state) AS State FROM sys.databases WHERE database_id = DB_ID();";
@@ -161,7 +220,7 @@ public sealed class ExportSessionPageFilter(ILogger<ExportSessionPageFilter> log
         var sql = context.HttpContext.RequestServices.GetService<ISqlExecutor>();
         var before = await ExportStamp.ReadAsync(sql, log, context.HttpContext.RequestAborted);
         PageHandlerExecutedContext done;
-        await using (var session = ExportSession.Begin(log))
+        await using (var session = ExportSession.Begin(log, sql))
         {
             done = await next();
             foreach (var n in session.Notes) log.LogWarning("export {Page}: {Note}", context.ActionDescriptor.ViewEnginePath, n);

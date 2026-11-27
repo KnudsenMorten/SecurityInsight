@@ -496,7 +496,7 @@ ELSE
 BEGIN
     SET XACT_ABORT ON;
     BEGIN TRAN;
-    DECLARE @cur NVARCHAR(400) = NULL, @has int = 0, @ok int = 0;
+    DECLARE @cur NVARCHAR(MAX) = NULL, @has int = 0, @ok int = 0;
     SELECT @cur = Value, @has = 1 FROM cfg.InstallState WITH (UPDLOCK, HOLDLOCK) WHERE Name = N'HeartbeatJob';
     DECLARE @h NVARCHAR(32) = CASE WHEN ISJSON(@cur) = 1 THEN COALESCE(JSON_VALUE(@cur, '$.slot'), JSON_VALUE(@cur, '$.hour')) END;
     DECLARE @st NVARCHAR(32) = CASE WHEN ISJSON(@cur) = 1 THEN JSON_VALUE(@cur, '$.status') END;

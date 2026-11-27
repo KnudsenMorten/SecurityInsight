@@ -675,12 +675,9 @@ $publishRunRecommendations = {
         & pwsh -NoProfile -File $siEntryScript | Out-Host
         $code = $LASTEXITCODE
         $said = $null; if (Test-Path -LiteralPath $resFile) { try { $said = Get-Content -LiteralPath $resFile -Raw | ConvertFrom-Json } catch { $said = $null } }
-        if ($code -eq 0 -and $said -and [string]$said.ExitReason -eq 'success') { $out = [pscustomobject]@{ Refreshed = $true; Reason = '' } }
-        else {
-            $why = if ($code -ne 0) { 'the publishing process ended with exit code {0}' -f $code } elseif ($said) { 'the publishing process ended {0}' -f [string]$said.ExitReason } else { 'the publishing process did not say how it ended' }
-            $out = [pscustomobject]@{ Refreshed = $false; Reason = ($why + ' (its run-health record azure-recommendations says why)') }
-            Write-Warning ('[parts] {0}: recommendations not refreshed this run: {1} -- the previous complete snapshot stays the latest.' -f $engine, $out.Reason)
-        }
+        # #1427 refreshed = a clean process exit AND the phase's own 'success' (SI-ContainerConfig.ps1)
+        $out = Resolve-SIRecommendationsRefresh -ProcessExit $code -Said $said
+        if (-not $out.Refreshed) { Write-Warning ('[parts] {0}: recommendations not refreshed this run: {1} -- the previous complete snapshot stays the latest.' -f $engine, $out.Reason) }
     } catch {
         Write-Warning ('[parts] {0}: recommendations not refreshed this run: {1} -- the previous complete snapshot stays the latest.' -f $engine, $_.Exception.Message)
         $out = [pscustomobject]@{ Refreshed = $false; Reason = [string]$_.Exception.Message }
@@ -1088,20 +1085,14 @@ if ($runOpts.ForceFullRun) {
 # global, so it is set to the decision: a job's SI_FORCE_FULL_RUN=0 then really means an incremental run.
 $global:SI_ForceFullRun = [bool]$runOpts.ForceFullRun
 
-$orchExit = 0
-try {
-    & $orchestrator @orchArgs
-    $orchExit = $LASTEXITCODE
-} catch {
-    Write-Warning ('orchestrator threw: {0}' -f $_.Exception.Message)
-    if ($_.InvocationInfo) { Write-Warning ('  at: {0}' -f $_.InvocationInfo.PositionMessage.Trim()) }
-    if ($_.ScriptStackTrace) { Write-Warning ('  stack:'); $_.ScriptStackTrace -split "`n" | ForEach-Object { Write-Warning ('    {0}' -f $_) } }
-    $orchExit = 1
-}
+# #1427 how the run ended is the run's OWN word (its reason, its throw, its own `exit N`) -- never the exit code of the last
+# native program it happened to start: that made a run that published everything say 'error' (SI-ContainerConfig.ps1)
+$orchOutcome = Invoke-SIContainerOrchestrator -OrchestratorScript $orchestrator -OrchestratorArgs $orchArgs
+$orchExit = $orchOutcome.Exit
 
 # #1399 the run's recommendations phase says how it ended to the process that started it (the run's report carries it)
 if ($collectChild -eq 'recommendations' -and [string](Get-OptionalEnv 'SI_COLLECT_RECOMMENDATIONS_RESULT_FILE' '')) {
-    try { [IO.File]::WriteAllText([string](Get-OptionalEnv 'SI_COLLECT_RECOMMENDATIONS_RESULT_FILE' ''), (ConvertTo-Json -Compress -InputObject ([ordered]@{ Exit = $orchExit; ExitReason = $(if ($orchExit -ne 0) { 'error' } else { [string]$global:SI_LastRunExitReason }) }))) } catch { Write-Warning ('[parts] the recommendations phase could not say how it ended: {0}' -f $_.Exception.Message) }
+    try { [IO.File]::WriteAllText([string](Get-OptionalEnv 'SI_COLLECT_RECOMMENDATIONS_RESULT_FILE' ''), (ConvertTo-Json -Compress -InputObject (Get-SIRecommendationsPhaseResult -Outcome $orchOutcome))) } catch { Write-Warning ('[parts] the recommendations phase could not say how it ended: {0}' -f $_.Exception.Message) }
 }
 
 # #475: a part whose records were not handed over is a failed part (the run's records would be quietly smaller) -- in

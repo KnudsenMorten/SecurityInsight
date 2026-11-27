@@ -37,6 +37,9 @@
                 (Get-SIHeartbeatDatabaseLoadSql), never a query's text; a part that is not read is left out on its own
       Update    { installed, available, lastUpdaterRunUtc, lastUpdaterResult, nextUpdateUtc }
                 lastUpdaterResult succeeded | failed | nothing-to-do -- cfg.InstallState 'UpdateState' + the updater's timer
+                + signal, runningImages, imagePrune (#1424: { done, deleted, atUtc, version, repos[<= 20] { repo, before, kept,
+                children, deleted, left, failed } } from cfg.InstallState 'ImagePrune', each value only when known) and revisions,
+                each only when known, in that order
       Mail      { mailJob, lastSentUtc, lastFailedUtc, lastErrorCode, restriction, queued }
                 mailJob present | missing; restriction verified | not-verified | failed -- the two mail outboxes
                 (cfg.ExemptionMail, cfg.SignInMail), cfg.InstallState 'MailRestriction', the mail step's records, the job by name
@@ -50,14 +53,16 @@
       Published { collectionId, collectionUtc, publishedUtc, copiedUtc, newestCompleteUtc } (2026-10-26, Invardia 1.0.593): the
                 collection customers SEE (sidata.PublishedRun 'current') next to the newest complete one; left out when nothing is
                 published yet. Its own switch; auto = ring 0 first (ConfirmedRings).
-      LastRun   { runId, kind, startedUtc, endedUtc, totalSec, result, collectionUtc, steps[<= 20] { step, startedUtc, sec, result } }
+      LastRun   { runId, kind, startedUtc, endedUtc, totalSec, result, collectionUtc, steps[<= 40] { step, startedUtc, sec, result } }
+                (#1423, 3.1.53: every key only when known -- never null; sent on every ring; over 40 steps the most relevant go:
+                failed, cancelled, then the newest that ran, skipped last -- in run order, the others named once a day)
                 (#1395 LAST-RUN-1, owner 2026-11-26: "complete last run time" / "also time for each phase and total"; Invardia
                 ACCEPTED the shape, soft): the LAST FINISHED run of the WHOLE pipeline, complete or not (a person's run of one
                 stage / step is never it) -- cfg.FlowRun (the newest run of RunFinished by IX_FlowRun_Started) + its steps by PK_FlowStepRun, ONE read of the settings database; collectionUtc
                 = the Detailed collection that run published (sidata.PublishedRun 'current' when its FlowRunId is the run's, ONE
                 key read of the data database), else null. kind full | manual | scheduled | resume, result complete | cancelled |
                 failed | partial, a step's result ok | failed | skipped | cancelled. No finished run / a read that fails = LEFT
-                OUT, never a made-up value. Its own switch; auto = NO ring until Invardia confirms it live (ConfirmedRings).
+                OUT, never a made-up value. Its own switch; auto = every ring (ConfirmedRings, #1423).
       DataOut  [<= 10, unique by output] { output, phase, batchId, startedUtc, rowsPlanned, rowsSent, rowsHeld, rowsPerSec,
                 lastProgressUtc, stalled, lastEndedUtc, lastResult, lastErrorCode, heldReason } (#1043, AGREED with Invardia
                 2026-11-01): one entry per data-out output, running or last finished -- from cfg.DataOutBatch (the progress the
@@ -136,11 +141,10 @@ $script:SIHeartbeatFields = @{
                          # the field 2026-11-05 (f0f2403b): every ring. SI_Uplink_SendUplinkBacklog 'off' still turns it off per install.
                          UplinkBacklog = @(0, 1, 2, 3)
                          # REMOVE-ME (#1395 LAST-RUN-1, owner 2026-11-26): LastRun -- the last FINISHED pipeline run, its total and
-                         # each step. Invardia ACCEPTED the shape (soft: a bad value drops LastRun alone), but its wire contract is
-                         # CLOSED and the field must be LIVE there before SI sends it. >>> THE SEND GATE: no ring until Invardia
-                         # confirms its deploy carries LastRun (SI_HEARTBEAT_CONTRACT, heartbeatstate.ts) -- then @(0, 1, 2, 3).
-                         # SI_Uplink_SendLastRun on / a ring list turns it on for one install before that, 'off' turns it off.
-                         LastRun = @() }
+                         # each step. Invardia's parser carries it LIVE (SI_HEARTBEAT_CONTRACT.LastRun, heartbeatstate.ts, soft: a
+                         # bad value drops LastRun alone; steps at most 40 since 844f8562), so #1423 (3.1.53) sends it on EVERY
+                         # ring. SI_Uplink_SendLastRun 'off' still turns it off per install.
+                         LastRun = @(0, 1, 2, 3) }
     # over the size limit the fields go in THIS order (the least needed first); Collections (#718) is in the list too
     DropOrder        = @('Jobs', 'BuildPool', 'Security', 'DataOut', 'LastRun', 'Sources', 'Collections', 'Database', 'Mail', 'Update', 'Published', 'UplinkBacklog', 'Warnings', 'Pipeline')
     # #1395 LAST-RUN-1 (Invardia's accepted shape, 2026-11-26): the closed lists and caps of LastRun
@@ -148,7 +152,8 @@ $script:SIHeartbeatFields = @{
     LastRunResults     = @('complete', 'cancelled', 'failed', 'partial')
     LastRunStepResults = @('ok', 'failed', 'skipped', 'cancelled')
     LastRunStepFields  = @('step', 'startedUtc', 'sec', 'result')
-    MaxLastRunSteps    = 20
+    # #1423: Invardia's cap (heartbeatstate.ts LastRun.steps max 40)
+    MaxLastRunSteps    = 40
     LastRunIdMax       = 80
     # framework rule 11g: the ACR tiers an agent pool can have; the registry and its runs are read with these api-versions
     BuildPoolTiers   = @('S1', 'S2', 'S3', 'I6')
@@ -362,6 +367,16 @@ $script:SIHeartbeatFields = @{
     # made-up value). >>> THE SWITCH: UpdateSendRevisions -- ON (Invardia has the key). $false = left out.
     UpdateRevisionsField = 'revisions'
     UpdateSendRevisions  = $true
+    # #1424 (framework IMAGE-PRUNE CONTRACT point 5; Invardia's core block Update.imagePrune, SOFT: a bad value drops this key
+    # alone): the last update's clean-up of old images -- { done, deleted, atUtc, version, repos[<= 20] { repo, before, kept,
+    # children, deleted, left, failed } } from cfg.InstallState 'ImagePrune' (written by the updater's clean-up step). Sent
+    # after runningImages and before revisions; each value only when known (left out otherwise). No record = left out.
+    # >>> THE SWITCH: UpdateSendImagePrune. $false = never sent.
+    UpdateImagePruneField   = 'imagePrune'
+    UpdateSendImagePrune    = $true
+    UpdateImagePruneFields  = @('done', 'deleted', 'atUtc', 'version', 'repos')
+    UpdateImagePruneRepoFields = @('repo', 'before', 'kept', 'children', 'deleted', 'left', 'failed')
+    MaxImagePruneRepos      = 20
     # framework 8.18 (Invardia's contract, heartbeatstate Update.signal, SOFT; Invardia 2026-11-20: "the SAME existing shape, no
     # new key"): the "Update now" mark this install's updater was STARTED on -- { raisedAt, startedUtc } from cfg.InstallState
     # 'UpdateSignal', which the signal AND the head call (expedite) both write (engine\_shared\SI-UpdateNowSignal.ps1). Sent
@@ -500,6 +515,15 @@ function New-SIHeartbeatOrdered {
     [pscustomobject]$o
 }
 
+function New-SIHeartbeatKnown {
+    <# PURE (#1423). An object with ONLY the KNOWN keys of -Names, in that order: a key whose value is $null (not known) is LEFT
+       OUT, never sent as null. #>
+    param([string[]]$Names, [System.Collections.IDictionary]$Values)
+    $o = [ordered]@{}
+    foreach ($n in $Names) { if ($Values.Contains($n) -and $null -ne $Values[$n]) { $o[$n] = $Values[$n] } }
+    [pscustomobject]$o
+}
+
 # =====================================================================================================================
 #  The schema of every field -- PURE (what Invardia's validator accepts; nothing that fails it is put on the record)
 # =====================================================================================================================
@@ -517,6 +541,19 @@ function Test-SIHeartbeatField {
         if (($have -join ',') -cne (@($names) -join ',')) { return ("{0} has the fields '{1}', agreed '{2}'" -f $what, ($have -join ','), (@($names) -join ',')) }
         '' }
     $array = { param($v, $max, $what) if ($null -eq $v -or -not ($v -is [array])) { return "$what is not an array" }; if (@($v).Count -gt $max) { return ('{0} has {1} entries (at most {2})' -f $what, @($v).Count, $max) }; '' }
+    # #1423: ONLY agreed keys, in the agreed order, each at most once, the -Required ones present -- a key that is not known is
+    # LEFT OUT, so a key that is there is never null
+    $known = { param($o, $names, $what, [string[]]$required = @())
+        if ($null -eq $o -or $o -is [string] -or $o -is [array] -or $o -is [System.Collections.IDictionary]) { return "$what is not an object" }
+        $have = @($o.PSObject.Properties | ForEach-Object { $_.Name }); $at = -1
+        foreach ($h in $have) {
+            $i = [array]::IndexOf([string[]]@($names), [string]$h)
+            if ($i -lt 0 -or $i -le $at) { return ("{0} has the fields '{1}', agreed (in this order, each only when known) '{2}'" -f $what, ($have -join ','), (@($names) -join ',')) }
+            $at = $i
+            if ($null -eq $o.$h) { return ("{0}.{1} is null (a value that is not known is left out)" -f $what, $h) }
+        }
+        foreach ($r in $required) { if ($have -cnotcontains $r) { return ("{0}.{1} is missing" -f $what, $r) } }
+        '' }
     switch ($Name) {
         'Pipeline' {
             # the agreed seven -- or the agreed seven followed by EXACTLY the progress / estimated-end keys -- and, either way,
@@ -646,8 +683,29 @@ function Test-SIHeartbeatField {
             $isObj = [bool]($Value -and -not ($Value -is [string]) -and -not ($Value -is [System.Collections.IDictionary]))
             if ($isObj -and $Value.PSObject.Properties[$c.UpdateSignalField]) { $upNames += $c.UpdateSignalField }
             if ($isObj -and $Value.PSObject.Properties[$c.UpdateRunningImagesField]) { $upNames += $c.UpdateRunningImagesField }
+            if ($isObj -and $Value.PSObject.Properties[$c.UpdateImagePruneField]) { $upNames += $c.UpdateImagePruneField }
             if ($isObj -and $Value.PSObject.Properties[$c.UpdateRevisionsField]) { $upNames += $c.UpdateRevisionsField }
             $w = & $exact $Value $upNames 'Update'; if ($w) { return $w }
+            # #1424: imagePrune -- Invardia's shape, each value only when known
+            if ($Value.PSObject.Properties[$c.UpdateImagePruneField]) {
+                $ip = $Value.($c.UpdateImagePruneField)
+                $w = & $known $ip $c.UpdateImagePruneFields 'Update.imagePrune'; if ($w) { return $w }
+                if (-not @($ip.PSObject.Properties).Count) { return 'Update.imagePrune is empty (it is left out when nothing is known)' }
+                if ($ip.PSObject.Properties['done'] -and -not ($ip.done -is [bool])) { return 'Update.imagePrune.done is not true / false' }
+                if ($ip.PSObject.Properties['deleted'] -and -not (& $isInt $ip.deleted)) { return 'Update.imagePrune.deleted is not a whole number >= 0' }
+                if ($ip.PSObject.Properties['atUtc'] -and -not (& $isTime $ip.atUtc)) { return 'Update.imagePrune.atUtc is not ISO-8601 UTC' }
+                if ($ip.PSObject.Properties['version'] -and -not ($ip.version -is [string] -and $ip.version -cmatch '^[0-9A-Za-z.+-]{1,50}$')) { return 'Update.imagePrune.version is not a version' }
+                if ($ip.PSObject.Properties['repos']) {
+                    $w = & $array $ip.repos $c.MaxImagePruneRepos 'Update.imagePrune.repos'; if ($w) { return $w }
+                    $seenR = @{}
+                    foreach ($r in @($ip.repos)) {
+                        $w = & $known $r $c.UpdateImagePruneRepoFields 'an Update.imagePrune.repos entry' @('repo'); if ($w) { return $w }
+                        if (-not ($r.repo -is [string] -and $r.repo -cmatch '^[a-z0-9][a-z0-9._/-]{0,79}$')) { return ("Update.imagePrune.repos.repo '{0}' is not a repository name" -f $r.repo) }
+                        if ($seenR.ContainsKey($r.repo)) { return ('repository {0} appears more than once' -f $r.repo) }; $seenR[$r.repo] = 1
+                        foreach ($n in @($c.UpdateImagePruneRepoFields | Select-Object -Skip 1)) { if ($r.PSObject.Properties[$n] -and -not (& $isInt $r.$n)) { return "Update.imagePrune.repos.$n is not a whole number >= 0" } }
+                    }
+                }
+            }
             # SI #1414: revisions -- exactly Invardia's shape { single, activeRevisions, apps, readUtc }
             if ($Value.PSObject.Properties[$c.UpdateRevisionsField]) {
                 $rv = $Value.($c.UpdateRevisionsField)
@@ -717,7 +775,8 @@ function Test-SIHeartbeatField {
         'LastRun' {
             # #1395 LAST-RUN-1 (Invardia's accepted shape): no finished run = the field is LEFT OUT, never null
             if ($null -eq $Value) { return 'LastRun is null (leave the field out when no run has finished)' }
-            $w = & $exact $Value $c.Fields.LastRun 'LastRun'; if ($w) { return $w }
+            # #1423: only the agreed keys, in order, each only when known (steps always: [] when the run has none)
+            $w = & $known $Value $c.Fields.LastRun 'LastRun' @('steps'); if ($w) { return $w }
             if ($null -ne $Value.runId -and -not ($Value.runId -is [string] -and $Value.runId -cmatch ('^[A-Za-z0-9._:-]{{1,{0}}}$' -f [int]$c.LastRunIdMax))) { return 'LastRun.runId is not an id' }
             if (-not (& $inList $Value.kind $c.LastRunKinds $true)) { return ("LastRun.kind '{0}' is not in the list" -f $Value.kind) }
             if (-not (& $inList $Value.result $c.LastRunResults $true)) { return ("LastRun.result '{0}' is not in the list" -f $Value.result) }
@@ -725,7 +784,7 @@ function Test-SIHeartbeatField {
             if (-not (& $isInt $Value.totalSec)) { return 'LastRun.totalSec is not a whole number >= 0' }
             $w = & $array $Value.steps $c.MaxLastRunSteps 'LastRun.steps'; if ($w) { return $w }
             foreach ($s in @($Value.steps)) {
-                $w = & $exact $s $c.LastRunStepFields 'a LastRun.steps entry'; if ($w) { return $w }
+                $w = & $known $s $c.LastRunStepFields 'a LastRun.steps entry' @('step'); if ($w) { return $w }
                 if (-not ($s.step -is [string] -and $s.step -cmatch '^[a-z0-9][a-z0-9-]{0,59}$')) { return ("LastRun.steps.step '{0}' is not a job key" -f $s.step) }
                 if (-not (& $isTime $s.startedUtc)) { return 'LastRun.steps.startedUtc is not ISO-8601 UTC' }
                 if (-not (& $isInt $s.sec)) { return 'LastRun.steps.sec is not a whole number >= 0' }
@@ -851,7 +910,7 @@ IF OBJECT_ID(N'cfg.JobFlow') IS NOT NULL
     INSERT @r (K, Name, Txt) SELECT TOP (1) N'def', Mode, DefinitionJson FROM cfg.JobFlow WHERE FlowId = N'daily';
 IF OBJECT_ID(N'cfg.InstallState') IS NOT NULL
     INSERT @r (K, Name, T1, Txt) SELECT N'state', Name, UpdatedAt, Value FROM cfg.InstallState
-    WHERE Name IN (N'UpdateState', N'UpdateSignal', N'SecretHandover', N'MailRestriction', N'MailRestrictionAttestation', N'MailLastSent', N'MailLastFailed', N'CollectionHeld', N'OutsidePipeline', N'Housekeeping', N'StatisticsRefresh', N'StatisticsStaleRead');
+    WHERE Name IN (N'UpdateState', N'UpdateSignal', N'ImagePrune', N'SecretHandover', N'MailRestriction', N'MailRestrictionAttestation', N'MailLastSent', N'MailLastFailed', N'CollectionHeld', N'OutsidePipeline', N'Housekeeping', N'StatisticsRefresh', N'StatisticsStaleRead');
 IF OBJECT_ID(N'cfg.ServiceNowCheck') IS NOT NULL
     INSERT @r (K, Name, T1, Txt, T2)
     SELECT N'snow', c.[Output], c.CheckedAt, c.Outcome,
@@ -1198,26 +1257,38 @@ function Get-SIHeartbeatLastRun {
     $coll = $null
     $pub = @(@($PublishedRows) | Where-Object { $null -ne $_ })[0]
     if ($pub -and $id -and [string](& $g $pub 'FlowRunId') -ceq $id) { $coll = ConvertTo-SIHeartbeatUtc (& $g $pub 'CollectionTime') }
-    $o = New-SIHeartbeatOrdered -Names $c.Fields.LastRun -Values @{
+    # #1423: a value that is not known is LEFT OUT (never null, never made up) -- New-SIHeartbeatKnown keeps only the known keys
+    $o = New-SIHeartbeatKnown -Names $c.Fields.LastRun -Values @{
         runId = $(if ($id -cmatch ('^[A-Za-z0-9._:-]{{1,{0}}}$' -f [int]$c.LastRunIdMax)) { $id } else { $null })
         kind = (ConvertTo-SIHeartbeatLastRunKind -Trigger ([string](& $g $run 'Trg')) -Scope ([string](& $g $run 'Scope')) -FromStep ([string](& $g $run 'FromStep')))
         startedUtc = (ConvertTo-SIHeartbeatUtc (& $g $run 'T1')); endedUtc = (ConvertTo-SIHeartbeatUtc (& $g $run 'T2'))
         totalSec = (ConvertTo-SIHeartbeatSeconds (& $g $run 'T1') (& $g $run 'T2'))
         result = (ConvertTo-SIHeartbeatLastRunResult -State $state -StepRows $steps)
-        collectionUtc = $coll }
-    $list = New-Object System.Collections.Generic.List[object]
+        collectionUtc = $coll; steps = 'x' }
+    $all = New-Object System.Collections.Generic.List[object]
     foreach ($s in $steps) {
         $k = ConvertTo-SIHeartbeatStepSlug -Job ([string](& $g $s 'Job')) -Order ([long](ConvertTo-SIHeartbeatInt (& $g $s 'N1')))
         $att = ConvertTo-SIHeartbeatInt (& $g $s 'N2'); $retried = ($null -ne $att -and $att -gt 1)
-        if ($list.Count -ge [int]$c.MaxLastRunSteps) { if ($null -ne $LeftOut) { $LeftOut.Add($k) }; continue }
-        $list.Add((New-SIHeartbeatOrdered -Names $c.LastRunStepFields -Values @{
+        $all.Add((New-SIHeartbeatKnown -Names $c.LastRunStepFields -Values @{
             step = $k
             # #1395 round 2: a step the runner started AGAIN (Attempts > 1) has its start restamped -- the time of its last attempt
-            # only would leave hours out: unknown (null) is honest, a partial number is not. Attempts not recorded = kept.
+            # only would leave hours out: unknown is honest (left out), a partial number is not. Attempts not recorded = kept.
             startedUtc = $(if ($retried) { $null } else { ConvertTo-SIHeartbeatUtc (& $g $s 'T1') }); sec = $(if ($retried) { $null } else { ConvertTo-SIHeartbeatSeconds (& $g $s 'T1') (& $g $s 'T2') })
             result = (ConvertTo-SIHeartbeatLastRunStepResult -State ([string](& $g $s 'S')) -ErrorClass ([string](& $g $s 'Txt')) -RunState $state) }))
     }
-    # set here, not through New-SIHeartbeatOrdered: its $( ) would unroll a one-entry list into the entry itself
+    # #1423: Invardia's cap is 40 steps. Over it the MOST RELEVANT steps go -- a failed step first, then a cancelled one, then
+    # the steps that ran (newest first), a skipped step last -- and they are sent in RUN ORDER; the names of the others go to
+    # -LeftOut for the caller to say (never dropped silently). The standard pipeline has fewer than 40.
+    $keep = @(0..($all.Count - 1))
+    if ($all.Count -gt [int]$c.MaxLastRunSteps) {
+        $rank = { param($r) switch ("$r") { 'failed' { 0 } 'cancelled' { 1 } 'skipped' { 3 } default { 2 } } }
+        $keep = @(0..($all.Count - 1) | Sort-Object -Property @{ Expression = { & $rank $all[$_].result } }, @{ Expression = { $_ }; Descending = $true } |
+                  Select-Object -First ([int]$c.MaxLastRunSteps) | Sort-Object)
+        if ($null -ne $LeftOut) { for ($i = 0; $i -lt $all.Count; $i++) { if ($keep -notcontains $i) { $LeftOut.Add([string]$all[$i].step) } } }
+    }
+    $list = New-Object System.Collections.Generic.List[object]
+    if ($all.Count) { foreach ($i in $keep) { $list.Add($all[$i]) } }
+    # set here, not through New-SIHeartbeatKnown: its $( ) would unroll a one-entry list into the entry itself
     $o.steps = [object[]]$list.ToArray()
     $o
 }
@@ -1921,9 +1992,9 @@ function Get-SIHeartbeatStatsKeepSql {
 IF OBJECT_ID(N'cfg.InstallState') IS NOT NULL
 BEGIN
     IF EXISTS (SELECT 1 FROM cfg.InstallState WITH (UPDLOCK, HOLDLOCK) WHERE Name = N'StatisticsStaleRead')
-        UPDATE cfg.InstallState SET Value = LEFT(@Value, 400), UpdatedAt = SYSUTCDATETIME(), UpdatedBy = @By WHERE Name = N'StatisticsStaleRead';
+        UPDATE cfg.InstallState SET Value = @Value, UpdatedAt = SYSUTCDATETIME(), UpdatedBy = @By WHERE Name = N'StatisticsStaleRead';
     ELSE
-        INSERT cfg.InstallState (Name, Value, [Version], UpdatedBy) VALUES (N'StatisticsStaleRead', LEFT(@Value, 400), NULL, @By);
+        INSERT cfg.InstallState (Name, Value, [Version], UpdatedBy) VALUES (N'StatisticsStaleRead', @Value, NULL, @By);
 END
 '@
 }
@@ -2194,6 +2265,72 @@ function Add-SIHeartbeatUpdateRunningImages {
     foreach ($n in @($script:SIHeartbeatFields.Fields.Update)) { $o[$n] = $Update.$n }
     if ($Update.PSObject.Properties[$script:SIHeartbeatFields.UpdateSignalField]) { $o[$script:SIHeartbeatFields.UpdateSignalField] = $Update.($script:SIHeartbeatFields.UpdateSignalField) }
     $o[$script:SIHeartbeatFields.UpdateRunningImagesField] = [object[]]$imgs
+    [pscustomobject]$o
+}
+
+function Get-SIHeartbeatImagePrune {
+    <#
+        PURE. #1424: Update.imagePrune from cfg.InstallState 'ImagePrune' -- the record the updater's clean-up step writes
+        (container\updater\_shared\SI-UpdaterImagePrune.ps1 ConvertTo-SIUpdaterImagePruneValue): { at, done, deleted, v, left
+        { repo: n }, r { repo: [before, kept, children, deleted, left, failed] }, why }. An older record carries only at / done /
+        deleted / left (then a repository sends only its left). Returns { done, deleted, atUtc, version, repos[<= 20] { repo,
+        before, kept, children, deleted, left, failed } } with ONLY the known values (a negative count = not read back = left
+        out); $null when there is no record, it does not parse, or nothing in it is known. Over 20 repositories: the ones with a
+        failed delete or images left first. A repository name that is not one is left out.
+    #>
+    param([object[]]$Rows, [System.Collections.Generic.List[string]]$LeftOut)
+    $c = $script:SIHeartbeatFields
+    $row = @(Get-SIHeartbeatRowsOf $Rows 'state' | Where-Object { [string](Get-SIHeartbeatRowValue $_ 'Name') -eq 'ImagePrune' })[0]
+    if (-not $row) { return $null }
+    $o = $null; try { $o = [string](Get-SIHeartbeatRowValue $row 'Txt') | ConvertFrom-Json -ErrorAction Stop } catch { return $null }
+    if ($null -eq $o -or $o -is [string] -or $o -is [array]) { return $null }
+    $p = { param($n) if ($o.PSObject.Properties[$n]) { $o.$n } else { $null } }
+    $v = @{}
+    $done = & $p 'done'; if ($done -is [bool]) { $v.done = $done }
+    $v.deleted = ConvertTo-SIHeartbeatInt (& $p 'deleted')
+    $v.atUtc = ConvertTo-SIHeartbeatUtc (& $p 'at')
+    $ver = "$(& $p 'v')".Trim(); if ($ver -cmatch '^[0-9A-Za-z.+-]{1,50}$') { $v.version = $ver }
+    $repos = New-Object System.Collections.Generic.List[object]
+    $seen = @{}
+    $full = & $p 'r'; $left = & $p 'left'
+    $isFull = [bool]($full -and -not ($full -is [string]) -and -not ($full -is [array]))
+    $src = if ($isFull) { $full } elseif ($left -and -not ($left -is [string]) -and -not ($left -is [array])) { $left } else { $null }
+    if ($null -ne $src) {
+        foreach ($pp in @($src.PSObject.Properties)) {
+            $name = "$($pp.Name)".Trim().ToLowerInvariant()
+            if (-not ($name -cmatch '^[a-z0-9][a-z0-9._/-]{0,79}$') -or $seen.ContainsKey($name)) { continue }
+            $seen[$name] = 1
+            $vals = @{ repo = $name }
+            if ($isFull) {
+                $a = @($pp.Value); $i = 0
+                foreach ($n in @($c.UpdateImagePruneRepoFields | Select-Object -Skip 1)) { if ($i -lt $a.Count) { $vals[$n] = ConvertTo-SIHeartbeatInt $a[$i] }; $i++ }
+            } else { $vals.left = ConvertTo-SIHeartbeatInt $pp.Value }
+            $repos.Add((New-SIHeartbeatKnown -Names $c.UpdateImagePruneRepoFields -Values $vals))
+        }
+    }
+    if ($repos.Count -gt [int]$c.MaxImagePruneRepos) {
+        $idx = @(0..($repos.Count - 1) | Sort-Object -Property @{ Expression = { $r = $repos[$_]; if ($r.failed -gt 0) { 0 } elseif ($r.left -gt 0) { 1 } else { 2 } } }, @{ Expression = { $_ } } |
+                 Select-Object -First ([int]$c.MaxImagePruneRepos) | Sort-Object)
+        $kept = New-Object System.Collections.Generic.List[object]; foreach ($i in $idx) { $kept.Add($repos[$i]) }
+        if ($null -ne $LeftOut) { for ($i = 0; $i -lt $repos.Count; $i++) { if ($idx -notcontains $i) { $LeftOut.Add([string]$repos[$i].repo) } } }
+        $repos = $kept
+    }
+    if ($repos.Count) { $v.repos = 'x' }
+    $out = New-SIHeartbeatKnown -Names $c.UpdateImagePruneFields -Values $v
+    if (-not @($out.PSObject.Properties).Count) { return $null }
+    # set here: a one-entry list stays an array
+    if ($repos.Count) { $out.repos = [object[]]$repos.ToArray() }
+    $out
+}
+
+function Add-SIHeartbeatUpdateImagePrune {
+    <# PURE. #1424: Update with imagePrune after its agreed five, signal and runningImages, and BEFORE revisions (the last key). #>
+    param([Parameter(Mandatory)]$Update, [Parameter(Mandatory)]$ImagePrune)
+    $c = $script:SIHeartbeatFields
+    $o = [ordered]@{}
+    foreach ($pp in @($Update.PSObject.Properties)) { if ($pp.Name -notin @($c.UpdateImagePruneField, $c.UpdateRevisionsField)) { $o[$pp.Name] = $pp.Value } }
+    $o[$c.UpdateImagePruneField] = $ImagePrune
+    if ($Update.PSObject.Properties[$c.UpdateRevisionsField]) { $o[$c.UpdateRevisionsField] = $Update.($c.UpdateRevisionsField) }
     [pscustomobject]$o
 }
 
@@ -3229,6 +3366,20 @@ function New-SIHeartbeatFields {
                         }
                     } catch { $problems.Add(('the running images could not be read ({0}) -- Update goes without them' -f $_.Exception.Message)) }
                 }
+                # #1424: the last update's clean-up of old images (imagePrune, before revisions) -- from the settings read already
+                # made (cfg.InstallState 'ImagePrune'); in its own try: no record or a value that does not pass leaves the key out
+                if ($null -ne $uv -and $c.UpdateSendImagePrune -and $null -ne $CfgRows) {
+                    try {
+                        $ipLeft = New-Object System.Collections.Generic.List[string]
+                        $ipv = Get-SIHeartbeatImagePrune -Rows @($CfgRows) -LeftOut $ipLeft
+                        if ($ipLeft.Count) { $problems.Add(('the image clean-up result has room for {0} repositories -- not in it: {1}' -f [int]$c.MaxImagePruneRepos, ($ipLeft -join ', '))) }
+                        if ($null -ne $ipv) {
+                            $ui = Add-SIHeartbeatUpdateImagePrune -Update $uv -ImagePrune $ipv
+                            $why = Test-SIHeartbeatField -Name 'Update' -Value $ui
+                            if (-not $why) { $uv = $ui } else { $problems.Add(('the image clean-up result was left out: {0}' -f $why)) }
+                        }
+                    } catch { $problems.Add(('the image clean-up result could not be read ({0}) -- Update goes without it' -f $_.Exception.Message)) }
+                }
                 # SI #1414: whether only the newest revision answers (revisions, the LAST key) -- in its own try: a read or a
                 # value that does not pass leaves the key out, never the rest of Update
                 if ($null -ne $uv -and $c.UpdateSendRevisions) {
@@ -3288,7 +3439,7 @@ function New-SIHeartbeatFields {
                 }
                 $left = New-Object System.Collections.Generic.List[string]
                 $lv = Get-SIHeartbeatLastRun -Rows @($lr) -PublishedRows $lp -LeftOut $left
-                # over Invardia's cap of 20 steps: the first 20 go, the others are named once a day (never dropped silently)
+                # over Invardia's cap of 40 steps (#1423): the most relevant 40 go, the others are named once a day (never dropped silently)
                 # its OWN line, once per UTC day (the 00:00 half hour; once per process within it) -- never folded into the
                 # shared problems line, which is said once per process and may already be taken
                 if ($left.Count -and (Test-SIHeartbeatLastRunSayCap -NowUtc $NowUtc)) {

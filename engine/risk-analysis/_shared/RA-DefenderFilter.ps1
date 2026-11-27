@@ -253,7 +253,65 @@ function Test-RACountQuery {
 }
 
 # #1399 the one accepted-snapshot rule of SI_AzureRecommendation_CL
-if (-not (Get-Command -Name Get-SIAzureRecAcceptedTimeKql -ErrorAction SilentlyContinue)) { . ([IO.Path]::Combine((Split-Path -Parent (Split-Path -Parent $PSScriptRoot)), '_shared', 'SI-AzureRecSnapshot.ps1')) }
+if (-not (Get-Command -Name Get-SIAzureRecAcceptedTimeKql -ErrorAction SilentlyContinue) -or -not (Get-Command -Name Get-SIAzureRecPartialReason -ErrorAction SilentlyContinue)) { . ([IO.Path]::Combine((Split-Path -Parent (Split-Path -Parent $PSScriptRoot)), '_shared', 'SI-AzureRecSnapshot.ps1')) }
+
+# #1416 (a) A PARTIAL DEFENDER SNAPSHOT IS NEVER READ AS WHOLE. When no complete snapshot of SI_AzureRecommendation_CL is left
+# in the 8-day window, the rule's step 3 hands every reader the newest one there is -- which is NOT complete. A report that
+# reads it (the Defender recommendation reports, and the reports whose Defender hand-off or in-engine filter read it: every
+# query that carries the generated //__SI_REC_SNAPSHOT_BEGIN__ block) then ends NOT COMPLETE through the existing path (the
+# "lookup unavailable" error: "report '...' is NOT in this run ... Its findings are unknown for this run, not resolved."),
+# so the data sync carries its last complete rows and closes nothing off it. Asked ONCE per run (one small Log Analytics
+# query); a table that does not exist is no snapshot (nothing to say); an answer that cannot be read is said the same way.
+$script:RARecSnapBlock = '//__SI_REC_SNAPSHOT_BEGIN__'
+$script:RARecSnapVerdict = $null
+
+function Test-RARecSnapshotTransient {
+    <# PURE. A platform answer worth asking again once: a throttle (429), a 5xx, a timeout, a reset connection. #>
+    param([AllowEmptyString()][string]$Message)
+    $m = ([string]$Message).ToLowerInvariant()
+    return ($m -match 'throttl|too many requests|\b429\b|rate limit|\b50[0234]\b|service unavailable|bad gateway|gateway timeout|timed out|timeout|temporar|connection.*(closed|reset)')
+}
+
+function Get-RARecSnapshotPartialError {
+    <#
+        $null when -Query does not read the Defender snapshot, or the snapshot it reads is whole (or there is none); else the
+        "lookup unavailable" error that ends the report as not complete (New-RALookupUnavailableError). -Read { param($Kql)
+        rows } is the Log Analytics seam (default Invoke-LogAnalyticsKqlQuery on the run's workspace). Once per run.
+    #>
+    param([AllowEmptyString()][string]$Query, [scriptblock]$Read, [scriptblock]$Sleep = { param($s) Start-Sleep -Seconds $s })
+    if ([string]::IsNullOrEmpty($Query) -or $Query.IndexOf($script:RARecSnapBlock) -lt 0) { return $null }
+    if ($null -eq $script:RARecSnapVerdict) {
+        if (-not $Read) {
+            $ws = if (-not [string]::IsNullOrWhiteSpace([string]$global:SI_WorkspaceResourceId)) { [string]$global:SI_WorkspaceResourceId } else { [string]$global:WorkspaceResourceId }
+            $Read = { param($Kql) $laRows = Invoke-LogAnalyticsKqlQuery -WorkspaceResourceId $ws -Query $Kql; $laRows }.GetNewClosure()
+        }
+        $why = ''
+        $kql = Get-SIAzureRecPartialKql
+        try {
+            $ans = $null
+            # a platform answer (throttle, 5xx, timeout) is asked again ONCE before the run says it cannot tell
+            try { $ans = & $Read $kql }
+            catch {
+                if (-not (Test-RARecSnapshotTransient -Message ([string]$_.Exception.Message))) { throw }
+                & $Sleep 5
+                $ans = & $Read $kql
+            }
+            $why = Get-SIAzureRecPartialReason -Rows @(ConvertTo-RAFlatRows $ans)
+        }
+        catch {
+            $msg = [string]$_.Exception.Message
+            $v = Get-RAHandoffSourceVerdict -Rows $null -CountError $msg -Table 'SI_AzureRecommendation_CL'
+            # no table = no snapshot was ever written: nothing to read as whole or not
+            if ($v.State -ne 'Absent') { $why = 'whether the Defender for Cloud recommendation snapshot is complete could not be read: {0}' -f (($msg -split "`n") | Select-Object -First 1) }
+        }
+        $script:RARecSnapVerdict = @{ Reason = [string]$why }
+        if ($why -and (Get-Command -Name Write-Warn2 -ErrorAction SilentlyContinue)) {
+            Write-Warn2 ('{0} -- every report that reads the Defender for Cloud recommendations is not complete in this run (its findings are unknown, not resolved)' -f $why)
+        }
+    }
+    if (-not $script:RARecSnapVerdict.Reason) { return $null }
+    return (New-RALookupUnavailableError -Message ('a lookup this report needs could not be read -- {0}' -f $script:RARecSnapVerdict.Reason))
+}
 
 function Get-RADefenderSetKql {
     <#

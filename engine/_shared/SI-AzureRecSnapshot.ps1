@@ -9,10 +9,14 @@
 
     THE RULE (Invoke-SIRecommendations posts the rows of a snapshot, then its 'SnapshotComplete' marker with the number of
     distinct keys it holds):
-      1. the newest snapshot whose marker is there and that holds at least that many distinct keys (an EXACT count);
+      1. the newest snapshot whose marker is there and that holds at least that many distinct keys (an EXACT count) -- a
+         marker of 0 (#1416 (c): a complete read that found no unhealthy recommendation) is a snapshot of no rows: all fixed;
       2. else the newest snapshot from before the first marker (published before 3.1.52);
       3. else the newest snapshot there is -- NEVER no snapshot while one is there: an empty answer would read as every
-         recommendation fixed.
+         recommendation fixed. #1416 (a): such a snapshot is NOT complete and is never presented as whole -- every reader
+         asks which step took its snapshot (Get-SIAzureRecPartialKql / Get-SIAzureRecPartialReason): a Risk Analysis report
+         that reads it ends not complete (its findings unknown for the run, not resolved: nothing is closed off it), the data
+         sync says it.
     THE ROWS: one per key (resource id, row kind, primary entity id, assessment key) -- a snapshot posted twice (a retry, or
     every part of a run before 3.1.52) is never read twice; the marker row is never a row.
     PURE text. PowerShell 5.1 and 7.
@@ -42,8 +46,8 @@ function Get-SIAzureRecAcceptedTimeKql {
     $r = 'tostring(column_ifexists("RowKind", "")) != "SnapshotComplete"'
     @"
 toscalar(($Source | where $m | where isnotempty(CollectionTime) | summarize _siExp = max(toint(column_ifexists("AffectedEntityCount", int(null)))) by CollectionTime
-    | join kind=inner ($Source | where $r | where isnotempty(CollectionTime) | summarize by CollectionTime, _siK = $k | summarize _siN = count() by CollectionTime) on CollectionTime
-    | where _siN >= _siExp | project CollectionTime, _siP = 1)
+    | join kind=leftouter ($Source | where $r | where isnotempty(CollectionTime) | summarize by CollectionTime, _siK = $k | summarize _siN = count() by CollectionTime) on CollectionTime
+    | where coalesce(_siN, 0) >= _siExp | project CollectionTime, _siP = 1)
     | union ($Source | where $r | where isnotempty(CollectionTime) | summarize by CollectionTime
         | extend _siFm = toscalar($Source | where $m | where isnotempty(CollectionTime) | summarize min(CollectionTime))
         | where isnull(_siFm) or CollectionTime < _siFm | project CollectionTime, _siP = 2)
@@ -52,6 +56,70 @@ toscalar(($Source | where $m | where isnotempty(CollectionTime) | summarize _siE
     | summarize arg_min(_siP, CollectionTime)
     | project CollectionTime)
 "@
+}
+
+function Get-SIAzureRecAcceptedRuleKql {
+    <#
+        PURE. #1416 (a): the snapshot the rule above takes AND which of its three steps took it, as ONE tabular expression
+        over -Source: one row (CollectionTime, SnapshotRule = 1 | 2 | 3), none when the table holds no snapshot at all. Made
+        FROM Get-SIAzureRecAcceptedTimeKql's own text (its toscalar( ... | project CollectionTime) opened up), so the snapshot
+        it names is always the one every reader reads -- one definition, never a copy.
+          SnapshotRule 1 = a snapshot with its marker and every key it counts (complete);
+                       2 = a snapshot from before the first marker (published before 3.1.52: read as whole, as before);
+                       3 = the newest snapshot there is, NOT complete (no complete one is left in the window) -- the readers
+                           never present it as whole (Get-SIAzureRecPartialReason).
+    #>
+    param([Parameter(Mandatory)][string]$Source)
+    $t = (Get-SIAzureRecAcceptedTimeKql -Source $Source).TrimEnd()
+    if (-not $t.StartsWith('toscalar(') -or -not $t.EndsWith('| project CollectionTime)')) { throw 'Get-SIAzureRecAcceptedRuleKql: the accepted-snapshot rule no longer has the shape this reads (toscalar( ... | project CollectionTime))' }
+    $inner = $t.Substring('toscalar('.Length, $t.Length - 'toscalar('.Length - 1)
+    $inner.Substring(0, $inner.Length - '| project CollectionTime'.Length) + '| project CollectionTime, SnapshotRule = _siP'
+}
+
+function Get-SIAzureRecPartialKql {
+    <#
+        PURE. #1416 (a): the one-row answer a reader asks before it reads the recommendations -- the accepted snapshot of
+        SI_AzureRecommendation_CL over -LookbackDays (8, the window every reader reads) and its step (SnapshotRule). -AsOf:
+        the snapshot in force at that collection time (the data sync's own window, Get-SIDataRecommendationsKql).
+    #>
+    param([int]$LookbackDays = 8, [object]$AsOf = $null)
+    $until = ''
+    if ($null -ne $AsOf -and [string]$AsOf -ne '') {
+        # every fraction kept (7 digits, the data sync's own literal -- ConvertTo-SIDataKqlTime): a snapshot taken AT the
+        # collection's time (a flow run gives every step its start time) must never be cut off by a rounded literal
+        $lit = if (Get-Command -Name ConvertTo-SIDataKqlTime -ErrorAction SilentlyContinue) { ConvertTo-SIDataKqlTime -Time ([datetime]$AsOf) }
+               else { 'datetime({0})' -f ([datetime]$AsOf).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffffffZ', [System.Globalization.CultureInfo]::InvariantCulture) }
+        $until = ' | where CollectionTime <= {0}' -f $lit
+    }
+    $src = '(SI_AzureRecommendation_CL | where TimeGenerated > ago({0}d){1})' -f $LookbackDays, $until
+    Get-SIAzureRecAcceptedRuleKql -Source $src
+}
+
+function Get-SIAzureRecPartialReason {
+    <#
+        PURE. #1416 (a): -Rows = the answer of Get-SIAzureRecPartialKql. '' when the snapshot every reader takes is whole (step
+        1 or 2) or there is none; else the plain words for the step 3 case -- the newest snapshot is NOT complete and no
+        complete one is left in the window. A reader never presents that snapshot as whole: Risk Analysis ends each report
+        that reads it as not complete (its findings unknown, not resolved -- nothing is closed off it), the data sync says it.
+    #>
+    param([AllowNull()][AllowEmptyCollection()][object[]]$Rows, [int]$LookbackDays = 8)
+    # however a reader hands its rows over (one array, an array holding that array, or rows)
+    $r = @(@($Rows) | ForEach-Object { $_ } | ForEach-Object { $_ } | Where-Object { $null -ne $_ }) | Select-Object -First 1
+    if ($null -eq $r) { return '' }
+    # a row as an object (Log Analytics) or as a dictionary (a seam that hands hashtables)
+    $val = { param($n) if ($r -is [System.Collections.IDictionary]) { if ($r.Contains($n)) { $r[$n] } else { $null } } else { $p = $r.PSObject.Properties[$n]; if ($p) { $p.Value } else { $null } } }
+    $rule = & $val 'SnapshotRule'
+    if ($null -eq $rule -or $rule -is [System.DBNull] -or [string]$rule -eq '') { return '' }
+    if ([int]$rule -ne 3) { return '' }
+    $at = ''
+    $tv = & $val 'CollectionTime'
+    if ($null -ne $tv -and $tv -isnot [System.DBNull] -and [string]$tv -ne '') {
+        try {
+            $dt = if ($tv -is [datetime]) { ([datetime]$tv).ToUniversalTime() } else { [datetime]::Parse([string]$tv, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::AdjustToUniversal -bor [System.Globalization.DateTimeStyles]::AssumeUniversal) }
+            $at = [string]::Format([System.Globalization.CultureInfo]::InvariantCulture, ' (of {0:yyyy-MM-dd HH:mm} UTC)', $dt)
+        } catch { $at = '' }
+    }
+    'the newest Defender for Cloud recommendation snapshot{0} is not complete, and no complete snapshot is left in the last {1} days' -f $at, $LookbackDays
 }
 
 function Get-SIAzureRecRowsKql {

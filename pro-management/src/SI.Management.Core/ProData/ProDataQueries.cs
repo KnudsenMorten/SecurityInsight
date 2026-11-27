@@ -36,6 +36,9 @@ public interface IProDataQueries
     /// with <paramref name="ids"/>: how many of those ticked findings the filter keeps.
     Task<long> ExportCountAsync(FindingFilter filter, IReadOnlyCollection<string>? ids, CancellationToken ct) =>
         throw new NotSupportedException(GetType().Name + " counts no export: implement ExportCountAsync");
+    /// #1418 (a)(b) the keys of the findings the export's chunks read (<see cref="ProDataSql.FindingsExportKeyHash"/>), read at its
+    /// start and its end on the live path. Null = this reader cannot say (a fake): that export keeps its count and doubled-key checks.
+    Task<ExportKeyHash?> ExportKeyHashAsync(FindingFilter filter, IReadOnlyCollection<string>? ids, CancellationToken ct) => Task.FromResult<ExportKeyHash?>(null);
     Task<QueryResult<IReadOnlyList<PivotCell>>> PivotAsync(FindingFilter filter, CancellationToken ct);
     Task<QueryResult<FindingDetail?>> FindingAsync(string? collectionId, string findingId, CancellationToken ct);
     Task<QueryResult<IReadOnlyList<TrendCell>>> TrendAsync(TrendRequest request, CancellationToken ct);
@@ -220,6 +223,13 @@ public sealed class ProDataQueries : IProDataQueries
         using var keep = FindingSource.KeepStored();
         var (rows, _) = await Run(ProDataSql.FindingsExportCount(filter, ids), ct).ConfigureAwait(false);
         return rows.Count > 0 ? L(rows[0], "N") : 0;
+    }
+
+    public async Task<ExportKeyHash?> ExportKeyHashAsync(FindingFilter filter, IReadOnlyCollection<string>? ids, CancellationToken ct)
+    {
+        using var keep = FindingSource.KeepStored();
+        var (rows, _) = await Run(ProDataSql.FindingsExportKeyHash(filter, ids), ct).ConfigureAwait(false);
+        return rows.Count > 0 ? ExportKeyHash.Of(rows[0]) : new ExportKeyHash(0, "");
     }
 
     /// The pivot of the filtered view. Read once per data version when a cache is given (<see cref="ViewsCache"/>): the key

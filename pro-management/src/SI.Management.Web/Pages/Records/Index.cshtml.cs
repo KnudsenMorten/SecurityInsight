@@ -190,18 +190,23 @@ public sealed class IndexModel : PageModel
         if (!(await PrepareAsync(ct) && await LayoutAsync(ct))) return null;
         // "Export this page" reads the page shown; every other export every matching record -- #1400: a chunk at a time,
         // the first chunk here, ExportRows reads the rest, all with ONE request (its relative dates fixed once)
-        _exportRequest = ReadGrid().Pinned();
-        return SI.Management.Web.Columns.ExportChoices.PageOnly(Request)
-            ? (await _cis.GridAsync(Applied, _exportRequest, false, ct)).Data
-            : (await _cis.GridChunkAsync(Applied, _exportRequest, 1, ProDataFilters.ExportChunk, ct)).Data;
+        var request = ReadGrid().Pinned();
+        _exportRequest = request;
+        if (SI.Management.Web.Columns.ExportChoices.PageOnly(Request)) return (await _cis.GridAsync(Applied, request, false, ct)).Data;
+        // #1418 (a)(b): on the live path the source's keys are read before the first chunk (and again after the last)
+        var spec = Applied;
+        _keyStart = await ExportConsistency.StartAsync(t => _cis.GridKeyHashAsync(spec, request, t), ct);
+        return (await _cis.GridChunkAsync(spec, request, 1, ProDataFilters.ExportChunk, ct)).Data;
     }
 
     private GridRequest? _exportRequest;
+    private ExportKeyHash? _keyStart;
 
     /// #1400 every row of the export (<see cref="GridChunks"/>), each chunk filled with <paramref name="cols"/>' extra columns.
     private IAsyncEnumerable<IReadOnlyDictionary<string, object?>> ExportRows(GridPage first, IReadOnlyList<GridColumn> cols, CancellationToken ct) =>
         GridChunks.RowsAsync(first, !SI.Management.Web.Columns.ExportChoices.PageOnly(Request),
-            async (n, t) => (await _cis.GridChunkAsync(Applied, _exportRequest ?? ReadGrid().Pinned(), n, ProDataFilters.ExportChunk, t)).Data, (rows, t) => FillAsync(cols, rows, t), ct, keyColumn: Applied.KeyColumn);
+            async (n, t) => (await _cis.GridChunkAsync(Applied, _exportRequest ?? ReadGrid().Pinned(), n, ProDataFilters.ExportChunk, t)).Data, (rows, t) => FillAsync(cols, rows, t), ct, keyColumn: Applied.KeyColumn,
+            keyStart: _keyStart, keyHash: _exportRequest is { } r ? t => _cis.GridKeyHashAsync(Applied, r, t) : null);
 
     private async IAsyncEnumerable<IReadOnlyList<object?>> ExcelRows(GridPage first, IReadOnlyList<GridColumn> cols, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
     {

@@ -47,7 +47,7 @@ function Select-SIInstallTenantOrganization {
 }
 
 function ConvertTo-SIInstallTenantJson {
-    <# PURE. The row's value: compact JSON { tenantId, name, initialDomain, setBy, setAt } (cfg.InstallState.Value is NVARCHAR(400)). #>
+    <# PURE. The row's value: compact JSON { tenantId, name, initialDomain, setBy, setAt } (cfg.InstallState.Value: NVARCHAR(MAX) since 3.1.53; the record stays small). #>
     param([string]$TenantId = '', [string]$Name = '', [string]$InitialDomain = '', [Parameter(Mandatory)][string]$SetBy, [Parameter(Mandatory)][datetime]$NowUtc)
     $cut = { param($t, $n) $t = ("$t").Trim(); if ($t.Length -gt $n) { $t.Substring(0, $n) } else { $t } }
     $o = [ordered]@{

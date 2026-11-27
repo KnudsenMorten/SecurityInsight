@@ -1052,9 +1052,9 @@ function Get-SIDataOutTrustWriteSql {
 IF OBJECT_ID(N'cfg.InstallState') IS NOT NULL
 BEGIN
     IF EXISTS (SELECT 1 FROM cfg.InstallState WITH (UPDLOCK, HOLDLOCK) WHERE Name = N'$n')
-        UPDATE cfg.InstallState SET Value = LEFT(@Value, 400), UpdatedAt = SYSUTCDATETIME(), UpdatedBy = LEFT(@By, 256) WHERE Name = N'$n';
+        UPDATE cfg.InstallState SET Value = @Value, UpdatedAt = SYSUTCDATETIME(), UpdatedBy = LEFT(@By, 256) WHERE Name = N'$n';
     ELSE
-        INSERT cfg.InstallState (Name, Value, [Version], UpdatedBy) VALUES (N'$n', LEFT(@Value, 400), NULL, LEFT(@By, 256));
+        INSERT cfg.InstallState (Name, Value, [Version], UpdatedBy) VALUES (N'$n', @Value, NULL, LEFT(@By, 256));
 END
 "@
 }
@@ -1407,6 +1407,15 @@ function Invoke-SIDataLoadRecommendations {
             $recRowCount = [long](ConvertTo-SIDataNumber $recSize.PageRows)
             $recEmpty = ($recRowCount -le 0)
             $recPlanned = Get-SIDataPartitionCount -Rows $recRowCount -Bytes ([double](ConvertTo-SIDataNumber $recSize.PageBytes))
+        }
+        # #1416 (a): the snapshot read is never presented as whole when it is not -- no complete snapshot left in the window
+        # (the accepted-snapshot rule's step 3): said plainly with the collection; Risk Analysis ends every report that reads
+        # it as not complete, so no finding is closed off it
+        if (-not $recEmpty -and (Get-Command -Name Get-SIAzureRecPartialKql -ErrorAction SilentlyContinue)) {
+            $recPartial = ''
+            try { $recPartial = Get-SIAzureRecPartialReason -Rows @(& $Query (Get-SIAzureRecPartialKql -AsOf $Item.CollectionTime)) }
+            catch { $recPartial = ''; & $Log 'WARN' ("  {0}: whether the Defender for Cloud recommendation snapshot is complete could not be read ({1}) -- the recommendations are stored as read" -f $tText, (([string]$_.Exception.Message -split "`n") | Select-Object -First 1)) }
+            if ($recPartial) { & $Log 'WARN' ("  {0}: the Defender for Cloud recommendations stored with this collection are NOT complete -- {1}. They are stored as read; what is missing from them is unknown, not resolved." -f $tText, $recPartial) }
         }
         if (-not $recEmpty) {
             $recSql = Get-SIDataInsertRecommendationSql

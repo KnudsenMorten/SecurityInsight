@@ -74,6 +74,8 @@ public sealed class CachedCollectionViews : ICollectionViews, IDisposable
     public Task<QueryResult<GridPage>> ExportAsync(GridQuery query, CancellationToken ct) => _inner.ExportAsync(query, ct);
     /// #1400 an export's chunk is read live and never kept (a cached chunk would hold the export in memory after all).
     public Task<QueryResult<GridPage>> ExportChunkAsync(GridQuery query, int chunk, int size, CancellationToken ct) => _inner.ExportChunkAsync(query, chunk, size, ct);
+    /// #1418 an export's key hash is read live and never kept (a kept one would hide the change it is read to see).
+    public Task<ExportKeyHash?> ExportKeyHashAsync(GridQuery query, CancellationToken ct) => _inner.ExportKeyHashAsync(query, ct);
 
     /// #1372 a page's choices list (every row, like an export -- but it is the page's own small list, never a person's file):
     /// kept like a grid of its spec, under its own key ("choices"), so a repeat visit reads nothing.

@@ -49,7 +49,7 @@ function Get-SITelemetryEndpointRulesState {
     KindAliases   = @{ webapp = 'web' }
     Labels        = @{ web = 'SecurityInsight web app'; mcp = 'SecurityInsight MCP server' }
     StateName     = 'Endpoints'      # cfg.InstallState row
-    StateMax      = 400              # cfg.InstallState.Value is NVARCHAR(400)
+    StateMax      = 0                # #1426: 0 = no limit -- cfg.InstallState.Value is NVARCHAR(MAX); every endpoint is kept
     RunHealthPath = '/Admin/RunHealth'
 } }
     , $script:SITelemetryEndpointRules
@@ -128,7 +128,7 @@ function ConvertTo-SITelemetryEndpointList {
 
 function ConvertTo-SIInstallEndpointsValue {
     <# PURE. The list as the cfg.InstallState 'Endpoints' value (compact JSON, kind + url only -- labels are added when the
-       report is built -- at most 400 characters: entries that would pass the limit are left out, in order). '' for an
+       report is built; StateMax 0 = every entry -- a positive StateMax leaves out, in order, entries that would pass it). '' for an
        empty list. #>
     param([AllowNull()][object[]]$Endpoints)
     $list = @(ConvertTo-SITelemetryEndpointList -Items $Endpoints | ForEach-Object { [pscustomobject][ordered]@{ kind = $_.kind; url = $_.url } })
@@ -136,7 +136,8 @@ function ConvertTo-SIInstallEndpointsValue {
     foreach ($e in $list) {
         $keep.Add($e)
         $json = ConvertTo-Json -InputObject @($keep.ToArray()) -Compress -Depth 3
-        if ($json.Length -gt (Get-SITelemetryEndpointRulesState).StateMax) { $keep.RemoveAt($keep.Count - 1) }
+        $max = (Get-SITelemetryEndpointRulesState).StateMax
+        if ($max -gt 0 -and $json.Length -gt $max) { $keep.RemoveAt($keep.Count - 1) }
     }
     if (-not $keep.Count) { return '' }
     ConvertTo-Json -InputObject @($keep.ToArray()) -Compress -Depth 3

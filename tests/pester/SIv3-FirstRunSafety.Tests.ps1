@@ -332,7 +332,7 @@ Describe 'containers: the same safety layer (dry run, Power BI line, one-time no
         }
         $s = [IO.File]::ReadAllText((Join-Path $script:SIRoot 'container\Start-SIInContainer.ps1'))
         $s.IndexOf('Invoke-SIContainerRunSafety -Engine') | Should -BeLessThan $s.IndexOf('if ($dispatchClassifier) {')
-        $s.IndexOf('Invoke-SIContainerRunSafety -Engine') | Should -BeLessThan $s.IndexOf('& $orchestrator @orchArgs')
+        $s.IndexOf('Invoke-SIContainerRunSafety -Engine') | Should -BeLessThan $s.IndexOf('Invoke-SIContainerOrchestrator -OrchestratorScript $orchestrator -OrchestratorArgs $orchArgs')
         $ra = [IO.File]::ReadAllText((Join-Path $script:SIRoot 'container\Start-RiskAnalysisInContainer.ps1'))
         $ra.IndexOf('Invoke-SIContainerRunSafety -Engine') | Should -BeLessThan $ra.IndexOf('& $engineScript')
     }

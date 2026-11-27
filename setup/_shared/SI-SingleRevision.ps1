@@ -113,10 +113,16 @@ function Get-SISingleRevisionState {
     if (-not $keeper -and $latest) {
         $lps = if ($lr) { [string](& $p $lr @('properties', 'provisioningState')) } else { '' }
         $lrs = if ($lr) { [string](& $p $lr @('properties', 'runningState')) } else { '' }
-        $pending = -not ($lps -eq 'Failed' -or $lrs -eq 'Failed')
+        # #1417 (b): a revision that is PROVISIONED and has settled in a state that is not running (Degraded, Stopped) is not on
+        # its way any more -- judged now, never waited for the whole ready wait; still provisioning / activating = waited for
+        $settled = ($lps -eq 'Provisioned' -and $lrs -in 'Degraded', 'Stopped')
+        $pending = -not ($lps -eq 'Failed' -or $lrs -eq 'Failed' -or $settled)
     }
-    # revisions the traffic list names that are not the keeper (pinned by name)
-    $pinned = @($traffic | ForEach-Object { [string](& $p $_ @('revisionName')) } | Where-Object { $_ -and $_ -ne $keeper } | Select-Object -Unique)
+    # revisions the traffic list names that are not the keeper (pinned by name). #1417 (a): an entry of weight 0 sends nothing
+    # and pins nothing (Azure lists a revision at 0 % after a split) -- only an entry that carries traffic is a pin; an entry
+    # with a LABEL is a pin at any weight (the label is its own address, reached whatever the weight -- review of 45c752500)
+    $wOf = { param($t) $wv = "$(& $p $t @('weight'))".Trim(); $n = 0; if ([int]::TryParse($wv, [ref]$n)) { $n } else { 0 } }
+    $pinned = @($traffic | Where-Object { (& $wOf $_) -gt 0 -or "$(& $p $_ @('label'))".Trim() } | ForEach-Object { [string](& $p $_ @('revisionName')) } | Where-Object { $_ -and $_ -ne $keeper } | Select-Object -Unique)
     [pscustomobject]@{ App = $name; External = $ext; Mode = $mode; Latest = $latest; Ready = $ready; Active = @($active); Keeper = $keeper; KeeperWhy = $why; Pending = $pending
                        Pinned = @($pinned); TrafficOk = $trafficOk; Labels = $labels; LatestImage = $img
                        Ok = [bool]($keeper -and $mode -eq 'Single' -and $active.Count -eq 1 -and $active[0] -eq $keeper -and $trafficOk) }
@@ -188,12 +194,17 @@ function Invoke-SISingleRevision {
             $st = Get-SISingleRevisionState -App $app -Revisions @(& $Arm 'LIST' ($appPath + '/revisions') $null)
             # a change made just before this step (an identity PATCH, a setting) makes a NEW revision: wait for it, bounded, and
             # judge the newest healthy revision -- never an older one, never "not proven" while it is still on its way
-            $readyBy = [datetime]::UtcNow.AddSeconds([Math]::Max(0, $ReadyWaitSeconds))
+            $readyFrom = [datetime]::UtcNow
+            $readyBy = $readyFrom.AddSeconds([Math]::Max(0, $ReadyWaitSeconds))
+            $waited = $false
             while (-not $st.Ok -and -not $st.Keeper -and $st.Pending -and $PollSeconds -gt 0 -and [datetime]::UtcNow -lt $readyBy) {
+                $waited = $true
                 & $nap $PollSeconds
                 $app = & $Arm 'GET' $appPath $null
                 $st = Get-SISingleRevisionState -App $app -Revisions @(& $Arm 'LIST' ($appPath + '/revisions') $null)
             }
+            # #1417 (b): a wait is said -- how long, and for what -- so a slow nightly step is never a silent one
+            if ($waited) { & $say ('one active revision: {0}: waited {1:N0} s for its newest revision {2} ({3})' -f $n, ([datetime]::UtcNow - $readyFrom).TotalSeconds, $st.Latest, $(if ($st.Keeper) { 'now proven healthy' } elseif ($st.Pending) { 'still not ready at the end of the wait' } else { $st.KeeperWhy })) }
             if ($st.Ok) { $states.Add($st); continue }
             $plan = Get-SISingleRevisionPlan -State $st
             if ($plan.Refuse) { $fail.Add($plan.Refuse); $states.Add($st); continue }
@@ -217,7 +228,11 @@ function Invoke-SISingleRevision {
                 while ($true) {
                     $app = & $Arm 'GET' $appPath $null
                     $ps = [string](Get-SISingleRevisionProp $app @('properties', 'provisioningState'))
-                    if (-not $ps -or $ps -eq 'Succeeded') { break }
+                    if ($ps -eq 'Succeeded') { break }
+                    # #1417 (c): an EMPTY state is not "Succeeded": read again within the wait; still empty at its end = this app
+                    # is REFUSED (a failure, nothing deactivated) -- never a deactivation after a PATCH whose outcome was not read
+                    if (-not $ps -and ($PollSeconds -le 0 -or [datetime]::UtcNow -ge $doneBy)) { throw ('the change to Single revision mode answered no provisioning state within {0} s -- nothing was deactivated' -f $WaitSeconds) }
+                    if (-not $ps) { & $nap $PollSeconds; continue }
                     if ($ps -eq 'Failed') { throw ('the change to Single revision mode ended Failed') }
                     if ($PollSeconds -le 0 -or [datetime]::UtcNow -ge $doneBy) { throw ('the change to Single revision mode is still {0} after {1} s' -f $ps, $WaitSeconds) }
                     & $nap $PollSeconds

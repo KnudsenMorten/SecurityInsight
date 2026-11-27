@@ -473,7 +473,7 @@ Describe 'IMAGE-PRUNE: what the install records (the read of jobs and apps, the 
         (ConvertTo-SIUpdaterImageRef -Image 'acrsi.azurecr.io/si-web' -LoginServer $script:Login).Tag | Should -Be 'latest'
         (ConvertTo-SIUpdaterImageRef -Image 'acrsi.azurecr.io/si-web@sha256:bad' -LoginServer $script:Login) | Should -BeNullOrEmpty
     }
-    It 'the step: one log line per repository, the release record (what runs + the release before as history) and the state row of at most 400 characters' {
+    It 'the step: one log line per repository, the release record (what runs + the release before as history) and the state row (whole -- NVARCHAR(MAX) since #1426)' {
         $f = New-StandardRegistry
         $script:Log = New-Object System.Collections.Generic.List[string]
         Mock Write-UpdLog { $script:Log.Add($m) }
@@ -492,7 +492,7 @@ Describe 'IMAGE-PRUNE: what the install records (the read of jobs and apps, the 
         $rec.CurrentVersion | Should -Be '3.1.11'; $rec.PreviousVersion | Should -Be '3.1.10'
         @($rec.Current | ForEach-Object { Format-SIUpdaterImageRef -Ref $_ }) | Should -Be @('si-management:src-2', 'si-orchestrator:v4-aaa')
         @($rec.Previous | ForEach-Object { Format-SIUpdaterImageRef -Ref $_ }) | Should -Be @('si-management:src-1', 'si-orchestrator:v3-bbb')
-        $row = $script:Rows['ImagePrune']; $row.Length | Should -BeLessOrEqual 400
+        $row = $script:Rows['ImagePrune']; $row.Length | Should -BeLessOrEqual 32000 -Because 'cfg.InstallState.Value is NVARCHAR(MAX) since #1426; 32000 is the record''s last-resort size'
         $j = $row | ConvertFrom-Json
         $j.done | Should -BeTrue; $j.deleted | Should -Be 6; $j.left.'si-orchestrator' | Should -Be 1
     }

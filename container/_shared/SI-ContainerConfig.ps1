@@ -478,6 +478,73 @@ function Resolve-SIContainerRunOptions {
     [pscustomobject]@{ AssetLimit = $limit; Sinks = $sinks; ForceFullRun = [bool]$force; Source = $src }
 }
 
+function Resolve-SIOrchestratorOutcome {
+    <#
+        PURE. #1427 how the engine run ended, from the run's OWN word. The orchestrator is a PowerShell script: it returns
+        (and says $global:SI_LastRunExitReason) or it throws -- $LASTEXITCODE after it is only the exit code of the last
+        native program the run happened to start (or $null when it started none), never how the run ended.
+          * threw                                  -> Exit 1, 'error'
+          * the run said success / success-partial -> Exit 0, that reason (an exit code left behind does not undo it)
+          * the run said another reason            -> its exit code (or 1), that reason
+          * no reason, exit code not 0             -> that exit code, 'error' (a script's own `exit N`)
+          * no reason, exit code 0 / none          -> Exit 0, '' (as before)
+        Returns @{ Exit; ExitReason; ExitCode } -- ExitCode is the raw code, kept as information.
+    #>
+    param($ExitCode, [switch]$Threw, [string]$Reason)
+    $code = if ($null -eq $ExitCode -or [string]$ExitCode -eq '') { 0 } else { [int]$ExitCode }
+    if ($Threw) { return [pscustomobject]@{ Exit = 1; ExitReason = 'error'; ExitCode = $code } }
+    if ($Reason) {
+        if ($Reason -in 'success', 'success-partial') { return [pscustomobject]@{ Exit = 0; ExitReason = $Reason; ExitCode = $code } }
+        return [pscustomobject]@{ Exit = $(if ($code -ne 0) { $code } else { 1 }); ExitReason = $Reason; ExitCode = $code }
+    }
+    if ($code -ne 0) { return [pscustomobject]@{ Exit = $code; ExitReason = 'error'; ExitCode = $code } }
+    [pscustomobject]@{ Exit = 0; ExitReason = ''; ExitCode = 0 }
+}
+
+function Invoke-SIContainerOrchestrator {
+    <#
+        #1427 runs the engine run (Invoke-SIEngineRun.ps1, or a test's fake) and says how it ended (Resolve-SIOrchestratorOutcome).
+        $LASTEXITCODE is set to 0 right before it, so only the script's own `exit N` (or a native program at its very end) can
+        set it; the run's reason is cleared too, so a reason is the run's own. The run's output goes to the host, as before.
+        Never throws: a run that threw is said (message, position, stack) and is an 'error'.
+    #>
+    param([Parameter(Mandatory)][string]$OrchestratorScript, [hashtable]$OrchestratorArgs = @{})
+    $__ocThrew = $false; $__ocCode = 0
+    try {
+        $global:SI_LastRunExitReason = $null
+        $global:LASTEXITCODE = 0
+        & $OrchestratorScript @OrchestratorArgs | Out-Host
+        $__ocCode = $global:LASTEXITCODE
+    } catch {
+        Write-Warning ('orchestrator threw: {0}' -f $_.Exception.Message)
+        if ($_.InvocationInfo) { Write-Warning ('  at: {0}' -f $_.InvocationInfo.PositionMessage.Trim()) }
+        if ($_.ScriptStackTrace) { Write-Warning ('  stack:'); $_.ScriptStackTrace -split "`n" | ForEach-Object { Write-Warning ('    {0}' -f $_) } }
+        $__ocThrew = $true
+    }
+    Resolve-SIOrchestratorOutcome -ExitCode $__ocCode -Threw:$__ocThrew -Reason ([string]$global:SI_LastRunExitReason)
+}
+
+function Get-SIRecommendationsPhaseResult {
+    <# PURE. #1427 what the run's recommendations phase writes for the process that started it: the run's own outcome. #>
+    param([Parameter(Mandatory)]$Outcome)
+    [ordered]@{ Exit = [int]$Outcome.Exit; ExitReason = [string]$Outcome.ExitReason }
+}
+
+function Resolve-SIRecommendationsRefresh {
+    <#
+        PURE. #1427 the parent's reading of the recommendations phase: refreshed only on a clean process exit AND the phase's
+        own 'success'. Returns @{ Refreshed; Reason } -- Reason is what the run's report says when they were not refreshed.
+    #>
+    param($ProcessExit, $Said)
+    $code = if ($null -eq $ProcessExit -or [string]$ProcessExit -eq '') { 0 } else { [int]$ProcessExit }
+    $reason = if ($Said -and $Said.PSObject.Properties['ExitReason']) { [string]$Said.ExitReason } else { '' }
+    if ($code -eq 0 -and $reason -eq 'success') { return [pscustomobject]@{ Refreshed = $true; Reason = '' } }
+    $why = if ($code -ne 0) { 'the publishing process ended with exit code {0}' -f $code }
+           elseif ($reason) { 'the publishing process ended {0}' -f $reason }
+           else { 'the publishing process did not say how it ended' }
+    [pscustomobject]@{ Refreshed = $false; Reason = ($why + ' (its run-health record azure-recommendations says why)') }
+}
+
 function Get-SIContainerRaEnvOverrides {
     <#
         PURE. The Risk Analysis settings a job's env vars set -- ONLY those whose env var is PRESENT. An absent env var

@@ -120,6 +120,69 @@ Describe 'Invoke-SISingleRevision (setup/_shared/SI-SingleRevision.ps1)' {
         $r.Ok | Should -BeFalse; $r.Text | Should -Match 'pinned by name to r1'
         @($w.Calls | Where-Object { $_ -like 'PATCH *' -or $_ -like 'POST *' }).Count | Should -Be 0
     }
+    It '#1417 (a): a traffic entry of weight 0 pins nothing -- set to Single, the 0 % revision deactivated' {
+        $w = New-World
+        $w.Apps['ca-si-management'] = New-App 'ca-si-management' -Mode 'Multiple' -Traffic @([pscustomobject]@{ revisionName = 'r1'; weight = 0 }, [pscustomobject]@{ revisionName = 'r2'; weight = 100 })
+        $w.Revs['ca-si-management'] = @((New-Rev 'r1'), (New-Rev 'r2'))
+        (Get-SISingleRevisionState -App $w.Apps['ca-si-management'] -Revisions $w.Revs['ca-si-management']).Pinned | Should -BeNullOrEmpty
+        $r = & $script:Run $w
+        $r.Ok | Should -BeTrue -Because "$($r.Text)"
+        @($w.Calls | Where-Object { $_ -like 'PATCH *' }).Count | Should -Be 1
+        @($r.Apps[0].Active) | Should -Be @('r2')
+        # a LABELLED 0 % route is a pin (its label is its own address): refused, nothing changed
+        $w2 = New-World
+        $w2.Apps['ca-si-management'] = New-App 'ca-si-management' -Mode 'Labels' -Traffic @([pscustomobject]@{ revisionName = 'r1'; weight = 0; label = 'blue' }, [pscustomobject]@{ revisionName = 'r2'; weight = 100 })
+        $w2.Revs['ca-si-management'] = @((New-Rev 'r1'), (New-Rev 'r2'))
+        $r2 = & $script:Run $w2
+        $r2.Ok | Should -BeFalse; $r2.Text | Should -Match 'pinned by name to r1'
+        @($w2.Calls | Where-Object { $_ -like 'PATCH *' -or $_ -like 'POST *' }).Count | Should -Be 0
+    }
+    It '#1417 (b): a newest revision that settled Degraded is judged at once (no ready wait), and a wait that happened is said' {
+        $w = New-World
+        $w.Apps['ca-si-management'] = New-App 'ca-si-management' -Latest 'r3'
+        $w.Revs['ca-si-management'] = @((New-Rev 'r2'), (New-Rev 'r3' -Run 'Degraded'))
+        $naps = New-Object System.Collections.Generic.List[int]
+        $r = Invoke-SISingleRevision -Arm (New-WorldArm $w) -SubscriptionId 'sub' -ResourceGroup 'rg' -PollSeconds 1 -WaitSeconds 20 -ReadyWaitSeconds 300 -Sleep { param($s) $naps.Add($s) }.GetNewClosure()
+        $r.Ok | Should -BeFalse; $r.Text | Should -Match 'r3 is Degraded'
+        $naps.Count | Should -Be 0 -Because 'a settled state is not on its way: nothing to wait for'
+        @($w.Calls | Where-Object { $_ -like 'PATCH *' -or $_ -like 'POST *' }).Count | Should -Be 0
+        # still on its way (Activating) -> waited for, and the wait is said
+        $w2 = New-World; $w2.ActivateAfter = 2
+        $w2.Apps['ca-si-management'] = New-App 'ca-si-management' -Latest 'r3'
+        $w2.Revs['ca-si-management'] = @((New-Rev 'r2'), (New-Rev 'r3' -Run 'Activating'))
+        $lines = New-Object System.Collections.Generic.List[string]
+        $r2 = Invoke-SISingleRevision -Arm (New-WorldArm $w2) -SubscriptionId 'sub' -ResourceGroup 'rg' -PollSeconds 1 -WaitSeconds 20 -ReadyWaitSeconds 20 -Sleep { } -Log { param($m) $lines.Add($m) }.GetNewClosure()
+        $r2.Ok | Should -BeTrue
+        @($lines | Where-Object { $_ -match 'ca-si-management: waited \d+ s for its newest revision r3 \(now proven healthy\)' }).Count | Should -Be 1
+    }
+    It '#1417 (c): an EMPTY provisioning state after the PATCH is read again -- never taken for Succeeded' {
+        $w = New-World
+        $w.Apps['ca-si-management'] = New-App 'ca-si-management' -Mode 'Multiple'
+        $w.Revs['ca-si-management'] = @((New-Rev 'r1'), (New-Rev 'r2'))
+        $inner = New-WorldArm $w
+        $st = @{ Patched = $false; Empty = 0 }
+        $arm = {
+            param([string]$Method, [string]$Path, $Body)
+            $res = & $inner $Method $Path $Body
+            if ($Method -eq 'PATCH') { $st.Patched = $true }
+            if ($Method -eq 'GET' -and $st.Patched -and $res) { if ($st.Empty -lt 2) { $st.Empty++; $res.properties.provisioningState = '' } else { $res.properties.provisioningState = 'Succeeded' } }
+            $res
+        }.GetNewClosure()
+        $r = Invoke-SISingleRevision -Arm $arm -SubscriptionId 'sub' -ResourceGroup 'rg' -PollSeconds 1 -WaitSeconds 20 -ReadyWaitSeconds 20 -Sleep { }
+        $r.Ok | Should -BeTrue -Because "$($r.Text)"
+        $iPatch = $w.Calls.IndexOf(@($w.Calls | Where-Object { $_ -like 'PATCH *' })[0]); $iPost = $w.Calls.IndexOf(@($w.Calls | Where-Object { $_ -like 'POST *' })[0])
+        @($w.Calls[($iPatch + 1)..($iPost - 1)] | Where-Object { $_ -like 'GET *' }).Count | Should -BeGreaterOrEqual 3 -Because 'two empty answers, then Succeeded, before any deactivation'
+        # still empty at the end of the wait: the app is REFUSED -- a failure, nothing deactivated
+        $w3 = New-World
+        $w3.Apps['ca-si-management'] = New-App 'ca-si-management' -Mode 'Multiple'
+        $w3.Revs['ca-si-management'] = @((New-Rev 'r1'), (New-Rev 'r2'))
+        $inner3 = New-WorldArm $w3
+        $st3 = @{ Patched = $false }
+        $arm3 = { param([string]$Method, [string]$Path, $Body) $res = & $inner3 $Method $Path $Body; if ($Method -eq 'PATCH') { $st3.Patched = $true }; if ($Method -eq 'GET' -and $st3.Patched -and $res) { $res.properties.provisioningState = '' }; $res }.GetNewClosure()
+        $r3 = Invoke-SISingleRevision -Arm $arm3 -SubscriptionId 'sub' -ResourceGroup 'rg' -PollSeconds 0 -Sleep { }
+        $r3.Ok | Should -BeFalse; $r3.Text | Should -Match 'answered no provisioning state'
+        @($w3.Calls | Where-Object { $_ -like 'POST *' }).Count | Should -Be 0
+    }
     It 'the PATCH body: Single, traffic = latest 100 % (no label), the ingress otherwise as read (custom domains, IP rules, CORS kept), without its address' {
         $w = New-World
         $w.Apps['ca-si-mcp'] = New-App 'ca-si-mcp' -Mode 'Multiple' -Traffic @([pscustomobject]@{ revisionName = 'r2'; weight = 100; label = 'blue' })

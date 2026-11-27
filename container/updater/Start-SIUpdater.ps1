@@ -1384,7 +1384,8 @@ function Test-SIUpdaterRunNow {
         -- so on that timer the start that is NOT that time in the zone ends here,
         before anything is read or changed, with one plain line (exit 0, not a failure). A timer of the customer's own, a run
         started by hand, by a release or by the web app (SI_UPDATER_MODE), and an image without SI-NightlySchedule.ps1 always
-        go on. Returns $true = go on.
+        go on. #1425: a plain start by hand (no SI_UPDATER_MODE) minutes after the other tick goes on too -- the execution's own
+        start time (Get-SIUpdaterOwnExecutionStart) tells it from the timer's start. Returns $true = go on.
     #>
     param([hashtable]$Env = @{}, [Parameter(Mandatory)][string]$SubscriptionId, [Parameter(Mandatory)][string]$ResourceGroup, [datetime]$NowUtc = [datetime]::UtcNow)
     if (-not (Get-Command -Name Test-SIUpdaterNightlyTick -ErrorAction SilentlyContinue)) { return $true }
@@ -1397,8 +1398,42 @@ function Test-SIUpdaterRunNow {
     $own = Get-SIUpdaterOwnTimer -SubscriptionId $SubscriptionId -ResourceGroup $ResourceGroup -JobName $jn
     if (-not "$($own.Cron)".Trim()) { return $true }
     $t = Test-SIUpdaterNightlyTick -NowUtc $u -Cron ([string]$own.Cron) -Mode $mode -Zone ([string]$own.Zone)
+    # #1425: a start by hand (a plain start of the job, no SI_UPDATER_MODE) within minutes of the other tick looked like that
+    # tick and was declined. A start the clock puts on a tick reads the start time of THIS execution: a timer's execution
+    # starts at the tick itself (ARM records the planned time), a start by hand later -- that one goes on. The start-minus-tick
+    # difference is logged for every start judged this way. (Two updates at once: the overlap check below, as for every run.)
+    if ($t.PSObject.Properties['OnTick'] -and $t.OnTick -and (Get-Command -Name Get-SIUpdaterOwnExecutionStart -ErrorAction SilentlyContinue)) {
+        $xn = if ($Env.ContainsKey('CONTAINER_APP_JOB_EXECUTION_NAME')) { "$($Env['CONTAINER_APP_JOB_EXECUTION_NAME'])".Trim() } else { "$([Environment]::GetEnvironmentVariable('CONTAINER_APP_JOB_EXECUTION_NAME'))".Trim() }
+        $started = if ($xn) { Get-SIUpdaterOwnExecutionStart -SubscriptionId $SubscriptionId -ResourceGroup $ResourceGroup -JobName $jn -Execution $xn } else { $null }
+        if ($started) {
+            $t = Test-SIUpdaterNightlyTick -NowUtc $u -Cron ([string]$own.Cron) -Mode $mode -Zone ([string]$own.Zone) -StartedUtc $started
+            $tickTxt = if ($t.Tick) { ' the {0} UTC tick' -f $t.Tick } else { ' the tick' }
+            if (-not $t.OnTick) { Write-UpdLog ('nightly start: this execution started {0} s from{1} -- a start by hand, the update goes on' -f $t.OffsetSec, $tickTxt) }
+            elseif ($t.Go) { Write-UpdLog ('nightly start: the timer''s start ({0} s after{1}) -- {2}' -f $t.OffsetSec, $tickTxt, $t.Why) }
+            else { Write-UpdLog ('nightly start: the timer''s start ({0} s after{1})' -f $t.OffsetSec, $tickTxt) }
+        }
+    }
     if (-not $t.Go) { Write-UpdLog $t.Why }
     [bool]$t.Go
+}
+
+function Get-SIUpdaterOwnExecutionStart {
+    <#
+        #1425: the start time (UTC) of this execution of the updater job, as ARM lists it; $null when it cannot be read (the
+        tick check then decides on the clock, as before). Tests replace it.
+    #>
+    param([Parameter(Mandatory)][string]$SubscriptionId, [Parameter(Mandatory)][string]$ResourceGroup, [Parameter(Mandatory)][string]$JobName, [Parameter(Mandatory)][string]$Execution)
+    try {
+        $all = @(Invoke-SIUpdaterArm -Path (Get-SIUpdaterRgPath -SubscriptionId $SubscriptionId -ResourceGroup $ResourceGroup -Provider ('Microsoft.App/jobs/{0}/executions' -f $JobName)) -List)
+        $me = @($all | Where-Object { $_ -and [string]$_.name -eq $Execution })[0]
+        if (-not $me) { return $null }
+        $p = if ($me.PSObject.Properties['properties']) { $me.properties } else { $me }
+        if ($p.PSObject.Properties['startTime'] -and $p.startTime -is [datetime]) { return $(if ($p.startTime.Kind -eq 'Unspecified') { [datetime]::SpecifyKind($p.startTime, 'Utc') } else { $p.startTime.ToUniversalTime() }) }
+        if ($p.PSObject.Properties['startTime'] -and "$($p.startTime)".Trim()) {
+            return [datetime]::Parse([string]$p.startTime, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::AdjustToUniversal -bor [Globalization.DateTimeStyles]::AssumeUniversal)
+        }
+    } catch { }
+    $null
 }
 
 function Invoke-SIUpdater {

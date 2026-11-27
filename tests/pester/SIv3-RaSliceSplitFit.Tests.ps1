@@ -39,9 +39,8 @@ BeforeAll {
             Invoke = { param($q, $p, $m) $script:Sql.Add([pscustomobject]@{ Sql = $q; P = $p }); 3 } }
     }
     $script:Warned = New-Object System.Collections.Generic.List[string]
-    function global:Write-Warn2 { param([string]$m) [void]$script:Warned.Add($m) }
+    function script:Write-Warn2 { param([string]$m) [void]$script:Warned.Add($m) }
 }
-AfterAll { Remove-Item -Path Function:\global:Write-Warn2 -ErrorAction SilentlyContinue }
 
 Describe 'a refused request that still shrinks with the split is not futile (Test-RASplitCanStillFit)' {
     It 'a 413 with CL rows inlined per slice and a remainder under the limit: a finer split can fit' {

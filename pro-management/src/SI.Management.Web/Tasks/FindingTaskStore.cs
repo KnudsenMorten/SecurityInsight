@@ -27,6 +27,9 @@ public interface IFindingTaskStore
     /// Saved | Stale (the task is no longer in the expected status) | Gone. One transaction with its history and change-log rows.
     Task<string> ChangeStatusAsync(long taskId, string expectedStatus, string action, string? note, string by, string byKey, CancellationToken ct);
     Task<TaskPage> QueryAsync(TaskQuery q, CancellationToken ct);
+    /// #1418 (a)(b) the keys (task ids) of every task <paramref name="q"/> lists, hashed in SQL -- an export reads them at its
+    /// start and its end on the live path. Null = this store cannot say (the in-memory store of the tests).
+    Task<SI.Management.Core.ProData.ExportKeyHash?> KeyHashAsync(TaskQuery q, CancellationToken ct) => Task.FromResult<SI.Management.Core.ProData.ExportKeyHash?>(null);
     Task<TaskCounts> CountsAsync(IReadOnlyCollection<string> keys, IReadOnlyList<int>? departments, DateOnly today, int soonDays, CancellationToken ct);
 }
 
@@ -313,15 +316,36 @@ WHERE t.Status = N'open' AND t.AssigneeKey IN (SELECT j.[value] FROM OPENJSON(@K
     public async Task<TaskPage> QueryAsync(TaskQuery query, CancellationToken ct)
     {
         var q = query.Normalized();
-        var rows = await _sql.QueryAsync(ListSql(q.Sort, q.Descending), new Dictionary<string, object?>
-        {
-            ["View"] = q.View, ["Keys"] = JsonSerializer.Serialize(q.Keys), ["PersonalKeys"] = JsonSerializer.Serialize(q.PersonalKeys), ["Departments"] = Json(q.Departments),
-            // the department filter: one or more departments (0 = Unassigned), a JSON array its IN-list reads; null = every one
-            ["DepartmentIds"] = q.AllDepartmentIds.Count == 0 ? null : JsonSerializer.Serialize(q.AllDepartmentIds), ["Like"] = q.Text is null ? null : Like(q.Text), ["Show"] = q.Show, ["Today"] = Iso(q.Today), ["SoonDays"] = q.SoonDays,
-            ["RecentDays"] = q.RecentDays, ["Skip"] = (q.Page - 1) * q.Size, ["Take"] = q.Size,
-        }, ct);
+        var rows = await _sql.QueryAsync(ListSql(q.Sort, q.Descending), ListParams(q), ct);
         var list = rows.Where(r => r.Long("TaskId") is > 0).ToList();
         return new TaskPage(list.Select(Row).ToList(), list.Count > 0 ? list[0].Long("Total") ?? list.Count : 0, q.Page, q.Size);
+    }
+
+    private static Dictionary<string, object?> ListParams(TaskQuery q) => new()
+    {
+        ["View"] = q.View, ["Keys"] = JsonSerializer.Serialize(q.Keys), ["PersonalKeys"] = JsonSerializer.Serialize(q.PersonalKeys), ["Departments"] = Json(q.Departments),
+        // the department filter: one or more departments (0 = Unassigned), a JSON array its IN-list reads; null = every one
+        ["DepartmentIds"] = q.AllDepartmentIds.Count == 0 ? null : JsonSerializer.Serialize(q.AllDepartmentIds), ["Like"] = q.Text is null ? null : Like(q.Text), ["Show"] = q.Show, ["Today"] = Iso(q.Today), ["SoonDays"] = q.SoonDays,
+        ["RecentDays"] = q.RecentDays, ["Skip"] = (q.Page - 1) * q.Size, ["Take"] = q.Size,
+    };
+
+    /// <summary>
+    /// #1418 (a)(b) the keys (task ids) of every task the list statement reads -- the same prelude, FROM and WHERE
+    /// (<see cref="ListSql"/>), no order and no page, hashed in SQL (<see cref="SI.Management.Core.ProData.ExportKeyHashSql"/>).
+    /// </summary>
+    public static string KeyHashSql
+    {
+        get
+        {
+            var nl = ListWhere.IndexOf('\n');
+            return ClosedPrelude + NL + ListWhere[..(nl + 1)] + "SELECT " + SI.Management.Core.ProData.ExportKeyHashSql.Columns("t.TaskId") + NL + From + NL + ListWhere[(nl + 1)..].TrimEnd() + ";";
+        }
+    }
+
+    public async Task<SI.Management.Core.ProData.ExportKeyHash?> KeyHashAsync(TaskQuery query, CancellationToken ct)
+    {
+        var rows = await _sql.QueryAsync(KeyHashSql, ListParams(query.Normalized()), ct);
+        return rows.Count > 0 ? new SI.Management.Core.ProData.ExportKeyHash(rows[0].Long("KeyRows") ?? 0, rows[0].Str("KeyHash") ?? "") : new SI.Management.Core.ProData.ExportKeyHash(0, "");
     }
 
     public async Task<TaskCounts> CountsAsync(IReadOnlyCollection<string> keys, IReadOnlyList<int>? departments, DateOnly today, int soonDays, CancellationToken ct)

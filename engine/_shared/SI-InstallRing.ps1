@@ -78,7 +78,7 @@ function Resolve-SIInstallRing {
 }
 
 function ConvertTo-SIInstallRingJson {
-    <# PURE. The row's value: compact JSON { ring, channel, setBy, source, setAt } (cfg.InstallState.Value is NVARCHAR(400)). #>
+    <# PURE. The row's value: compact JSON { ring, channel, setBy, source, setAt } (cfg.InstallState.Value: NVARCHAR(MAX) since 3.1.53; the record stays small). #>
     param([Parameter(Mandatory)][int]$Ring, [string]$Channel = '', [Parameter(Mandatory)][string]$SetBy, [string]$Source = '',
           [Parameter(Mandatory)][datetime]$NowUtc)
     $cut = { param($t, $n) $t = ("$t").Trim(); if ($t.Length -gt $n) { $t.Substring(0, $n) } else { $t } }

@@ -170,6 +170,9 @@ public interface ICollectionViews
     /// </summary>
     Task<QueryResult<GridPage>> ExportChunkAsync(GridQuery query, int chunk, int size, CancellationToken ct) =>
         throw new NotSupportedException(GetType().Name + " reads no export chunks: implement ExportChunkAsync (an export never falls back to a capped read)");
+    /// #1418 (a)(b) the keys of every row an export of <paramref name="query"/> reads (<see cref="GridSql.KeyHash"/>), read at its
+    /// start and its end on the live path. Null = this reader cannot say (a fake): that export keeps its count and doubled-key checks.
+    Task<ExportKeyHash?> ExportKeyHashAsync(GridQuery query, CancellationToken ct) => Task.FromResult<ExportKeyHash?>(null);
     /// #1372 every row of a small list a page offers as its choices (the task reports' dimension values): read like an export,
     /// but a caching reader keeps it like any grid of its spec (long for an immutable one, briefly otherwise).
     Task<QueryResult<GridPage>> ChoicesAsync(GridQuery query, CancellationToken ct) => ExportAsync(query, ct);
@@ -293,6 +296,17 @@ public sealed class CollectionViews : ICollectionViews
     public Task<QueryResult<GridPage>> ExportAsync(GridQuery query, CancellationToken ct) => Grid(query, export: true, ct);
     /// #1400 one chunk of every matching row: the grid's own page statement with the chunk as its page (never cached).
     public Task<QueryResult<GridPage>> ExportChunkAsync(GridQuery query, int chunk, int size, CancellationToken ct) => Grid(query, export: false, ct, (chunk, size));
+
+    /// #1418 (a)(b) the keys of every row the export's chunks read: the same source, parameters and WHERE, hashed in SQL.
+    public async Task<ExportKeyHash?> ExportKeyHashAsync(GridQuery query, CancellationToken ct)
+    {
+        var st = GridSql.Normalize(query.Spec, query.Request);
+        var sp = new Dictionary<string, object?>(query.SourceParameters, StringComparer.Ordinal);
+        if (query.Spec.SourceParameters.Contains("Source") && !sp.ContainsKey("Source")) sp["Source"] = _vulnSource;
+        using var keep = query.Spec.Name == CollectionViewSql.Rows.Name ? FindingSource.KeepStored() : null;
+        var (rows, _) = await Run(GridSql.KeyHash(query.Spec, st, sp), ct).ConfigureAwait(false);
+        return rows.Count > 0 ? ExportKeyHash.Of(rows[0]) : new ExportKeyHash(0, "");
+    }
 
     private async Task<QueryResult<GridPage>> Grid(GridQuery query, bool export, CancellationToken ct, (int Chunk, int Size)? part = null)
     {

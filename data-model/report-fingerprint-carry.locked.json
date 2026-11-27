@@ -344,6 +344,37 @@
           ]
         }
       }
+    },
+    {
+      "id": "report-defender-empty-snapshot-2026-11-26",
+      "decided": "3.1.52 review of the data-memory-stream work (#1416 (c), agreed right and deferred to 3.1.53; owner: \"data quality is key. trust\" / \"no data drop\")",
+      "description": "The accepted-snapshot rule also takes a snapshot whose SnapshotComplete marker says 0 rows (a complete read that found no unhealthy recommendation): the marker's join keeps a snapshot without rows (leftouter) and counts it as 0. Before, such a run published nothing and the last snapshot that still had rows stayed the newest. No row of a snapshot that has rows changes.",
+      "reports": {
+        "Azure_Recommendations_Summary": {
+          "restoreText": [
+            { "now": "summarize _siExp = max(toint(column_ifexists(\"AffectedEntityCount\", int(null)))) by CollectionTime | join kind=leftouter (", "was": "summarize _siExp = max(toint(column_ifexists(\"AffectedEntityCount\", int(null)))) by CollectionTime | join kind=inner (" },
+            { "now": "| where coalesce(_siN, 0) >= _siExp |", "was": "| where _siN >= _siExp |" }
+          ]
+        },
+        "Azure_Recommendations_Detailed": {
+          "restoreText": [
+            { "now": "summarize _siExp = max(toint(column_ifexists(\"AffectedEntityCount\", int(null)))) by CollectionTime | join kind=leftouter (", "was": "summarize _siExp = max(toint(column_ifexists(\"AffectedEntityCount\", int(null)))) by CollectionTime | join kind=inner (" },
+            { "now": "| where coalesce(_siN, 0) >= _siExp |", "was": "| where _siN >= _siExp |" }
+          ]
+        },
+        "Azure_DefenderRecommendations_Summary": {
+          "restoreText": [
+            { "now": "summarize _siExp = max(toint(column_ifexists(\"AffectedEntityCount\", int(null)))) by CollectionTime | join kind=leftouter (", "was": "summarize _siExp = max(toint(column_ifexists(\"AffectedEntityCount\", int(null)))) by CollectionTime | join kind=inner (" },
+            { "now": "| where coalesce(_siN, 0) >= _siExp |", "was": "| where _siN >= _siExp |" }
+          ]
+        },
+        "Azure_DefenderRecommendations_Detailed": {
+          "restoreText": [
+            { "now": "summarize _siExp = max(toint(column_ifexists(\"AffectedEntityCount\", int(null)))) by CollectionTime | join kind=leftouter (", "was": "summarize _siExp = max(toint(column_ifexists(\"AffectedEntityCount\", int(null)))) by CollectionTime | join kind=inner (" },
+            { "now": "| where coalesce(_siN, 0) >= _siExp |", "was": "| where _siN >= _siExp |" }
+          ]
+        }
+      }
     }
   ]
 }

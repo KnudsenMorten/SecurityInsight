@@ -720,13 +720,13 @@ Describe 'the installed licence for the web app''s Licence card (cfg.InstallStat
         @($script:Sql | Where-Object { $_.Sql -match "Name = N'Licence'" }).Count | Should -Be 1
         $script:Calls.Count | Should -Be 0
     }
-    It 'a summary that would not fit drops its free text first' {
+    It '#1426 a long summary is kept whole (cfg.InstallState.Value is NVARCHAR(MAX)): nothing is dropped' {
         $script:Sql = New-Object System.Collections.Generic.List[object]
         $store = [pscustomobject]@{ Name = 'fake'; Invoke = { param($sql, $p, $mode) $script:Sql.Add($p) } }
         $long = [ordered]@{ status = 'Valid'; customer = ('c' * 60); features = ('f' * 200); reason = ('r' * 200) } | ConvertTo-Json -Compress
         Save-SILicenceProSummary -Store $store -Json $long
-        $script:Sql[0].Value.Length | Should -BeLessOrEqual 400
-        ($script:Sql[0].Value | ConvertFrom-Json).customer | Should -Be ('c' * 60)
+        $script:Sql[0].Value | Should -Be $long
+        ($script:Sql[0].Value | ConvertFrom-Json).reason | Should -Be ('r' * 200)
     }
 }
 

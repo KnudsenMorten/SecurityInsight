@@ -1832,9 +1832,10 @@ function Complete-RAStreamReport {
                 $afterId = ''
                 while ($true) {
                     $g = & $__trQ; $g['Hash'] = $hName; $g['AfterId'] = $afterId; $g['Rows'] = [string]$__trTarget
-                    $r = & $__trNameRows $g $__trOneSql; $traces += $__trSt.Written
-                    if ($r.Rows -lt $__trTarget -or $r.LastId -lt 0) { break }
-                    $afterId = [string]$r.LastId
+                    # #1411 (c): its own name -- $r is the report ($Stream.Current) in this function
+                    $trPage = & $__trNameRows $g $__trOneSql; $traces += $__trSt.Written
+                    if ($trPage.Rows -lt $__trTarget -or $trPage.LastId -lt 0) { break }
+                    $afterId = [string]$trPage.LastId
                 }
                 $lo = $hName
                 continue

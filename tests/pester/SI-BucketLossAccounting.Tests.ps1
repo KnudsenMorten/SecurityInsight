@@ -46,7 +46,7 @@ BeforeAll {
 
     # Capture what the verdict prints instead of writing to the host.
     $script:Emitted = New-Object System.Collections.Generic.List[string]
-    function global:Write-Err2 { param([string]$m) [void]$script:Emitted.Add($m) }
+    function script:Write-Err2 { param([string]$m) [void]$script:Emitted.Add($m) }
 }
 
 Describe 'the accounting helpers' {

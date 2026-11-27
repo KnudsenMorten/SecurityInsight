@@ -23,7 +23,8 @@ public sealed record CiExportRow(string Key, string? Name, IReadOnlyList<object?
 /// object (the records the correlation joined into the CI): the CI's id and name, the source, the record type, the
 /// source's own id and name of it, whether it is the CI's primary record, its state and when the source last saw it.
 /// Read in batches of <see cref="BatchSize"/> keys, twice per sheet (the columns first, then the rows), so a large export
-/// never holds every document in memory. Capped at Excel's limits; what is left out is said on the Export sheet.
+/// never holds every document in memory. Rows are never cut: at Excel's row limit each sheet goes on on "&lt;sheet&gt; 2", ...
+/// (#1400, #1421 (a)); only columns past Excel's column limit are left out, and that is said on the Export sheet.
 /// </summary>
 public static class CiFullExport
 {
@@ -45,6 +46,10 @@ public static class CiFullExport
     {
         for (var i = 0; i < keys.Count; i += BatchSize) yield return keys.Skip(i).Take(BatchSize).ToList();
     }
+
+    /// #1421 (a): the Export sheet's line for a sheet whose rows went on on more sheets.
+    public static string Continued(string name, int sheets, int rowLimit = XlsxWriter.MaxRows) =>
+        $"{name}: more rows than one Excel sheet holds ({rowLimit:N0} with its heading row) -- every row is written, on '{name}' " + (sheets == 2 ? $"and '{name} 2'." : $"and '{name} 2' to '{name} {sheets}'.");
 
     /// The CI fields in the sheet's order: <see cref="FirstFields"/>, then the rest by name.
     public static List<string> OrderFields(IEnumerable<string> fields)
@@ -130,7 +135,11 @@ public static class CiFullExport
         if (!schema.Ci) info.Notes.Add($"{FieldsSheet}: the CI documents are not in this Pro database yet (the v3 data model arrives with the next data sync); only the page's columns are written.");
         var tail = tailHeaders ?? Array.Empty<string>();
         // the fields under the headings the grid shows them under -- never under their internal names
-        var headers = pageHeaders.Concat(FieldHeadings(fields, fieldHeading)).Concat(tail).ToList();
+        // #1421 (b): the page's headings, the fields' and the tail's made unique together, the same way every grid and export
+        // does (DataColumnKeys.UniqueTitles) -- a field heading that reads like a page heading carries its field name
+        var headers = DataColumnKeys.UniqueTitles(pageHeaders.Select(h => (h, h))
+            .Concat(fields.Zip(FieldHeadings(fields, fieldHeading), (f, h) => (DataColumnKeys.Field(f), h)))
+            .Concat(tail.Select(h => (h, h)))).ToList();
         if (headers.Count == 0) headers.Add(keyHeader);
         var ci = x.AddSheet(FieldsSheet, headers);
         var sheetNo = 1;
@@ -139,12 +148,7 @@ public static class CiFullExport
             void Write(List<object?> values)
             {
                 // #1400: at Excel's row limit the rows go on on the next sheet -- never cut
-                if (ci.RowCount + 2 > XlsxWriter.MaxRows)
-                {
-                    info.Rows.Add((ci.Name, ci.RowCount));
-                    ci.Dispose();
-                    ci = x.AddSheet(FieldsSheet + " " + (++sheetNo).ToString(System.Globalization.CultureInfo.InvariantCulture), headers);
-                }
+                if (ci.IsFull) ci = ExcelExport.Next(x, info, ci, FieldsSheet, headers, ++sheetNo);
                 ci.WriteRow(values);
             }
             // the rows in the page's order, a chunk at a time, each chunk with its own CIs' documents
@@ -182,12 +186,14 @@ public static class CiFullExport
             info.Rows.Add((ci.Name, ci.RowCount));
         }
         finally { ci.Dispose(); }
+        if (sheetNo > 1) info.Notes.Add(Continued(FieldsSheet, sheetNo, x.SheetRowLimit));
 
         // ---- the linked objects: one row per CI and linked object (a view of CIs; written when the CIs have any) ---------
         if (by == CiExportKeys.CiId && schema.Ci && schema.Links)
         {
             SheetWriter? links = null;
-            var linksFull = false;
+            var linksNo = 1;
+            var linkHeaders = new[] { keyHeader }.Concat(LinkHeaders).ToList();
             try
             {
                 foreach (var b in Batches(keys))
@@ -197,8 +203,9 @@ public static class CiFullExport
                     {
                         foreach (var l in found[key])
                         {
-                            links ??= x.AddSheet(LinksSheet, new[] { keyHeader }.Concat(LinkHeaders).ToList());
-                            if (links.RowCount + 2 > XlsxWriter.MaxRows) { linksFull = true; break; }
+                            links ??= x.AddSheet(LinksSheet, linkHeaders);
+                            // #1421 (a): at Excel's row limit the rows go on on the next sheet -- never cut
+                            if (links.IsFull) links = ExcelExport.Next(x, info, links, LinksSheet, linkHeaders, ++linksNo);
                             links.WriteRow(new List<object?>
                             {
                                 key, ExcelExport.Blank(names.GetValueOrDefault(key)), ExcelExport.Blank(l.Provider), ExcelExport.Blank(l.RecordType), ExcelExport.Blank(l.NativeId),
@@ -211,7 +218,7 @@ public static class CiFullExport
                 if (links is not null) info.Rows.Add((links.Name, links.RowCount));
             }
             finally { links?.Dispose(); }
-            if (linksFull) info.Notes.Add($"{LinksSheet}: the sheet stops at Excel's {XlsxWriter.MaxRows:N0} rows; narrow the filter to get the rest.");
+            if (linksNo > 1) info.Notes.Add(Continued(LinksSheet, linksNo, x.SheetRowLimit));
         }
 
         // ---- sheet 2: the full details per source --------------------------------------------------------------------
@@ -245,8 +252,10 @@ public static class CiFullExport
             info.Notes.Add($"{DetailsSheet}: {props.Count - space:N0} of {props.Count:N0} source properties are left out (the last by name) -- Excel has at most {MaxColumns:N0} columns.");
             props = props.Take(space).ToList();
         }
-        var full = false;
-        using (var s = x.AddSheet(DetailsSheet, fixedHeaders.Concat(props).ToList()))
+        var detailHeaders = fixedHeaders.Concat(props).ToList();
+        var detailsNo = 1;
+        var ds = x.AddSheet(DetailsSheet, detailHeaders);
+        try
         {
             foreach (var b in Batches(keys))
             {
@@ -256,7 +265,8 @@ public static class CiFullExport
                     foreach (var o in objects[key].OrderBy(o => AssetMetadataText.Rank(o.SourceSystem)).ThenBy(o => o.SourceSystem, StringComparer.Ordinal)
                                  .ThenBy(o => o.MemberAssetId, StringComparer.OrdinalIgnoreCase).ThenBy(o => o.ItemName, StringComparer.OrdinalIgnoreCase))
                     {
-                        if (s.RowCount + 2 > XlsxWriter.MaxRows) { full = true; break; }
+                        // #1421 (a): at Excel's row limit the rows go on on the next sheet -- never cut
+                        if (ds.IsFull) ds = ExcelExport.Next(x, info, ds, DetailsSheet, detailHeaders, ++detailsNo);
                         var cells = CiExportFlatten.Metadata(o.SourceSystem, o.PropertiesJson);
                         var values = new List<object?>(fixedHeaders.Count + props.Count)
                         {
@@ -264,13 +274,14 @@ public static class CiFullExport
                             o.CollectionTime == default ? (object?)null : DateTime.SpecifyKind(o.CollectionTime, DateTimeKind.Utc),
                         };
                         foreach (var p in props) values.Add(cells.TryGetValue(p, out var v) ? v : null);
-                        s.WriteRow(values);
+                        ds.WriteRow(values);
                     }
                 }
             }
-            info.Rows.Add((s.Name, s.RowCount));
+            info.Rows.Add((ds.Name, ds.RowCount));
         }
-        if (full) info.Notes.Add($"{DetailsSheet}: the sheet stops at Excel's {XlsxWriter.MaxRows:N0} rows; narrow the filter to get the rest.");
+        finally { ds.Dispose(); }
+        if (detailsNo > 1) info.Notes.Add(Continued(DetailsSheet, detailsNo, x.SheetRowLimit));
         info.Add("Full details", "the newest object of each source record, one level flattened (source.property); nested values and lists as JSON text");
     }
 }

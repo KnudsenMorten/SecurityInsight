@@ -113,7 +113,7 @@ IF OBJECT_ID('cfg.InstallState') IS NOT NULL
 BEGIN
     SET XACT_ABORT ON;
     BEGIN TRAN;
-    DECLARE @old nvarchar(400) = (SELECT Value FROM cfg.InstallState WITH (UPDLOCK, HOLDLOCK) WHERE Name = N'LicenceRequest');
+    DECLARE @old nvarchar(max) = (SELECT Value FROM cfg.InstallState WITH (UPDLOCK, HOLDLOCK) WHERE Name = N'LicenceRequest');
     IF @old IS NULL
         INSERT cfg.InstallState (Name, Value, [Version], UpdatedBy) VALUES (N'LicenceRequest', @Value, NULL, @By);
     ELSE
@@ -125,7 +125,6 @@ BEGIN
 END
 '@
     $v = $Json
-    if ($v.Length -gt 400) { $o = $v | ConvertFrom-Json; $o.reason = ''; $o.lastError = 'see the updater log'; $v = $o | ConvertTo-Json -Compress }
     & $Store.Invoke $sql ([ordered]@{ Value = $v; By = 'caj-si-updater' }) 'nonquery'
 }
 
@@ -153,14 +152,14 @@ function Save-SIUpdaterLicenceSummary {
 }
 
 function Save-SILicenceProSummary {
-    <# The installed-licence summary into cfg.InstallState 'Licence' (NVARCHAR(400); the free text is dropped first if it is too long). #>
+    <# The installed-licence summary into cfg.InstallState 'Licence' (NVARCHAR(MAX) since 3.1.53: the whole summary, nothing dropped). #>
     param([Parameter(Mandatory)]$Store, [Parameter(Mandatory)][string]$Json)
     $sql = @'
 IF OBJECT_ID('cfg.InstallState') IS NOT NULL
 BEGIN
     SET XACT_ABORT ON;
     BEGIN TRAN;
-    DECLARE @old nvarchar(400) = (SELECT Value FROM cfg.InstallState WITH (UPDLOCK, HOLDLOCK) WHERE Name = N'Licence');
+    DECLARE @old nvarchar(max) = (SELECT Value FROM cfg.InstallState WITH (UPDLOCK, HOLDLOCK) WHERE Name = N'Licence');
     IF @old IS NULL
         INSERT cfg.InstallState (Name, Value, [Version], UpdatedBy) VALUES (N'Licence', @Value, NULL, @By);
     ELSE
@@ -169,8 +168,6 @@ BEGIN
 END
 '@
     $v = $Json
-    if ($v.Length -gt 400) { $o = $v | ConvertFrom-Json; $o.reason = ''; $v = $o | ConvertTo-Json -Compress }
-    if ($v.Length -gt 400) { $o = $v | ConvertFrom-Json; $o.features = ''; $v = $o | ConvertTo-Json -Compress }
     & $Store.Invoke $sql ([ordered]@{ Value = $v; By = 'caj-si-updater' }) 'nonquery'
 }
 

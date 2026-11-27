@@ -76,12 +76,11 @@ BeforeAll {
     function Reset-Run { Remove-Variable -Scope Global -Name RA_DefenderCveIndex, RA_DefenderCveSaid, SI_RA_DefenderCveContext, SI_RA_DefenderCveRead, SI_RA_DefenderCveFilterUrlMax -ErrorAction SilentlyContinue
         $global:SI_RA_DefenderCveApi = 'on'
         $script:Asked.Clear(); $script:Urls.Clear(); $global:CveSaid = [System.Collections.Generic.List[string]]::new() }
-    function global:Write-Info { param($m) $global:CveSaid.Add([string]$m) }
+    function script:Write-Info { param($m) $global:CveSaid.Add([string]$m) }
     function Get-RowsText { param($Rows) (@($Rows) | ForEach-Object { $_ | ConvertTo-Json -Compress -Depth 4 }) -join "`n" }
 }
 AfterAll {
     Remove-Variable -Scope Global -Name RA_DefenderCveIndex, RA_DefenderCveSaid, SI_RA_DefenderCveContext, SI_RA_DefenderCveRead, SI_RA_DefenderCveFilterUrlMax, SI_RA_DefenderCveApi, CveSaid, CveErr -ErrorAction SilentlyContinue
-    Remove-Item -Path Function:\global:Write-Info -ErrorAction SilentlyContinue
 }
 
 Describe 'by default the CVE report''s own query carries the context and no Defender API call is made' {

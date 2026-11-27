@@ -195,7 +195,7 @@ Describe '(7) the guided install verifies and records the licence itself' {
         $step.IndexOf('Save-SIInstallLicenceRecord') | Should -BeGreaterThan $step.IndexOf('setup/Import-SIProSettings.ps1')
         $step | Should -Match 'if \(\$ctx\.Pro -and -not \$ctx\.AwaitLicence -and \(Get-Command -Name Save-SIInstallLicenceRecord'
     }
-    It 'writes the SAME row the updater writes (cfg.InstallState Licence), the value as a safe literal, within 400 characters' -Skip:(-not $script:HasProInstall) {
+    It 'writes the SAME row the updater writes (cfg.InstallState Licence), the value as a safe literal, kept whole (#1426: NVARCHAR(MAX))' -Skip:(-not $script:HasProInstall) {
         $q = Get-SIInstallLicenceRecordSql -Json '{"status":"Valid","customer":"O''Brien Ltd","sku":"Pro"}'
         $q | Should -Match "Name = N'Licence'"
         $q | Should -Match ([regex]::Escape('N''{"status":"Valid","customer":"O''''Brien Ltd","sku":"Pro"}'''))
@@ -203,8 +203,8 @@ Describe '(7) the guided install verifies and records the licence itself' {
         $long = [ordered]@{ status = 'Valid'; sku = 'Pro'; features = ('f' * 150); reason = ('r' * 300) } | ConvertTo-Json -Compress
         $q2 = Get-SIInstallLicenceRecordSql -Json $long
         $lit = [regex]::Match($q2, "N'(\{.*?\})'").Groups[1].Value.Replace("''", "'")
-        $lit.Length | Should -BeLessOrEqual 400
-        ($lit | ConvertFrom-Json).reason | Should -BeNullOrEmpty
+        ($lit | ConvertFrom-Json).reason | Should -Be ('r' * 300) -Because 'nothing is dropped any more'
+        ($lit | ConvertFrom-Json).features | Should -Be ('f' * 150)
     }
     It 'verifies the licence, writes its summary through the install''s SQL seam and says so; a failure is a line, never a stop' -Skip:(-not $script:HasProInstall) {
         $script:Sent = New-Object System.Collections.Generic.List[string]

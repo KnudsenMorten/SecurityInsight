@@ -10,16 +10,27 @@
 
 BeforeAll {
     $script:PesterDir = $PSScriptRoot
-    $script:LoggerNames = '(?:Write-SI\w*|Reset-SIProgress)'
+    # #1420 (a): the Risk Analysis loggers (Write-Info / Write-Warn2 / Write-Ok / Write-Diag / Write-Err2) leaked the same way
+    $script:LoggerNames = '(?:Write-SI\w*|Reset-SIProgress|Write-Info|Write-Warn2|Write-Ok|Write-Diag|Write-Err2)'
     function script:Find-SIGlobalLoggerStub {
         param([Parameter(Mandatory)][AllowEmptyString()][string]$Text)
         $hits = New-Object System.Collections.Generic.List[string]
         $lines = $Text -split "`r?`n"
+        # #1420 (c): a suite that SAVES a global logger and RESTORES it ($old = Get-Item function:global:X ... Set-Item
+        # function:global:X -Value $old) leaves nothing behind -- that logger's lines are not a leak
+        $kept = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+        foreach ($m in [regex]::Matches($Text, ('(?im)^[^#\r\n]*\$(\w+)\s*=\s*[^\r\n]*function:\\?global:({0})\b' -f $script:LoggerNames))) {
+            $var = [regex]::Escape($m.Groups[1].Value); $nm = $m.Groups[2].Value
+            if ($Text -match ('(?im)^[^#\r\n]*(?:Set-Item|New-Item)[^\r\n]*function:\\?global:{0}\b[^\r\n]*-Value\s+\(?\${1}\b' -f [regex]::Escape($nm), $var)) { [void]$kept.Add($nm) }
+        }
         for ($i = 0; $i -lt $lines.Count; $i++) {
             $l = $lines[$i]
             if ($l -match '^\s*#' -or $l -match 'Remove-Item') { continue }
+            $nm = ''
+            if ($l -match ('(?i)(?:function\s+global:|function:\\?global:)({0})\b' -f $script:LoggerNames)) { $nm = $Matches[1] }
+            if ($nm -and $kept.Contains($nm)) { continue }
             # function global:Write-SIInfo { ... } / Set-Item function:global:Write-SIWarn
-            if ($l -match ('(?i)function\s+global:{0}\b' -f $script:LoggerNames) -or $l -match ('(?i)function:\\?global:{0}\b' -f $script:LoggerNames)) { $hits.Add(($i + 1)); continue }
+            if ($nm) { $hits.Add(($i + 1)); continue }
             # foreach ($n in 'Write-SIInfo', ...) { ... Set-Item -Path ("function:global:{0}" -f $n) ... } (same or next line)
             if ($l -match '(?i)function:\\?global:\{0\}') {
                 $ctx = $l; if ($i -gt 0) { $ctx = $lines[$i - 1] + "`n" + $l }
@@ -38,6 +49,13 @@ Describe 'no suite defines a global Write-SI* logger stub (#1415)' {
         @(Find-SIGlobalLoggerStub -Text "foreach (`$n in 'Write-SIInfo') { Set-Item -Path (`"function:script:{0}`" -f `$n) -Value { } }").Count | Should -Be 0
         @(Find-SIGlobalLoggerStub -Text "foreach (`$n in 'Get-AzContext') { Set-Item -Path (`"function:global:{0}`" -f `$n) -Value { } }").Count | Should -Be 0 -Because 'only the loggers are guarded here'
         @(Find-SIGlobalLoggerStub -Text "Remove-Item -Path 'function:global:Write-SIInfo'").Count | Should -Be 0 -Because 'removing one is a clean-up, not a stub'
+        # #1420 (a): the Risk Analysis loggers are guarded too
+        @(Find-SIGlobalLoggerStub -Text "function global:Write-Warn2 { param(`$m) }").Count | Should -Be 1
+        @(Find-SIGlobalLoggerStub -Text "function script:Write-Info { param(`$m) }").Count | Should -Be 0
+        # #1420 (c): saved and restored = no leak; set without the restore = still a hit
+        $saveRestore = "`$old = Get-Item function:global:Write-SIInfo`nSet-Item -Path function:global:Write-SIInfo -Value { param(`$m) }`ntry { } finally { Set-Item -Path function:global:Write-SIInfo -Value `$old }"
+        @(Find-SIGlobalLoggerStub -Text $saveRestore).Count | Should -Be 0 -Because 'the suite puts back what it found'
+        @(Find-SIGlobalLoggerStub -Text "`$old = Get-Item function:global:Write-SIInfo`nSet-Item -Path function:global:Write-SIInfo -Value { param(`$m) }").Count | Should -BeGreaterThan 0 -Because 'saved but never restored is a leak'
     }
     It 'the check reads the suites (control)' {
         @(Get-ChildItem -LiteralPath $script:PesterDir -Filter '*.Tests.ps1' -File).Count | Should -BeGreaterThan 100

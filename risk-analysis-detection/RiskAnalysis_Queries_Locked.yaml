@@ -3093,8 +3093,8 @@ Reports:
                   // from the snapshot the Defender recommendation report reads
                   //__SI_REC_SNAPSHOT_BEGIN__
                   | where CollectionTime == toscalar(((SI_AzureRecommendation_CL | where TimeGenerated > ago(8d)) | where tostring(column_ifexists("RowKind", "")) == "SnapshotComplete" | where isnotempty(CollectionTime) | summarize _siExp = max(toint(column_ifexists("AffectedEntityCount", int(null)))) by CollectionTime
-                      | join kind=inner ((SI_AzureRecommendation_CL | where TimeGenerated > ago(8d)) | where tostring(column_ifexists("RowKind", "")) != "SnapshotComplete" | where isnotempty(CollectionTime) | summarize by CollectionTime, _siK = strcat(tostring(column_ifexists("PrimaryEntityId", "")), "|", tostring(column_ifexists("RowKind", "")), "|", tolower(tostring(column_ifexists("ResourceIdLower", ""))), "|", tolower(tostring(column_ifexists("AssessmentKey", "")))) | summarize _siN = count() by CollectionTime) on CollectionTime
-                      | where _siN >= _siExp | project CollectionTime, _siP = 1)
+                      | join kind=leftouter ((SI_AzureRecommendation_CL | where TimeGenerated > ago(8d)) | where tostring(column_ifexists("RowKind", "")) != "SnapshotComplete" | where isnotempty(CollectionTime) | summarize by CollectionTime, _siK = strcat(tostring(column_ifexists("PrimaryEntityId", "")), "|", tostring(column_ifexists("RowKind", "")), "|", tolower(tostring(column_ifexists("ResourceIdLower", ""))), "|", tolower(tostring(column_ifexists("AssessmentKey", "")))) | summarize _siN = count() by CollectionTime) on CollectionTime
+                      | where coalesce(_siN, 0) >= _siExp | project CollectionTime, _siP = 1)
                       | union ((SI_AzureRecommendation_CL | where TimeGenerated > ago(8d)) | where tostring(column_ifexists("RowKind", "")) != "SnapshotComplete" | where isnotempty(CollectionTime) | summarize by CollectionTime
                       | extend _siFm = toscalar((SI_AzureRecommendation_CL | where TimeGenerated > ago(8d)) | where tostring(column_ifexists("RowKind", "")) == "SnapshotComplete" | where isnotempty(CollectionTime) | summarize min(CollectionTime))
                       | where isnull(_siFm) or CollectionTime < _siFm | project CollectionTime, _siP = 2)
@@ -3550,8 +3550,8 @@ Reports:
                   // from the snapshot the Defender recommendation report reads
                   //__SI_REC_SNAPSHOT_BEGIN__
                   | where CollectionTime == toscalar(((SI_AzureRecommendation_CL | where TimeGenerated > ago(8d)) | where tostring(column_ifexists("RowKind", "")) == "SnapshotComplete" | where isnotempty(CollectionTime) | summarize _siExp = max(toint(column_ifexists("AffectedEntityCount", int(null)))) by CollectionTime
-                      | join kind=inner ((SI_AzureRecommendation_CL | where TimeGenerated > ago(8d)) | where tostring(column_ifexists("RowKind", "")) != "SnapshotComplete" | where isnotempty(CollectionTime) | summarize by CollectionTime, _siK = strcat(tostring(column_ifexists("PrimaryEntityId", "")), "|", tostring(column_ifexists("RowKind", "")), "|", tolower(tostring(column_ifexists("ResourceIdLower", ""))), "|", tolower(tostring(column_ifexists("AssessmentKey", "")))) | summarize _siN = count() by CollectionTime) on CollectionTime
-                      | where _siN >= _siExp | project CollectionTime, _siP = 1)
+                      | join kind=leftouter ((SI_AzureRecommendation_CL | where TimeGenerated > ago(8d)) | where tostring(column_ifexists("RowKind", "")) != "SnapshotComplete" | where isnotempty(CollectionTime) | summarize by CollectionTime, _siK = strcat(tostring(column_ifexists("PrimaryEntityId", "")), "|", tostring(column_ifexists("RowKind", "")), "|", tolower(tostring(column_ifexists("ResourceIdLower", ""))), "|", tolower(tostring(column_ifexists("AssessmentKey", "")))) | summarize _siN = count() by CollectionTime) on CollectionTime
+                      | where coalesce(_siN, 0) >= _siExp | project CollectionTime, _siP = 1)
                       | union ((SI_AzureRecommendation_CL | where TimeGenerated > ago(8d)) | where tostring(column_ifexists("RowKind", "")) != "SnapshotComplete" | where isnotempty(CollectionTime) | summarize by CollectionTime
                       | extend _siFm = toscalar((SI_AzureRecommendation_CL | where TimeGenerated > ago(8d)) | where tostring(column_ifexists("RowKind", "")) == "SnapshotComplete" | where isnotempty(CollectionTime) | summarize min(CollectionTime))
                       | where isnull(_siFm) or CollectionTime < _siFm | project CollectionTime, _siP = 2)
@@ -3950,8 +3950,8 @@ Reports:
           // complete snapshot, one row per key -- never no snapshot while one is there
           //__SI_REC_SNAPSHOT_BEGIN__
           let _recLatest = toscalar((_recAll | where tostring(column_ifexists("RowKind", "")) == "SnapshotComplete" | where isnotempty(CollectionTime) | summarize _siExp = max(toint(column_ifexists("AffectedEntityCount", int(null)))) by CollectionTime
-              | join kind=inner (_recAll | where tostring(column_ifexists("RowKind", "")) != "SnapshotComplete" | where isnotempty(CollectionTime) | summarize by CollectionTime, _siK = strcat(tostring(column_ifexists("PrimaryEntityId", "")), "|", tostring(column_ifexists("RowKind", "")), "|", tolower(tostring(column_ifexists("ResourceIdLower", ""))), "|", tolower(tostring(column_ifexists("AssessmentKey", "")))) | summarize _siN = count() by CollectionTime) on CollectionTime
-              | where _siN >= _siExp | project CollectionTime, _siP = 1)
+              | join kind=leftouter (_recAll | where tostring(column_ifexists("RowKind", "")) != "SnapshotComplete" | where isnotempty(CollectionTime) | summarize by CollectionTime, _siK = strcat(tostring(column_ifexists("PrimaryEntityId", "")), "|", tostring(column_ifexists("RowKind", "")), "|", tolower(tostring(column_ifexists("ResourceIdLower", ""))), "|", tolower(tostring(column_ifexists("AssessmentKey", "")))) | summarize _siN = count() by CollectionTime) on CollectionTime
+              | where coalesce(_siN, 0) >= _siExp | project CollectionTime, _siP = 1)
               | union (_recAll | where tostring(column_ifexists("RowKind", "")) != "SnapshotComplete" | where isnotempty(CollectionTime) | summarize by CollectionTime
               | extend _siFm = toscalar(_recAll | where tostring(column_ifexists("RowKind", "")) == "SnapshotComplete" | where isnotempty(CollectionTime) | summarize min(CollectionTime))
               | where isnull(_siFm) or CollectionTime < _siFm | project CollectionTime, _siP = 2)
@@ -4269,8 +4269,8 @@ Reports:
           // complete snapshot, one row per key -- never no snapshot while one is there
           //__SI_REC_SNAPSHOT_BEGIN__
           let _recLatest = toscalar((_recAll | where tostring(column_ifexists("RowKind", "")) == "SnapshotComplete" | where isnotempty(CollectionTime) | summarize _siExp = max(toint(column_ifexists("AffectedEntityCount", int(null)))) by CollectionTime
-              | join kind=inner (_recAll | where tostring(column_ifexists("RowKind", "")) != "SnapshotComplete" | where isnotempty(CollectionTime) | summarize by CollectionTime, _siK = strcat(tostring(column_ifexists("PrimaryEntityId", "")), "|", tostring(column_ifexists("RowKind", "")), "|", tolower(tostring(column_ifexists("ResourceIdLower", ""))), "|", tolower(tostring(column_ifexists("AssessmentKey", "")))) | summarize _siN = count() by CollectionTime) on CollectionTime
-              | where _siN >= _siExp | project CollectionTime, _siP = 1)
+              | join kind=leftouter (_recAll | where tostring(column_ifexists("RowKind", "")) != "SnapshotComplete" | where isnotempty(CollectionTime) | summarize by CollectionTime, _siK = strcat(tostring(column_ifexists("PrimaryEntityId", "")), "|", tostring(column_ifexists("RowKind", "")), "|", tolower(tostring(column_ifexists("ResourceIdLower", ""))), "|", tolower(tostring(column_ifexists("AssessmentKey", "")))) | summarize _siN = count() by CollectionTime) on CollectionTime
+              | where coalesce(_siN, 0) >= _siExp | project CollectionTime, _siP = 1)
               | union (_recAll | where tostring(column_ifexists("RowKind", "")) != "SnapshotComplete" | where isnotempty(CollectionTime) | summarize by CollectionTime
               | extend _siFm = toscalar(_recAll | where tostring(column_ifexists("RowKind", "")) == "SnapshotComplete" | where isnotempty(CollectionTime) | summarize min(CollectionTime))
               | where isnull(_siFm) or CollectionTime < _siFm | project CollectionTime, _siP = 2)

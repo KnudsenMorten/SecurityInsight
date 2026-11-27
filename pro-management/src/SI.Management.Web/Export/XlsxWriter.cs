@@ -54,6 +54,10 @@ public sealed class XlsxWriter : IDisposable
         _created = createdUtc ?? DateTime.UtcNow;
     }
 
+    /// The rows one sheet holds INCLUDING its header: Excel's <see cref="MaxRows"/>. Only a test sets it lower (#1421 (a): the
+    /// roll-over to "&lt;sheet&gt; 2" is proven without writing a million rows).
+    internal int SheetRowLimit { get; init; } = MaxRows;
+
     public IReadOnlyList<string> SheetNames => _sheets;
 
     /// Starts a sheet. The previous one must be disposed (completed) first; the name is made a legal, unique sheet name.
@@ -314,13 +318,15 @@ public sealed class SheetWriter : IDisposable
     public IReadOnlyList<string> Headers => _headers;
     /// Data rows written so far (the header row not counted).
     public long RowCount => _rows;
+    /// True when the next row would not fit (Excel's row limit, the header row included): go on on the next sheet.
+    public bool IsFull => _rows + 2 > _book.SheetRowLimit;
 
     public void WriteRow(params object?[] cells) => WriteRow((IReadOnlyList<object?>)cells);
 
     public void WriteRow(IReadOnlyList<object?> values)
     {
         if (_done) throw new InvalidOperationException($"the sheet '{Name}' is complete");
-        if (_rows + 2 > XlsxWriter.MaxRows) throw new InvalidOperationException($"the sheet '{Name}' is full (Excel's {XlsxWriter.MaxRows:N0} rows)");
+        if (IsFull) throw new InvalidOperationException($"the sheet '{Name}' is full (Excel's {_book.SheetRowLimit:N0} rows)");
         var row = new Cell[_headers.Length];
         for (var i = 0; i < row.Length; i++)
         {

@@ -289,7 +289,7 @@ Describe 'WIRING: the queue worker holds its part with the heartbeat' {
     It 'the part is taken with the short lease, the heartbeat starts before the engine runs and ends before the part is deleted with the NEWEST receipt' {
         $script:Src | Should -Match ([regex]::Escape('Get-SINextWorkItem -Context $kctx -QueueName $queueName -VisibilityTimeoutSeconds $partLeaseSeconds'))
         $start = $script:Src.IndexOf('$partBeat = Start-SIWorkItemLeaseBeat')
-        $run = $script:Src.IndexOf('& $orchestrator @orchArgs')
+        $run = $script:Src.IndexOf('Invoke-SIContainerOrchestrator -OrchestratorScript $orchestrator -OrchestratorArgs $orchArgs')
         $stop = $script:Src.IndexOf('$beatEnd = Stop-SIWorkItemLeaseBeat -Beat $partBeat')
         $del = $script:Src.IndexOf('Complete-SIWorkItem -Context $kctx -QueueName $queueName -Id $queueMessageId -PopReceipt $queueMessageReceipt')
         $start | Should -BeGreaterThan 0; $start | Should -BeLessThan $run

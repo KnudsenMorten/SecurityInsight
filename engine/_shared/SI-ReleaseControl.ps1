@@ -253,7 +253,7 @@ ELSE
 BEGIN
     SET XACT_ABORT ON;
     BEGIN TRAN;
-    DECLARE @cur NVARCHAR(400) = NULL, @ok int = 0;
+    DECLARE @cur NVARCHAR(MAX) = NULL, @ok int = 0;
     SELECT @cur = Value FROM cfg.InstallState WITH (UPDLOCK, HOLDLOCK) WHERE Name = N'ReleaseModeReport';
     IF @cur IS NULL AND NOT EXISTS (SELECT 1 FROM cfg.InstallState WHERE Name = N'ReleaseModeReport')
     BEGIN

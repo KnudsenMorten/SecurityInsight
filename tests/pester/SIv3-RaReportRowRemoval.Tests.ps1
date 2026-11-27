@@ -239,6 +239,34 @@ Describe '#1397 (1) the removal: the 3.1.51 batching, done only when proven -- o
         $script:SyncText | Should -Match ([regex]::Escape('[long]$StartSize = 5000, [long]$TargetMs = 5000'))
         $script:SyncText | Should -Match ([regex]::Escape('if ($walk -eq 0) { break }'))
     }
+
+    It '#1411 (a) BEHAVIOUR: the data sync''s held removal is done only when a pass removes NOTHING -- rows a short batch did not reach are removed too' {
+        . (Join-Path $script:SIRoot 'engine\pro-data\_shared\SI-DataSync.ps1')
+        # a seam: report 3 held back; its rows come in waves the statement only reaches on a later ask (rows another
+        # session still held, a page the index had not shown yet) -- 3 now, 2 on the next ask, then none
+        $st = @{ Waves = [System.Collections.Generic.Queue[long]]::new(); Asks = (New-Object System.Collections.Generic.List[long]); Batches = (New-Object System.Collections.Generic.List[long]) }
+        foreach ($w in 3L, 2L) { $st.Waves.Enqueue($w) }
+        $batchSql = Get-SIDataHeldRowsBatchSql   # read here: the closure below does not see functions dot-sourced in this It
+        $inv = {
+            param([string]$Sql, $P, [string]$Mode)
+            if ($Mode -eq 'reader') { return , @(@{ ReportName = 'Device_Missing_CVEs_Detailed'; HeldRaReport = 3 }) }
+            if ($Sql -eq $batchSql) {
+                $st.Batches.Add([long]$P['Batch'])
+                $n = if ($st.Waves.Count) { [Math]::Min([long]$P['Batch'], $st.Waves.Dequeue()) } else { 0L }
+                $st.Asks.Add($n); return $n
+            }
+            throw "unexpected SQL: $Sql"
+        }.GetNewClosure()
+        $r = Remove-SIDataHeldReportRows -CollectionId 2 -Invoke $inv -Log { param($l, $m) } -What 't'
+        $r.Removed | Should -Be 5 -Because 'the rows of both waves are removed -- a first short batch is no proof of the end'
+        @($st.Asks) | Should -Be @(3, 2, 0) -Because 'asked again after every pass that removed rows, until one removes nothing'
+        @($st.Batches | Select-Object -Unique) | Should -Be @(5000) -Because 'the 3.1.51 batching (5,000 first) is kept'
+        # nothing held: one read of the list, no statement
+        $st2 = @{ N = 0 }
+        $none = { param([string]$Sql, $P, [string]$Mode) if ($Mode -eq 'reader') { return , @() }; $st2.N++; 0L }.GetNewClosure()
+        (Remove-SIDataHeldReportRows -CollectionId 2 -Invoke $none -Log { param($l, $m) } -What 't').Removed | Should -Be 0
+        $st2.N | Should -Be 0
+    }
 }
 Describe '#1397 (2) the trace-name check reads one page of shared names at a time -- never every candidate row' {
     BeforeEach { $script:RAStreamBatchSize = @{} }

@@ -186,7 +186,7 @@ $script:SICiBuildVersion = 15
 # after every good read) and the build goes on -- every CI comes out as with a good read: re-baselined, version 15.
 # 2026-11-25 (#1389): per-CI `Get-Command` guards became `Test-Path function:` (the same answer for a function, 0.08 ms
 # instead of 8 ms) -- nothing the build decides changed; every CI is the same: re-baselined, version unchanged.
-$script:SICiBuildLogicHash = 'cfacba9f6783bc62b1b1c9b3babcff4cbd0dc02c534f79c657d3ac9dc38da7c6'
+$script:SICiBuildLogicHash = '6409b0679122544210e59f668b6858a24cbfeeafb0860db85bf4718f5b7e767a'
 # a CI's fields that change without the CI changing (left out of its content hash)
 # (#406 si_not_seen_days: the days since a not seen / retired CI was last seen -- it grows every day by itself)
 $script:SICiVolatileFields = @('si_collection_time', 'si_run_id', 'si_days_inactive', 'si_ci_action', 'si_last_seen', 'si_field_sources', 'si_not_seen_days')

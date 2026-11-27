@@ -474,8 +474,8 @@ function Get-SIDbInitDatabasesRecordSql {
 IF OBJECT_ID(N'cfg.InstallState') IS NOT NULL
 BEGIN
     IF EXISTS (SELECT 1 FROM cfg.InstallState WHERE Name = N'SupportGrantDatabases')
-        UPDATE cfg.InstallState SET Value = LEFT(@Value, 400), UpdatedAt = SYSUTCDATETIME(), UpdatedBy = N'caj-si-dbinit' WHERE Name = N'SupportGrantDatabases';
-    ELSE INSERT cfg.InstallState (Name, Value, UpdatedBy) VALUES (N'SupportGrantDatabases', LEFT(@Value, 400), N'caj-si-dbinit');
+        UPDATE cfg.InstallState SET Value = @Value, UpdatedAt = SYSUTCDATETIME(), UpdatedBy = N'caj-si-dbinit' WHERE Name = N'SupportGrantDatabases';
+    ELSE INSERT cfg.InstallState (Name, Value, UpdatedBy) VALUES (N'SupportGrantDatabases', @Value, N'caj-si-dbinit');
 END
 '@
 }

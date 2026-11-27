@@ -365,6 +365,38 @@ OPTION (RECOMPILE);
     public static SqlQuery? ExportCount(GridSpec s, GridState st, IReadOnlyDictionary<string, object?> sourceParams) =>
         UsesKeyset(s, st, sourceParams) ? Page(s with { Keyset = null }, st with { Page = 1, Size = 1 }, sourceParams) : null;
 
+    /// <summary>
+    /// #1418 (a)(b) the KEYS of every row an export of this request reads, as one row (<see cref="ExportKeyHashSql"/>): the
+    /// generic page statement's own source and WHERE (its filters, search and selection), no order, no page. Read at the
+    /// start and the end of an export on the live path: a row added while another is removed leaves the count as it was,
+    /// never the keys.
+    /// </summary>
+    public static SqlQuery KeyHash(GridSpec s, GridState st, IReadOnlyDictionary<string, object?> sourceParams)
+    {
+        s = s with { Keyset = null };
+        var ix = IndexedSearch(s, st);
+        if (ix is not null) s = ix.Spec;
+        // a spec with a late projection: its narrow source (with the late columns this request filters or searches on), as
+        // its page reads it -- the keys never need the other late columns
+        if (s.Late is { } late && s.Ctes.Trim().Length == 0 && s.Columns.Any(c => c.LateSql is not null) && s.Column(s.KeyColumn) is { LateSql: null })
+        {
+            var needed = s.Columns.Where(c => c.LateSql is not null
+                && (st.Filters.Any(f => string.Equals(f.Key, c.Key, StringComparison.OrdinalIgnoreCase)) || (c.Search && st.Search is not null)))
+                .Select(c => c.Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            s = s with { Source = late.NarrowSource(needed), Columns = s.Columns.Where(c => c.LateSql is null || needed.Contains(c.Key)).ToList(), Late = null };
+        }
+        var text = $"""
+{With(s)}
+SELECT {ExportKeyHashSql.Columns(Col(s.KeyColumn))}
+FROM g
+WHERE {Where(s)}
+OPTION (RECOMPILE);
+""";
+        var p = Params(s, st, sourceParams);
+        ix?.Apply(p);
+        return new SqlQuery(text, p);
+    }
+
     /// #1400 the state of one export chunk: the request's sort, filters, search and selection, with the chunk as its page.
     /// Its size is the export's own (at most <see cref="ProDataFilters.ExportChunk"/>), never one a person picks for a page.
     /// The order ends with the key (<see cref="OrderBy"/>), so the chunks neither overlap nor leave a row out.

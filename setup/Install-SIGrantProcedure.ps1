@@ -191,7 +191,7 @@ COMMIT TRANSACTION;
         $sql = @"
 SET XACT_ABORT ON;
 DECLARE @u sysname = $u, @s nvarchar(400);
-DECLARE @rec nvarchar(400) = (SELECT Value FROM cfg.InstallState WHERE Name = N'GrantProcedureBefore');
+DECLARE @rec nvarchar(max) = (SELECT Value FROM cfg.InstallState WHERE Name = N'GrantProcedureBefore');
 IF @rec IS NULL THROW 51672, N'there is no rollback record -- nothing was changed', 1;
 IF JSON_VALUE(@rec, '$.user') <> @u THROW 51672, N'the rollback record is for another user -- nothing was changed', 1;
 DECLARE @before nvarchar(300) = N',' + ISNULL(JSON_VALUE(@rec, '$.roles'), N'') + N',';

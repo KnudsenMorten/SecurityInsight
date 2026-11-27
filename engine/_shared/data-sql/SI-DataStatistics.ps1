@@ -167,9 +167,9 @@ function Get-SIDataStatisticsRecordSql {
 IF OBJECT_ID(N'cfg.InstallState') IS NOT NULL
 BEGIN
     IF EXISTS (SELECT 1 FROM cfg.InstallState WITH (UPDLOCK, HOLDLOCK) WHERE Name = N'StatisticsRefresh')
-        UPDATE cfg.InstallState SET Value = LEFT(@Value, 400), UpdatedAt = SYSUTCDATETIME(), UpdatedBy = @By WHERE Name = N'StatisticsRefresh';
+        UPDATE cfg.InstallState SET Value = @Value, UpdatedAt = SYSUTCDATETIME(), UpdatedBy = @By WHERE Name = N'StatisticsRefresh';
     ELSE
-        INSERT cfg.InstallState (Name, Value, [Version], UpdatedBy) VALUES (N'StatisticsRefresh', LEFT(@Value, 400), NULL, @By);
+        INSERT cfg.InstallState (Name, Value, [Version], UpdatedBy) VALUES (N'StatisticsRefresh', @Value, NULL, @By);
 END
 '@
 }

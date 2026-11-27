@@ -2,15 +2,18 @@
 <#
     #1395 LAST-RUN-1 -- the heartbeat's LastRun (engine/_shared/SI-HeartbeatFields.ps1). Owner 2026-11-26: "complete last run
     time" / "also time for each phase and total" / "why dont we have this in telemetry" / "if missing add to next build".
-    Invardia accepted the shape (soft; its wire contract is closed, so the field is gated until it is live there):
+    Invardia accepted the shape (soft; its wire contract is closed) and its parser carries it live (heartbeatstate.ts
+    SI_HEARTBEAT_CONTRACT.LastRun, steps max 40 since 844f8562) -- #1423 (3.1.53) sends it on every ring:
 
-      LastRun { runId, kind, startedUtc, endedUtc, totalSec, result, collectionUtc, steps[<= 20] { step, startedUtc, sec, result } }
+      LastRun { runId, kind, startedUtc, endedUtc, totalSec, result, collectionUtc, steps[<= 40] { step, startedUtc, sec, result } }
 
     What must hold:
-      - the shape is EXACT (keys and order), the closed lists are Invardia's, steps capped at 20 in run order;
+      - the shape: only the contract's keys, in its order, EACH ONLY WHEN KNOWN (never null -- #1423); the closed lists and
+        the patterns are Invardia's (pinned below against a copy of its contract); steps capped at 40 -- over it the most
+        relevant (failed, cancelled, the newest that ran, skipped last), sent in run order, the others named;
       - a cancelled run, a failed step, a partial run, each kind of start;
       - no finished run / a read that fails = the field is LEFT OUT (never made-up values), never the heartbeat;
-      - the send gate: auto = no ring until Invardia confirms it live; SI_Uplink_SendLastRun on / a ring list / off;
+      - the send gate: auto = every ring; SI_Uplink_SendLastRun off / a ring list;
       - Published is unchanged;
       - REAL SQL (when the runner has one): the read against the shipped schema and an older one.
 #>
@@ -65,22 +68,47 @@ Describe 'the shape is exactly the one Invardia accepted' {
         ($v.steps -is [array]) | Should -BeTrue
         @($v.steps).Count | Should -Be 5
         @($v.steps | ForEach-Object { $_.step }) | Should -Be @('identity', 'endpoint', 'risk-analysis-detailed', 'close-loop-mail', 'asset-datasync') -Because 'run order (StepOrder), the job as its short key'
-        foreach ($s in $v.steps) { @($s.PSObject.Properties.Name) | Should -Be @('step', 'startedUtc', 'sec', 'result') }
+        foreach ($i in 0, 1, 2, 4) { @($v.steps[$i].PSObject.Properties.Name) | Should -Be @('step', 'startedUtc', 'sec', 'result') }
+        @($v.steps[3].PSObject.Properties.Name) | Should -Be @('step', 'result') -Because '#1423: a disabled step never started -- its start and seconds are LEFT OUT, never null, never made up'
         $v.steps[0].startedUtc | Should -BeExactly '2026-11-26T01:00:00Z'
         $v.steps[0].sec | Should -Be 2400
         $v.steps[0].result | Should -BeExactly 'ok'
         $v.steps[3].result | Should -BeExactly 'skipped'
-        $v.steps[3].startedUtc | Should -BeNullOrEmpty -Because 'a disabled step never started -- null, never a made-up time'
-        $v.steps[3].sec | Should -BeNullOrEmpty
         Test-SIHeartbeatField -Name 'LastRun' -Value $v | Should -BeNullOrEmpty
     }
-    It 'the JSON on the wire: steps stay an array (also with one step), every value its type' {
+    It 'the JSON on the wire: steps stay an array (also with one step), every value its type, nothing null' {
         $one = @((RunRow), (StepRow 1 'identity' 'Success' $script:T0 $script:T0.AddMinutes(1)))
         $v = Get-SIHeartbeatLastRun -Rows $one -PublishedRows @()
         $j = $v | ConvertTo-Json -Depth 6 -Compress
-        $j | Should -Match '"steps":\[\{"step":"identity","startedUtc":"2026-11-26T01:00:00Z","sec":60,"result":"ok"\}\]'
-        $j | Should -Match '"totalSec":27000,'
-        $j | Should -Match '"collectionUtc":null' -Because 'nothing published by this run'
+        $j | Should -BeExactly '{"runId":"flow-20261126-0100","kind":"scheduled","startedUtc":"2026-11-26T01:00:00Z","endedUtc":"2026-11-26T08:30:00Z","totalSec":27000,"result":"complete","steps":[{"step":"identity","startedUtc":"2026-11-26T01:00:00Z","sec":60,"result":"ok"}]}' -Because 'nothing published by this run: collectionUtc is LEFT OUT'
+        $j | Should -Not -Match 'null'
+    }
+    It '#1423: a run with nothing known but its steps: only steps; a run without step rows: steps []' {
+        $v = Get-SIHeartbeatLastRun -Rows @((RunRow -Id 'bad id!' -State 'Weird' -Trg 'unknown-trigger' -Start $null -End $null)) -PublishedRows @()
+        @($v.PSObject.Properties.Name) | Should -Be @('steps')
+        ($v | ConvertTo-Json -Depth 6 -Compress) | Should -BeExactly '{"steps":[]}'
+        Test-SIHeartbeatField -Name 'LastRun' -Value $v | Should -BeNullOrEmpty
+    }
+    It '#1423: the key set is EXACTLY Invardia''s contract (a copy of SI_HEARTBEAT_CONTRACT.LastRun, heartbeatstate.ts)' {
+        # Invardia packages/core/src/heartbeatstate.ts (read 2026-11-26, 844f8562):
+        #   LastRun: soft({ t: 'obj', fields: { runId: str<=80 /^[A-Za-z0-9._:-]{1,80}$/, kind: oneOf(full|manual|scheduled|resume),
+        #     startedUtc: iso, endedUtc: iso, totalSec: int, result: oneOf(complete|cancelled|failed|partial), collectionUtc: iso,
+        #     steps: arr max 40 of { step: str<=60 /^[A-Za-z0-9._-]{1,60}$/ req, startedUtc: iso, sec: int, result: oneOf(ok|failed|skipped|cancelled) } } })
+        $c = Get-SIHeartbeatFieldsContract
+        $c.Fields.LastRun | Should -Be @('runId', 'kind', 'startedUtc', 'endedUtc', 'totalSec', 'result', 'collectionUtc', 'steps')
+        $c.LastRunStepFields | Should -Be @('step', 'startedUtc', 'sec', 'result')
+        $c.LastRunKinds | Should -Be @('full', 'manual', 'scheduled', 'resume')
+        $c.LastRunResults | Should -Be @('complete', 'cancelled', 'failed', 'partial')
+        $c.LastRunStepResults | Should -Be @('ok', 'failed', 'skipped', 'cancelled')
+        $c.MaxLastRunSteps | Should -Be 40
+        $c.LastRunIdMax | Should -Be 80
+        # every value SI can produce matches Invardia's patterns (its parser re-checks each; a bad one drops LastRun)
+        $iso = '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,7})?)?(Z|[+-]\d{2}:\d{2})$'
+        $v = Get-SIHeartbeatLastRun -Rows $script:Rows -PublishedRows $script:Pub
+        $v.runId | Should -Match '^[A-Za-z0-9._:-]{1,80}$'
+        foreach ($t in 'startedUtc', 'endedUtc', 'collectionUtc') { $v.$t | Should -Match $iso }
+        foreach ($s in $v.steps) { $s.step | Should -Match '^[A-Za-z0-9._-]{1,60}$'; if ($s.PSObject.Properties['startedUtc']) { $s.startedUtc | Should -Match $iso }; if ($s.PSObject.Properties['sec']) { $s.sec | Should -BeGreaterOrEqual 0 } }
+        ($v.totalSec -is [long] -or $v.totalSec -is [int]) | Should -BeTrue
     }
     It 'the validator refuses what Invardia refuses' {
         # a fresh value per case (a JSON round trip would turn the time strings into [datetime] on PowerShell 7)
@@ -93,13 +121,14 @@ Describe 'the shape is exactly the one Invardia accepted' {
         & $bad { param($x) $x.steps[0].result = 'success' } | Should -Match 'steps.result'
         & $bad { param($x) $x.steps[0].step = 'Caj_Identity' } | Should -Match 'job key'
         & $bad { param($x) $x | Add-Member -NotePropertyName extra -NotePropertyValue 1 } | Should -Match 'agreed'
-        & $bad { param($x) $x.steps = @(1..21 | ForEach-Object { [pscustomobject][ordered]@{ step = "s$_"; startedUtc = $null; sec = $null; result = $null } }) } | Should -Match 'at most 20'
+        & $bad { param($x) $x.steps = @(1..41 | ForEach-Object { [pscustomobject][ordered]@{ step = "s$_"; result = 'ok' } }) } | Should -Match 'at most 40'
+        & $bad { param($x) $x.kind = $null } | Should -Match 'kind is null' -Because '#1423: a value that is not known is left out, never null'
+        & $bad { param($x) $x.steps[0].sec = $null } | Should -Match 'sec is null'
+        & $bad { param($x) $x.PSObject.Properties.Remove('steps') } | Should -Match 'steps is missing'
+        & $bad { param($x) $x.steps[0].PSObject.Properties.Remove('step') } | Should -Match 'step is missing'
+        # the agreed order: a key out of order is refused
+        & $bad { param($x) $r = $x.runId; $x.PSObject.Properties.Remove('runId'); $x | Add-Member -NotePropertyName runId -NotePropertyValue $r } | Should -Match 'agreed'
         Test-SIHeartbeatField -Name 'LastRun' -Value $null | Should -Match 'leave the field out'
-        $c = Get-SIHeartbeatFieldsContract
-        $c.LastRunKinds | Should -Be @('full', 'manual', 'scheduled', 'resume')
-        $c.LastRunResults | Should -Be @('complete', 'cancelled', 'failed', 'partial')
-        $c.LastRunStepResults | Should -Be @('ok', 'failed', 'skipped', 'cancelled')
-        $c.MaxLastRunSteps | Should -Be 20
     }
 }
 
@@ -179,9 +208,9 @@ Describe 'how the run ended and how it was started' {
                   (StepRow 5 'close-loop-mail' 'Success' $t.AddHours(5) $t.AddHours(5).AddMinutes(1) -Attempts ([DBNull]::Value)))
         $v = Get-SIHeartbeatLastRun -Rows $rows -PublishedRows @()
         $v.steps[0].startedUtc | Should -BeExactly '2026-11-26T01:00:00Z'; $v.steps[0].sec | Should -Be 2400
-        $v.steps[1].startedUtc | Should -BeNullOrEmpty; $v.steps[1].sec | Should -BeNullOrEmpty
+        @($v.steps[1].PSObject.Properties.Name) | Should -Be @('step', 'result') -Because '#1423: not known = left out'
         $v.steps[1].result | Should -BeExactly 'ok'
-        $v.steps[2].startedUtc | Should -BeNullOrEmpty; $v.steps[2].sec | Should -BeNullOrEmpty
+        @($v.steps[2].PSObject.Properties.Name) | Should -Be @('step', 'result')
         $v.steps[2].result | Should -BeExactly 'failed'
         $v.steps[3].startedUtc | Should -BeExactly '2026-11-26T05:00:00Z' -Because 'Attempts not recorded: the times are kept'
         $v.steps[3].sec | Should -Be 3600
@@ -193,7 +222,8 @@ Describe 'how the run ended and how it was started' {
         (Get-SIHeartbeatLastRun -Rows $old -PublishedRows @()).steps[0].sec | Should -Be 300
         Test-SIHeartbeatField -Name 'LastRun' -Value $v | Should -BeNullOrEmpty
         $j = $v | ConvertTo-Json -Depth 6 -Compress
-        $j | Should -Match '\{"step":"endpoint","startedUtc":null,"sec":null,"result":"ok"\}'
+        $j | Should -Match '\{"step":"endpoint","result":"ok"\}'
+        $j | Should -Not -Match 'null'
     }
     It 'a job name that is not a key is MADE one, never dropped' {
         ConvertTo-SIHeartbeatStepSlug -Job 'caj-si-Risk_Analysis Detailed' | Should -BeExactly 'risk-analysis-detailed'
@@ -211,41 +241,58 @@ Describe 'how the run ended and how it was started' {
     }
 }
 
-Describe 'more than 20 steps: the first 20 in run order' {
-    It 'caps at 20 and keeps the run order' {
+Describe '#1423 more than 40 steps: the most relevant 40, in run order' {
+    It 'all ran fine: the NEWEST 40 go, in run order; the oldest are named' {
         $t = $script:T0
-        $rows = @((RunRow)) + @(25..1 | ForEach-Object { StepRow $_ ('step-{0:00}' -f $_) 'Success' $t.AddMinutes($_) $t.AddMinutes($_ + 1) })
+        $rows = @((RunRow)) + @(45..1 | ForEach-Object { StepRow $_ ('step-{0:00}' -f $_) 'Success' $t.AddMinutes($_) $t.AddMinutes($_ + 1) })
         $left = New-Object System.Collections.Generic.List[string]
         $v = Get-SIHeartbeatLastRun -Rows $rows -PublishedRows @() -LeftOut $left
-        @($v.steps).Count | Should -Be 20
-        $v.steps[0].step | Should -BeExactly 'step-01'
-        $v.steps[19].step | Should -BeExactly 'step-20'
-        @($left) | Should -Be @('step-21', 'step-22', 'step-23', 'step-24', 'step-25')
+        @($v.steps).Count | Should -Be 40
+        $v.steps[0].step | Should -BeExactly 'step-06'
+        $v.steps[39].step | Should -BeExactly 'step-45'
+        @($left) | Should -Be @('step-01', 'step-02', 'step-03', 'step-04', 'step-05')
         Test-SIHeartbeatField -Name 'LastRun' -Value $v | Should -BeNullOrEmpty
     }
-    It '20 steps or fewer: nothing left out' {
+    It 'a failed and a cancelled OLD step are kept before newer ok steps; skipped steps go first; the order stays the run''s' {
+        $t = $script:T0
+        $rows = @((RunRow -State 'Failed')) + @(1..44 | ForEach-Object {
+            $st = switch ($_) { 1 { 'Failed' } 2 { 'Interrupted' } { $_ -in 40, 41, 42 } { 'Skipped' } default { 'Success' } }
+            $cls = switch ($_) { 1 { 'graph-403' } 2 { 'cancelled' } { $_ -in 40, 41, 42 } { 'needs-failed' } default { $null } }
+            StepRow $_ ('step-{0:00}' -f $_) $st $t.AddMinutes($_) $t.AddMinutes($_ + 1) $cls })
+        $left = New-Object System.Collections.Generic.List[string]
+        $v = Get-SIHeartbeatLastRun -Rows $rows -PublishedRows @() -LeftOut $left
+        @($v.steps).Count | Should -Be 40
+        $v.steps[0].step | Should -BeExactly 'step-01'; $v.steps[0].result | Should -BeExactly 'failed'
+        $v.steps[1].step | Should -BeExactly 'step-02'; $v.steps[1].result | Should -BeExactly 'cancelled'
+        @($left) | Should -Be @('step-03', 'step-40', 'step-41', 'step-42') -Because 'the three skipped steps first, then the oldest ok step'
+        $orders = @($v.steps | ForEach-Object { [int]($_.step -replace 'step-', '') })
+        ($orders -join ',') | Should -BeExactly ((@($orders | Sort-Object)) -join ',') -Because 'sent in run order'
+        Test-SIHeartbeatField -Name 'LastRun' -Value $v | Should -BeNullOrEmpty
+    }
+    It '40 steps or fewer: nothing left out, every step in run order' {
         $t = $script:T0
         $left = New-Object System.Collections.Generic.List[string]
-        $v = Get-SIHeartbeatLastRun -Rows (@((RunRow)) + @(1..20 | ForEach-Object { StepRow $_ ('step-{0:00}' -f $_) 'Success' $t $t })) -PublishedRows @() -LeftOut $left
-        @($v.steps).Count | Should -Be 20
+        $v = Get-SIHeartbeatLastRun -Rows (@((RunRow)) + @(40..1 | ForEach-Object { StepRow $_ ('step-{0:00}' -f $_) 'Success' $t $t })) -PublishedRows @() -LeftOut $left
+        @($v.steps).Count | Should -Be 40
+        $v.steps[0].step | Should -BeExactly 'step-01'
         $left.Count | Should -Be 0
     }
     It 'the steps left out are SAID once a day (the 00:00 half hour), never dropped silently' {
         $t = $script:T0
-        $rows = @((RunRow)) + @(1..22 | ForEach-Object { StepRow $_ ('step-{0:00}' -f $_) 'Success' $t $t })
+        $rows = @((RunRow)) + @(1..42 | ForEach-Object { StepRow $_ ('step-{0:00}' -f $_) 'Success' $t $t })
         $say = { param([datetime]$At) $l = New-Object System.Collections.Generic.List[string]
                  $f = New-SIHeartbeatFields -Ring 0 -NowUtc $At -Switch @{ LastRun = $true } -LastRunRows $rows -Log { param($x) $l.Add($x) }.GetNewClosure(); @{ F = $f; Lines = $l } }
         $global:SI_HeartbeatLastRunCapSaid = $null
         # the shared once-per-process problems line is already taken: the cap line is its OWN line and still comes
         $global:SI_HeartbeatFieldProblemsSaid = $true
         $a = & $say ([datetime]::SpecifyKind([datetime]'2026-11-26T00:07:00', [DateTimeKind]::Utc))
-        @($a.F['LastRun'].steps).Count | Should -Be 20
+        @($a.F['LastRun'].steps).Count | Should -Be 40
         $a.Lines.Count | Should -Be 1
-        $a.Lines[0] | Should -Match 'LastRun has room for 20 steps -- not in it: step-21, step-22'
+        $a.Lines[0] | Should -Match 'LastRun has room for 40 steps -- not in it: step-01, step-02'
         $a2 = & $say ([datetime]::SpecifyKind([datetime]'2026-11-26T00:22:00', [DateTimeKind]::Utc))
         $a2.Lines.Count | Should -Be 0 -Because 'once per UTC day'
         $b = & $say ([datetime]::SpecifyKind([datetime]'2026-11-26T10:07:00', [DateTimeKind]::Utc))
-        @($b.F['LastRun'].steps).Count | Should -Be 20
+        @($b.F['LastRun'].steps).Count | Should -Be 40
         $b.Lines.Count | Should -Be 0 -Because 'said once a day, not on every heartbeat'
         $c = & $say ([datetime]::SpecifyKind([datetime]'2026-11-27T00:07:00', [DateTimeKind]::Utc))
         $c.Lines.Count | Should -Be 1 -Because 'the next UTC day says it again'
@@ -295,16 +342,16 @@ Describe 'no finished run or a read that fails: LastRun is LEFT OUT, never the h
     }
 }
 
-Describe 'the send gate: shipped, sent only once Invardia has it live' {
-    It 'auto = NO ring (Invardia confirms its deploy first); on / a ring list turn it on; off off' {
-        @((Get-SIHeartbeatFieldsContract).ConfirmedRings['LastRun']).Count | Should -Be 0
-        foreach ($r in 0, 1, 2, 3) { (Resolve-SIUplinkHeartbeatFieldSwitch -Field 'LastRun' -Ring $r -Value $null -EnvValue '').On | Should -BeFalse }
-        (Resolve-SIUplinkHeartbeatFieldSwitch -Field 'LastRun' -Ring 2 -Value 'on').On | Should -BeTrue
+Describe '#1423 the send gate: Invardia''s parser has it live -- sent on every ring' {
+    It 'auto = EVERY ring; off / a ring list per install' {
+        @((Get-SIHeartbeatFieldsContract).ConfirmedRings['LastRun']) | Should -Be @(0, 1, 2, 3)
+        foreach ($r in 0, 1, 2, 3) { (Resolve-SIUplinkHeartbeatFieldSwitch -Field 'LastRun' -Ring $r -Value $null -EnvValue '').On | Should -BeTrue }
+        (Resolve-SIUplinkHeartbeatFieldSwitch -Field 'LastRun' -Ring $null -Value $null -EnvValue '').On | Should -BeFalse -Because 'an unknown ring sends only on an explicit on'
+        (Resolve-SIUplinkHeartbeatFieldSwitch -Field 'LastRun' -Ring 2 -Value 'off').On | Should -BeFalse
         (Resolve-SIUplinkHeartbeatFieldSwitch -Field 'LastRun' -Ring 0 -Value $null -EnvValue '0').On | Should -BeTrue
         (Resolve-SIUplinkHeartbeatFieldSwitch -Field 'LastRun' -Ring 1 -Value $null -EnvValue '0').On | Should -BeFalse
-        (Resolve-SIUplinkHeartbeatFieldSwitch -Field 'LastRun' -Ring 0 -Value 'off' -ConfirmedRings @(0, 1, 2, 3)).On | Should -BeFalse
     }
-    It 'the tick: off by default (no LastRun on the record); on = LastRun on the record, exactly the shape' {
+    It 'the tick: on by default (LastRun on the record, exactly the shape); off = no LastRun' {
         $mk = { $t = New-Object System.Collections.Generic.List[string]; $tr = { param($Record, $Endpoint, $AccessCode, $TimeoutSec) $t.Add(($Record | ConvertTo-Json -Depth 10 -Compress)); [pscustomobject]@{ Status = 'ok'; Reason = 'ok'; SupersededBy = '' } }.GetNewClosure(); @{ Sent = $t; Tr = $tr } }
         $ctx = [pscustomobject]@{ Mode = 'identified'; Endpoint = 'https://stub.example.test/report'; AccessCode = 'inv-TESTKEYabcdefghijklmnopqrstuvwxyz'; Edition = 'pro'; LicenceState = 'valid'
                    Version = '3.1.52'; Hosting = 'container'; RuntimeIdentity = 'mi-container'; Ring = 0; InstallId = ''; TenantId = '7f3e2a10-4b5c-4d6e-8f90-a1b2c3d4e5f6'; StateDirectory = ''
@@ -312,13 +359,13 @@ Describe 'the send gate: shipped, sent only once Invardia has it live' {
         $a = & $mk
         $r = Send-SIHeartbeatTick -Context $ctx -Transport $a.Tr -Now $script:Now -HeartbeatCounts { @{} } -LastRunRows $script:Rows -LastRunPublishedRows $script:Pub 6>$null
         $r.Status | Should -Be 'sent'
-        $a.Sent[0] | Should -Not -Match '"LastRun":' -Because 'auto: no ring until Invardia confirms it live'
-        $global:SI_Uplink_SendLastRun = 'on'
+        $a.Sent[0] | Should -Match '"LastRun":\{"runId":"flow-20261126-0100","kind":"scheduled","startedUtc":"2026-11-26T01:00:00Z","endedUtc":"2026-11-26T08:30:00Z","totalSec":27000,"result":"complete","collectionUtc":"2026-11-26T03:05:00Z","steps":\[' -Because '#1423: auto = every ring'
+        Test-SIHeartbeatField -Name 'LastRun' -Value $r.Record.LastRun | Should -BeNullOrEmpty
+        $global:SI_Uplink_SendLastRun = 'off'
         $b = & $mk
         $r = Send-SIHeartbeatTick -Context $ctx -Transport $b.Tr -Now $script:Now -HeartbeatCounts { @{} } -LastRunRows $script:Rows -LastRunPublishedRows $script:Pub 6>$null
         $r.Status | Should -Be 'sent'
-        $b.Sent[0] | Should -Match '"LastRun":\{"runId":"flow-20261126-0100","kind":"scheduled","startedUtc":"2026-11-26T01:00:00Z","endedUtc":"2026-11-26T08:30:00Z","totalSec":27000,"result":"complete","collectionUtc":"2026-11-26T03:05:00Z","steps":\['
-        Test-SIHeartbeatField -Name 'LastRun' -Value $r.Record.LastRun | Should -BeNullOrEmpty
+        $b.Sent[0] | Should -Not -Match '"LastRun":' -Because 'off turns it off per install'
     }
     It 'a heartbeat refused WITH it goes again WITHOUT it; it is dropped early when the record is too big' {
         Get-SITelemetryOptionalFields | Should -Contain 'LastRun'

@@ -4310,7 +4310,7 @@ IF OBJECT_ID(N'cfg.InstallState') IS NOT NULL
 SET NOCOUNT ON;
 IF OBJECT_ID(N'cfg.InstallState') IS NULL BEGIN SELECT N'none'; RETURN; END
 BEGIN TRANSACTION;
-DECLARE @h nvarchar(400) = NULL, @at datetime2(0) = NULL;
+DECLARE @h NVARCHAR(MAX) = NULL, @at datetime2(0) = NULL;
 SELECT @h = Value, @at = UpdatedAt FROM cfg.InstallState WITH (UPDLOCK, HOLDLOCK) WHERE Name = N'HousekeepingLease';
 IF @h IS NULL
     INSERT cfg.InstallState (Name, Value, [Version], UpdatedBy) VALUES (N'HousekeepingLease', @Holder, NULL, @By);

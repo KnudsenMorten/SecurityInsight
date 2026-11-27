@@ -151,7 +151,7 @@ Describe '#1372 the statistics read is KEPT: read again only after a refresh or 
         ConvertTo-SIHeartbeatStatsKeepValue -Rows @(@{ Async = $null; Total = 3; Stale = 1 }) | Should -Be ''
         ConvertTo-SIHeartbeatStatsKeepValue -Rows @() | Should -Be ''
         $k = Get-SIHeartbeatStatsKeepSql
-        $k | Should -Match "UPDATE cfg\.InstallState SET Value = LEFT\(@Value, 400\), UpdatedAt = SYSUTCDATETIME\(\), UpdatedBy = @By WHERE Name = N'StatisticsStaleRead'"
+        $k | Should -Match "UPDATE cfg\.InstallState SET Value = @Value, UpdatedAt = SYSUTCDATETIME\(\), UpdatedBy = @By WHERE Name = N'StatisticsStaleRead'"
         $k | Should -Match "INSERT cfg\.InstallState \(Name, Value, \[Version\], UpdatedBy\) VALUES \(N'StatisticsStaleRead'"
         Get-SIHeartbeatFieldsCfgSql | Should -Match "N'StatisticsRefresh', N'StatisticsStaleRead'\);"
         # round trip: what is kept is read back as the same answer
@@ -204,7 +204,7 @@ Describe '#1210 (d) the refresh time is recorded by the pipeline''s refresh and 
         $r.Tables | Should -Be 1
         $calls.Count | Should -Be 1
         $calls[0].Mode | Should -Be 'nonquery'
-        $calls[0].Sql | Should -Match "UPDATE cfg\.InstallState SET Value = LEFT\(@Value, 400\), UpdatedAt = SYSUTCDATETIME\(\)"
+        $calls[0].Sql | Should -Match "UPDATE cfg\.InstallState SET Value = @Value, UpdatedAt = SYSUTCDATETIME\(\)"
         $calls[0].Sql | Should -Match "N'StatisticsRefresh'"
         $calls[0].Params.Value | Should -Be '{"tables":1,"refreshed":3,"failed":0,"seconds":0}'
     }

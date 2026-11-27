@@ -65,7 +65,7 @@ public static class ExcelExport
         {
             foreach (var r in rows)
             {
-                if (s.RowCount + 2 > XlsxWriter.MaxRows) s = Next(x, info, s, name, headers, ++no);
+                if (s.IsFull) s = Next(x, info, s, name, headers, ++no);
                 s.WriteRow(r);
             }
             info.Rows.Add((s.Name, s.RowCount));
@@ -86,7 +86,7 @@ public static class ExcelExport
         {
             await foreach (var r in rows.WithCancellation(ct))
             {
-                if (s.RowCount + 2 > XlsxWriter.MaxRows) s = Next(x, info, s, name, headers, ++no);
+                if (s.IsFull) s = Next(x, info, s, name, headers, ++no);
                 s.WriteRow(r);
             }
             info.Rows.Add((s.Name, s.RowCount));
@@ -94,7 +94,9 @@ public static class ExcelExport
         finally { s.Dispose(); }
     }
 
-    private static SheetWriter Next(XlsxWriter x, ExportInfo info, SheetWriter full, string name, IReadOnlyList<string> headers, int no)
+    /// #1400 / #1421 (a): closes a full sheet (its rows counted on the Export sheet) and opens "&lt;name&gt; &lt;no&gt;" with the
+    /// same headings -- every export that reaches Excel's row limit goes on this way, never cut.
+    internal static SheetWriter Next(XlsxWriter x, ExportInfo info, SheetWriter full, string name, IReadOnlyList<string> headers, int no)
     {
         info.Rows.Add((full.Name, full.RowCount));
         full.Dispose();

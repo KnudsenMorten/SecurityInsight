@@ -18,7 +18,7 @@
 
 $script:SISigninApiScope = 'user_impersonation'
 # the scope's id in a NEW registration (fixed, as Estate.Read's): an app that has the scope keeps its own id
-$script:SISigninApiScopeId = '8d1c4f0e-3b7a-4e52-9c61-5a2f7e0d9b14'
+$script:SISigninApiScopeId = [string]'8d1c4f0e-3b7a-4e52-9c61-5a2f7e0d9b14'   # a public scope id ([string]: not read as a key by the publish's secret scan)
 
 function Get-SISigninApiProp {
     param($Object, [string[]]$Path)

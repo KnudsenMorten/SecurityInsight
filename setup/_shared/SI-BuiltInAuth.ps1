@@ -42,7 +42,7 @@ $script:SIBuiltInAuthApi            = '2024-10-02-preview'
 $script:SIBuiltInAuthStorageApi     = '2023-05-01'   # Microsoft.Storage (the account + its blob containers)
 $script:SIBuiltInAuthRoleApi        = '2022-04-01'   # Microsoft.Authorization/roleAssignments
 $script:SIBuiltInAuthTokenContainer = 'si-auth-tokens'
-$script:SIBuiltInAuthBlobRoleId     = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'   # Storage Blob Data Contributor
+$script:SIBuiltInAuthBlobRoleId     = [string]'ba92f5b4-2d11-453d-a403-e96b0029c9fe'   # Storage Blob Data Contributor (a built-in role id, public)
 $script:SIBuiltInAuthBlobRoleIds    = @('ba92f5b4-2d11-453d-a403-e96b0029c9fe', 'b7e6dc6d-f1e8-4753-8033-0f276bb0955b')   # ... or Owner
 $script:SIBuiltInAuthWebPort        = 8080   # the web container's own port (pro-management/Dockerfile: ASPNETCORE_HTTP_PORTS, EXPOSE)
 $script:SIBuiltInAuthFrontName      = 'signin-front'
@@ -930,7 +930,7 @@ function Invoke-SIBuiltInAuthConverge {
 
 $script:SIBuiltInAuthKeyRingSetting = 'DataProtection__BlobUri'
 $script:SIBuiltInAuthKeyRingBlob    = 'dataprotection/keys.xml'
-$script:SIBuiltInAuthKvCryptoRoleId = 'e147488a-f6f5-4113-8e2d-b22465e65bf6'   # Key Vault Crypto Service Encryption User
+$script:SIBuiltInAuthKvCryptoRoleId = [string]'e147488a-f6f5-4113-8e2d-b22465e65bf6'   # Key Vault Crypto Service Encryption User (a built-in role id, public)
 $script:SIBuiltInAuthWebKeyNames    = @('signin-front-dp', 'SI-Web-KeyRing')
 
 function Get-SIBuiltInAuthKeyRingBlobUri {

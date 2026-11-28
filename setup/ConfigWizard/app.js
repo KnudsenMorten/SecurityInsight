@@ -509,7 +509,7 @@ function buildShodanSnippet() {
   lines.push(assignLine('SI_Shodan_ApiKey',     'shodanApiKey',     '<your-shodan-key>', 24));
   // (A "licence tier" select stood here. Nothing read it -- the backend never wrote it and no engine knows
   //  SI_Shodan_LicenseTier -- so the choice was silently discarded. The engine's real budget control is
-  //  $global:SI_ShodanMonthlyCreditCap, documented in config\SecurityInsight.custom.reference.ps1. #174)
+  //  $global:SI_ShodanMonthlyCreditCap, documented in config\SecurityInsight.custom.sample.reference.ps1. #174)
   return lines.join('\n');
 }
 

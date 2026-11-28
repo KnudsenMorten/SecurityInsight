@@ -95,7 +95,7 @@ Describe 'the setting SI_Data_KeepCollections' {
         $s[0].card | Should -Be 'How long data is kept'
         $s[0].info.confirmWhen | Should -Be 'lower'
         $s[0].defaultText | Should -Match '^3 collections'
-        (Get-Content -Raw -LiteralPath (Join-Path $script:Root 'config\SecurityInsight.custom.reference.ps1')) | Should -Match '(?m)^# \$global:SI_Data_KeepCollections = 3\r?$'
+        (Get-Content -Raw -LiteralPath (Join-Path $script:Root 'config\SecurityInsight.custom.sample.reference.ps1')) | Should -Match '(?m)^# \$global:SI_Data_KeepCollections = 3\r?$'
     }
 }
 

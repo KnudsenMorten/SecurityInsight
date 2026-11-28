@@ -48,7 +48,7 @@ Describe '(1) (2) correlation and asset tagging are Community edition jobs' {
         @($p.parameters | Where-Object { $_.key -eq 'assetTaggingWrites' })[0].page | Should -Be 'features'
     }
     It 'nothing a person reads calls asset tagging Pro (the settings catalog, the reference config, the product docs)' {
-        foreach ($f in 'config\settings.catalog.locked.json', 'config\SecurityInsight.custom.reference.ps1', 'pro-management\src\SI.Management.Web\ProductDocs\community-scripts.md') {
+        foreach ($f in 'config\settings.catalog.locked.json', 'config\SecurityInsight.custom.sample.reference.ps1', 'pro-management\src\SI.Management.Web\ProductDocs\community-scripts.md') {
             (Read-SI $f) | Should -Not -Match 'Asset tagging \(Pro\)' -Because $f
             (Read-SI $f) | Should -Not -Match '(?i)asset tagging as a container job is part of Pro' -Because $f
         }

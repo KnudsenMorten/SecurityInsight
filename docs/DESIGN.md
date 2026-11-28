@@ -6193,6 +6193,13 @@ every host type:
 | Windows VM, app identity (certificate or secret) | the SecurityInsight app identity | setup (`Initialize-SIInfra`; `setup\Grant-SIIdentity.ps1 -AppId <client id>` grants it again) |
 | Windows VM / Arc server, managed identity | the machine's identity | `setup\Grant-SIIdentity.ps1` (the same grant plan as the container identity) |
 
+**The installing person (or app) gets NO data role** (#1452, 2026-11-27): the guided install passes no grantee to
+`Initialize-SIInfra`, and `Initialize-SIInfra` never gives the engine's runtime roles to the Invardia Support app (client id
+from every source setup knows; fail-closed when the caller's object id or a grantee's application cannot be read). The
+only step that still uses the installer's own sign-in on storage is `Bootstrap-ContainerAppJob.ps1` step 3d (the
+customisation files to `sioverlay`), and only on an install WITHOUT the settings database -- which is never today (SQL is
+in every v3 install); an install with the database keeps its configuration there.
+
 A storage key left in an older configuration (or a key-mode switch) is ignored without a message, and the
 next container setup removes a storage-key secret an older setup put on a job.
 
@@ -7306,7 +7313,7 @@ Until 3.0, layers 3 and 4 were the other way round, so a shipped per-engine defa
 the value you set (about 60 settings were affected). The shipped defaults files now assign a value only
 when nothing earlier set it.
 
-`config/SecurityInsight.custom.reference.ps1` lists every setting the engines read, with its default; a
+`config/SecurityInsight.custom.sample.reference.ps1` lists every setting the engines read, with its default; a
 test pins the settings added in 3.0 and fails the build if a setting nothing reads comes back.
 
 **Setup upgrades the file instead of replacing it.** The wizard, unattended setup and the command line
@@ -7334,7 +7341,7 @@ Save writes only the fields that changed, each one validated against the setting
 
 **The Licence card** (category *Licence & updates*) shows the **installed** licence first: the customer, the edition, the date it is valid until and its state -- *Valid*, *Ends soon* (within 30 days), *Not valid yet*, *In grace*, *Expired*, *Wrong tenant*, *Does not verify* or *Missing* -- coloured, with one sentence on what happens next. The updater job verifies the installed licence every night with the same offline checks the engines use (signature, dates, tenant) and records the result in the Pro database; the web app shows that record and never reads the licence itself. The renewal request (requested / waiting / installed / rejected) is the line under it.
 
-Community installs get the same words at the end of `config\SecurityInsight.custom.reference.ps1`, in a generated **settings glossary** grouped the same way. Both come from one source in the product, so the web app and the reference never disagree.
+Community installs get the same words at the end of `config\SecurityInsight.custom.sample.reference.ps1`, in a generated **settings glossary** grouped the same way. Both come from one source in the product, so the web app and the reference never disagree.
 
 **Templates are ours, configuration is yours.** SecurityInsight Pro separates two things. *Templates* are the content we develop and improve: the detection rules, the Risk Analysis reports, the risk weights index, the tagging rules and the service model -- just like the `.locked` files of a Community install. *Configuration* describes your environment and is yours alone: every setting, including the names of your tables, DCRs, DCE and workspace (the default in the settings list is the only default), and the **CMDB ownership map** -- per asset type, which import connector already owns it in your CMDB. The ownership map is one document on the Settings side (*Exclusions, weights, rules* -> *CMDB ownership*): setup fills it from the shipped map once, you change it there, and every change is staged and saved through Review & commit. A template release never changes a setting or the ownership map. An install that had names or ownership entries as template overrides keeps every one of them: setup carries each name over as a setting and the ownership entries into the ownership document, unchanged, and keeps the old rows as history.
 
@@ -11269,15 +11276,14 @@ The Support app holds no right on any container job. A support request reaches t
   updater's step runs (b) with `-KeepJobRights`: NO delete is sent in a customer tenant. A right an earlier release gave on a
   `caj-si-*` job (the leftover Container Apps Jobs Operator) is kept and said in ONE plain line ("a right an earlier release
   gave is still there; it is not needed and is kept"), again only when that set changes (its key in `cfg.InstallState
-  'SupportLeftoverRights'`). The rights at the resource group or above are judged against the consented level
-  (`cfg.SupportConsent`, `Resolve-SISupportGrantRightNotes`): the reader set (Reader, Monitoring Reader, Log Analytics
-  Reader, Security Reader, Key Vault Reader) is expected at both levels; Setup = Contributor + User Access Administrator at the
-  install's subscription or resource group, expected; User Access Administrator at the tenant root management group is
-  expected at rings 0-2 (framework ROOT-RIGHTS-1) -- at ring 3 or an unknown ring it is a note, because the approval Invardia
-  records (`rootUaaApproval`) is not readable by the updater; anything else (Owner, Contributor at a broader management
-  group, anything beyond the reader set under Troubleshoot, any right with no consent recorded) is ONE note for the owner,
-  never removed, never a warning. The "broader than a job" warning is gone. The Support-session step and the person-run
-  update keep (b) as above and are not told about rights above the group (they read no consent). Invardia derives its setup
+  'SupportLeftoverRights'`). **The Support app's rights at the resource group or above are NEITHER listed NOR judged**
+  (#1452, Invardia's ROOT-RIGHTS-1 review 2026-11-27; framework ROOT-RIGHTS-1 point 4: "the Support app's rights are
+  INVARDIA's: products neither list nor change them") -- they stand by owner decision (2026-10-06, confirmed 2026-11-07,
+  ROOT-RIGHTS-1 2026-11-09). The earlier judging against `cfg.SupportConsent` (#1163: one "above the consented level" note
+  per right) is REMOVED, and so is every consent level derived from a Key Vault role (a Key Vault Reader read as
+  troubleshoot while Invardia's record said setup): the level comes only from Invardia's `GET /api/support/consent`, applied
+  by the updater (`SI-SupportPortalConsent.ps1`). The "broader than a job" warning is gone. The Support-session step and the person-run
+  update keep (b) as above. Invardia derives its setup
   step support-arm itself; SI adds no step key.
 - **The job** -- reads the queue exactly as before (sweep, every message read and deleted, the newest one not older than 15
   minutes, the request never an instruction, the consent cap, the SUPPORT-GRANT line). One change: an EMPTY queue (the
@@ -13671,7 +13677,7 @@ by default** — nothing needs enabling.
 | **Path** | `<root>/logs/<engine>_<flavour>[_<simulation>][_<template>]_<yyyyMMddTHHmmssZ>.log` |
 | **Layout** | one `logs/` folder per install (deliberate — easier to grep than a tree), UTC stamp so the folder sorts chronologically |
 | **Retention** | 30 days, pruned at the start of each run; override with `$global:SI_LogRetentionDays` |
-| **Kill switch** | `$global:SI_DisableTranscript` — both knobs are documented in `config/SecurityInsight.custom.reference.ps1` |
+| **Kill switch** | `$global:SI_DisableTranscript` — both knobs are documented in `config/SecurityInsight.custom.sample.reference.ps1` |
 
 The helper is layout-aware: it resolves `SOLUTIONS/SecurityInsight/logs` in the monorepo and
 `<root>/logs` in the flat community layout, so a community install does not end up writing its

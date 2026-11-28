@@ -19,6 +19,13 @@
 #>
 
 BeforeDiscovery {
+    # the REAL SQL part sets its SQL up itself (review 2026-11-27): on the Linux test runner TEST_SQL_* name the SQL sidecar
+    # (_SITestSql.ps1 Initialize-SITestSqlEnv, as the gate's shard does) -- a plain Invoke-Pester of this file runs it too. A
+    # SI_TEST_LOCALSQL set by hand is kept; without either the part is skipped (said by Pester as skipped, never green).
+    if (-not $env:SI_TEST_LOCALSQL) {
+        $sqlHelper = Join-Path $PSScriptRoot '_SITestSql.ps1'
+        if (Test-Path -LiteralPath $sqlHelper) { . $sqlHelper; $null = Initialize-SITestSqlEnv }
+    }
     $script:HasSql = [bool]($env:SI_TEST_LOCALSQL)
 }
 
@@ -95,7 +102,8 @@ Describe 'the shape is exactly the one Invardia accepted' {
         #     startedUtc: iso, endedUtc: iso, totalSec: int, result: oneOf(complete|cancelled|failed|partial), collectionUtc: iso,
         #     steps: arr max 40 of { step: str<=60 /^[A-Za-z0-9._-]{1,60}$/ req, startedUtc: iso, sec: int, result: oneOf(ok|failed|skipped|cancelled) } } })
         $c = Get-SIHeartbeatFieldsContract
-        $c.Fields.LastRun | Should -Be @('runId', 'kind', 'startedUtc', 'endedUtc', 'totalSec', 'result', 'collectionUtc', 'steps')
+        #   + version: soft(version) (FLEET-TELEMETRY-1, Invardia 9f8e838, live 2026-11-27)
+        $c.Fields.LastRun | Should -Be @('runId', 'kind', 'startedUtc', 'endedUtc', 'totalSec', 'result', 'collectionUtc', 'steps', 'version')
         $c.LastRunStepFields | Should -Be @('step', 'startedUtc', 'sec', 'result')
         $c.LastRunKinds | Should -Be @('full', 'manual', 'scheduled', 'resume')
         $c.LastRunResults | Should -Be @('complete', 'cancelled', 'failed', 'partial')
@@ -148,7 +156,7 @@ Describe 'how the run ended and how it was started' {
         @($v.steps | ForEach-Object { $_.result }) | Should -Be @('ok', 'cancelled', 'cancelled', 'cancelled') -Because 'a step the cancel closed did not fail'
         Test-SIHeartbeatField -Name 'LastRun' -Value $v | Should -BeNullOrEmpty
     }
-    It 'a step stopped from outside the pipeline (Interrupted, class stopped) is cancelled; a run whose only failures are such: cancelled' {
+    It 'a step stopped from outside the pipeline (Interrupted, class stopped) is cancelled; FLEET-STATUS-1: a run whose only failures are such is FAILED (killed, not cancelled the product''s way)' {
         $t = $script:T0
         ConvertTo-SIHeartbeatLastRunStepResult -State 'Interrupted' -ErrorClass 'stopped' -RunState 'Failed' | Should -BeExactly 'cancelled'
         ConvertTo-SIHeartbeatLastRunStepResult -State 'Interrupted' -ErrorClass 'interrupted' -RunState 'Failed' | Should -BeExactly 'failed' -Because 'the runner stopped while starting it -- not on purpose'
@@ -156,7 +164,7 @@ Describe 'how the run ended and how it was started' {
         $rows = @((RunRow -State 'Failed'), (StepRow 1 'identity' 'Success' $t $t.AddMinutes(40)),
                   (StepRow 2 'endpoint' 'Interrupted' $t.AddMinutes(40) $t.AddHours(1) 'stopped'), (StepRow 3 'risk-analysis-detailed' 'Skipped' $null $null 'flow-stopped'))
         $v = Get-SIHeartbeatLastRun -Rows $rows -PublishedRows @()
-        $v.result | Should -BeExactly 'cancelled' -Because 'stopped on purpose only (Test-SIJobFlowStoppedOnly): nothing failed by itself'
+        $v.result | Should -BeExactly 'failed' -Because 'FLEET-STATUS-1 (Invardia 2026-11-27): cancelled only for a run cancelled the product''s way; executions stopped from outside = a killed run = failed'
         @($v.steps | ForEach-Object { $_.result }) | Should -Be @('ok', 'cancelled', 'cancelled')
         # one real failure beside it: failed
         $rows2 = $rows + @((StepRow 4 'close-loop-mail' 'Failed' $t $t.AddMinutes(2) 'graph-403'))
@@ -395,9 +403,12 @@ Describe 'cheap: index reads only, never a big table' {
         $q = Get-SIHeartbeatLastRunSql
         $q | Should -Match "IF OBJECT_ID\(N'cfg.FlowRun'\) IS NOT NULL"
         $q | Should -Match "IF OBJECT_ID\(N'cfg.FlowStepRun'\) IS NOT NULL"
-        $q | Should -Match "SELECT TOP \(1\) @id = FlowRunId FROM cfg.FlowRun WHERE FlowId = N'daily' AND State IN \(N'Succeeded', N'Failed', N'Stopped', N'Cancelled'\) ORDER BY StartedUtc DESC"
+        $q | Should -Match ([regex]::Escape("SELECT TOP (1) @id = FlowRunId FROM cfg.FlowRun WHERE ' + @w + N' ORDER BY StartedUtc DESC;"))
+        # FLEET-STATUS-1: the finished runs -- and a KILLED one (still Running / Starting, no beat for KilledRunMinutes)
+        $q | Should -Match ([regex]::Escape("FlowId = N''daily'' AND (State IN (N''Succeeded'', N''Failed'', N''Stopped'', N''Cancelled'') OR (State IN (N''Running'', N''Starting'') AND HeartbeatUtc < DATEADD(minute, -30, SYSUTCDATETIME())))"))
         $q | Should -Match 'WHERE s.FlowRunId = @id'
-        $q | Should -Match ([regex]::Escape("AND (Scope IS NULL OR Scope IN (N''pipeline'', N''from-step'')) ORDER BY StartedUtc DESC"))
+        $q | Should -Match ([regex]::Escape("SET @w = @w + N' AND (Scope IS NULL OR Scope IN (N''pipeline'', N''from-step''))'"))
+        $q | Should -Match ([regex]::Escape("COL_LENGTH(N'cfg.FlowRun', N'Version') IS NOT NULL THEN N'r.Version'")) -Because 'the version the run started on, guarded for an older schema'
         $q | Should -Match "COL_LENGTH\(N'cfg.FlowRun', N'Scope'\)"
         $q | Should -Not -Match 'sidata\.'
         $p = Get-SIHeartbeatLastRunPublishedSql
@@ -449,6 +460,8 @@ CREATE TABLE cfg.FlowStepRun (FlowRunId NVARCHAR(64) NOT NULL, StepOrder INT NOT
             & $ins 'older' 'Succeeded' 'schedule' $t.AddDays(-1) $t.AddDays(-1).AddHours(7) $null
             & $ins 'last' 'Cancelled' 'manual' $t $t.AddHours(3) $null
             & $ins 'now' 'Running' 'schedule' $t.AddHours(8) $null $null
+            # its runner beats now: a run going on, never "the last run" (FLEET-STATUS-1: only a run with no beat for 30 min is)
+            Exec $Database "UPDATE cfg.FlowRun SET HeartbeatUtc = SYSUTCDATETIME() WHERE FlowRunId = N'now';"
             # another pipeline's run is never read
             Exec $Database "INSERT cfg.FlowRun (FlowRunId, FlowId, Day, Trg, State, StartedUtc, EndedUtc) VALUES (N'other', N'weekly', N'2026-11-26', N'schedule', N'Succeeded', @S, @S);" @{ S = $t.AddHours(9) }
             $st = { param($Run, $O, $Job, $State, $S, $E, $Cls) Exec $Database "INSERT cfg.FlowStepRun (FlowRunId, StepOrder, GroupNo, Job, State, StartedUtc, EndedUtc, ErrorClass) VALUES (@R, @O, @O, @J, @St, @S, @E, @C);" @{ R = $Run; O = $O; J = $Job; St = $State; S = $S; E = $E; C = $Cls } }
@@ -516,6 +529,23 @@ CREATE TABLE cfg.FlowStepRun (FlowRunId NVARCHAR(64) NOT NULL, StepOrder INT NOT
         $rows = @(Exec $script:Db (Get-SIHeartbeatLastRunSql) $null 'reader' | ForEach-Object { $_ })
         $rows.Count | Should -Be 0
         Get-SIHeartbeatLastRun -Rows $rows -PublishedRows @() | Should -BeNullOrEmpty
+    }
+    It 'FLEET-STATUS-1: a KILLED run (Running, no beat for 30 min) is read as the last run with its version; a beating run is not' {
+        Exec $script:Db "DELETE FROM cfg.FlowStepRun; DELETE FROM cfg.FlowRun;"
+        Exec $script:Db "INSERT cfg.FlowRun (FlowRunId, FlowId, Day, Trg, State, StartedUtc, EndedUtc, Version) VALUES (N'prev', N'daily', N'2026-11-26', N'schedule', N'Succeeded', DATEADD(hour, -10, SYSUTCDATETIME()), DATEADD(hour, -4, SYSUTCDATETIME()), N'3.1.54');"
+        Exec $script:Db "INSERT cfg.FlowRun (FlowRunId, FlowId, Day, Trg, State, StartedUtc, HeartbeatUtc, Version) VALUES (N'killed', N'daily', N'2026-11-27', N'schedule', N'Running', DATEADD(hour, -3, SYSUTCDATETIME()), DATEADD(minute, -45, SYSUTCDATETIME()), N'3.1.55');"
+        Exec $script:Db "INSERT cfg.FlowStepRun (FlowRunId, StepOrder, GroupNo, Job, State, StartedUtc) VALUES (N'killed', 1, 1, N'identity', N'Running', DATEADD(hour, -3, SYSUTCDATETIME()));"
+        $rows = @(Exec $script:Db (Get-SIHeartbeatLastRunSql) $null 'reader' | ForEach-Object { $_ })
+        $v = Get-SIHeartbeatLastRun -Rows $rows -PublishedRows @() -NowUtc ([datetime]::UtcNow)
+        $v.runId | Should -BeExactly 'killed'
+        $v.result | Should -BeExactly 'failed'
+        $v.steps[0].result | Should -BeExactly 'failed'
+        @($rows | Where-Object { $_.K -eq 'run' })[0].Ver | Should -BeExactly '3.1.55'
+        $v.version | Should -BeExactly '3.1.55' -Because 'LastRun carries the version the run started on'
+        # the runner beats it again (resumed): not finished -- the run before it is the last run
+        Exec $script:Db "UPDATE cfg.FlowRun SET HeartbeatUtc = SYSUTCDATETIME() WHERE FlowRunId = N'killed';"
+        $rows = @(Exec $script:Db (Get-SIHeartbeatLastRunSql) $null 'reader' | ForEach-Object { $_ })
+        (Get-SIHeartbeatLastRun -Rows $rows -PublishedRows @() -NowUtc ([datetime]::UtcNow)).runId | Should -BeExactly 'prev'
     }
     It 'a database without the run tables: nothing, no error' {
         Exec 'master' ("CREATE DATABASE [{0}_empty]" -f $script:Db)

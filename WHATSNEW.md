@@ -1,5 +1,19 @@
 # What's new in SecurityInsight
 
+## 3.1.56 · 2026-11-28 · Fix-only
+
+The Community installer ships with every release, and the status at Invardia says more.
+
+### New features
+
+None in this version.
+
+### Fixes
+
+- **Installer in every release** - The Community installer is part of every release download and always carries the version it installs, also for a security patch of the release.
+- **Clearer status at Invardia** - The status shows which version each run used, a stopped run as ended, and the update result right after the update. The setup no longer gives Invardia Support any of the engine's own roles.
+- **Old sample copies after a Community update** - Community installations that update keep old-named copies of three sample files beside the new ones. Nothing reads them, and they can be deleted.
+
 ## 3.1.55 · 2026-11-27 · Fix-only
 
 The Azure recommendation reports complete again, and AI requests run again.

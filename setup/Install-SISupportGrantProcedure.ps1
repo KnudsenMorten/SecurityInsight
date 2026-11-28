@@ -21,10 +21,11 @@
                procedure whose text is exactly an earlier release's is replaced by this release's (then signed below)
       user     the Support app's own database user (if it has none) and the standing READ-ONLY role si_support_read --
                framework 4a: the read-only path exists BEFORE any admin right becomes just in time
-      consent  the customer's consent: the Pro database's row when it has one (copied to the other databases), else
-               DERIVED from the Support app's role on the install's Key Vault (Secrets Officer = setup, Reader =
-               troubleshoot; owner 2026-11-01); no such role = no consent (nothing is written: the support grant then
-               refuses, exit 3 -- the customer's admin grants it with Grant-SISupportAccess). Never a level given here.
+      consent  the customer's consent: the Pro database's row when it has one (copied to the other databases) -- the
+               level the customer set in the Invardia portal (GET /api/support/consent, applied by the updater). NEVER
+               derived from a Key Vault role (Invardia 2026-11-27: a Key Vault Reader read as troubleshoot while
+               Invardia's record said setup). No row = no consent (nothing is written: the support grant then refuses,
+               exit 3, until the portal's level arrives). Never a level given here. (-KeyVaultName is no longer read.)
       sign     the four procedures signed with a new in-database certificate in db_owner (2099, private key removed) --
                only a procedure whose text is this release's; only when unsigned
       grants   EXECUTE for the engine (and the web app's sweep); no product role may write the three tables
@@ -102,7 +103,7 @@ $sp = $null
 try { $sp = Get-SISupportAppServicePrincipal -Graph $seams.Graph -ClientId $SupportAppId } catch { & $say 'Yellow' ('the Support app could not be looked up ({0})' -f $_.Exception.Message) }
 $userName = if ($sp -and $sp.DisplayName) { [string]$sp.DisplayName } else { 'invardia-support-app' }
 
-# ---- the consent: the Pro database's own, else derived from the Key Vault role ----
+# ---- the consent: the Pro database's own (the Invardia portal's level, applied by the updater) -- never a Key Vault role ----
 $level = ''; $source = 'derived'
 if ($chosen -contains 'consent') {
     try {
@@ -110,16 +111,7 @@ if ($chosen -contains 'consent') {
         $have = (& $val $row 'Consent').Trim()
         if ($have -and $have -ne '-') { $level, $source = $have -split '\|', 2; & $say 'Gray' ('consent on the Pro database: {0} ({1}) -- copied to the other databases' -f $level, $source) }
     } catch { & $say 'Yellow' ('the consent could not be read ({0})' -f $_.Exception.Message) }
-    if (-not $level -and $sp -and $KeyVaultName) {
-        try {
-            $scope = '/subscriptions/{0}/resourceGroups/{1}/providers/Microsoft.KeyVault/vaults/{2}' -f $SubscriptionId, $ResourceGroup, $KeyVaultName
-            $ra = & $seams.Arm 'GET' ('{0}/providers/Microsoft.Authorization/roleAssignments?api-version=2022-04-01&$filter={1}' -f $scope, [uri]::EscapeDataString("principalId eq '$($sp.Id)'")) $null
-            $level = Get-SISupportGrantDerivedLevel -RoleDefinitionIds @(@($ra.value) | Where-Object { $_ } | ForEach-Object { [string]$_.properties.roleDefinitionId })
-            $source = 'derived'
-            if ($level) { & $say 'Gray' ('consent DERIVED from the Support app''s Key Vault role: {0}' -f $level) }
-        } catch { & $say 'Yellow' ('the Support app''s Key Vault role could not be read ({0})' -f $_.Exception.Message) }
-    }
-    if (-not $level) { $result.Lines.Add('no consent: the Support app has no recorded consent and no Key Vault role that shows one -- the support grant will refuse (exit 3) until the customer''s admin runs Grant-SISupportAccess') }
+    if (-not $level) { $result.Lines.Add('no consent: the Pro database has no consent yet -- the support grant will refuse (exit 3) until the level set in the Invardia portal arrives (the updater applies it on its next run), or the customer''s admin grants it with Grant-SISupportAccess') }
     $result.Consent = $(if ($level) { '{0} ({1})' -f $level, $source } else { '' })
 }
 

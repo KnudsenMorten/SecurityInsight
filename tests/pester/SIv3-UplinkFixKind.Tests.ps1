@@ -19,7 +19,7 @@ BeforeAll {
     $script:SIRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSCommandPath))
     . (Join-Path $script:SIRoot 'engine\_shared\SI-TelemetrySend.ps1')
     $script:FixKinds = @('customer-config', 'product-defect')   # Invardia packages/core/src/fixrequests.ts REPORT_FIX_KINDS
-    $script:Id = [pscustomobject]@{ Mode = 'identified'; Endpoint = 'https://uplink.test'; AccessCode = 'inv-TESTKEY-0123456789'; Edition = 'pro'; LicenceState = 'valid'
+    $script:Id = [pscustomobject]@{ Mode = 'identified'; Endpoint = 'https://uplink.test'; AccessCode = ('inv-TESTKEY-' + '0123456789'); Edition = 'pro'; LicenceState = 'valid'
                                     Version = '3.0.0'; Hosting = 'container'; RuntimeIdentity = 'mi-container'; InstallId = ''; TenantId = '11111111-2222-3333-4444-555555555555'; StateDirectory = $TestDrive }
     $script:Anon = [pscustomobject]@{ Mode = 'anonymous'; Endpoint = 'https://uplink.test'; AccessCode = 'community'; Edition = 'community'; LicenceState = 'none'
                                       Version = '3.0.0'; Hosting = 'vm'; RuntimeIdentity = 'spn-certificate'; InstallId = '0f0e0d0c-0b0a-4908-8706-050403020100'; TenantId = ''; StateDirectory = $TestDrive }

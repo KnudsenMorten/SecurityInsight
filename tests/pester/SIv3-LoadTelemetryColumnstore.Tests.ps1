@@ -187,7 +187,7 @@ Describe '#1316 (b) columnstore: behind ONE setting, off by default, built only 
         $e[0].type | Should -Be 'bool'
         $e[0].defaultText | Should -Match '^On'
         "$($e[0].description) $($e[0].effect) $($e[0].whenToChange)" | Should -Not -Match 'REMOVE-ME|removed in a later release'
-        $ref = Get-Content -Raw (Join-Path $script:SIRoot 'config\SecurityInsight.custom.reference.ps1')
+        $ref = Get-Content -Raw (Join-Path $script:SIRoot 'config\SecurityInsight.custom.sample.reference.ps1')
         $ref | Should -Match '(?m)^# \$global:SI_Data_ColumnstoreIndexes = \$true\s*$'
     }
     It 'the indexes: nonclustered COLUMNSTORE on the findings and the finding lifecycle, no MAX column, the phases'' columns' {

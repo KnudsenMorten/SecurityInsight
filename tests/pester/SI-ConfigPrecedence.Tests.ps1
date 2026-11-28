@@ -87,7 +87,7 @@ Describe 'a value in config\SecurityInsight.custom.ps1 beats the shipped engine 
 Describe 'the shipped samples no longer carry values that would now take effect by surprise' {
 
     It '<_> sets no active placeholder ExportDestination, no forced full run, and the engine''s AutoBucketMax' -ForEach @(
-        'config\SecurityInsight.custom.sample.ps1', 'config\SecurityInsight.custom.community.sample.ps1'
+        'config\SecurityInsight.custom.sample.ps1', 'config\SecurityInsight.community.custom.sample.ps1'
     ) {
         $lines = @(Get-Content -LiteralPath (Join-Path $script:SIRoot $_) | Where-Object { $_ -notmatch '^\s*#' })
         @($lines | Where-Object { $_ -match '^\s*\$global:ExportDestination\s*=' -and $_ -match '<' }).Count | Should -Be 0 -Because 'a placeholder URL would now be used as the export target'

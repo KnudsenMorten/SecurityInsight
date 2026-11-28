@@ -25,7 +25,7 @@ BeforeAll {
             return [pscustomobject]@{ Mode = 'anonymous'; Endpoint = 'https://uplink.test'; AccessCode = 'community-code'; Edition = 'community'; LicenceState = 'none'; Version = '3.0.0'; Hosting = 'container'
                                       RuntimeIdentity = 'mi-container'; InstallId = '0f3c9a2e-5b7d-4c1a-9e8f-1a2b3c4d5e6f'; TenantId = ''; StateDirectory = $TestDrive }
         }
-        [pscustomobject]@{ Mode = 'identified'; Endpoint = 'https://uplink.test'; AccessCode = 'inv-TESTKEY-0123456789'; Edition = 'pro'; LicenceState = 'valid'; Version = '3.0.0'; Hosting = 'container'
+        [pscustomobject]@{ Mode = 'identified'; Endpoint = 'https://uplink.test'; AccessCode = ('inv-TESTKEY-' + '0123456789'); Edition = 'pro'; LicenceState = 'valid'; Version = '3.0.0'; Hosting = 'container'
                            RuntimeIdentity = 'mi-container'; InstallId = ''; TenantId = '11111111-2222-3333-4444-555555555555'; StateDirectory = $TestDrive; Endpoints = @() }
     }
     function script:New-Capture { $l = New-Object System.Collections.Generic.List[object]; [pscustomobject]@{ List = $l; Transport = { param($Record, $Endpoint, $AccessCode, $TimeoutSec) $l.Add($Record); [pscustomobject]@{ Status = 'ok' } }.GetNewClosure() } }

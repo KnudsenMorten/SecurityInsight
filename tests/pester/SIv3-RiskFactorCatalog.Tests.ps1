@@ -141,7 +141,7 @@ Describe 'network ranges (customer-overridable)' {
         $t | Should -Match "SI-RiskFactorCatalog\.ps1"
     }
     It 'the setting is documented in the Community reference (the Pro settings catalog is built from it: SI-SettingsPage.Tests)' {
-        [IO.File]::ReadAllText((Join-Path $script:SIRoot 'config\SecurityInsight.custom.reference.ps1')) | Should -Match '(?m)^# \$global:SI_InternetExposedRanges = @\('
+        [IO.File]::ReadAllText((Join-Path $script:SIRoot 'config\SecurityInsight.custom.sample.reference.ps1')) | Should -Match '(?m)^# \$global:SI_InternetExposedRanges = @\('
     }
 }
 

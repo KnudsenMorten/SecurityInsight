@@ -101,7 +101,7 @@ Describe 'Defender''s severity per assessment key is a lookup the engine pre-fet
         function script:Invoke-LogAnalyticsKqlQuery {
             param([string]$WorkspaceResourceId, [string]$Query, [int]$TimeoutSec = 600)
             $script:Fetched.Add($Query)
-            if ($Query -match '_akSeverity') { return , @([pscustomobject]@{ _akKey = '22e93e92-4a31-b4cd-d640-3ef908430aa6'; _akSeverity = 'Medium'; _akIssue = 'NetworkAccessPolicy' }) }
+            if ($Query -match '_akSeverity') { return , @([pscustomobject]@{ _akKey = [string]'22e93e92-4a31-b4cd-d640-3ef908430aa6'; _akSeverity = 'Medium'; _akIssue = 'NetworkAccessPolicy' }) }
             return , @()
         }
         foreach ($g in 'Summary', 'Detailed') {

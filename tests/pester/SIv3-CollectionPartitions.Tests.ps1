@@ -140,7 +140,7 @@ Describe 'the switch SI_Data_RetireByPartition: ON by default, and off is today'
         ($s[0].description + $s[0].purpose + $s[0].info.what) | Should -Not -Match 'REMOVE-ME'
         $s[0].description | Should -Match 'On \(the default\)'
         $s[0].card | Should -Be 'How long data is kept'
-        [IO.File]::ReadAllText((Join-Path $script:Root 'config\SecurityInsight.custom.reference.ps1')) | Should -Match '(?m)^# \$global:SI_Data_RetireByPartition = \$true'
+        [IO.File]::ReadAllText((Join-Path $script:Root 'config\SecurityInsight.custom.sample.reference.ps1')) | Should -Match '(?m)^# \$global:SI_Data_RetireByPartition = \$true'
     }
     It 'DEFAULT ON: not set = on; off only for a real no (both copies of the rule)' {
         foreach ($f in @({ param($v) Test-SIPartitionSwitchOn -Value $v }, { param($v) Test-SIIndexBuildPartitionSwitch -Value $v })) {

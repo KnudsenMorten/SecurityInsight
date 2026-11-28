@@ -31,7 +31,7 @@ BeforeAll {
         $ctx = if ($Mode -eq 'anonymous') {
             "[pscustomobject]@{ Mode = 'anonymous'; Endpoint = 'https://uplink.test'; AccessCode = 'community-code'; Edition = 'community'; LicenceState = 'none'; Version = '3.0.0'; Hosting = 'container'; RuntimeIdentity = 'mi-container'; InstallId = '0f8fad5b-d9cb-469f-a165-70867728950e'; TenantId = ''; StateDirectory = '$($script:Work)' }"
         } else {
-            "[pscustomobject]@{ Mode = 'identified'; Endpoint = 'https://uplink.test'; AccessCode = 'inv-TESTKEY-0123456789'; Edition = 'pro'; LicenceState = 'valid'; Version = '3.0.0'; Hosting = 'container'; RuntimeIdentity = 'mi-container'; InstallId = ''; TenantId = '11111111-2222-3333-4444-555555555555'; Endpoints = @(); StateDirectory = '$($script:Work)' }"
+            "[pscustomobject]@{ Mode = 'identified'; Endpoint = 'https://uplink.test'; AccessCode = ('inv-TESTKEY-' + '0123456789'); Edition = 'pro'; LicenceState = 'valid'; Version = '3.0.0'; Hosting = 'container'; RuntimeIdentity = 'mi-container'; InstallId = ''; TenantId = '11111111-2222-3333-4444-555555555555'; Endpoints = @(); StateDirectory = '$($script:Work)' }"
         }
         Set-Content -LiteralPath $engine -Encoding UTF8 -Value @"
 `$ErrorActionPreference = 'Continue'

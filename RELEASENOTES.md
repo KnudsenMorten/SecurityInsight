@@ -13,6 +13,18 @@ SecurityInsight Pro and the Pro trial install from invardia.com, never from GitH
 [invardia.com/trial](https://invardia.com/trial/), and your installation page there gives your two lines.
 <!-- /install lines -->
 
+## v3.1.56 — the Community installer ships with every release, and the status at Invardia says more
+
+### Fixes
+- **The Community installer is part of every release download** and always carries the version it installs, also when a
+  security patch of the release's images is published.
+- **The installation's status at Invardia shows which version each run used**, a run that was stopped is shown as ended,
+  and the update's result is reported right after the update.
+- **The setup no longer gives the Invardia Support app any of the engine's own roles.** Roles given before stay as they
+  are until Invardia changes them.
+- **Community installations that update keep old-named copies of three sample files beside the new ones.** Nothing reads
+  the old copies, and they can be deleted.
+
 ## v3.1.55 — the Azure recommendation reports complete again
 
 ### Fixes

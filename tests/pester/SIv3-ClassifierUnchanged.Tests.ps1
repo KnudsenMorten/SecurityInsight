@@ -143,6 +143,6 @@ Describe 'wiring in the engine' {
     }
     It 'the setting is shipped with its default (7) and documented in the reference' {
         [IO.File]::ReadAllText([IO.Path]::Combine($script:SIRoot, 'launcher', 'privilege-tier-classifier', 'LauncherConfig.defaults.ps1')) | Should -Match 'SI_PrivilegeTierClassifier_RefreshDays = 7'
-        [IO.File]::ReadAllText([IO.Path]::Combine($script:SIRoot, 'config', 'SecurityInsight.custom.reference.ps1')) | Should -Match '# \$global:SI_PrivilegeTierClassifier_RefreshDays = 7'
+        [IO.File]::ReadAllText([IO.Path]::Combine($script:SIRoot, 'config', 'SecurityInsight.custom.sample.reference.ps1')) | Should -Match '# \$global:SI_PrivilegeTierClassifier_RefreshDays = 7'
     }
 }

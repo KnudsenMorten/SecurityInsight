@@ -726,6 +726,11 @@ function Invoke-SIUpdaterFromInvardia {
                     if ($resumeTries -ge 2) { Write-UpdLog ('WARNING: the update to {0} did not finish {1} time(s) before (the install still records {2}) -- it is finished now' -f $code.Version, ($resumeTries - 1), $global:SI_UpdaterRecordedVersion) }
                     & $save
                 }
+                # FLEET-STATUS-1 (Invardia 2026-11-27): the roll swaps the jobs -- the heartbeat among them -- so a heartbeat on
+                # the NEW version can go out before this run ends. The state row says "installing <version>" BEFORE the roll
+                # (the heartbeat sends no result for it, never the previous run's "nothing-to-do"), and the result goes into it
+                # the moment the install is decided (below), before the run's long tail (old images, sizes, templates).
+                if (Get-Command -Name Set-SIInvardiaUpdateInProgress -ErrorAction SilentlyContinue) { Set-SIInvardiaUpdateInProgress -State $state -Version "$($code.Version)" -NowUtc $now; & $save }
                 # #405: ring 1 (internal) gets the release's templates installed directly, exactly as on the ring channel
                 $roll = Invoke-SIUpdaterRoll -SIRoot $si -ResourceGroup $ResourceGroup -AcrName $AcrName -SubscriptionId $SubscriptionId -Store $Store `
                             -AcceptFingerprint $AcceptFingerprint -TemplatesFollowChannel:$channel -InstallTemplatesDirect:($ringPick.Ring -eq 1) `
@@ -734,6 +739,9 @@ function Invoke-SIUpdaterFromInvardia {
                             -McpApp (& $nameOf 'mcp') `
                             -UpdaterJob (& $nameOf 'updater') `
                             -SelfOff:((& $get 'SI_UPDATER_SELF_UPDATE') -match '^(?i)(0|false|off|no)$')
+                # FLEET-STATUS-1: the result into the state row AT ONCE, before anything else this run does (the heartbeat on the
+                # new version reads it): Held / failed here; succeeded or failed after the post-roll below
+                $saveResult = { if (Get-Command -Name Set-SIInvardiaUpdateInProgress -ErrorAction SilentlyContinue) { Set-SIInvardiaUpdateInProgress -State $state -Clear }; & $save }
                 if ($roll.Held) {
                     $state.code.hold = $roll.Reason; & $track 'waiting' $roll.Reason
                     # #1406 (review): a roll that was HELD did not try -- its count is taken back (only an attempt that rolls counts)
@@ -742,6 +750,7 @@ function Invoke-SIUpdaterFromInvardia {
                         $state.code.resumeTries = $(if ($back -gt 0) { [string]$back } else { '' }); if ($back -le 0) { $state.code.resumeVersion = '' }
                         $resumeTries = 0
                     }
+                    & $saveResult
                 }
                 elseif ($roll.Code -eq 0) {
                     Set-SIInvardiaUpdateApplied -State $state -Result $code -NowUtc $now; $siNow = $si; $runs = $code.Version
@@ -755,7 +764,7 @@ function Invoke-SIUpdaterFromInvardia {
                     else { $state.templates.pendingFingerprint = '' }
                     & $beat 'the web app and the updater itself'
                     # Pro: the web app + MCP server, the installed record, then the updater itself -- as the ring channel does
-                    $post =if ($s['PostRoll']) { & $s.PostRoll $si $code.Version $relCommit }
+                    $post = if ($s['PostRoll']) { & $s.PostRoll $si $code.Version $relCommit }
                             else { Invoke-SIUpdaterInvardiaPostRoll -SIRoot $si -Version $code.Version -Commit $relCommit -Environment $pre.Environment -ResourceGroup $ResourceGroup `
                                        -AcrName $AcrName -SubscriptionId $SubscriptionId -UpdaterJob (& $nameOf 'updater') `
                                        -WebApp (& $nameOf 'web') `
@@ -775,6 +784,8 @@ function Invoke-SIUpdaterFromInvardia {
                     # release IS installed and is not installed again; the step wrote its own failure report, the post-roll run
                     # checks once more, and the heartbeat's Update.revisions + Invardia's daily check show it until it is fixed)
                     if ($post.Code -eq 0 -and $post.PSObject.Properties['RevisionsOk'] -and -not $post.RevisionsOk) { $rc = 1; $state.lastError = ('code: {0}' -f $post.RevisionsText) }
+                    # FLEET-STATUS-1: the install is decided -- its result (applied, or the post-roll's error) is in the state row now
+                    & $saveResult
                     # IMAGE-PRUNE (owner 2026-11-16, current only): ONLY after the update AND its read-back ended well (the engine roll
                     # verified, the post-roll healthy): the install's own registry keeps ONLY what runs now -- no previous release;
                     # one line per repository and per image. Never fails the update (SI-UpdaterImagePrune.ps1; SI_Updater_ImagePrune = off turns it off).
@@ -793,6 +804,8 @@ function Invoke-SIUpdaterFromInvardia {
                     # the database / templates / build / roll step recorded its own failure (Invoke-SIUpdaterRoll); this only when none did
                     if ((Get-Command -Name Get-SIUpdaterFailures -ErrorAction SilentlyContinue) -and -not @(Get-SIUpdaterFailures).Count) { & $fail 'roll' $state.lastError }
                     if ($resumeTries -ge 2) { & $fail 'resume' ('the update to {0} did not finish {1} times (the install still records {2})' -f $code.Version, $resumeTries, $global:SI_UpdaterRecordedVersion) }
+                    # FLEET-STATUS-1: the failed install is in the state row at once (the jobs were restored)
+                    & $saveResult
                 }
             }
         }
@@ -908,6 +921,10 @@ function Invoke-SIUpdaterFromInvardia {
         & $fail $(if ("$global:SI_UpdaterStep".Trim()) { "$global:SI_UpdaterStep" } else { 'updater' }) $state.lastError
         $rc = 1
     }
+    # FLEET-STATUS-1 (review B): the run is over -- the "installing" mark NEVER outlives it. A roll or post-roll that THREW
+    # skipped its own result save: cleared here, the row then carries the error alone and the heartbeat reads 'failed' at
+    # once (never null for up to UpdateInProgressMaxHours)
+    if (Get-Command -Name Set-SIInvardiaUpdateInProgress -ErrorAction SilentlyContinue) { Set-SIInvardiaUpdateInProgress -State $state -Clear }
     & $save
     $rc
     } finally {

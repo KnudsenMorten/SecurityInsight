@@ -14,9 +14,9 @@
       none / anything else   the row is removed: the support grant refuses to open (the read-only user is NOT touched --
                              framework point 5: never lose access)
       Invardia unreachable, or an answer without supportConsent: nothing is changed -- the last level stays
-    The consent trigger lets the updater write exactly such a row, or remove the row. Once Invardia has answered, the
-    marker cfg.InstallState 'SupportConsentPortal' stops the DERIVED consent (SI-SupportGrantUpdate.ps1) from being made
-    again, so a level the portal took away never comes back. The signed procedures are unchanged: a session can never
+    The consent trigger lets the updater write exactly such a row, or remove the row. The marker cfg.InstallState
+    'SupportConsentPortal' records that Invardia answered. This is the ONLY source of the level (2026-11-27, Invardia's
+    ROOT-RIGHTS-1 review): nothing derives one from a Key Vault role any more. The signed procedures are unchanged: a session can never
     exceed the level. Every line says what was done or why not; nothing here fails the update.
     PURE apart from the seams: -Get { param([string]$Uri, [hashtable]$Headers) } (the parsed answer; throws on a refusal),
     -Sql { param([string]$Query, $Params, [string]$Mode) } on the Pro database. PS 5.1 safe; no module.

@@ -477,8 +477,14 @@ Describe 'no free file loads a Pro file' {
             if ($rel -ieq 'tests\pester\SI-CommunityPayload.Tests.ps1') { return }
             $tokens = $null; $errs = $null
             $null = [System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$errs)
+            # the stamped Community installer at the root (release\Update-SICommunityInstaller.ps1) carries copies of shipped
+            # files as text ($__siLauncherFiles['<path>'] = @{ ...; Text = @'...'@ }): each of those files is scanned at its own
+            # path above, and 'the stamped Community installer ships ...' below proves every one is a Community file -- so
+            # only the launcher's own code is scanned here
+            $isStamped = ($rel -ieq 'Install-SecurityInsight.ps1')
             foreach ($t in $tokens) {
                 if ($t.Kind -eq 'Comment') { continue }
+                if ($isStamped -and $t.Kind -eq 'HereStringLiteral' -and $t.Extent.StartScriptPosition.Line -match "^\`$__siLauncherFiles\['") { continue }
                 if ($t.Kind -notin 'StringLiteral', 'StringExpandable', 'HereStringLiteral', 'HereStringExpandable', 'Generic') { continue }
                 foreach ($term in $terms) {
                     if ($t.Text.IndexOf($term, [StringComparison]::OrdinalIgnoreCase) -ge 0 -and "$rel|$term" -notin $guarded) {
@@ -489,6 +495,19 @@ Describe 'no free file loads a Pro file' {
         }
         # joined on one line, so the message names every offender (an array's message shows only the first ten)
         (@($offenders) -join ' ;; ') | Should -BeNullOrEmpty -Because 'the Community edition does not contain these files'
+    }
+}
+
+Describe 'the stamped Community installer is in the public payload, with Community code only' {
+
+    It 'Install-SecurityInsight.ps1 at the root ships (no excludePaths entry strips it) and embeds only files the Community edition ships' {
+        $p = Join-Path $script:SIRoot 'Install-SecurityInsight.ps1'
+        Test-Path -LiteralPath $p -PathType Leaf | Should -BeTrue -Because 'the release zip carries the installer at its root (release\Update-SICommunityInstaller.ps1)'
+        Test-SIExcluded 'Install-SecurityInsight.ps1' | Should -BeFalse -Because 'the public release zip must carry it'
+        $keys = @([regex]::Matches([IO.File]::ReadAllText($p), "(?m)^\`$__siLauncherFiles\['(?<f>[^']+)'\] = ") | ForEach-Object { $_.Groups['f'].Value })
+        $keys.Count | Should -BeGreaterThan 0 -Because 'it carries its sign-in and package check'
+        @($keys | Where-Object { Test-SIExcluded $_ }) | Should -BeNullOrEmpty -Because 'the public installer carries no Pro file'
+        foreach ($k in $keys) { Test-Path -LiteralPath (Join-Path $script:SIRoot $k) -PathType Leaf | Should -BeTrue -Because "$k must be a file of the tree" }
     }
 }
 

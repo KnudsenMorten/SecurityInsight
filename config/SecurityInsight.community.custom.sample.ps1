@@ -21,7 +21,7 @@
 
     For the full list of every supported global (cadence, EG label overrides,
     Shodan tuning, AI prompt overrides, schema-discovery, etc.), see
-    `SecurityInsight.custom.reference.ps1` in this folder.
+    `SecurityInsight.custom.sample.reference.ps1` in this folder.
 
     Internal customers (with Connect-Platform): start from
     `SecurityInsight.custom.sample.ps1` instead.

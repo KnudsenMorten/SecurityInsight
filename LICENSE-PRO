@@ -92,6 +92,8 @@ These paths are delivered only to licensed customers through the private Automat
   setup/Release-SI.ps1
   setup/Release-SIImagePatch.ps1
   setup/_shared/SI-ImagePatch.ps1
+  setup/vendor-jobs
+  setup/Deploy-SIImagePatchJob.ps1
   setup/Get-SIFixRequests.ps1
   setup/Receive-SIReleaseApprovals.ps1
   setup/_shared/SI-ReleaseApprovals.ps1
@@ -100,6 +102,7 @@ These paths are delivered only to licensed customers through the private Automat
   ops/context-discovery
   ops/identity-move
   setup/_shared/SI-InvardiaPublisher.ps1
+  setup/_shared/SI-SkipQuote.ps1
   setup/Import-SICmdbCsv.ps1
   setup/New-SIServiceNowTestPack.ps1
   setup/Invoke-SIGuardAcceptEverywhere.ps1

@@ -402,7 +402,7 @@ Describe 'NEVER RE-OPENED: when we say it is private, it stays that way (owner 2
     It 'static: only the cut-over''s rollback passes -AllowReopen, and only on the customer''s -ReopenPublicAccess' {
         # paths are compared in one form ('/') so the allow-list holds on Linux (the runner) and Windows alike
         $hits = @(Get-ChildItem -Path $script:SIRoot -Recurse -File -Include *.ps1 |
-                  Where-Object { ($_.FullName.Substring($script:SIRoot.Length + 1) -replace '\\', '/') -notmatch '(^|/)tests/' } |
+                  Where-Object { ($_.FullName.Substring($script:SIRoot.Length + 1) -replace '\\', '/') -notmatch '(^|/)tests/|^Install-SecurityInsight\.ps1$' } |   # the stamped Community installer: copies of shipped files, each checked at its own path
                   Select-String -Pattern '-AllowReopen\b' | ForEach-Object { '{0}: {1}' -f ($_.Path.Substring($script:SIRoot.Length + 1) -replace '\\', '/'), $_.Line.Trim() })
         @($hits | Where-Object { $_ -notmatch '^setup/Set-SIPrivateNetworking\.ps1: .*-AllowReopen:\$ReopenPublicAccess' -and $_ -notmatch '^setup/_shared/SI-PrivateNetwork\.ps1: ' }) | Should -BeNullOrEmpty
         @($hits | Where-Object { $_ -match '^setup/Set-SIPrivateNetworking\.ps1' }).Count | Should -Be 1
@@ -413,7 +413,7 @@ Describe 'NEVER RE-OPENED: when we say it is private, it stays that way (owner 2
         # collection endpoints / a customer's own OpenAI resource (not part of the private set)
         $allowed = @('setup/_shared/SI-SetupArm.ps1', 'setup/ConfigWizard/backend/Initialize-SIInfra.ps1', 'engine/_shared/SI-AzRest.ps1', 'setup/Validate-SIOpenAI.ps1')
         $hits = @(Get-ChildItem -Path $script:SIRoot -Recurse -File -Include *.ps1, *.psm1, *.bicep |
-                  Where-Object { ($_.FullName.Substring($script:SIRoot.Length + 1) -replace '\\', '/') -notmatch '(^|/)tests/' } |
+                  Where-Object { ($_.FullName.Substring($script:SIRoot.Length + 1) -replace '\\', '/') -notmatch '(^|/)tests/|^Install-SecurityInsight\.ps1$' } |   # the stamped Community installer: copies of shipped files, each checked at its own path
                   Select-String -Pattern "(?i)publicNetworkAccess\s*=\s*['""]Enabled['""]|defaultAction\s*=\s*['""]Allow['""]|networkRuleBypassOptions\s*=\s*['""]None['""]" |
                   ForEach-Object { $_.Path.Substring($script:SIRoot.Length + 1) -replace '\\', '/' } | Sort-Object -Unique)
         @($hits | Where-Object { $allowed -notcontains $_ }) | Should -BeNullOrEmpty

@@ -137,8 +137,8 @@ Invoke-WebRequest https://invardia.com/support/si/Grant-SIIdentity.ps1 -OutFile 
 Any of them: `https://invardia.com/support/si/<Script>.ps1`; the checksums are in `SHA256SUMS.txt` next to them. Run on
 its own, a script does not read an install's configuration file unless you name it with `-ConfigPath`.
 
-**Configuration files** (edit, do not run): `config\SecurityInsight.custom.community.sample.ps1` (copy to
-`SecurityInsight.custom.ps1`), `config\SecurityInsight.custom.reference.ps1` (every setting with a generated glossary:
+**Configuration files** (edit, do not run): `config\SecurityInsight.community.custom.sample.ps1` (copy to
+`SecurityInsight.custom.ps1`), `config\SecurityInsight.custom.sample.reference.ps1` (every setting with a generated glossary:
 purpose, real default, effect, when to change it) and `launcher\<engine>\LauncherConfig.custom.sample.ps1` per engine.
 Your `*.custom.*` files are never touched by an update.
 

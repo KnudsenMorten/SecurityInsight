@@ -69,3 +69,20 @@ function Get-SIGitFileText {
     if ($global:LASTEXITCODE -ne 0) { return '' }
     (@($l) -join "`n")
 }
+
+function Get-SIGitBlobBytes {
+    <# The bytes of <commit>:<path> (binary-safe: read from git's stdout stream, never decoded). #>
+    param([Parameter(Mandatory)][string]$RepoRoot, [Parameter(Mandatory)][string]$Spec)
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = 'git'; $psi.UseShellExecute = $false; $psi.RedirectStandardOutput = $true; $psi.RedirectStandardError = $true; $psi.CreateNoWindow = $true
+    foreach ($a in '-C', $RepoRoot, 'cat-file', 'blob', $Spec) { $psi.ArgumentList.Add($a) }
+    $p = [System.Diagnostics.Process]::Start($psi)
+    try {
+        $ms = New-Object IO.MemoryStream
+        $err = $p.StandardError.ReadToEndAsync()
+        $p.StandardOutput.BaseStream.CopyTo($ms)
+        $p.WaitForExit(); $null = $err.GetAwaiter().GetResult()
+        if ($p.ExitCode -ne 0) { throw "git cat-file blob $Spec failed ($($p.ExitCode))" }
+        , $ms.ToArray()
+    } finally { $p.Dispose() }
+}

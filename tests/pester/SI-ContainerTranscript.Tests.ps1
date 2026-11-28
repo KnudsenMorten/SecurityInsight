@@ -364,7 +364,7 @@ Describe 'the orchestrator build context can still contain what the entrypoints 
         foreach ($p in @(& git -C $script:SIRoot ls-files -- 'config/*.locked.json' 2>$null)) {
             Test-SIDockerContextIncludes -Patterns $script:IgnoreLines -Path $p | Should -BeTrue -Because "$p is a shipped product file an engine reads"
         }
-        Test-SIDockerContextIncludes -Patterns $script:IgnoreLines -Path 'config/SecurityInsight.custom.reference.ps1' | Should -BeFalse
+        Test-SIDockerContextIncludes -Patterns $script:IgnoreLines -Path 'config/SecurityInsight.custom.sample.reference.ps1' | Should -BeFalse
         Test-SIDockerContextIncludes -Patterns @('**/config/') -Path 'config/x.json' | Should -BeFalse -Because 'a leading **/ matches the root too'
     }
 

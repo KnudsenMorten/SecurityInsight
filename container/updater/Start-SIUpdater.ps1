@@ -323,12 +323,15 @@ function Invoke-SIUpdaterSupportTrigger {
         RIGHT ON ANY JOB (every run, after the queue step): caj-si-support-grant to the event trigger on si-support-requests
         (the scaler signed in as the engine identity), read back (setup\_shared\SI-SupportGrantUpdate.ps1
         Invoke-SISupportGrantQueueTrigger). #1163: the updater REMOVES NO RIGHT -- a right an earlier release gave on a
-        caj-si-* job is kept and said once; the rights at the resource group or above are judged against the consented level
-        (cfg.SupportConsent), the ring and the tenant root -- a right above it is one note for the owner. The
+        caj-si-* job is kept and said once. The Support app's rights at the resource group or above are NEITHER listed NOR
+        judged (framework ROOT-RIGHTS-1 point 4, Invardia 2026-11-27: they are Invardia's and stand by owner decision) -- no
+        note, no consent read here (a consent level, where SI needs one, comes only from Invardia's GET
+        /api/support/consent, SI-SupportPortalConsent.ps1). The
         Support app is the one recorded on the install (cfg.InstallState 'SupportApp'). One line per change or failure,
         nothing when there is nothing to do. The library is dot-sourced and called HERE (never from a .GetNewClosure()
         scriptblock: see Invoke-SIUpdaterSupportQueue). NEVER throws, never fails the run.
-        -Arm { param($Method, $Path, $Body) } / -SupportPrincipalId / -Sleep: test seams. Returns the step's result or $null.
+        -Arm { param($Method, $Path, $Body) } / -SupportPrincipalId / -Sleep: test seams. -TenantId / -Ring: still accepted
+        (the call site is unchanged), no longer used -- nothing is judged by ring or root. Returns the step's result or $null.
     #>
     param([string]$SubscriptionId, [string]$ResourceGroup, [string]$SIRoot, $Store, [scriptblock]$Arm, [AllowNull()]$SupportPrincipalId = $null, [scriptblock]$Sleep,
           [string]$TenantId = '', [AllowNull()]$Ring = $global:SI_UpdaterResolvedRing)
@@ -338,12 +341,11 @@ function Invoke-SIUpdaterSupportTrigger {
         . $lib
         if (-not (Get-Command -Name Invoke-SISupportGrantQueueTrigger -ErrorAction SilentlyContinue)) { return $null }
         if (-not $Arm) { $Arm = { param([string]$Method, [string]$Path, $Body) Invoke-SIUpdaterArm -Method $Method -Path $Path -Body $Body -AllowNotFound:($Method -eq 'GET') } }
-        # #1163: the consented level and the leftover rights said before -- read only from the Pro database
-        $consent = ''; $said = ''
+        # #1163: the leftover rights said before -- read only from the Pro database (no consent is read: nothing is judged)
+        $said = ''
         $sqlSeam = $null
         if ($Store -and $Store.Invoke) { $sqlSeam = { param($Query, $Params, $Mode) & $Store.Invoke $Query $null 'reader' | ForEach-Object { if ($_ -is [System.Collections.IDictionary]) { [pscustomobject]$_ } else { $_ } } } }
         if ($sqlSeam) {
-            try { $row = @(& $sqlSeam (Get-SISupportGrantConsentReadSql) $null 'reader' | Where-Object { $null -ne $_ })[0]; if ($row -and $row.PSObject.Properties['Consent']) { $consent = Get-SISupportGrantConsentLevel ([string]$row.Consent) } } catch { $consent = '' }
             try { $row = @(& $sqlSeam (Get-SISupportGrantLeftoverSql -Read) $null 'reader' | Where-Object { $null -ne $_ })[0]; if ($row -and $row.PSObject.Properties['Value']) { $said = [string]$row.Value } } catch { $said = '' }
         }
         if ($null -eq $SupportPrincipalId) {
@@ -353,9 +355,9 @@ function Invoke-SIUpdaterSupportTrigger {
                 if ($app) { $SupportPrincipalId = Resolve-SISupportGrantPrincipal -Rest (Get-SIUpdaterRest) -AppId $app }
             }
         }
-        # #1163: the updater removes NO right in a customer tenant (-KeepJobRights); rights above the consent are notes
+        # #1163: the updater removes NO right in a customer tenant (-KeepJobRights); the Support app's other rights are Invardia's
         $r = Invoke-SISupportGrantQueueTrigger -Arm $Arm -SubscriptionId $SubscriptionId -ResourceGroup $ResourceGroup -SupportPrincipalId ([string]$SupportPrincipalId) -Sleep $Sleep `
-                 -ConsentLevel $consent -Ring $Ring -TenantId $TenantId -KeepJobRights -LeftoverSaid $said
+                 -KeepJobRights -LeftoverSaid $said
         foreach ($l in @($r.Lines)) { Write-UpdLog $(if ($l.Level -eq 'warn') { 'WARNING: ' + $l.Text } else { $l.Text }) }
         # the leftover set is said ONCE: its key recorded when it changed (cfg.InstallState 'SupportLeftoverRights')
         if ($Store -and $Store.Invoke -and $r.LeftoverKey -and $r.LeftoverKey -ne $said) {

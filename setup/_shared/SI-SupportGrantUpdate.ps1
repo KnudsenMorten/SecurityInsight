@@ -6,12 +6,11 @@
       1. THE QUEUE si-support-requests in the install's own storage account (control plane: an ARM PUT, read back) -- where
          the Invardia Support session puts its request for caj-si-support-grant. The job itself is made by the missing-jobs
          step (SI-MissingJobs.ps1).
-      2. A DERIVED CONSENT (owner decision 2026-11-01), ONCE, into an empty cfg.SupportConsent: the Support app recorded on
-         the install (cfg.InstallState 'SupportApp') and the level its Azure role on the install's Key Vault shows today --
-         Key Vault Secrets Officer = setup, Key Vault Reader = troubleshoot (what Grant-SISupportAccess gives at each level);
-         no such role = no consent (nothing is written; the customer's admin grants it with Grant-SISupportAccess). A
-         consent that is there -- the customer's or an earlier derived one -- is never touched. The table's trigger lets the
-         updater write exactly this and nothing else.
+      2. (RETIRED 2026-11-27, Invardia ROOT-RIGHTS-1 review) the consent is NEVER derived from the Support app's Key Vault
+         role any more -- a Key Vault Reader read as "troubleshoot" while Invardia's record said setup. The consent level
+         comes ONLY from Invardia: GET /api/support/consent, applied by the updater (SI-SupportPortalConsent.ps1). A row an
+         earlier release derived stays until the portal's answer replaces it (nothing is removed here).
+         Get-SISupportGrantDerivedConsentSql stays only as the statement the consent trigger's own SQL test runs.
     What it can NOT do, and leaves to the one Support-session step per install (setup\Install-SISupportGrantProcedure.ps1):
     sign the procedures (needs db_owner), the Support app's read-only user, and its one Azure role -- Storage Queue Data
     Message Sender on the queue (needs role assignment rights). Every line says what was done or why not; nothing here fails
@@ -26,9 +25,9 @@
            b. ONLY when the trigger reads back as Event: every role assignment the Support app holds AT a caj-si-* job is
               removed (whatever its role -- no ARM right on any job), READ BACK -- by the Support-session step and the
               person-run update; THE UPDATER (-KeepJobRights, #1163) sends no delete: a right an earlier release gave is
-              kept and said once. A right at the resource group or above is judged against the CONSENTED level (#1163:
-              Setup's Contributor + User Access Administrator at the subscription expected; root User Access Administrator
-              at rings 0-2 expected) -- anything above it is one note for the owner, never changed here.
+              kept and said once. The Support app's rights at the resource group or above are NEITHER listed NOR judged
+              (framework ROOT-RIGHTS-1 point 4, Invardia 2026-11-27: "the Support app's rights are INVARDIA's: products
+              neither list nor change them") -- they stand by owner decision (2026-10-06 / 2026-11-07 / 2026-11-09).
          So support never loses its way in: the queue starts the job before the start right goes. The updater holds
          Contributor, which may not remove a role assignment: then the line says who can (the Support-session step or the
          customer's admin) and the next update checks again. Idempotent; never throws; a second run changes nothing.
@@ -56,27 +55,9 @@ $script:SISupportGrantUpdate = [ordered]@{
                                 '18d7d88d-d35e-4fb5-a5c3-7773c20a72d9' = 'User Access Administrator'; '43d0d8ad-25c7-4714-9337-8ba259a9fe05' = 'Monitoring Reader'
                                 '73c42c96-874c-492b-b04d-ab87d138a893' = 'Log Analytics Reader'; '39bc4728-0917-49c7-9d2c-d95423bc2eb4' = 'Security Reader'
                                 '21090545-7ca7-4776-b22c-e363652d74d2' = 'Key Vault Reader' }
-    # #1163 (agreed with Invardia 2026-11-10): the Support app's rights judged against the CONSENTED level (cfg.SupportConsent)
-    # -- the reader set is expected at both levels; Setup adds Contributor + User Access Administrator at the install's
-    # subscription; User Access Administrator at the tenant root management group is expected at rings 0-2 (framework
-    # ROOT-RIGHTS-1; at ring 3 only with an approval Invardia records, which the update cannot read)
-    ReaderRoles   = @('acdd72a7-3385-48ef-bd42-f606fba81ae7', '43d0d8ad-25c7-4714-9337-8ba259a9fe05', '73c42c96-874c-492b-b04d-ab87d138a893', '39bc4728-0917-49c7-9d2c-d95423bc2eb4', '21090545-7ca7-4776-b22c-e363652d74d2')
-    SetupRoles    = @('b24988ac-6180-42a0-ab88-20f7382dd24c', '18d7d88d-d35e-4fb5-a5c3-7773c20a72d9')
-    RootUaaRole   = '18d7d88d-d35e-4fb5-a5c3-7773c20a72d9'
+    # (2026-11-27, framework ROOT-RIGHTS-1 point 4: the Support app's rights at the resource group or above are Invardia's
+    # -- no role list here judges them, and no Key Vault role is read as a consent level)
     LeftoverRow   = 'SupportLeftoverRights'
-    # the built-in role definitions (their ids are the same in every tenant) -> the level they show
-    LevelByRoleId = [ordered]@{ 'b86a8fe4-44ce-4948-aee5-eccb2c155cd7' = 'setup'; '21090545-7ca7-4776-b22c-e363652d74d2' = 'troubleshoot' }
-}
-
-function Get-SISupportGrantDerivedLevel {
-    <# PURE. The level the Support app's role assignments on the Key Vault show: setup (Key Vault Secrets Officer) wins over
-       troubleshoot (Key Vault Reader); '' = neither (no consent can be derived). -RoleDefinitionIds: full ids or GUIDs. #>
-    param([AllowEmptyCollection()][string[]]$RoleDefinitionIds = @())
-    $ids = @($RoleDefinitionIds | Where-Object { $_ } | ForEach-Object { ([string]$_ -split '/')[-1].ToLowerInvariant() })
-    $map = $script:SISupportGrantUpdate.LevelByRoleId
-    if (@($ids | Where-Object { $map.Contains($_) -and $map[$_] -eq 'setup' }).Count) { return 'setup' }
-    if (@($ids | Where-Object { $map.Contains($_) -and $map[$_] -eq 'troubleshoot' }).Count) { return 'troubleshoot' }
-    ''
 }
 
 function Get-SISupportGrantConsentReadSql {
@@ -89,7 +70,9 @@ SELECT CASE WHEN OBJECT_ID(N'cfg.InstallState') IS NULL THEN N'' ELSE ISNULL((SE
 }
 
 function Get-SISupportGrantDerivedConsentSql {
-    <# PURE. The ONE write: a derived consent into an EMPTY table (parameters @AppId, @Level, @By), then the row read back. #>
+    <# PURE. NO CALLER since 2026-11-27 (the consent is never derived any more -- see the header, point 2): kept only as the
+       statement the consent trigger's own SQL test (SIv3-SupportGrantSqlReal) proves si_updater may run. A derived consent
+       into an EMPTY table (parameters @AppId, @Level, @By), then the row read back. #>
     @"
 IF NOT EXISTS (SELECT 1 FROM cfg.SupportConsent WHERE Id = 1)
     INSERT cfg.SupportConsent (Id, AppId, [Level], Source, ConsentedBy) VALUES (1, CONVERT(uniqueidentifier, @AppId), @Level, N'derived', LEFT(@By, 256));
@@ -112,42 +95,6 @@ function Invoke-SISupportGrantQueueEnsure {
         if (Invoke-SIRestJson -Rest $Rest -Uri $uri -AllowNotFound -What 'the support request queue (read back)') { return [pscustomobject]@{ Action = 'created'; Line = ('support requests: the queue {0} was made in {1}, and read back' -f $c.Queue, $Account) } }
         [pscustomobject]@{ Action = 'failed'; Line = ('support requests: the queue {0} was sent but does not read back yet -- the next update checks it again' -f $c.Queue) }
     } catch { [pscustomobject]@{ Action = 'failed'; Line = ('support requests: the queue {0} was not made ({1}) -- the next update tries again' -f $c.Queue, $_.Exception.Message) } }
-}
-
-function Invoke-SISupportGrantDerivedConsent {
-    <#
-        The DERIVED CONSENT (see the header). @{ Action (present | none | derived | planned | failed); Level; Line }. Never
-        throws. -VaultName: the install's Key Vault (SI_KeyVaultName), in -ResourceGroup.
-    #>
-    param([Parameter(Mandatory)][scriptblock]$Rest, [Parameter(Mandatory)][scriptblock]$Sql, [Parameter(Mandatory)][string]$SubscriptionId,
-          [Parameter(Mandatory)][string]$ResourceGroup, [AllowEmptyString()][string]$VaultName, [switch]$WhatIf)
-    $c = $script:SISupportGrantUpdate
-    $out = { param($a, $lv, $l) [pscustomobject]@{ Action = $a; Level = $lv; Line = $l } }
-    $val = { param($r, $k) if ($null -eq $r) { '' } elseif ($r -is [System.Collections.IDictionary]) { [string]$r[$k] } elseif ($r.PSObject.Properties[$k]) { [string]$r.$k } else { '' } }
-    try {
-        $row = @(& $Sql (Get-SISupportGrantConsentReadSql) @{} 'rows' | ForEach-Object { $_ } | Where-Object { $null -ne $_ })[0]
-        $app = (& $val $row 'SupportApp').Trim(); $have = (& $val $row 'Consent').Trim()
-        if ($have -eq '-') { return (& $out 'failed' '' 'support consent: the Pro database has no cfg.SupportConsent yet (its schema step runs first) -- the next update derives it') }
-        if ($have) { return (& $out 'present' (($have -split '\|')[0]) '') }
-        # the level now comes from the Invardia portal (SI-SupportPortalConsent.ps1, applied by the updater): once Invardia has
-        # answered, nothing is derived any more -- a level the portal took away (none) must never come back from a Key Vault role
-        if ((& $val $row 'Portal').Trim()) { return (& $out 'none' '' '') }
-        if ($app -notmatch '^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$') { return (& $out 'none' '' '') }   # no Support app on this install: nothing to derive, nothing said
-        if (-not "$VaultName".Trim()) { return (& $out 'none' '' 'support consent: not derived -- the install names no Key Vault (SI_KeyVaultName); the customer''s admin records it with Grant-SISupportAccess') }
-        $sp = Invoke-SIRestJson -Rest $Rest -Uri ("https://graph.microsoft.com/v1.0/servicePrincipals?`$filter=appId eq '{0}'&`$select=id" -f $app) -Resource 'https://graph.microsoft.com/' -What 'the Support app in this tenant'
-        $spId = [string](@($sp.value)[0].id)
-        if (-not $spId) { return (& $out 'none' '' 'support consent: not derived -- the Support app recorded on the install is not in this tenant') }
-        $scope = '/subscriptions/{0}/resourceGroups/{1}/providers/Microsoft.KeyVault/vaults/{2}' -f $SubscriptionId, $ResourceGroup, $VaultName.Trim()
-        $list = @(Get-SIRestList -Rest $Rest -Uri ('https://management.azure.com{0}/providers/Microsoft.Authorization/roleAssignments?api-version={1}&$filter={2}' -f $scope, $c.AuthApi, [uri]::EscapeDataString("principalId eq '$spId'")) -What 'the Support app''s roles on the Key Vault')
-        $level = Get-SISupportGrantDerivedLevel -RoleDefinitionIds @($list | ForEach-Object { [string]$_.properties.roleDefinitionId })
-        if (-not $level) { return (& $out 'none' '' 'support consent: not derived -- the Support app has neither Key Vault Secrets Officer nor Key Vault Reader on the install''s Key Vault (no consent: the customer''s admin grants it with Grant-SISupportAccess)') }
-        if ($WhatIf) { return (& $out 'planned' $level ('support consent: would be recorded as DERIVED, level {0} (from the Support app''s Key Vault role)' -f $level)) }
-        $back = @(& $Sql (Get-SISupportGrantDerivedConsentSql) @{ AppId = $app; Level = $level; By = 'caj-si-updater (derived from the Support app''s Key Vault role)' } 'rows' | ForEach-Object { $_ } | Where-Object { $null -ne $_ })[0]
-        $got = (& $val $back 'Consent').Trim()
-        if ($got -eq ('{0}|derived' -f $level)) { return (& $out 'derived' $level ('support consent: recorded as DERIVED, level {0} (from the Support app''s Key Vault role), and read back' -f $level)) }
-        if ($got) { return (& $out 'present' (($got -split '\|')[0]) '') }
-        & $out 'failed' $level 'support consent: the derived consent does not read back -- the next update tries again'
-    } catch { & $out 'failed' '' ('support consent: not derived ({0}) -- the next update tries again' -f $_.Exception.Message) }
 }
 
 # ---- #1154: THE JOB IS STARTED BY ITS QUEUE; THE SUPPORT APP HOLDS NO RIGHT ON ANY JOB --------------------------------------
@@ -247,53 +194,6 @@ function Get-SISupportGrantTriggerPatch {
     [ordered]@{ properties = [ordered]@{ configuration = $c } }
 }
 
-function Get-SISupportGrantConsentLevel {
-    <# PURE. The consented level from the consent read's 'Consent' column ('<level>|<source>', '' = none, '-' = no table):
-       setup | troubleshoot | '' (none recorded, or not readable). #>
-    param([AllowNull()][AllowEmptyString()][string]$Consent)
-    $lv = ("$Consent".Trim() -split '\|')[0].Trim().ToLowerInvariant()
-    if ($lv -in 'setup', 'troubleshoot') { return $lv }
-    ''
-}
-
-function Resolve-SISupportGrantRightNotes {
-    <#
-        PURE. #1163: the Support app's rights at the install's resource group or above, judged against the consented level.
-        -Assignments: its role assignments whose scope is the resource group or an ancestor of it. -ConsentLevel: setup |
-        troubleshoot | '' (none recorded). -Ring: the install's ring (0-3; $null = not known). -TenantId: names the root
-        management group. Returns the notes for the owner (plain lines; '' never) -- nothing is ever removed for a note:
-          * the reader set: expected at both levels;
-          * Contributor / User Access Administrator at the install's subscription or resource group: expected at Setup;
-          * User Access Administrator at the tenant root management group: expected at rings 0-2; at ring 3 (or an unknown
-            ring) a note -- it needs an approval Invardia records, which the update cannot read;
-          * anything else: above the consented level -- a note.
-    #>
-    param([AllowEmptyCollection()][object[]]$Assignments = @(), [AllowEmptyString()][string]$ConsentLevel = '', [AllowNull()]$Ring = $null,
-          [Parameter(Mandatory)][string]$SubscriptionId, [Parameter(Mandatory)][string]$ResourceGroup, [AllowEmptyString()][string]$TenantId = '')
-    $c = $script:SISupportGrantUpdate
-    $sub = ('/subscriptions/{0}' -f $SubscriptionId).ToLowerInvariant()
-    $rg = ('{0}/resourcegroups/{1}' -f $sub, $ResourceGroup).ToLowerInvariant()
-    $root = if ("$TenantId".Trim()) { ('/providers/microsoft.management/managementgroups/{0}' -f "$TenantId".Trim()).ToLowerInvariant() } else { '' }
-    $r = -1; $ringKnown = ($null -ne $Ring -and [int]::TryParse("$Ring", [ref]$r) -and $r -ge 0 -and $r -le 3)
-    $lvWords = if ($ConsentLevel) { 'the consented level ({0})' -f $ConsentLevel } else { 'the consented level (no consent is recorded)' }
-    $notes = New-Object System.Collections.Generic.List[string]
-    foreach ($a in @($Assignments | Where-Object { $_ })) {
-        $scope = ([string](Get-SISupportGrantProp $a @('properties', 'scope'))).TrimEnd('/').ToLowerInvariant()
-        $rd = ([string](Get-SISupportGrantProp $a @('properties', 'roleDefinitionId')) -split '/')[-1].ToLowerInvariant()
-        if ($c.ReaderRoles -contains $rd) { continue }
-        $where = if ($scope -eq $sub) { 'the install''s subscription' } elseif ($scope -eq $rg) { 'the install''s resource group' } elseif ($root -and $scope -eq $root) { 'the tenant root management group' } else { [string](Get-SISupportGrantProp $a @('properties', 'scope')) }
-        $role = Get-SISupportGrantRoleName $rd
-        if ($ConsentLevel -eq 'setup' -and $c.SetupRoles -contains $rd -and $scope -in $sub, $rg) { continue }
-        if ($root -and $scope -eq $root -and $rd -eq $c.RootUaaRole) {
-            if ($ringKnown -and $r -le 2) { continue }
-            $notes.Add(('support access: a note for the owner -- the Invardia Support app holds {0} at {1}; {2} it is expected only with an approval Invardia records, which the update cannot read; it is kept' -f $role, $where, $(if ($ringKnown) { "at ring $r" } else { 'with the ring not known,' })))
-            continue
-        }
-        $notes.Add(('support access: a note for the owner -- the Invardia Support app holds {0} at {1}, above {2}; the update never removes it, the customer''s admin or Invardia decides' -f $role, $where, $lvWords))
-    }
-    $notes.ToArray()
-}
-
 function Get-SISupportGrantLeftoverKey {
     <# PURE. One short key for a set of role assignment ids (order and case do not matter): each assignment's NAME (the last
        part of its id, a GUID), sorted, joined by ','; '' for none. #>
@@ -356,20 +256,18 @@ function Invoke-SISupportGrantQueueTrigger {
         Invardia Support app's service principal (object id) in this tenant ('' = no Support app here: the trigger is still
         converted, nothing is removed). -RemoveHow: who can remove a right this identity may not (said in the line).
         -Tries / -WaitSeconds / -Sleep: the read-backs. -WhatIf: reads only, the plan said.
-        #1163 (agreed with Invardia 2026-11-10): -ConsentLevel (setup | troubleshoot | '' none recorded), -Ring, -TenantId --
-        the rights at the resource group or above are judged against the consented level (Resolve-SISupportGrantRightNotes):
-        one note for the owner per right above it, NEVER removed. -KeepJobRights (THE UPDATER: it may not, and does not, remove
+        The Support app's rights at the resource group or above are NEITHER listed NOR judged (framework ROOT-RIGHTS-1 point 4;
+        Invardia 2026-11-27): only its rights AT a caj-si-* job are this step's. -KeepJobRights (THE UPDATER: it may not, and does not, remove
         a right in a customer tenant): a right an earlier release gave on a caj-si-* job is KEPT, no DELETE is sent -- ONE
         plain line, only when that set differs from -LeftoverSaid (the key said before; Get-SISupportGrantLeftoverKey).
         Returns @{ Trigger (none | present | converted | planned | failed | cannot); Removal (none | removed | planned | failed |
-        held | skipped | kept); Removed = @(ids); Kept = @(ids); Notes = @(texts); LeftoverKey; Lines = @(@{ Level (info |
+        held | skipped | kept); Removed = @(ids); Kept = @(ids); Notes = @() (always empty: no right is judged); LeftoverKey; Lines = @(@{ Level (info |
         warn); Text }) }. NEVER throws.
     #>
     param([Parameter(Mandatory)][scriptblock]$Arm, [Parameter(Mandatory)][string]$SubscriptionId, [Parameter(Mandatory)][string]$ResourceGroup,
           [AllowEmptyString()][string]$StorageAccount = '', [AllowEmptyString()][string]$SupportPrincipalId = '',
           [string]$RemoveHow = 'Invardia support removes it in its Support session (its support grant install step, roles), or the customer''s admin: Azure portal > the job > Access control (IAM) > Role assignments > remove the Invardia Support app',
           [int]$Tries = 12, [int]$WaitSeconds = 10, [scriptblock]$Sleep, [switch]$WhatIf,
-          [AllowEmptyString()][string]$ConsentLevel = '', [AllowNull()]$Ring = $null, [AllowEmptyString()][string]$TenantId = '',
           [switch]$KeepJobRights, [AllowEmptyString()][string]$LeftoverSaid = '')
     $c = $script:SISupportGrantUpdate
     $res = [ordered]@{ Trigger = 'none'; Removal = 'none'; Removed = @(); Kept = @(); Notes = @(); LeftoverKey = ''; Lines = (New-Object System.Collections.Generic.List[object]) }
@@ -424,14 +322,9 @@ function Invoke-SISupportGrantQueueTrigger {
         try { $all = @(& $list) } catch { & $say 'warn' ('support access: the Invardia Support app''s rights could not be read ({0}) -- the next update checks again' -f $_.Exception.Message); $res.Removal = 'failed'; return (& $done) }
         $jobRx = '(?i)^' + [regex]::Escape($rg) + '/providers/Microsoft\.App/jobs/caj-si-[^/]+$'
         $onJob = @($all | Where-Object { [string](Get-SISupportGrantProp $_ @('properties', 'scope')) -match $jobRx })
-        # #1163: the rights at the resource group or above, judged against the CONSENTED level -- a note for the owner each,
-        # never removed (Setup's Contributor + User Access Administrator at the subscription are expected, not "broader")
-        $rgKey = $rg.ToLowerInvariant() + '/'
-        # (a management group is no string prefix of the group's path: any management-group scope the list returns is inherited)
-        $above = @($all | Where-Object { $sc = [string](Get-SISupportGrantProp $_ @('properties', 'scope')); $sc -and ($rgKey.StartsWith($sc.TrimEnd('/').ToLowerInvariant() + '/') -or $sc -match '(?i)^/providers/Microsoft\.Management/managementGroups/[^/]+/?$') })
-        # (judged only where the caller read the consent -- the updater; a caller that did not is never told "no consent")
-        if ($PSBoundParameters.ContainsKey('ConsentLevel')) { $res.Notes = @(Resolve-SISupportGrantRightNotes -Assignments $above -ConsentLevel $ConsentLevel -Ring $Ring -SubscriptionId $SubscriptionId -ResourceGroup $ResourceGroup -TenantId $TenantId) }
-        foreach ($n in $res.Notes) { & $say 'info' $n }
+        # framework ROOT-RIGHTS-1 point 4 (Invardia 2026-11-27): the Support app's rights at the resource group or above
+        # (Contributor + User Access Administrator at the subscription, User Access Administrator / Reader at the tenant root,
+        # ...) are Invardia's -- not listed, not judged, no note; only its rights AT a job are this step's
         if (-not $onJob.Count) { return (& $done) }
         $what = { param($a) '{0} on {1}' -f (Get-SISupportGrantRoleName ([string](Get-SISupportGrantProp $a @('properties', 'roleDefinitionId')))), ([string](Get-SISupportGrantProp $a @('properties', 'scope')) -split '/')[-1] }
         if ($KeepJobRights) {

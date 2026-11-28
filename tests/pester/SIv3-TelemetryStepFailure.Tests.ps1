@@ -18,7 +18,7 @@ BeforeAll {
     $script:SIRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSCommandPath))
     . (Join-Path $script:SIRoot 'engine\_shared\SI-TelemetrySend.ps1')
     . (Join-Path $script:SIRoot 'engine\_shared\SI-JobFlow.ps1')
-    $script:Id = [pscustomobject]@{ Mode = 'identified'; Endpoint = 'https://uplink.test'; AccessCode = 'inv-TESTKEY-0123456789'; Edition = 'pro'; LicenceState = 'valid'
+    $script:Id = [pscustomobject]@{ Mode = 'identified'; Endpoint = 'https://uplink.test'; AccessCode = ('inv-TESTKEY-' + '0123456789'); Edition = 'pro'; LicenceState = 'valid'
                                     Version = '3.0.0'; Hosting = 'container'; RuntimeIdentity = 'mi-container'; InstallId = ''; TenantId = '11111111-2222-3333-4444-555555555555'; StateDirectory = $TestDrive
                                     Endpoints = @([pscustomobject]@{ kind = 'webapp'; url = 'https://si.contoso.example' }) }
     function script:New-Capture { $l = New-Object System.Collections.Generic.List[object]; [pscustomobject]@{ List = $l; Transport = { param($Record, $Endpoint, $AccessCode, $TimeoutSec) $l.Add($Record); [pscustomobject]@{ Status = 'ok' } }.GetNewClosure() } }

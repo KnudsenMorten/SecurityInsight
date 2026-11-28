@@ -19,6 +19,9 @@
       * (Optional) Key Vault    if -CreateKeyVault
       * RBAC for SPN at: workspace, DCR RG (Monitoring Metrics Publisher),
         storage account (Blob/Table/Queue Data Contributor)
+        -- the ENGINE's runtime roles: only to an engine identity (-SpnObjectId / -ManagedIdentityName), never to the
+           Invardia Support app (told by its client id, -SupportAppId / the Support session; framework RIGHTS-1). The
+           guided install passes no -SpnObjectId: the container setup grants the engine's managed identity.
 
     No PowerShell modules: native REST and ARM (setup\_shared\SI-SetupAzure.ps1).
 
@@ -94,7 +97,15 @@ param(
     [Parameter()]          [string]$Owner = '',
     # #866 (a private install; owner: "we will not allow fw option or exceptions"): the storage account and the Key Vault
     # are CREATED with no public access -- setup makes their private endpoints right after this, before any read or write
-    [Parameter()]          [switch]$PrivateNetwork
+    [Parameter()]          [switch]$PrivateNetwork,
+    # The Invardia Support app's client id (the install answer supportAppId, framework 4.1a). The engine's runtime roles
+    # below are NEVER given to it (framework RIGHTS-1 / ROOT-RIGHTS-1 point 4): when -SpnObjectId is the Support app -- it
+    # is the signed-in caller (or its object id cannot be read), or a grantee whose application Graph names as one of the
+    # Support app ids (-SupportAppId, the Support session, -RecordedSupportAppId, $global:SI_SupportAppId) -- no role
+    # is given here and one line says so; the container setup gives them to the engine's managed identity.
+    [Parameter()]          [string[]]$SupportAppId = @(),
+    # the install's RECORDED Support app (cfg.InstallState 'SupportApp'), where the caller could read it -- one more source
+    [Parameter()]          [string]$RecordedSupportAppId = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -222,6 +233,38 @@ if ($ManagedIdentityName) {
     $SpnObjectId = [string]$miOut.PrincipalId
 }
 
+# ----- 2c. The engine's runtime roles are never the Invardia Support app's (framework RIGHTS-1, ROOT-RIGHTS-1 point 4) -----
+# Found 2026-11-27 at three installs: the Support app ran setup and, as "the SPN", got the engine's storage, Key Vault and
+# monitoring data roles. Told by CLIENT ID only, from EVERY source setup knows (Get-SISetupSupportAppIds), and FAIL-CLOSED
+# (Resolve-SISetupEngineGrantee): a caller that is the Support app with no readable object id, a grantee that is not the
+# caller whose application cannot be read from Graph -- no role. Nothing is removed here.
+$grantToSupportApp = $false
+if ($SpnObjectId -and -not $miOut) {
+    $sessApp = ''; try { $sess = Get-SISupportSession; if ($sess -and $sess.AppId) { $sessApp = [string]$sess.AppId } } catch { }
+    $cfgApp = [string](Get-Variable -Scope Global -Name SI_SupportAppId -ValueOnly -ErrorAction Ignore)
+    $supportIds = @(Get-SISetupSupportAppIds -SupportAppId @($SupportAppId) -SessionAppId $sessApp -RecordedAppId @($RecordedSupportAppId) -ConfigAppId $cfgApp)
+    $callerOid = ''; try { $callerOid = [string](Get-SISetupSignedInObjectId) } catch { $callerOid = '' }
+    $callerApp = if ($ctx -and $ctx.Account) { [string]$ctx.Account.Id } else { '' }
+    $callerType = if ($ctx -and $ctx.Account) { [string]$ctx.Account.Type } else { '' }
+    # a grantee that is NOT the caller (and is an app): its client id read from Microsoft Graph, read only
+    $gApp = ''; $gLookup = 'skipped'
+    $isCaller = ((ConvertTo-SISetupGuid $SpnObjectId) -and (ConvertTo-SISetupGuid $SpnObjectId) -eq (ConvertTo-SISetupGuid $callerOid))
+    if ($supportIds.Count -and -not $isCaller -and $SpnPrincipalType -eq 'ServicePrincipal') {
+        try {
+            if (-not (Get-Command -Name Invoke-SIGraphRequest -ErrorAction SilentlyContinue)) { . (Join-Path $siRootForTags 'setup\_shared\SI-GraphRest.ps1') }
+            $sp = Invoke-SIGraphRequest -Method GET -Uri ('/v1.0/servicePrincipals/{0}?$select=appId' -f [uri]::EscapeDataString($SpnObjectId.Trim()))
+            $gApp = [string]$(if ($sp -is [System.Collections.IDictionary]) { $sp['appId'] } elseif ($sp -and $sp.PSObject.Properties['appId']) { $sp.appId } else { '' })
+            $gLookup = if (ConvertTo-SISetupGuid $gApp) { 'ok' } else { 'failed' }
+        } catch { $gLookup = 'failed'; _Warn ("the grantee {0}: its application could not be read from Microsoft Graph ({1})" -f $SpnObjectId, $_.Exception.Message) }
+    }
+    $decision = Resolve-SISetupEngineGrantee -GranteeObjectId $SpnObjectId -GranteePrincipalType $SpnPrincipalType -GranteeAppId $gApp -GranteeLookup $gLookup `
+        -CallerObjectId $callerOid -CallerAppId $callerApp -CallerType $callerType -SupportAppIds $supportIds
+    if (-not $decision.Allow) {
+        $grantToSupportApp = $true
+        _Warn ("the engine's runtime roles are NOT given to {0}: {1}. The container setup gives them to the engine's managed identity; give an engine identity (-SpnObjectId of the engine's app, or -ManagedIdentityName) to grant them here." -f $SpnObjectId, $decision.Why)
+    }
+}
+
 # ----- 3. Log Analytics workspace -----
 $ws = Get-SIAzOperationalInsightsWorkspace -ResourceGroupName $ResourceGroupName -Name $WorkspaceName -ErrorAction SilentlyContinue
 if (-not $ws) {
@@ -281,7 +324,7 @@ if (-not $sa) {
 $rbacScopes = @()
 function _GrantRbac {
     param([string]$RoleName, [string]$Scope)
-    if (-not $SpnObjectId) { _Info ("RBAC '{0}' at {1}: granted by the container setup to the jobs' managed identity" -f $RoleName, $Scope); return }
+    if (-not $SpnObjectId -or $grantToSupportApp) { _Info ("RBAC '{0}' at {1}: granted by the container setup to the jobs' managed identity" -f $RoleName, $Scope); return }
     # Assignments are read for this principal at -Scope; ARM also returns inherited ones from a parent scope, which
     # would false-positive the existence check and skip the EXPLICIT assignment the engine needs at this scope.
     # Filter on .Scope -ieq $Scope to require a direct assignment.

@@ -1,0 +1,21 @@
+{
+  "version": "3.1.56",
+  "date": "2026-11-28",
+  "type": "fix-only",
+  "summary": "The Community installer ships with every release, and the status at Invardia says more.",
+  "new": [],
+  "fixes": [
+    {
+      "title": "Installer in every release",
+      "text": "The Community installer is part of every release download and always carries the version it installs, also for a security patch of the release."
+    },
+    {
+      "title": "Clearer status at Invardia",
+      "text": "The status shows which version each run used, a stopped run as ended, and the update result right after the update. The setup no longer gives Invardia Support any of the engine's own roles."
+    },
+    {
+      "title": "Old sample copies after a Community update",
+      "text": "Community installations that update keep old-named copies of three sample files beside the new ones. Nothing reads them, and they can be deleted."
+    }
+  ]
+}

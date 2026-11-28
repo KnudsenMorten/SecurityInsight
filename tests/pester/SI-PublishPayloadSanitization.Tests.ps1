@@ -186,6 +186,19 @@ BeforeDiscovery {
         $script:PayloadFiles += $win
     }
 
+    # The framework's never-public CORE rule for file NAMES (APPROVAL-STEPS-1, .github/scripts/publish-never-public.ps1):
+    # a shipped *.custom.* file must be a *.custom.sample.* file, whatever its extension. Repeated here (not read from the
+    # shared script) so SI's own gate fails first; the three samples named *.custom.json.sample / *.custom.community.sample.*
+    # / *.custom.reference.* were refused by it on 2026-11-27 and are now *.custom.sample.*.
+    $script:CoreNameHits = @()
+    foreach ($rel in $trackedRaw) {
+        $parts = $rel -split '/'
+        if ($script:ExcludeTopNames -contains $parts[0]) { continue }
+        if (@($script:SolutionExcludePaths | Where-Object { $rel -eq $_ -or $rel.StartsWith($_ + '/') }).Count -gt 0) { continue }
+        $leaf = $parts[-1]
+        if ($leaf -imatch '\.custom\.' -and $leaf -inotmatch '\.custom\.sample\.') { $script:CoreNameHits += $rel }
+    }
+
     # --- scan -----------------------------------------------------------------
     $script:Findings = @()
     foreach ($rel in $script:PayloadFiles) {
@@ -202,10 +215,11 @@ BeforeDiscovery {
                     # key; ONLY that key, ONLY in packages.lock.json, is a public package hash, not a secret (2026-11-01)
                     if ($d.name -eq 'storage account key' -and (Split-Path -Leaf $rel) -eq 'packages.lock.json' -and $line -match '^\s*"contentHash":\s*"[A-Za-z0-9+/]{86}=="\s*,?\s*$') { continue }
                     # #1061 / framework PUB-FRONT: the sign-in front's error text names the DOCUMENTED example host
-                    # (e.g. sql-x.database.windows.net) -- the one host PUB-FRONT's leak scan allows; ONLY that value, ONLY in
-                    # the pinned front the solution folder carries (pro-management\signin-front, one build path for Pro and
-                    # Community since SI #1207 -- the vendored copy is gone)
-                    if ($d.name -eq 'sql server host' -and $rel -like 'pro-management\signin-front\*' -and $hit -ceq 'sql-x.database.windows.net') { continue }
+                    # (server sql-x in the database.windows.net zone) -- the one host PUB-FRONT's leak scan allows; ONLY that
+                    # value, ONLY in the pinned front the solution folder carries (pro-management\signin-front, one build path
+                    # for Pro and Community since SI #1207 -- the vendored copy is gone). The host is BUILT here, so this file
+                    # does not itself carry a host the framework's never-public denylist would read as a real server.
+                    if ($d.name -eq 'sql server host' -and $rel -like 'pro-management\signin-front\*' -and $hit -ceq ('sql-x' + '.database.windows.net')) { continue }
                     $script:Findings += [pscustomobject]@{ File = $rel; Line = $lineNo; Kind = $d.name; Match = $hit }
                 }
             }
@@ -244,7 +258,7 @@ BeforeDiscovery {
         # merged into docs/ and deleted -- the file no longer exists, so its entry is gone.)
         # --- #21 TRIAGE, 2026-08-06 (operator-approved) -------------------------------------
         # Resource-group names in the deploy script's own .SYNOPSIS/.EXAMPLE. ACCEPTED: naming
-        # them IS the guidance -- "deploy to rg-securityinsight, NEVER PIM's rg-pim-manager-web"
+        # them IS the guidance -- "deploy to rg-securityinsight, NEVER PIM's own web resource group"
         # is the #3b control written down. No credential, no tenant identifier.
         #
         # 🔒 THE BASELINE IS OTHERWISE EMPTY -- THIS GATE IS NOW FULLY BLOCKING.
@@ -324,6 +338,8 @@ BeforeDiscovery {
             DenyRuleCount     = $script:Deny.Count
             CustomerRuleCount = $script:CustomerRules.Count
             CustomerAllowLeaks = $script:CustomerAllowLeaks
+            CoreNameHits      = $script:CoreNameHits
+            TrackedCount      = $trackedRaw.Count
         })
 }
 
@@ -399,6 +415,23 @@ Describe 'SI publish payload -- no customer name ships, not even through a basel
 
     It 'no Allow entry covers a customer name -- only the author''s own company is exempt' -ForEach $script:Summary {
         @($_.CustomerAllowLeaks) | Should -BeNullOrEmpty -Because 'an Allow entry that a customer rule matches would let that customer''s name ship'
+    }
+}
+
+Describe 'SI publish payload -- every shipped *.custom.* file is a *.custom.sample.* file (framework never-public core rule)' {
+
+    It 'no *.custom.* name outside *.custom.sample.* ships (the approval-gated publish refuses it)' -ForEach $script:Summary {
+        $_.TrackedCount | Should -BeGreaterThan 500 -Because 'control: the tracked list was read (a green run must not mean "listed nothing")'
+        @($_.CoreNameHits) | Should -BeNullOrEmpty -Because "the publish's never-public check refuses these names: $(@($_.CoreNameHits) -join ', ') -- rename to *.custom.sample.* or list in excludePaths"
+    }
+
+    It 'the rule itself still catches the three old sample names (negative control)' {
+        foreach ($n in 'RiskAnalysisGlobalExclusions.custom.json.sample', 'SecurityInsight.custom.community.sample.ps1', 'SecurityInsight.custom.reference.ps1') {
+            ($n -imatch '\.custom\.' -and $n -inotmatch '\.custom\.sample\.') | Should -BeTrue -Because "$n is the shape the framework refuses"
+        }
+        foreach ($n in 'RiskAnalysisGlobalExclusions.custom.sample.json', 'SecurityInsight.community.custom.sample.ps1', 'SecurityInsight.custom.sample.reference.ps1') {
+            ($n -imatch '\.custom\.' -and $n -inotmatch '\.custom\.sample\.') | Should -BeFalse -Because "$n is the shipped name"
+        }
     }
 }
 

@@ -226,7 +226,7 @@ Describe 'the ONE stuck alert' {
         $g | Should -Not -BeNullOrEmpty
         $g.kind | Should -Be 'next-run'
         (Get-SIGuardSwitchNames -GuardId 'job.run.throttled-stuck').Enabled | Should -Be 'SI_Guard_JobRunThrottledStuck_Enabled'
-        $ref = Get-Content -LiteralPath ([IO.Path]::Combine($script:SIRoot, 'config', 'SecurityInsight.custom.reference.ps1')) -Raw
+        $ref = Get-Content -LiteralPath ([IO.Path]::Combine($script:SIRoot, 'config', 'SecurityInsight.custom.sample.reference.ps1')) -Raw
         $ref | Should -Match '\$global:SI_Throttle_StuckHours = 6'
         $ref | Should -Match '\$global:SI_Throttle_StuckRuns = 12'
     }

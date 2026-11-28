@@ -3,7 +3,7 @@
     THE SUPPORT LEVEL SET IN THE INVARDIA PORTAL, APPLIED BY THE UPDATER (setup\_shared\SI-SupportPortalConsent.ps1; framework
     SUPPORT ACCESS point 2). The updater -- never the engine -- reads GET /api/support/consent with the install key and applies
     the level in the Pro database (Source customer, ConsentedBy 'Invardia portal'), read back; none = the row removed;
-    Invardia unreachable / no supportConsent = nothing changed; once Invardia answered, the derived consent is not made again.
+    Invardia unreachable / no supportConsent = nothing changed; it is the ONLY source of the level -- nothing derives one from a Key Vault role.
     Offline (fake Invardia + a fake Pro database that keeps the row); PS 5.1 and 7.
 #>
 
@@ -104,13 +104,11 @@ Describe 'the statement and the wiring' {
             [IO.File]::ReadAllText($f.FullName) | Should -Not -Match 'Invoke-SISupportPortalConsent|SI-SupportPortalConsent\.ps1' -Because "$($f.Name): the engine never applies the consent"
         }
     }
-    It 'the derived consent is not made once Invardia has answered (a level the portal took away never comes back)' {
+    It 'the portal is the ONLY source of the level (2026-11-27): no consent is derived from a Key Vault role, at any time' {
         . ([IO.Path]::Combine($script:SIRoot, 'setup', '_shared', 'SI-SupportGrantUpdate.ps1'))
         (Get-SISupportGrantConsentReadSql) | Should -Match "Name = N'SupportConsentPortal'"
-        $sql = { param($q, $p, $m) , @(@{ SupportApp = '3f2504e0-4f89-41d3-9a0c-0305e82c3301'; Consent = ''; Portal = '{"level":"none"}' }) }
-        $r = Invoke-SISupportGrantDerivedConsent -Rest { throw 'not called' } -Sql $sql -SubscriptionId 's' -ResourceGroup 'rg' -VaultName 'kv'
-        $r.Action | Should -Be 'none'
-        $r.Line | Should -BeNullOrEmpty
+        Get-Command -Name Invoke-SISupportGrantDerivedConsent -ErrorAction SilentlyContinue | Should -BeNullOrEmpty
+        Get-Command -Name Get-SISupportGrantDerivedLevel -ErrorAction SilentlyContinue | Should -BeNullOrEmpty
     }
     It 'the audit action is on the closed list' {
         $acts = (Get-Content -LiteralPath ([IO.Path]::Combine($script:SIRoot, 'config', 'audit-actions.locked.json')) -Raw | ConvertFrom-Json).actions

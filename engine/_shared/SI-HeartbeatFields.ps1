@@ -4,9 +4,13 @@
     data"). Eight optional fields of the identified heartbeat that caj-si-heartbeat sends every hour (SI-HeartbeatJob.ps1,
     Send-SIHeartbeatTick), each in EXACTLY the shape agreed with Invardia (validator live in Invardia 1.0.500, 2026-10-16):
 
-      Pipeline  { runId, state, startedUtc, step, stepSinceUtc, lastEndedUtc, nextStartUtc }
-                state running | idle | failed | succeeded -- the newest run record (cfg.FlowRun / cfg.FlowStepRun); nextStartUtc
+      Pipeline  { runId, state, startedUtc, step, stepSinceUtc, lastEndedUtc, nextStartUtc, version }
+                state running | idle | failed | succeeded | stopped -- the newest run record (cfg.FlowRun / cfg.FlowStepRun); nextStartUtc
                 from the stored pipeline (cfg.JobFlow) by the runner's own rule (Get-SIJobFlowDue)
+                + FLEET-STATUS-1 (2026-11-27): version = the version that run STARTED on (cfg.FlowRun.Version), null when not
+                recorded; a run still Running whose runner has not beaten for KilledRunMinutes reads 'failed' with lastEndedUtc =
+                its last beat + KilledRunMinutes; 'stopped' only for a run cancelled the product's way (State Cancelled), a run
+                the runner ended Stopped reads 'failed'
                 + THE PROGRESS AND ESTIMATED END (owner 2026-10-17: "give completion estimate of all env from last pipeline and
                 show est completion"), its own switch SI_Uplink_SendPipelineEta (default ON on every ring):
                 { stepsDone, stepsTotal, runningSteps[<= 12] { step, sinceUtc, prevMin, endUtc, estimate [, lastProgressUtc]
@@ -53,7 +57,10 @@
       Published { collectionId, collectionUtc, publishedUtc, copiedUtc, newestCompleteUtc } (2026-10-26, Invardia 1.0.593): the
                 collection customers SEE (sidata.PublishedRun 'current') next to the newest complete one; left out when nothing is
                 published yet. Its own switch; auto = ring 0 first (ConfirmedRings).
-      LastRun   { runId, kind, startedUtc, endedUtc, totalSec, result, collectionUtc, steps[<= 40] { step, startedUtc, sec, result } }
+      LastRun   { runId, kind, startedUtc, endedUtc, totalSec, result, collectionUtc, steps[<= 40] { step, startedUtc, sec, result } [, version] }
+                (FLEET-STATUS-1: a KILLED run -- see Pipeline -- is the last run, result failed, endedUtc = its detection time;
+                result cancelled only for a run cancelled the product's way, a run ended Stopped is failed. version = the version
+                the run STARTED on, the LAST key, left out when not known -- Invardia FLEET-TELEMETRY-1, live 9f8e838)
                 (#1423, 3.1.53: every key only when known -- never null; sent on every ring; over 40 steps the most relevant go:
                 failed, cancelled, then the newest that ran, skipped last -- in run order, the others named once a day)
                 (#1395 LAST-RUN-1, owner 2026-11-26: "complete last run time" / "also time for each phase and total"; Invardia
@@ -155,6 +162,20 @@ $script:SIHeartbeatFields = @{
     # #1423: Invardia's cap (heartbeatstate.ts LastRun.steps max 40)
     MaxLastRunSteps    = 40
     LastRunIdMax       = 80
+    # a pipeline run whose record still says Running / Starting but whose runner has not beaten for this long was KILLED (its
+    # executions stopped or crashed): Pipeline reads 'failed' and LastRun takes it as 'failed', both with endedUtc = its last
+    # beat + this. The runner calls a beat older than 15 minutes dead and resumes the run on its next 5-minute wake-up
+    # (SI-JobFlow StaleAfterMinutes) -- twice that, so a run the runner resumes normally never flips to 'failed' and back.
+    # Invardia reads a Pipeline still 'running' with a stale beat as 'unknown' after 2 h; this ends it well before.
+    # IT CAN FLIP BACK (on purpose): 'failed' is what the record says NOW. A runner that resumes the run LATER (after more than
+    # 30 minutes -- its wake-up was held, e.g. an update ran) beats it again, so the next heartbeat reads it 'running' (and
+    # LastRun goes back to the run before it) until it really ends; the heartbeat never writes the run record.
+    KilledRunMinutes    = 30
+    # FLEET-STATUS-1: an update's "installing now" mark (cfg.InstallState 'UpdateState'.updating) is honoured this long; older =
+    # the update died part-way (the decided install clears it, and the next updater run's save always does; a roll takes well
+    # under an hour), read as failed. Only how the heartbeat READS the mark -- it never stops or limits an update. KNOWN EDGE:
+    # an update that really takes longer than this reads 'failed' while it is still running (until it saves its result)
+    UpdateInProgressMaxHours = 6
     # framework rule 11g: the ACR tiers an agent pool can have; the registry and its runs are read with these api-versions
     BuildPoolTiers   = @('S1', 'S2', 'S3', 'I6')
     ArmAcrApi        = '2023-07-01'
@@ -232,7 +253,9 @@ $script:SIHeartbeatFields = @{
     StalledStepFields    = @('step', 'sinceUtc', 'lastProgressUtc')
     MaxStalledSteps      = 12
     Fields = @{
-        Pipeline = @('runId', 'state', 'startedUtc', 'step', 'stepSinceUtc', 'lastEndedUtc', 'nextStartUtc')
+        # version (framework FLEET-STATUS-1, 2026-11-27): the SecurityInsight version the run shown STARTED on
+        # (cfg.FlowRun.Version), null when not known -- Invardia's Pipeline is an open object, so it is safe on every ring
+        Pipeline = @('runId', 'state', 'startedUtc', 'step', 'stepSinceUtc', 'lastEndedUtc', 'nextStartUtc', 'version')
         Jobs     = @('name', 'lastStartUtc', 'lastEndUtc', 'lastResult', 'durationMin', 'prevDurationMin', 'cpu', 'memoryGi', 'timeoutHours')
         Sources  = @('source', 'lastGoodUtc', 'lastErrorCode', 'retries24h', 'throttled24h', 'lagMin')
         Database = @('tier', 'dtu', 'maxSizeMb', 'usedMb', 'peakLogWritePct1h', 'minutesAtLimit1h')
@@ -241,7 +264,9 @@ $script:SIHeartbeatFields = @{
         Warnings = @('code', 'sinceUtc')
         Security = @('collectionUtc', 'domains')
         Published = @('collectionId', 'collectionUtc', 'publishedUtc', 'copiedUtc', 'newestCompleteUtc')
-        LastRun  = @('runId', 'kind', 'startedUtc', 'endedUtc', 'totalSec', 'result', 'collectionUtc', 'steps')
+        # version (framework FLEET-STATUS-1; Invardia FLEET-TELEMETRY-1 LIVE, 9f8e838): the version the last finished run
+        # STARTED on (cfg.FlowRun.Version), the LAST key, left out when not known
+        LastRun  = @('runId', 'kind', 'startedUtc', 'endedUtc', 'totalSec', 'result', 'collectionUtc', 'steps', 'version')
         DataOut  = @('output', 'phase', 'batchId', 'startedUtc', 'rowsPlanned', 'rowsSent', 'rowsHeld', 'rowsPerSec', 'lastProgressUtc', 'stalled',
                      'lastEndedUtc', 'lastResult', 'lastErrorCode', 'heldReason')
         BuildPool = @('tier', 'count', 'building', 'checkedUtc')
@@ -524,6 +549,39 @@ function New-SIHeartbeatKnown {
     [pscustomobject]$o
 }
 
+function Test-SIHeartbeatVersionText {
+    <# PURE. Is -Value a version as Invardia's wire contract takes it (heartbeatstate.ts VERSION: 1-50 of 0-9 A-Z a-z . + -)? #>
+    param($Value)
+    ($Value -is [string] -and $Value -cmatch '^[0-9A-Za-z.+-]{1,50}$')
+}
+
+function ConvertTo-SIHeartbeatRunVersion {
+    <# PURE. FLEET-STATUS-1: a run record's Version (cfg.FlowRun.Version -- the version the run STARTED on) as the wire value:
+       trimmed, or $null when it is not recorded (an older schema, a run started before the runner recorded it) or is not a
+       version. Never the install's current version: a run can outlive an update. #>
+    param($Value)
+    if ($null -eq $Value -or $Value -is [System.DBNull]) { return $null }
+    $v = ([string]$Value).Trim()
+    if (Test-SIHeartbeatVersionText $v) { return $v }
+    $null
+}
+
+function Test-SIHeartbeatRunKilled {
+    <# PURE. Was a run KILLED -- its record still Running / Starting, but no beat from its runner for KilledRunMinutes (its
+       executions were stopped or crashed and no runner has closed it)? -State / -BeatUtc (cfg.FlowRun.HeartbeatUtc: the
+       runner writes it on its very first save and on every save after). No beat recorded = not known -- never judged
+       killed (never a guess). Returns the detection time (last beat + KilledRunMinutes, a fixed value: every heartbeat
+       after it says the same end) or $null when the run is not killed. #>
+    param([AllowNull()][AllowEmptyString()][string]$State, $BeatUtc, [Parameter(Mandatory)][datetime]$NowUtc)
+    if ("$State" -notin @('Running', 'Starting')) { return $null }
+    $alive = ConvertTo-SIHeartbeatTime $BeatUtc
+    if ($null -eq $alive) { return $null }
+    $at = $alive.AddMinutes([int]$script:SIHeartbeatFields.KilledRunMinutes)
+    $now = if ($NowUtc.Kind -eq [DateTimeKind]::Unspecified) { $NowUtc } else { $NowUtc.ToUniversalTime() }
+    if ($now -lt $at) { return $null }
+    $at
+}
+
 # =====================================================================================================================
 #  The schema of every field -- PURE (what Invardia's validator accepts; nothing that fails it is put on the record)
 # =====================================================================================================================
@@ -584,6 +642,7 @@ function Test-SIHeartbeatField {
             if ($null -ne $Value.runId -and -not ($Value.runId -is [string] -and $Value.runId -cmatch '^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$')) { return 'Pipeline.runId is not an id' }
             if ($null -ne $Value.step -and -not ($Value.step -is [string] -and $Value.step -cmatch '^[a-z0-9][a-z0-9-]{0,59}$')) { return 'Pipeline.step is not a job key' }
             foreach ($t in 'startedUtc', 'stepSinceUtc', 'lastEndedUtc', 'nextStartUtc') { if (-not (& $isTime $Value.$t)) { return "Pipeline.$t is not ISO-8601 UTC" } }
+            if ($null -ne $Value.version -and -not (Test-SIHeartbeatVersionText $Value.version)) { return 'Pipeline.version is not a version' }
             if (-not $withEta) { return '' }
             foreach ($n in 'stepsDone', 'stepsTotal', 'queuedRuns') { if (-not (& $isInt $Value.$n)) { return "Pipeline.$n is not a whole number >= 0" } }
             if ($null -ne $Value.stepsDone -and $null -ne $Value.stepsTotal -and $Value.stepsDone -gt $Value.stepsTotal) { return 'Pipeline.stepsDone is more than stepsTotal' }
@@ -777,6 +836,7 @@ function Test-SIHeartbeatField {
             if ($null -eq $Value) { return 'LastRun is null (leave the field out when no run has finished)' }
             # #1423: only the agreed keys, in order, each only when known (steps always: [] when the run has none)
             $w = & $known $Value $c.Fields.LastRun 'LastRun' @('steps'); if ($w) { return $w }
+            if ($Value.PSObject.Properties['version'] -and -not (Test-SIHeartbeatVersionText $Value.version)) { return 'LastRun.version is not a version' }
             if ($null -ne $Value.runId -and -not ($Value.runId -is [string] -and $Value.runId -cmatch ('^[A-Za-z0-9._:-]{{1,{0}}}$' -f [int]$c.LastRunIdMax))) { return 'LastRun.runId is not an id' }
             if (-not (& $inList $Value.kind $c.LastRunKinds $true)) { return ("LastRun.kind '{0}' is not in the list" -f $Value.kind) }
             if (-not (& $inList $Value.result $c.LastRunResults $true)) { return ("LastRun.result '{0}' is not in the list" -f $Value.result) }
@@ -868,6 +928,9 @@ BEGIN
     -- si-flow-1203: each run's scope (a column an older schema does not have yet -- then no row: every run counts as the pipeline)
     IF COL_LENGTH(N'cfg.FlowRun', N'Scope') IS NOT NULL
         INSERT @r (K, Name, S) EXEC (N'SELECT TOP ($n) N''runscope'', FlowRunId, LEFT(Scope, 32) FROM cfg.FlowRun WHERE FlowId = N''daily'' ORDER BY StartedUtc DESC;');
+    -- FLEET-STATUS-1: the version each run STARTED on (cfg.FlowRun.Version -- a column an older schema does not have: then no row)
+    IF COL_LENGTH(N'cfg.FlowRun', N'Version') IS NOT NULL
+        INSERT @r (K, Name, S) EXEC (N'SELECT TOP ($n) N''runver'', FlowRunId, LEFT(Version, 32) FROM cfg.FlowRun WHERE FlowId = N''daily'' AND Version IS NOT NULL ORDER BY StartedUtc DESC;');
     IF OBJECT_ID(N'cfg.FlowStepRun') IS NOT NULL
         INSERT @r (K, Name, S, T1, T2, N1, N2, Txt, Txt2)
         SELECT N'step', s.Job, s.State, s.StartedUtc, s.EndedUtc, s.StepOrder, s.GroupNo, s.FlowRunId, s.ErrorClass
@@ -1097,33 +1160,39 @@ function Get-SIHeartbeatLastRunSql {
         steps (cfg.FlowStepRun by its primary key). Rows: K 'run' (Id, S = State, Trg, FromStep, Scope, T1 / T2 = started /
         ended) then K 'step' (Id, S = State, T1 / T2, N1 = StepOrder, Job, Txt = ErrorClass). A schema without the tables, or
         no finished run yet, answers nothing. Scope is a column an older schema does not have (then every run is the pipeline).
+        FLEET-STATUS-1 (Invardia 2026-11-27): a KILLED run counts as finished -- a run still Running / Starting whose runner has
+        not beaten (HeartbeatUtc; none recorded = not judged) for KilledRunMinutes (Test-SIHeartbeatRunKilled decides again over the row,
+        so the clock is the heartbeat's). The run row also carries T3 = HeartbeatUtc and Ver = the version it STARTED on
+        (cfg.FlowRun.Version; NULL on a schema without it).
     #>
-@'
+    $km = [int]$script:SIHeartbeatFields.KilledRunMinutes
+@"
 SET NOCOUNT ON;
 IF OBJECT_ID(N'cfg.FlowRun') IS NOT NULL
 BEGIN
     DECLARE @id nvarchar(64);
-    IF COL_LENGTH(N'cfg.FlowRun', N'Scope') IS NOT NULL
-        EXEC sp_executesql N'SELECT TOP (1) @id = FlowRunId FROM cfg.FlowRun WHERE FlowId = N''daily'' AND State IN (N''Succeeded'', N''Failed'', N''Stopped'', N''Cancelled'') AND (Scope IS NULL OR Scope IN (N''pipeline'', N''from-step'')) ORDER BY StartedUtc DESC;', N'@id nvarchar(64) OUTPUT', @id = @id OUTPUT;
-    ELSE
-        SELECT TOP (1) @id = FlowRunId FROM cfg.FlowRun WHERE FlowId = N'daily' AND State IN (N'Succeeded', N'Failed', N'Stopped', N'Cancelled') ORDER BY StartedUtc DESC;
+    DECLARE @w nvarchar(max) = N'FlowId = N''daily'' AND (State IN (N''Succeeded'', N''Failed'', N''Stopped'', N''Cancelled'') OR (State IN (N''Running'', N''Starting'') AND HeartbeatUtc < DATEADD(minute, -$km, SYSUTCDATETIME())))';
+    IF COL_LENGTH(N'cfg.FlowRun', N'Scope') IS NOT NULL SET @w = @w + N' AND (Scope IS NULL OR Scope IN (N''pipeline'', N''from-step''))';
+    DECLARE @p nvarchar(max) = N'SELECT TOP (1) @id = FlowRunId FROM cfg.FlowRun WHERE ' + @w + N' ORDER BY StartedUtc DESC;';
+    EXEC sp_executesql @p, N'@id nvarchar(64) OUTPUT', @id = @id OUTPUT;
     IF @id IS NOT NULL
     BEGIN
         DECLARE @q nvarchar(max) = N'SELECT N''run'' AS K, r.FlowRunId AS Id, r.State AS S, r.Trg, r.FromStep, '
             + CASE WHEN COL_LENGTH(N'cfg.FlowRun', N'Scope') IS NOT NULL THEN N'r.Scope' ELSE N'CAST(NULL AS nvarchar(16))' END
-            + N' AS Scope, r.StartedUtc AS T1, r.EndedUtc AS T2, CAST(NULL AS int) AS N1, CAST(NULL AS int) AS N2, CAST(NULL AS nvarchar(64)) AS Job, CAST(NULL AS nvarchar(64)) AS Txt
+            + N' AS Scope, r.StartedUtc AS T1, r.EndedUtc AS T2, r.HeartbeatUtc AS T3, CAST(NULL AS int) AS N1, CAST(NULL AS int) AS N2, CAST(NULL AS nvarchar(64)) AS Job, CAST(NULL AS nvarchar(64)) AS Txt, '
+            + CASE WHEN COL_LENGTH(N'cfg.FlowRun', N'Version') IS NOT NULL THEN N'r.Version' ELSE N'CAST(NULL AS nvarchar(32))' END + N' AS Ver
 FROM cfg.FlowRun AS r WHERE r.FlowRunId = @id';
         IF OBJECT_ID(N'cfg.FlowStepRun') IS NOT NULL
             SET @q = @q + N'
 UNION ALL
-SELECT N''step'', s.FlowRunId, s.State, NULL, NULL, NULL, s.StartedUtc, s.EndedUtc, s.StepOrder, '
-                + CASE WHEN COL_LENGTH(N'cfg.FlowStepRun', N'Attempts') IS NOT NULL THEN N's.Attempts' ELSE N'CAST(NULL AS int)' END + N', s.Job, s.ErrorClass
+SELECT N''step'', s.FlowRunId, s.State, NULL, NULL, NULL, s.StartedUtc, s.EndedUtc, NULL, s.StepOrder, '
+                + CASE WHEN COL_LENGTH(N'cfg.FlowStepRun', N'Attempts') IS NOT NULL THEN N's.Attempts' ELSE N'CAST(NULL AS int)' END + N', s.Job, s.ErrorClass, NULL
 FROM cfg.FlowStepRun AS s WHERE s.FlowRunId = @id';
         SET @q = @q + N';';
         EXEC sp_executesql @q, N'@id nvarchar(64)', @id = @id;
     END
 END
-'@
+"@
 }
 
 function Get-SIHeartbeatLastRunPublishedSql {
@@ -1169,7 +1238,13 @@ function ConvertTo-SIHeartbeatLastRunStepResult {
        or stopped from outside (class cancelled / stopped) = cancelled; any other Failed / TimedOut / Interrupted = failed;
        Skipped because the run was cancelled or stopped = cancelled, any other Skipped / Disabled = skipped; a step still
        Waiting = cancelled in a cancelled / stopped run, else skipped; anything else (a step still Running) = $null. #>
-    param([AllowNull()][AllowEmptyString()][string]$State, [AllowNull()][AllowEmptyString()][string]$ErrorClass, [AllowNull()][AllowEmptyString()][string]$RunState)
+    param([AllowNull()][AllowEmptyString()][string]$State, [AllowNull()][AllowEmptyString()][string]$ErrorClass, [AllowNull()][AllowEmptyString()][string]$RunState, [switch]$Killed)
+    # FLEET-STATUS-1: in a KILLED run (its runner died, nobody closed it) the step that was going failed with it; one that
+    # never started was not run
+    if ($Killed) {
+        if ("$State" -in @('Running', 'Starting')) { return 'failed' }
+        if ("$State" -eq 'Waiting') { return 'skipped' }
+    }
     $stopped = ("$RunState" -in @($script:SIHeartbeatFields.PipelineStoppedRunStates))
     if (Test-SIHeartbeatLastRunStepEndedOnPurpose -State $State -ErrorClass $ErrorClass) { return 'cancelled' }
     switch -Exact ("$State") {
@@ -1183,22 +1258,25 @@ function ConvertTo-SIHeartbeatLastRunStepResult {
 }
 
 function ConvertTo-SIHeartbeatLastRunResult {
-    <# PURE. The run's end as LastRun.result: Stopped / Cancelled = cancelled; Failed = failed -- or cancelled when EVERY step
-       that failed was stopped or cancelled on purpose (the runner's own rule, Test-SIJobFlowStoppedOnly); Succeeded =
-       complete -- or partial when a step failed or was held back (a Skipped step other than one before a re-run's start or
-       one its classifier skipped); anything else = $null. #>
-    param([AllowNull()][AllowEmptyString()][string]$State, [object[]]$StepRows)
+    <# PURE. The run's end as LastRun.result (Invardia's values for a killed run, FLEET-STATUS-1 2026-11-27: 'cancelled' ONLY
+       when the run was cancelled the product's way -- SI_FLOW_CANCEL, the web app's "Cancel this run", the updater -- every
+       other early end is 'failed'): Cancelled = cancelled; Stopped (the runner ended it: a step stopped from outside the
+       pipeline, i.e. its executions were stopped, or a stop-on-failure step) = failed; -Killed (a run whose runner died and
+       that nobody closed, Test-SIHeartbeatRunKilled) = failed; Failed = failed -- or cancelled when EVERY step that failed was
+       cancelled by the product (class 'cancelled'); Succeeded = complete -- or partial when a step failed or was held back (a
+       Skipped step other than one before a re-run's start or one its classifier skipped); anything else = $null. #>
+    param([AllowNull()][AllowEmptyString()][string]$State, [object[]]$StepRows, [switch]$Killed)
+    if ($Killed) { return 'failed' }
     $stepsOf = @(@($StepRows | Where-Object { $null -ne $_ }) | ForEach-Object {
         [pscustomobject]@{ State = [string](Get-SIHeartbeatRowValue $_ 'S'); ErrorClass = [string](Get-SIHeartbeatRowValue $_ 'Txt') } })
     switch -Exact ("$State") {
         'Failed' {
-            $onPurpose = $false
-            if (Get-Command -Name Test-SIJobFlowStoppedOnly -ErrorAction SilentlyContinue) {
-                try { $onPurpose = [bool](Test-SIJobFlowStoppedOnly -State ([pscustomobject]@{ State = 'Failed'; Steps = $stepsOf })) } catch { $onPurpose = $false }
-            }
-            if ($onPurpose) { return 'cancelled' } else { return 'failed' }
+            $bad = @($stepsOf | Where-Object { $_.State -in @('Failed', 'TimedOut', 'Interrupted') })
+            if ($bad.Count -and -not @($bad | Where-Object { $_.ErrorClass -ne 'cancelled' }).Count) { return 'cancelled' }
+            return 'failed'
         }
-        { $_ -in @('Stopped', 'Cancelled') } { return 'cancelled' }
+        'Stopped' { return 'failed' }
+        'Cancelled' { return 'cancelled' }
         'Succeeded' {
             foreach ($s in $stepsOf) {
                 if ($s.State -in @('Failed', 'TimedOut', 'Interrupted') -and -not (Test-SIHeartbeatLastRunStepEndedOnPurpose -State $s.State -ErrorClass $s.ErrorClass)) { return 'partial' }
@@ -1244,7 +1322,7 @@ function Get-SIHeartbeatLastRun {
         without Attempts, or Attempts NULL, keeps the times. Its result and the run's totalSec are never changed by it. collectionUtc = the published collection's time when the run that published it
         IS this run, else null (also when the data database was not read).
     #>
-    param([AllowNull()][object[]]$Rows, [AllowNull()][object[]]$PublishedRows, [System.Collections.Generic.List[string]]$LeftOut)
+    param([AllowNull()][object[]]$Rows, [AllowNull()][object[]]$PublishedRows, [System.Collections.Generic.List[string]]$LeftOut, [datetime]$NowUtc = [datetime]::UtcNow)
     if ($null -eq $Rows) { return $null }
     $c = $script:SIHeartbeatFields
     $all = @(@($Rows) | Where-Object { $null -ne $_ })
@@ -1253,6 +1331,14 @@ function Get-SIHeartbeatLastRun {
     $g = { param($r, $n) Get-SIHeartbeatRowValue $r $n }
     if (-not (Test-SIHeartbeatLastRunWholePipeline -Scope ([string](& $g $run 'Scope')))) { return $null }
     $id = [string](& $g $run 'Id'); $state = [string](& $g $run 'S')
+    # FLEET-STATUS-1: a run still Running / Starting is LastRun only when it was KILLED (no beat for KilledRunMinutes): it
+    # ended 'failed' at the detection time -- a run that still beats is not finished, never "the last run"
+    $killedAt = $null
+    if ($state -in @('Running', 'Starting')) {
+        $killedAt = Test-SIHeartbeatRunKilled -State $state -BeatUtc (& $g $run 'T3') -NowUtc $NowUtc
+        if ($null -eq $killedAt) { return $null }
+    }
+    $endRaw = if ($null -ne $killedAt) { $killedAt } else { & $g $run 'T2' }
     $steps = @($all | Where-Object { [string](Get-SIHeartbeatRowValue $_ 'K') -eq 'step' } | Sort-Object -Property @{ Expression = { [long](ConvertTo-SIHeartbeatInt (Get-SIHeartbeatRowValue $_ 'N1')) } })
     $coll = $null
     $pub = @(@($PublishedRows) | Where-Object { $null -ne $_ })[0]
@@ -1261,10 +1347,12 @@ function Get-SIHeartbeatLastRun {
     $o = New-SIHeartbeatKnown -Names $c.Fields.LastRun -Values @{
         runId = $(if ($id -cmatch ('^[A-Za-z0-9._:-]{{1,{0}}}$' -f [int]$c.LastRunIdMax)) { $id } else { $null })
         kind = (ConvertTo-SIHeartbeatLastRunKind -Trigger ([string](& $g $run 'Trg')) -Scope ([string](& $g $run 'Scope')) -FromStep ([string](& $g $run 'FromStep')))
-        startedUtc = (ConvertTo-SIHeartbeatUtc (& $g $run 'T1')); endedUtc = (ConvertTo-SIHeartbeatUtc (& $g $run 'T2'))
-        totalSec = (ConvertTo-SIHeartbeatSeconds (& $g $run 'T1') (& $g $run 'T2'))
-        result = (ConvertTo-SIHeartbeatLastRunResult -State $state -StepRows $steps)
-        collectionUtc = $coll; steps = 'x' }
+        startedUtc = (ConvertTo-SIHeartbeatUtc (& $g $run 'T1')); endedUtc = (ConvertTo-SIHeartbeatUtc $endRaw)
+        totalSec = (ConvertTo-SIHeartbeatSeconds (& $g $run 'T1') $endRaw)
+        result = (ConvertTo-SIHeartbeatLastRunResult -State $state -StepRows $steps -Killed:($null -ne $killedAt))
+        collectionUtc = $coll; steps = 'x'
+        # FLEET-STATUS-1: the version the run STARTED on (its record), left out when not recorded
+        version = (ConvertTo-SIHeartbeatRunVersion (& $g $run 'Ver')) }
     $all = New-Object System.Collections.Generic.List[object]
     foreach ($s in $steps) {
         $k = ConvertTo-SIHeartbeatStepSlug -Job ([string](& $g $s 'Job')) -Order ([long](ConvertTo-SIHeartbeatInt (& $g $s 'N1')))
@@ -1274,7 +1362,7 @@ function Get-SIHeartbeatLastRun {
             # #1395 round 2: a step the runner started AGAIN (Attempts > 1) has its start restamped -- the time of its last attempt
             # only would leave hours out: unknown is honest (left out), a partial number is not. Attempts not recorded = kept.
             startedUtc = $(if ($retried) { $null } else { ConvertTo-SIHeartbeatUtc (& $g $s 'T1') }); sec = $(if ($retried) { $null } else { ConvertTo-SIHeartbeatSeconds (& $g $s 'T1') (& $g $s 'T2') })
-            result = (ConvertTo-SIHeartbeatLastRunStepResult -State ([string](& $g $s 'S')) -ErrorClass ([string](& $g $s 'Txt')) -RunState $state) }))
+            result = (ConvertTo-SIHeartbeatLastRunStepResult -State ([string](& $g $s 'S')) -ErrorClass ([string](& $g $s 'Txt')) -RunState $state -Killed:($null -ne $killedAt)) }))
     }
     # #1423: Invardia's cap is 40 steps. Over it the MOST RELEVANT steps go -- a failed step first, then a cancelled one, then
     # the steps that ran (newest first), a skipped step last -- and they are sent in RUN ORDER; the names of the others go to
@@ -1450,15 +1538,27 @@ function Get-SIHeartbeatPipeline {
     $def = @(Get-SIHeartbeatRowsOf $Rows 'def')[0]
     if (-not $runs.Count -and -not $def) { return $null }
     $v = @{ state = 'idle' }
+    $killedAt = $null
     $top = if ($runs.Count) { $runs[0] } else { $null }
     if ($top) {
         $rid = [string](Get-SIHeartbeatRowValue $top 'Name'); if ($rid -cmatch '^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$') { $v.runId = $rid }
         $v.startedUtc = ConvertTo-SIHeartbeatUtc (Get-SIHeartbeatRowValue $top 'T1')
         $topState = [string](Get-SIHeartbeatRowValue $top 'S')
-        $wasStopped = $topState -in @($script:SIHeartbeatFields.PipelineStoppedRunStates)
+        # FLEET-STATUS-1: the version the run shown STARTED on (its record's Version, K 'runver'); null when not recorded
+        $vr = @(Get-SIHeartbeatRowsOf $Rows 'runver' | Where-Object { [string](Get-SIHeartbeatRowValue $_ 'Name') -ceq $rid })[0]
+        if ($vr) { $v.version = ConvertTo-SIHeartbeatRunVersion (Get-SIHeartbeatRowValue $vr 'S') }
+        # FLEET-STATUS-1 (Invardia 2026-11-27): a run whose record still says Running but whose runner has not beaten for
+        # KilledRunMinutes was KILLED (its executions stopped or crashed, nobody closed it) -- 'failed', ended at the detection
+        # time, never 'running' with a stale beat
+        $killedAt = Test-SIHeartbeatRunKilled -State $topState -BeatUtc (Get-SIHeartbeatRowValue $top 'T3') -NowUtc $NowUtc
+        $wasStopped = ($topState -in @($script:SIHeartbeatFields.PipelineStoppedRunStates)) -or ($null -ne $killedAt)
         switch ($topState) { 'Running' { $v.state = 'running' } 'Succeeded' { $v.state = 'succeeded' } 'Failed' { $v.state = 'failed' } default { $v.state = 'idle' } }
-        # #1035: a run stopped or cancelled before its end -- 'stopped' only while its switch is on (not yet agreed), else idle
-        if ($wasStopped -and $Stopped) { $v.state = [string]$script:SIHeartbeatFields.PipelineStoppedState }
+        # FLEET-STATUS-1 (Invardia's values for a run that ended early): 'stopped' ONLY for a run cancelled the product's way
+        # (State Cancelled -- SI_FLOW_CANCEL, the web app, the updater), while #1035's switch is on; a run the runner ended
+        # Stopped (a step stopped from outside, i.e. its executions were stopped, or a stop-on-failure step) and a killed run
+        # are 'failed'
+        if ($topState -eq 'Cancelled' -and $Stopped) { $v.state = [string]$script:SIHeartbeatFields.PipelineStoppedState }
+        if ($topState -eq 'Stopped' -or $null -ne $killedAt) { $v.state = 'failed' }
         if ($v.state -eq 'running') {
             $steps = @(Get-SIHeartbeatRowsOf $Rows 'step' | Where-Object { [string](Get-SIHeartbeatRowValue $_ 'Txt') -eq $rid -and [string](Get-SIHeartbeatRowValue $_ 'S') -in @('Running', 'Starting') } |
                        Sort-Object { [int](Get-SIHeartbeatRowValue $_ 'N1') })
@@ -1468,6 +1568,8 @@ function Get-SIHeartbeatPipeline {
             # closed Interrupted (stopped / cancelled while it ran), else the first one that ended without success
             $mine = @(Get-SIHeartbeatRowsOf $Rows 'step' | Where-Object { [string](Get-SIHeartbeatRowValue $_ 'Txt') -eq $rid } | Sort-Object { [int](Get-SIHeartbeatRowValue $_ 'N1') })
             $at = @($mine | Where-Object { [string](Get-SIHeartbeatRowValue $_ 'S') -eq 'Interrupted' }) + @($mine | Where-Object { [string](Get-SIHeartbeatRowValue $_ 'S') -in @('Failed', 'TimedOut') })
+            # a killed run: the step that was going when its runner died
+            if ($null -ne $killedAt) { $at = @($mine | Where-Object { [string](Get-SIHeartbeatRowValue $_ 'S') -in @('Running', 'Starting') }) + $at }
             if ($at.Count) {
                 $k = ConvertTo-SIHeartbeatJobName (Get-SIHeartbeatRowValue $at[0] 'Name')
                 if ($k) { $v.step = $k; $v.stepSinceUtc = ConvertTo-SIHeartbeatUtc (Get-SIHeartbeatRowValue $at[0] 'T1') }
@@ -1476,12 +1578,14 @@ function Get-SIHeartbeatPipeline {
     }
     $ended = @($runs | Where-Object { $null -ne (ConvertTo-SIHeartbeatTime (Get-SIHeartbeatRowValue $_ 'T2')) } | Sort-Object { ConvertTo-SIHeartbeatTime (Get-SIHeartbeatRowValue $_ 'T2') } -Descending)
     if ($ended.Count) { $v.lastEndedUtc = ConvertTo-SIHeartbeatUtc (Get-SIHeartbeatRowValue $ended[0] 'T2') }
+    # a killed run ended when it was found dead -- its own end, never the previous run's
+    if ($null -ne $killedAt) { $v.lastEndedUtc = ConvertTo-SIHeartbeatUtc $killedAt }
     # #1175: the next SCHEDULED start, so Invardia judges a source against its schedule. While a run is going (its record
     # says Running) it is the first slot after now -- the schedule's own time, the same function the runner uses
     # (Get-SIJobFlowNextSlot); a run that has ended (its publish copy may still be written) takes the runner's own rule.
     # A pipeline on its own schedules (mode 'schedules') or a value that cannot be made (no definition, a definition that
     # does not read, an interval cadence while running, a runner that must resume a run that stopped) stays null.
-    $topRunning = $top -and [string](Get-SIHeartbeatRowValue $top 'S') -in @('Running', 'Starting')
+    $topRunning = $top -and [string](Get-SIHeartbeatRowValue $top 'S') -in @('Running', 'Starting') -and $null -eq $killedAt
     if ($def -and [string](Get-SIHeartbeatRowValue $def 'Name') -ne 'schedules' -and $topRunning) {
         try {
             $d = ConvertFrom-SIJobFlowJson -Json ([string](Get-SIHeartbeatRowValue $def 'Txt'))
@@ -1516,7 +1620,7 @@ function Get-SIHeartbeatPipeline {
     $prev = Get-SIPipelinePreviousMinutes -Runs $runList -Steps $allSteps -ExcludeRunId $topId
     $q = @(Get-SIHeartbeatRowsOf $Rows 'queue')[0]
     $e = Get-SIPipelineEta -Steps @($allSteps | Where-Object { $topId -and $_.FlowRunId -eq $topId }) -PreviousMinutes $prev -NowUtc $NowUtc `
-            -RunState $(if ($top) { [string](Get-SIHeartbeatRowValue $top 'S') } else { '' }) -Queued $(if ($q) { Get-SIHeartbeatRowValue $q 'N1' } else { $null }) `
+            -RunState $(if ($null -ne $killedAt) { 'Stopped' } elseif ($top) { [string](Get-SIHeartbeatRowValue $top 'S') } else { '' }) -Queued $(if ($q) { Get-SIHeartbeatRowValue $q 'N1' } else { $null }) `
             -StepProgress (Get-SIHeartbeatStepProgress -Rows $Rows)
     foreach ($k in $script:SIHeartbeatFields.PipelineEtaFields) { $v[$k] = $e.$k }
     $o = New-SIHeartbeatOrdered -Names (@($script:SIHeartbeatFields.Fields.Pipeline) + @($script:SIHeartbeatFields.PipelineEtaFields)) -Values $v
@@ -2215,6 +2319,17 @@ function Get-SIHeartbeatUpdate {
                 }
                 if ($err -and $v.lastUpdaterResult -ne 'failed') { $v.lastUpdaterResult = 'failed' }
             } elseif ($err) { $v.lastUpdaterResult = 'failed' }
+            # FLEET-STATUS-1 (Invardia 2026-11-27): an update is being installed NOW (the updater's mark, written BEFORE its
+            # roll swaps the jobs) -- the result is not known yet: lastUpdaterResult null (Invardia's contract has no "in
+            # progress" value), never the previous run's; lastUpdaterRunUtc = when it began. A mark older than
+            # UpdateInProgressMaxHours was never cleared: that update died part-way -- failed.
+            # the mark is its start time ("updating":"<iso>"); an object { since } is read too
+            $upd = if ($o.PSObject.Properties['updating']) { $o.updating } else { $null }
+            $since = if ($null -eq $upd) { $null } elseif ($upd -is [string] -or $upd -is [datetime]) { ConvertTo-SIHeartbeatTime $upd } elseif ($upd.PSObject.Properties['since']) { ConvertTo-SIHeartbeatTime $upd.since } else { $null }
+            if ($null -ne $since) {
+                $v.lastUpdaterRunUtc = ConvertTo-SIHeartbeatUtc $since
+                $v.lastUpdaterResult = if (($NowUtc.ToUniversalTime() - $since).TotalHours -lt [double]$script:SIHeartbeatFields.UpdateInProgressMaxHours) { $null } else { 'failed' }
+            }
         }
     }
     if ("$UpdaterCron".Trim()) { $v.nextUpdateUtc = ConvertTo-SIHeartbeatUtc (Get-SIHeartbeatCronNext -Cron $UpdaterCron -NowUtc $NowUtc) }
@@ -3292,7 +3407,8 @@ function New-SIHeartbeatFields {
                 if ($null -eq $pv) { $pv = Get-SIHeartbeatPipeline -Rows $CfgRows -NowUtc $NowUtc -Stopped:$stoppedOn }
                 # the running steps far past their last run's time with no progress (si-flow-1204), named -- in their own try:
                 # a problem there never costs the rest of Pipeline; none = the key is left out
-                if ($null -ne $pv) {
+                # (a killed run reads 'failed': its steps are not stalled, they ended with it)
+                if ($null -ne $pv -and [string]$pv.state -eq 'running') {
                     try {
                         $stw = ConvertTo-SIHeartbeatStalledWire -Stalled @(Get-SIHeartbeatStalledSteps -Rows $CfgRows -NowUtc $NowUtc)
                         if (@($stw).Count) {
@@ -3438,7 +3554,7 @@ function New-SIHeartbeatFields {
                     catch { $lp = $null; $problems.Add(('the collection of the last run could not be read ({0}) -- LastRun goes without it' -f $_.Exception.Message)) }
                 }
                 $left = New-Object System.Collections.Generic.List[string]
-                $lv = Get-SIHeartbeatLastRun -Rows @($lr) -PublishedRows $lp -LeftOut $left
+                $lv = Get-SIHeartbeatLastRun -Rows @($lr) -PublishedRows $lp -LeftOut $left -NowUtc $NowUtc
                 # over Invardia's cap of 40 steps (#1423): the most relevant 40 go, the others are named once a day (never dropped silently)
                 # its OWN line, once per UTC day (the 00:00 half hour; once per process within it) -- never folded into the
                 # shared problems line, which is said once per process and may already be taken

@@ -202,7 +202,7 @@ Describe 'REAL SQL: the Invardia Support app''s just-in-time grant (#1021)' -Ski
         (& $script:Member 'db_owner') | Should -Be 0
     }
 
-    It 'no consent -> 51803 (no-consent); the engine can NOT write the consent itself; the updater may record a DERIVED one only into the empty table' {
+    It 'no consent -> 51803 (no-consent); the engine can NOT write the consent itself; the consent trigger lets the updater write one row only into the empty table (the trigger''s own rule -- no SI path derives a level any more)' {
         $saved = @(& $script:A 'SELECT AppId, [Level], Source, ConsentedBy FROM cfg.SupportConsent' @{} 'rows')[0]
         & $script:A 'DELETE FROM cfg.SupportConsent;' @{} 'nonquery'
         try {

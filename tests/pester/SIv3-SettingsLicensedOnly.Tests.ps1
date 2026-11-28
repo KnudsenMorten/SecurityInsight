@@ -75,7 +75,7 @@ Describe 'the settings that shape how SI runs are community' {
         Get-Feature $s | Should -BeNullOrEmpty
     }
     It 'the Community reference''s glossary lists them, and leaves the licensed ones out' {
-        $ref = [IO.File]::ReadAllText((Join-Path $script:SIRoot 'config\SecurityInsight.custom.reference.ps1'))
+        $ref = [IO.File]::ReadAllText((Join-Path $script:SIRoot 'config\SecurityInsight.custom.sample.reference.ps1'))
         $at = $ref.IndexOf('# >>> SETTINGS GLOSSARY'); $at | Should -BeGreaterThan 0
         $g = $ref.Substring($at)
         foreach ($n in 'SI_UpdateRing', 'SI_Bootstrap_WebAppCpu', 'SI_Pro_DataRetentionDays', 'SI_KeyFigures_RecentDays') { $g.Contains("[$n]") | Should -BeTrue -Because "$n is a Community setting" }

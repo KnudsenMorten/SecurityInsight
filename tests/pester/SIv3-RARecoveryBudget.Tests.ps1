@@ -246,7 +246,7 @@ Describe '#1200 the setting' {
         $script:Clock = $script:Clock.AddDays(2); Test-RARecoveryBudgetSpent -Budget $z | Should -BeFalse
     }
     It 'the reference documents it and the catalog carries it (minutes, at least 0)' {
-        $ref = Get-Content -Raw (Join-Path $script:SIRoot 'config\SecurityInsight.custom.reference.ps1')
+        $ref = Get-Content -Raw (Join-Path $script:SIRoot 'config\SecurityInsight.custom.sample.reference.ps1')
         $ref | Should -Match '\$global:SI_RA_RecoveryBudgetMinutes = 90'
         $cat = Get-Content -Raw (Join-Path $script:SIRoot 'config\settings.catalog.locked.json') | ConvertFrom-Json
         $s = @($cat.settings | Where-Object { $_.name -eq 'SI_RA_RecoveryBudgetMinutes' })

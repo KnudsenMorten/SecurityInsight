@@ -11,7 +11,7 @@
 BeforeAll {
     $script:SIRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSCommandPath))
     . (Join-Path $script:SIRoot 'engine\asset-profiling\stages\Invoke-Schedule.ps1')
-    $script:Ref = Get-Content -Raw -LiteralPath (Join-Path $script:SIRoot 'config\SecurityInsight.custom.reference.ps1')
+    $script:Ref = Get-Content -Raw -LiteralPath (Join-Path $script:SIRoot 'config\SecurityInsight.custom.sample.reference.ps1')
 }
 
 Describe 'a tier cadence given as a bare number is HOURS (#187)' {
@@ -59,7 +59,7 @@ Describe 'no config file documents a setting nothing reads (#187)' {
         $s | Should -Match 'SI_PublicIP_ExtraTargets'
     }
     It 'no shipped config uses an aliased _Bucket template name' {
-        foreach ($f in 'config\SecurityInsight.custom.reference.ps1', 'launcher\risk-analysis\LauncherConfig.defaults.ps1', 'launcher\risk-analysis\LauncherConfig.custom.sample.ps1') {
+        foreach ($f in 'config\SecurityInsight.custom.sample.reference.ps1', 'launcher\risk-analysis\LauncherConfig.defaults.ps1', 'launcher\risk-analysis\LauncherConfig.custom.sample.ps1') {
             (Get-Content -Raw -LiteralPath (Join-Path $script:SIRoot $f)) | Should -Not -Match 'RiskAnalysis_(Summary|Detailed)_Bucket' -Because $f
         }
     }

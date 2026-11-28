@@ -119,7 +119,7 @@ Describe 'the setting: which source this run uses (owner 2026-11-11: download by
     }
     It 'ships with invardia for every install (the classifier''s defaults, the Community reference, the settings catalog: invardia | ai)' {
         [IO.File]::ReadAllText([IO.Path]::Combine($script:SIRoot, 'launcher', 'privilege-tier-classifier', 'LauncherConfig.defaults.ps1')) | Should -Match "SI_PrivilegeTierCatalog_Source = 'invardia'"
-        [IO.File]::ReadAllText([IO.Path]::Combine($script:SIRoot, 'config', 'SecurityInsight.custom.reference.ps1')) | Should -Match "# \`$global:SI_PrivilegeTierCatalog_Source = 'invardia'"
+        [IO.File]::ReadAllText([IO.Path]::Combine($script:SIRoot, 'config', 'SecurityInsight.custom.sample.reference.ps1')) | Should -Match "# \`$global:SI_PrivilegeTierCatalog_Source = 'invardia'"
         $cat = [IO.File]::ReadAllText([IO.Path]::Combine($script:SIRoot, 'config', 'settings.catalog.locked.json')) | ConvertFrom-Json
         $s = @($cat.settings | Where-Object { $_.name -eq 'SI_PrivilegeTierCatalog_Source' })
         $s.Count | Should -Be 1

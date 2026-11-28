@@ -253,6 +253,69 @@ function Get-SISetupSignedInObjectId {
     return $null
 }
 
+function ConvertTo-SISetupGuid {
+    <# PURE. One id in ONE form for comparing: [guid]::TryParse -- '{GUID}', upper case, spaces around all read as the same
+       lower-case 'D' form; anything that is not a GUID (a display name, '') = ''. #>
+    param([AllowNull()][AllowEmptyString()][string]$Id)
+    $g = [guid]::Empty
+    if ([guid]::TryParse(("$Id").Trim(), [ref]$g) -and $g -ne [guid]::Empty) { return $g.ToString('D') }
+    ''
+}
+
+function Get-SISetupSupportAppIds {
+    <#
+        PURE over its inputs. EVERY Invardia Support app client id this setup can know, normalised (ConvertTo-SISetupGuid),
+        once each: -SupportAppId (the install answer supportAppId, framework 4.1a; several allowed), -SessionAppId (the open
+        Invardia Support session's AppId), -RecordedAppId (the install's recorded Support app, cfg.InstallState 'SupportApp',
+        where the caller could read it), -ConfigAppId ($global:SI_SupportAppId where a configuration sets it; none does
+        today). Invardia's naming standard carries no Support app id that SI ships (framework/naming-standard.json role
+        support-app names no app id), so there is no fifth source. Anything that is not a GUID is never an id.
+    #>
+    param([AllowEmptyCollection()][string[]]$SupportAppId = @(), [AllowEmptyString()][string]$SessionAppId = '',
+          [AllowEmptyCollection()][string[]]$RecordedAppId = @(), [AllowEmptyString()][string]$ConfigAppId = '')
+    # one id per output object (callers wrap the call in @()); none = no output
+    @(@($SupportAppId) + @($SessionAppId) + @($RecordedAppId) + @($ConfigAppId) | ForEach-Object { ConvertTo-SISetupGuid $_ } | Where-Object { $_ } | Select-Object -Unique)
+}
+
+function Resolve-SISetupEngineGrantee {
+    <#
+        PURE. May setup give the ENGINE's runtime roles to this grantee? Framework RIGHTS-1 / ROOT-RIGHTS-1 point 4: the
+        Support app's rights are Invardia's -- a product never gives it the engine's roles (found 2026-11-27 at three
+        installs: the Support app ran setup and got the engine's storage, Key Vault and monitoring data roles as "the SPN").
+        Told by CLIENT ID only (-SupportAppIds, Get-SISetupSupportAppIds), never by a display name. FAILS CLOSED:
+          * the caller is an application whose client id is a Support app id, and its object id is NOT known -> refused
+            (the grantee may be the caller);
+          * the grantee IS the caller (object ids equal) and the caller's client id is a Support app id -> refused;
+          * the grantee is NOT the caller and is an app (-GranteePrincipalType ServicePrincipal): its client id from Graph
+            (-GranteeAppId, -GranteeLookup 'ok') -> refused when it is a Support app id; a lookup that failed
+            (-GranteeLookup 'failed') -> refused, never granted on a guess;
+          * a person or a group as grantee (User / Group) is never the Support app; no Support app id known = nothing to
+            compare with -> allowed.
+        Returns @{ Allow ($true|$false); Why (the line to say when refused, '' when allowed) }.
+    #>
+    param([AllowEmptyString()][string]$GranteeObjectId = '', [string]$GranteePrincipalType = 'ServicePrincipal',
+          [AllowEmptyString()][string]$GranteeAppId = '', [ValidateSet('ok', 'failed', 'skipped')][string]$GranteeLookup = 'skipped',
+          [AllowEmptyString()][string]$CallerObjectId = '', [AllowEmptyString()][string]$CallerAppId = '',
+          [AllowEmptyString()][string]$CallerType = '', [AllowEmptyCollection()][string[]]$SupportAppIds = @())
+    $ok = [pscustomobject]@{ Allow = $true; Why = '' }
+    $no = { param($w) [pscustomobject]@{ Allow = $false; Why = $w } }
+    $ids = @($SupportAppIds | ForEach-Object { ConvertTo-SISetupGuid $_ } | Where-Object { $_ })
+    if (-not $ids.Count) { return $ok }
+    $g = ConvertTo-SISetupGuid $GranteeObjectId; $c = ConvertTo-SISetupGuid $CallerObjectId; $ca = ConvertTo-SISetupGuid $CallerAppId
+    $callerIsSupport = ("$CallerType".Trim() -ne 'User') -and $ca -and ($ids -contains $ca)
+    if ($callerIsSupport -and -not $c) { return (& $no ("the caller is the Invardia Support app (client {0}) and its object id could not be read, so the grantee may be the Support app itself" -f $ca)) }
+    if ($g -and $c -and $g -eq $c) {
+        if ($callerIsSupport) { return (& $no ("the grantee is the caller, the Invardia Support app (client {0})" -f $ca)) }
+        return $ok
+    }
+    if ("$GranteePrincipalType".Trim() -in 'User', 'Group') { return $ok }
+    if ($GranteeLookup -eq 'failed') { return (& $no ("the grantee {0} is not the caller and its application could not be read from Microsoft Graph, so it cannot be told from the Invardia Support app" -f $GranteeObjectId)) }
+    $ga = ConvertTo-SISetupGuid $GranteeAppId
+    if ($ga -and $ids -contains $ga) { return (& $no ("the grantee {0} is the Invardia Support app (client {1})" -f $GranteeObjectId, $ga)) }
+    if ($GranteeLookup -ne 'ok') { return (& $no ("the grantee {0} is not the caller and its application was not read, so it cannot be told from the Invardia Support app" -f $GranteeObjectId)) }
+    $ok
+}
+
 # =====================================================================================================================
 #  Small ARM helpers
 # =====================================================================================================================

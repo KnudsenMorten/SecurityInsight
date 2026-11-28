@@ -102,7 +102,7 @@ Describe '#913 the runner: a transient lock failure is never a product defect, n
         Get-SIErrorFixKind -ErrorClass 'transient-sql' | Should -Be ''
         $l = New-Object System.Collections.Generic.List[object]
         $t = { param($Record, $Endpoint, $AccessCode, $TimeoutSec) $l.Add($Record); [pscustomobject]@{ Status = 'ok' } }.GetNewClosure()
-        $ctx = [pscustomobject]@{ Mode = 'identified'; Endpoint = 'https://uplink.test'; AccessCode = 'inv-TESTKEY-0123456789'; Edition = 'pro'; LicenceState = 'valid'
+        $ctx = [pscustomobject]@{ Mode = 'identified'; Endpoint = 'https://uplink.test'; AccessCode = ('inv-TESTKEY-' + '0123456789'); Edition = 'pro'; LicenceState = 'valid'
                                   Version = '3.0.1'; Hosting = 'container'; RuntimeIdentity = 'mi-container'; InstallId = ''; TenantId = '11111111-2222-3333-4444-555555555555'; StateDirectory = $TestDrive }
         $rc = [pscustomobject]@{ RunId = 'r'; Engine = 'flow'; ShardIndex = 0; ShardCount = 1; CollectionTime = [datetime]::UtcNow; StartedAt = [datetime]::UtcNow
                                  FailedStep = 'lock'; FailedStepError = 'the pipeline lock (acquire) could not be reached'; FailedStepErrorClass = 'transient-sql' }

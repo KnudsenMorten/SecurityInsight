@@ -214,7 +214,7 @@ Describe 'OPENAI-CAP (f): AI is off by default everywhere' {
         Remove-Variable -Scope Global -Name SI_PrivilegeTierClassifier_RunAI -ErrorAction SilentlyContinue
     }
     It 'both shipped samples have the AI summary off' {
-        foreach ($f in 'config\SecurityInsight.custom.sample.ps1', 'config\SecurityInsight.custom.community.sample.ps1') {
+        foreach ($f in 'config\SecurityInsight.custom.sample.ps1', 'config\SecurityInsight.community.custom.sample.ps1') {
             $t = Get-Content -Raw (Join-Path $script:SIRoot $f)
             $t | Should -Match '(?m)^\$global:BuildSummaryByAI\s*=\s*\$false'
             $t | Should -Not -Match '(?m)^\$global:(BuildSummaryByAI|SI_EnableAI\w*|SI_PrivilegeTierClassifier_RunAI)\s*=\s*\$true'

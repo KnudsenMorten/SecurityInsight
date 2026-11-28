@@ -61,7 +61,7 @@ Describe 'the setting and the statements' {
         @($s.values) | Should -Be @('off', 'shadow', 'on')
         $s.defaultText | Should -Match '^on'
         "$($s.description) $($s.effect) $($s.whenToChange)" | Should -Not -Match 'REMOVE-ME'
-        $ref = [IO.File]::ReadAllText((Join-Path $script:Root 'config\SecurityInsight.custom.reference.ps1'))
+        $ref = [IO.File]::ReadAllText((Join-Path $script:Root 'config\SecurityInsight.custom.sample.reference.ps1'))
         $ref | Should -Match "on \(the default\)[^\r\n]*\r?\n(#[^\r\n]*\r?\n)*# \`$global:SI_Data_ParseAtInsert = 'on'"
         $ref | Should -Not -Match "REMOVE-ME[^\r\n]*\r?\n(#[^\r\n]*\r?\n)*# \`$global:SI_Data_ParseAtInsert"
     }

@@ -1887,9 +1887,13 @@ function Get-SIInstallInfra {
     if ($Ctx.Cache.Contains('infra')) { return $Ctx.Cache['infra'] }
     $v = $Ctx.Values; $n = $Ctx.Names
     $r = Invoke-SIInstallScript -Ctx $Ctx -RelativePath 'setup/ConfigWizard/backend/Initialize-SIInfra.ps1' -Arguments ([ordered]@{
-        SpnObjectId = [string]$Ctx.Facts['userObjectId']; TenantId = [string]$v['tenantId']; SubscriptionId = [string]$v['subscriptionId']
-        # 2026-11-03 (a customer install): the signed-in PERSON is a User -- labelled ServicePrincipal, Azure refused every grant
-        SpnPrincipalType = $(if ([string]$Ctx.Facts['accountType'] -eq 'User') { 'User' } else { 'ServicePrincipal' })
+        # NO -SpnObjectId: the ENGINE's runtime roles (storage data, Key Vault Secrets / Certificate User, Log Analytics /
+        # Monitoring Contributor, Metrics Publisher) are never the caller's -- not a person, never the Invardia Support app
+        # (found 2026-11-27: the Support app ran setup at three installs and got them as "the SPN"). The engine runs as its
+        # managed identity, which the container setup grants from si-identity-rights.json (framework RIGHTS-1); the
+        # installer's own vault access is the temporary Secrets / Crypto Officer of the key-vault step, removed at the end.
+        TenantId = [string]$v['tenantId']; SubscriptionId = [string]$v['subscriptionId']
+        SupportAppId = [string]$v['supportAppId']
         ResourceGroupName = $n.ResourceGroup; Location = [string]$v['location']; WorkspaceName = $n.Workspace; DceName = $n.Dce
         StorageAccountName = $n.StorageAccount; CreateKeyVault = $true; KeyVaultName = $n.KeyVault
         Ring = 'prod'; Edition = $Ctx.Edition; Hosting = 'ca'; Owner = [string]$v['owner']

@@ -759,8 +759,40 @@ function ConvertTo-SIInvardiaUpdateStateJson {
         $c['error'] = (& $short $State.lastError)
         # 2026-10-23: the update waits for a pipeline run -- the heartbeat warns when it has waited more than 24 hours
         if ($State.Contains('waitsSinceUtc') -and $State.waitsSinceUtc) { $c['waits'] = [ordered]@{ since = (& $iso $State.waitsSinceUtc); kind = $State.waitsKind; why = (& $short $State.waitsReason) } }
+        # FLEET-STATUS-1 (Invardia 2026-11-27): an update is being installed NOW (Set-SIInvardiaUpdateInProgress) -- the
+        # heartbeat then never carries the previous run's result for it (the row only; never the Key Vault state). Kept SHORT --
+        # only its start time (the release being installed is code.version already): 31 characters, so the row stays within
+        # its 400 (an install whose column is not widened yet refuses a longer value)
+        if ($State.Contains('updatingSinceUtc') -and $State.updatingSinceUtc) { $c['updating'] = (& $iso $State.updatingSinceUtc) }
         $json = $c | ConvertTo-Json -Compress -Depth 4
         if ($json.Length -le 400) { return $json }
+    }
+    # FLEET-STATUS-1 (review): still over 400 with every text shortened away (both kinds held in pre-release waves, a claim
+    # again, a wait...): the parts the heartbeat's update result needs least give way, in this order, until it fits -- the
+    # templates' wave, the claim-again, the wait, the templates, the claim. The code's record WITH ITS WAVE, the error and
+    # the "installing" mark stay: the heartbeat (Get-SIReleaseWaveFromUpdateState) and the web app's header read the code's
+    # wave from this row with no other source, so it is never dropped -- as the very last step its NAME is shortened (to
+    # 40, then 20, then 8 characters), never removed. The Key Vault state keeps everything; this row is the shown copy (an
+    # install whose column is not widened yet refuses a longer value, and the whole save would fail).
+    $drop = @(
+        { if ($c.Contains('templates') -and $c['templates'].Contains('wave')) { $c['templates'].Remove('wave') } },
+        { $c.Remove('claimAgain'); $c.Remove('claimAgainUtc') },
+        { $c.Remove('waits') },
+        { $c.Remove('templates') },
+        { $c.Remove('claim') })
+    foreach ($d in $drop) {
+        . $d
+        $json = $c | ConvertTo-Json -Compress -Depth 4
+        if ($json.Length -le 400) { return $json }
+    }
+    if ($c.Contains('code') -and $c['code'].Contains('wave')) {
+        $full = [string]$c['code']['wave']['name']
+        foreach ($n in 40, 20, 8) {
+            if ($full.Length -le $n) { continue }
+            $c['code']['wave']['name'] = $full.Substring(0, $n).TrimEnd()
+            $json = $c | ConvertTo-Json -Compress -Depth 4
+            if ($json.Length -le 400) { return $json }
+        }
     }
     $json
 }
@@ -775,6 +807,20 @@ function Set-SIInvardiaUpdateCheck {
     $k.hold = $(if ($Hold) { $Hold } elseif ($Result.Action -eq 'hold') { [string]$Result.Reason } else { '' })
     $k.nextTryUtc = $(if ($Result.Action -eq 'waiting' -and $Result.RetryAfter -gt 0) { $NowUtc.AddSeconds([int]$Result.RetryAfter) } else { $null })
     if ($Result.Action -in @('refused', 'unauthorized', 'forbidden', 'notfound', 'invalid', 'network', 'error', 'off')) { $State.lastError = ('{0}: {1}' -f $Result.Kind, $Result.Reason) }
+}
+
+function Set-SIInvardiaUpdateInProgress {
+    <#
+        FLEET-STATUS-1 (Invardia 2026-11-27: heartbeats on the NEW version carried the OLD "nothing-to-do" for up to 45 minutes
+        after the swap, because the update state row was written only at the end of the run). -Version: the release being
+        installed now -- marks the state (the compact row carries 'updating', Get-SIHeartbeatUpdate reads it as "no result
+        yet" and never the previous run's); -Clear: the install is over (succeeded or failed), the mark goes. The caller saves
+        the state right after either. Only in memory + the row: the Key Vault state never keeps it (a run that dies under
+        the mark leaves it in the row, and the heartbeat reads an old mark as failed).
+    #>
+    param([Parameter(Mandatory)][System.Collections.IDictionary]$State, [string]$Version = '', [datetime]$NowUtc = [datetime]::UtcNow, [switch]$Clear)
+    if ($Clear) { $State['updatingVersion'] = ''; $State['updatingSinceUtc'] = $null; return }
+    $State['updatingVersion'] = "$Version".Trim(); $State['updatingSinceUtc'] = $NowUtc.ToUniversalTime()
 }
 
 function Set-SIInvardiaUpdateApplied {

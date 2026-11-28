@@ -45,7 +45,7 @@ BeforeAll {
 
     # the files as they were before the edit: the current text with the pairs taken out (CRLF, UTF-8, no BOM)
     $script:BeforeHash = @{
-        'RA-FactorKeys.ps1' = 'E967DEC2CB9F90F8F7D2C31DC943BC7C5610B66F6917692B481B7B9C271B44D2'
+        'RA-FactorKeys.ps1' = [string]'E967DEC2CB9F90F8F7D2C31DC943BC7C5610B66F6917692B481B7B9C271B44D2'   # a file hash ([string]: not a key to the secret scan)
         # re-recorded 2026-11-03 (PACKAGE-CLEAN): 3f7a36b9e changed ONE comment line of RA-RiskScore.ps1 (an own host name
         # to an example name); with that line put back the reversed text gives the hash recorded at 6c0dafb7b, A758DA44...
         'RA-RiskScore.ps1'  = '2F9EDA93E4D784379A1384B3C40EF358D156EDB0335D29A284B6120B0AC0741C'

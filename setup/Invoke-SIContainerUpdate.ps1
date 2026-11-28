@@ -1413,8 +1413,8 @@ function Invoke-SIUpdateOwnSqlConnector {
 }
 
 # #1021 THE SUPPORT GRANT (setup/_shared/SI-SupportGrantUpdate.ps1; rule: existing installs reach the new-install state): the
-# queue si-support-requests the Invardia Support session puts its request on (made, read back), and ONCE a DERIVED consent
-# from the Support app's Key Vault role (owner 2026-11-01) into an empty cfg.SupportConsent. The job itself comes from the
+# queue si-support-requests the Invardia Support session puts its request on (made, read back); no consent is derived here
+# (2026-11-27: the level comes only from Invardia's GET /api/support/consent, applied by the updater). The job itself comes from the
 # missing-jobs step; #1154: the job started by its queue (read back), then the Support app's rights on the jobs removed (read
 # back). Signing the procedures, the Support app's read-only user and its queue role need rights the updater does not have --
 # the one Support-session step per install (setup\Install-SISupportGrantProcedure.ps1). Pro only. Silent when there is
@@ -1435,8 +1435,8 @@ function Invoke-SIUpdateSupportGrant {
         $q = Invoke-SISupportGrantQueueEnsure -Rest $rest -SubscriptionId $sub -ResourceGroup $target.ResourceGroupName -Account (& $gv 'SI_StorageAccount') -WhatIf:$wi
         if ($q.Line) { $lines.Add(@($q.Action, $q.Line)) }
         $sqlStep = '9p. SUPPORT ACCESS'; $sql = $script:SIUpdateProSql   # dynamic scope: $proSrv, $proDb, $sqlStep come from this function
-        $dc = Invoke-SISupportGrantDerivedConsent -Rest $rest -Sql $sql -SubscriptionId $sub -ResourceGroup $target.ResourceGroupName -VaultName (& $gv 'SI_KeyVaultName') -WhatIf:$wi
-        if ($dc.Line) { $lines.Add(@($dc.Action, $dc.Line)) }
+        # 2026-11-27 (Invardia, ROOT-RIGHTS-1 review): NO consent is derived from the Support app's Key Vault role any more --
+        # the level comes only from Invardia's GET /api/support/consent, which the updater applies (SI-SupportPortalConsent.ps1)
         # #1154 (framework §5.5): the support grant job started by its queue (read back), THEN the Support app's rights on the
         # jobs removed (read back) -- the same step the updater runs on every run
         if (Get-Command -Name Invoke-SISupportGrantQueueTrigger -ErrorAction SilentlyContinue) {

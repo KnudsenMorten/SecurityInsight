@@ -221,7 +221,7 @@ Describe 'the switch (default ON, owner 2026-11-23)' {
         (@($s[0].values) -join ',') | Should -Be 'off,on'
         [string]$s[0].defaultText | Should -Match '^on'
         "$($s[0].description) $($s[0].effect) $($s[0].whenToChange)" | Should -Not -Match 'REMOVE-ME'
-        $ref = [IO.File]::ReadAllText((Join-Path $script:SIRoot 'config/SecurityInsight.custom.reference.ps1'))
+        $ref = [IO.File]::ReadAllText((Join-Path $script:SIRoot 'config/SecurityInsight.custom.sample.reference.ps1'))
         $ref | Should -Match "on \(the default\)[^\r\n]*\r?\n(#[^\r\n]*\r?\n)*# \`$global:SI_RA_HuntingStreamRead = 'on'"
         $ref | Should -Not -Match "REMOVE-ME[^\r\n]*\r?\n(#[^\r\n]*\r?\n)*# \`$global:SI_RA_HuntingStreamRead"
     }
